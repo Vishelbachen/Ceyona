@@ -2,6 +2,9 @@ import logging
 from typing import Dict, Any
 
 from engine.router import Router
+from engine.toolrouter import ToolRouter
+from tools.tools import Tools
+
 from engine.cognitive import Cognitive
 from engine.reasoning import Reasoning
 from engine.solver import Solver
@@ -27,20 +30,40 @@ class Orchestrator:
     def __init__(self):
         self.settings = Settings()
 
+        # ======================
+        # CORE ROUTING LAYERS
+        # ======================
         self.router = Router()
+        self.tool_router = ToolRouter()
+        self.tools = Tools(self.settings)
 
+        # ======================
+        # INTELLIGENCE LAYERS
+        # ======================
         self.brain = Brain() if Constants.ENABLE_BRAIN_LAYER else None
         self.cognitive = Cognitive()
         self.reasoning = Reasoning() if Constants.ENABLE_REASONING_LAYER else None
+
+        # ======================
+        # CORE ENGINE
+        # ======================
         self.solver = Solver()
 
+        # ======================
+        # SELF IMPROVEMENT STACK
+        # ======================
         self.scorer = Scorer() if Constants.ENABLE_SELF_CORRECTION else None
         self.corrector = SelfCorrection() if Constants.ENABLE_SELF_CORRECTION else None
         self.improver = SelfImprove() if Constants.ENABLE_SELF_IMPROVE else None
 
-        # 🧠 NEW: PROOF ENGINE
+        # ======================
+        # PROOF ENGINE (SAFE)
+        # ======================
         self.proof = ProofEngine()
 
+        # ======================
+        # MEMORY SYSTEM (SAFE INIT)
+        # ======================
         try:
             self.db = SupabaseClient(self.settings)
             self.embeddings = Embeddings(self.settings)
@@ -57,11 +80,17 @@ class Orchestrator:
             self.memory_intelligence = None
             self.memory_enabled = False
 
+        # ======================
+        # ACCESS CONTROL
+        # ======================
         try:
             self.access = AccessControl(self.db)
         except Exception:
             self.access = None
 
+    # ======================
+    # MAIN PIPELINE
+    # ======================
     async def process(self, user_id: int, text: str) -> str:
         try:
             text = (text or "").strip()
@@ -70,7 +99,9 @@ class Orchestrator:
 
             user_id_str = str(user_id)
 
-            # ACCESS
+            # ======================
+            # ACCESS CONTROL
+            # ======================
             if self.access:
                 try:
                     allowed, msg = self.access.require_access(user_id_str)
@@ -79,11 +110,35 @@ class Orchestrator:
                 except Exception:
                     pass
 
-            # ROUTE
+            # ======================
+            # BASE ROUTING (LLM LOGIC)
+            # ======================
             route = self.router.route(text)
 
-            # BRAIN SAFE
+            # ======================
+            # TOOL ROUTING (NEW GPT-LIKE LAYER)
+            # ======================
+            tool_route = self.tool_router.route(text)
+
+            tool_result = None
+
+            # EXECUTE TOOL IF NOT LLM
+            if tool_route.get("tool") != "llm":
+                try:
+                    tool_result = await self.tools.execute(tool_route, text)
+                except Exception as e:
+                    logger.warning(f"[TOOL FAIL SAFE] {e}")
+                    tool_result = None
+
+                # if tool succeeded → return directly (FAST PATH)
+                if tool_result and tool_result.get("status") == "success":
+                    return self._format_tool_response(tool_result)
+
+            # ======================
+            # BRAIN
+            # ======================
             brain = {"domain": "general"}
+
             if self.brain:
                 try:
                     result = self.brain.analyze(text, route)
@@ -92,7 +147,9 @@ class Orchestrator:
                 except Exception:
                     pass
 
+            # ======================
             # MEMORY
+            # ======================
             memory_context = {"recent": [], "semantic": []}
 
             if self.memory_enabled:
@@ -104,15 +161,22 @@ class Orchestrator:
                 except Exception:
                     pass
 
-            # CONTEXT
-            context = await self.cognitive.build_context(
-                user_id=user_id,
-                text=text,
-                memory=memory_context,
-                brain=brain
-            )
+            # ======================
+            # CONTEXT BUILDER
+            # ======================
+            try:
+                context = await self.cognitive.build_context(
+                    user_id=user_id,
+                    text=text,
+                    memory=memory_context,
+                    brain=brain
+                )
+            except Exception:
+                context = {"memory": memory_context}
 
+            # ======================
             # REASONING
+            # ======================
             reasoning = {}
 
             if self.reasoning:
@@ -126,7 +190,9 @@ class Orchestrator:
                 except Exception:
                     pass
 
-            # SOLVER
+            # ======================
+            # SOLVER (LLM CORE)
+            # ======================
             try:
                 response = await self.solver.solve(
                     text=text,
@@ -140,7 +206,9 @@ class Orchestrator:
             if not response:
                 response = "No response generated."
 
+            # ======================
             # BRAIN VERIFY
+            # ======================
             if self.brain:
                 try:
                     response = self.brain.verify(
@@ -150,7 +218,9 @@ class Orchestrator:
                 except Exception:
                     pass
 
-            # 🧠 PROOF ENGINE (NEW LAYER)
+            # ======================
+            # PROOF ENGINE (VALIDATION LAYER)
+            # ======================
             try:
                 response = self.proof.validate(
                     response,
@@ -159,7 +229,9 @@ class Orchestrator:
             except Exception:
                 pass
 
-            # SCORE + IMPROVE
+            # ======================
+            # SELF IMPROVEMENT
+            # ======================
             if self.scorer and self.corrector and self.improver:
                 try:
                     score = self.scorer.evaluate(response)
@@ -168,7 +240,9 @@ class Orchestrator:
                 except Exception:
                     pass
 
+            # ======================
             # MEMORY SAVE
+            # ======================
             if self.memory_enabled:
                 try:
                     await self.memory_intelligence.update_memory(
@@ -185,6 +259,18 @@ class Orchestrator:
             logger.exception(f"[ORCHESTRATOR FATAL] {e}")
             return self._fallback(text)
 
+    # ======================
+    # TOOL OUTPUT FORMATTER
+    # ======================
+    def _format_tool_response(self, tool_result: dict) -> str:
+        tool = tool_result.get("tool")
+        data = tool_result.get("data")
+
+        return f"[{tool.upper()} RESULT]\n{data}"
+
+    # ======================
+    # FALLBACK
+    # ======================
     def _fallback(self, text: str) -> str:
         return (
             "Ceyona AI system error occurred.\n"
