@@ -1,50 +1,59 @@
-class Router:
+class ToolRouter:
+    """
+    Decides REAL execution tool (not just intent)
+    """
+
     def route(self, text: str) -> dict:
-        text_lower = text.lower()
+        t = (text or "").lower()
 
-        # =========================
-        # MATH / ANALYTICAL MODE (CRITICAL)
-        # =========================
-        if any(x in text_lower for x in [
-            "prove", "theorem", "f(", "=", "derive", "limit", "integral",
-            "solve", "function", "доказать", "уравнение"
-        ]):
+        # ======================
+        # WEATHER TOOL
+        # ======================
+        if any(x in t for x in ["weather", "погода", "температура"]):
             return {
-                "type": "analysis",
-                "domain": "math"
+                "tool": "weather",
+                "args": self._extract_city(t)
             }
 
-        # =========================
-        # WEATHER
-        # =========================
-        if any(word in text_lower for word in ["weather", "погода"]):
+        # ======================
+        # MAPS TOOL
+        # ======================
+        if any(x in t for x in ["route", "map", "где", "как доехать", "distance"]):
             return {
-                "type": "weather",
-                "domain": "api"
+                "tool": "maps",
+                "args": self._extract_location(t)
             }
 
-        # =========================
-        # MAPS / LOCATION
-        # =========================
-        if any(word in text_lower for word in ["map", "где", "location", "near"]):
+        # ======================
+        # SEARCH TOOL
+        # ======================
+        if any(x in t for x in ["search", "найди", "find", "что такое"]):
             return {
-                "type": "maps",
-                "domain": "api"
+                "tool": "search",
+                "args": t
             }
 
-        # =========================
-        # SEARCH
-        # =========================
-        if any(word in text_lower for word in ["search", "найди", "find"]):
-            return {
-                "type": "search",
-                "domain": "api"
-            }
-
-        # =========================
-        # DEFAULT LLM MODE
-        # =========================
+        # ======================
+        # NO TOOL → LLM
+        # ======================
         return {
-            "type": "general",
-            "domain": "llm"
+            "tool": "llm",
+            "args": text
         }
+
+    # ----------------------
+    # SIMPLE EXTRACTION (SAFE)
+    # ----------------------
+    def _extract_city(self, text: str) -> str:
+        words = text.split()
+
+        blacklist = {"weather", "погода", "какая", "сегодня", "now", "today"}
+
+        for w in words:
+            if w not in blacklist and len(w) > 2:
+                return w
+
+        return "Tbilisi"
+
+    def _extract_location(self, text: str) -> str:
+        return text
