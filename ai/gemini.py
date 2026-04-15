@@ -1,24 +1,26 @@
+import os
 import httpx
+from ai.base import BaseAIModel
 
 
-class GeminiClient:
-    def __init__(self, settings):
-        self.api_key = settings.GEMINI_API_KEY
-        self.url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={self.api_key}"
+class GeminiModel(BaseAIModel):
+    def __init__(self):
+        self.api_key = os.getenv("GEMINI_API_KEY")
 
-    async def generate(self, prompt: str) -> str:
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post(
-                self.url,
-                json={
-                    "contents": [
-                        {
-                            "parts": [
-                                {"text": prompt}
-                            ]
-                        }
-                    ]
+    async def generate(self, prompt: str, stream: bool = False):
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={self.api_key}"
+
+        payload = {
+            "contents": [
+                {
+                    "parts": [{"text": prompt}]
                 }
-            )
-            data = response.json()
-            return data["candidates"][0]["content"]["parts"][0]["text"]
+            ]
+        }
+
+        async with httpx.AsyncClient(timeout=60) as client:
+            response = await client.post(url, json=payload)
+
+        data = response.json()
+
+        return data["candidates"][0]["content"]["parts"][0]["text"]
