@@ -10,6 +10,9 @@ from handler import handle_message
 
 
 async def message_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.text:
+        return
+
     user_id = update.effective_user.id
     text = update.message.text
 
@@ -21,10 +24,16 @@ async def message_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start_bot(settings):
     app = ApplicationBuilder().token(settings.BOT_TOKEN).build()
 
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_entry))
+    app.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, message_entry)
+    )
 
+    # PRODUCTION SAFE START
     await app.initialize()
     await app.start()
+
+    # IMPORTANT FIX (Railway compatible polling)
     await app.updater.start_polling()
 
-    await app.idle()
+    # keep alive
+    await app.updater.idle()
