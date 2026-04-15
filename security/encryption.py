@@ -3,8 +3,13 @@ from cryptography.fernet import Fernet
 
 class Encryption:
     def __init__(self, settings):
-        self.key = settings.ENCRYPTION_KEY
-        self.cipher = Fernet(self.key.encode())
+        key = settings.ENCRYPTION_KEY
+
+        # ensure correct type
+        if isinstance(key, str):
+            key = key.encode()
+
+        self.cipher = Fernet(key)
 
     def encrypt(self, data: str) -> str:
         return self.cipher.encrypt(data.encode()).decode()
