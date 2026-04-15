@@ -13,25 +13,37 @@ class AISelector:
         self.mistral = MistralClient(settings)
         self.gemini = GeminiClient(settings)
 
+    def select_order(self, model_type: str):
+        """
+        Deterministic routing strategy
+        """
+
+        if model_type == "fast":
+            return [self.groq, self.mistral, self.openai]
+
+        if model_type == "analysis":
+            return [self.gemini, self.openai, self.mistral]
+
+        if model_type == "coding":
+            return [self.openai, self.gemini, self.mistral]
+
+        return [self.groq, self.openai, self.mistral, self.gemini]
+
     async def generate(self, prompt: str, route: dict) -> str:
         model_type = route.get("type", "general")
+        order = self.select_order(model_type)
 
-        # приоритет моделей
-        if model_type == "fast":
-            order = [self.groq, self.mistral, self.openai]
-
-        elif model_type == "analysis":
-            order = [self.gemini, self.openai, self.mistral]
-
-        else:
-            order = [self.groq, self.openai, self.mistral, self.gemini]
+        last_error = None
 
         for model in order:
             try:
                 result = await model.generate(prompt)
-                if result:
+
+                if result and isinstance(result, str):
                     return result
-            except Exception:
+
+            except Exception as e:
+                last_error = e
                 continue
 
-        return "Ceyona AI: All models failed."
+        return f"Ceyona AI: All models failed. ({last_error})"
