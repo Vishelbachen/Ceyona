@@ -45,7 +45,7 @@ class Orchestrator:
         # 2. Memory
         memory_context = await self.memory.retrieve(user_id, user_input)
 
-        # 3. Route
+        # 3. Router (intent)
         route = self.router.route(user_input, context)
 
         # 4. Agent decision
@@ -58,17 +58,22 @@ class Orchestrator:
 
         # 6. Execute actions
         for action in actions:
-            if action["type"] == "tool":
-                tool_name = self.tool_router.route(user_input)
 
-                if tool_name:
+            # ================= TOOL PATH =================
+            if action["type"] == "tool":
+                tool_info = self.tool_router.route(user_input)
+
+                if tool_info:
                     tool_result = await self.functions.execute(
-                        tool_name,
+                        tool_info["tool"],
                         {"query": user_input}
                     )
+
                     results.append(tool_result)
 
+            # ================= REASONING PATH =================
             elif action["type"] == "reason":
+
                 reasoning_output = await self.reasoning.process(
                     input_text=user_input,
                     memory=memory_context,
@@ -91,13 +96,14 @@ class Orchestrator:
                     model
                 )
 
-                # STREAM READY OUTPUT
+                # STREAM OUTPUT
                 streamed = []
                 async for chunk in self.streamer.stream_tokens(final):
                     streamed.append(chunk)
 
                 final_text = "".join(streamed)
 
+                # MEMORY SAVE
                 await self.memory.store(user_id, user_input, final_text, score)
 
                 self.threads.add_message(thread_id, "assistant", final_text)
@@ -112,8 +118,9 @@ class Orchestrator:
                     "actions": actions
                 }
 
+        # TOOL ONLY RESPONSE
         return {
-            "response": str(results),
+            "response": results,
             "stream": False,
             "route": route,
             "thread_id": thread_id,
