@@ -13,6 +13,9 @@ from engine.streamer import Streamer
 from engine.context_compressor import ContextCompressor
 from engine.memory_ranker import MemoryRanker
 from engine.multi_agent import MultiAgent
+from engine.tool_chain import ToolChain
+from engine.selfreflection import SelfReflection
+from engine.autonomous_loop import AutonomousLoop
 
 from memory.memoryintelligence import MemoryIntelligence
 from ai.selector import ModelSelector
@@ -39,6 +42,10 @@ class Orchestrator:
         self.memory_ranker = MemoryRanker()
         self.multi_agent = MultiAgent()
 
+        self.tool_chain = ToolChain()
+        self.self_reflection = SelfReflection()
+        self.autonomous_loop = AutonomousLoop()
+
         self.functions = FunctionCalling({})
 
     async def handle(self, user_input: str, user_id: str, thread_id: str = None, context: dict = None):
@@ -56,6 +63,9 @@ class Orchestrator:
         # ROUTE
         route = self.router.route(user_input, context)
 
+        # AUTONOMOUS THINKING
+        auto_tasks = self.autonomous_loop.decide_next_task(user_input, str(memory_context))
+
         # AGENT DECISION
         actions = await self.agent.decide(user_input, route)
 
@@ -63,21 +73,25 @@ class Orchestrator:
 
         results = []
 
-        # ACTION EXECUTION
+        # EXECUTION LOOP
         for action in actions:
 
-            # TOOL PATH
+            # ================= TOOL PATH =================
             if action["type"] == "tool":
                 tool_info = self.tool_router.route(user_input)
 
                 if tool_info:
-                    tool_result = await self.functions.execute(
-                        tool_info["tool"],
-                        {"query": user_input}
-                    )
-                    results.append(tool_result)
 
-            # REASONING PATH
+                    # TOOL CHAINING (future support)
+                    result = await self.tool_chain.execute_chain(
+                        [tool_info["tool"]],
+                        user_input,
+                        self.functions
+                    )
+
+                    results.append(result)
+
+            # ================= REASONING PATH =================
             elif action["type"] == "reason":
 
                 compressed_memory = self.context_compressor.compress(
@@ -106,11 +120,22 @@ class Orchestrator:
                     model
                 )
 
-                # MULTI-AGENT CHECK
+                # MULTI MODEL CHECK
                 final = await self.multi_agent.run(
                     [model],
                     final
                 )
+
+                # SELF REFLECTION
+                reflection = self.self_reflection.reflect(user_input, final)
+
+                if reflection["needs_improvement"]:
+                    final = await self.improver.improve(
+                        user_input,
+                        final,
+                        score,
+                        model
+                    )
 
                 # STREAM OUTPUT
                 streamed = []
@@ -119,8 +144,10 @@ class Orchestrator:
 
                 final_text = "".join([c["token"] for c in streamed])
 
-                # MEMORY SAVE
-                await self.memory.store(user_id, user_input, final_text, score)
+                # MEMORY SCORING (IMPORTANT)
+                mem_score = self.memory_ranker.score(final_text)
+
+                await self.memory.store(user_id, user_input, final_text, mem_score)
 
                 self.threads.add_message(thread_id, "assistant", final_text)
 
@@ -128,9 +155,11 @@ class Orchestrator:
                     "response": final_text,
                     "stream": True,
                     "score": score,
+                    "memory_score": mem_score,
                     "route": route,
                     "model": model.__class__.__name__,
                     "thread_id": thread_id,
+                    "auto_tasks": auto_tasks,
                     "actions": actions
                 }
 
@@ -139,5 +168,6 @@ class Orchestrator:
             "stream": False,
             "route": route,
             "thread_id": thread_id,
+            "auto_tasks": auto_tasks,
             "actions": actions
         }
