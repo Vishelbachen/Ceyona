@@ -1,5 +1,3 @@
-
-
 import logging
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters
@@ -27,20 +25,24 @@ def start_bot(settings):
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
 
+    # =========================
+    # 🔥 IMPORTANT FIX
+    # =========================
+    async def post_init(application):
+        logger.info("[BOT] Cleaning Telegram state...")
+
+        await application.bot.delete_webhook(drop_pending_updates=True)
+
+        try:
+            await application.bot.get_updates(offset=-1)
+        except Exception as e:
+            logger.warning(f"[BOT] get_updates reset failed: {e}")
+
+    app.post_init = post_init   # 🔥 THIS WAS MISSING
+
     logger.info("BOT START (CLEAN MODE)")
 
-    # 🔥 ONLY THIS
     app.run_polling(
         drop_pending_updates=True,
         close_loop=False
     )
-
-async def post_init(application):
-    # kill EVERYTHING Telegram knows
-    await application.bot.delete_webhook(drop_pending_updates=True)
-
-    # HARD reset updates stream
-    try:
-        await application.bot.get_updates(offset=-1)
-    except Exception:
-        pass
