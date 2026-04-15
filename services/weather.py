@@ -1,29 +1,24 @@
-import requests
+# engine/tools/weather_tool.py
+
+from engine.services.weather import WeatherService
 
 
-class WeatherService:
+class WeatherTool:
     def __init__(self, settings):
-        self.api_key = settings.OPENWEATHER_API_KEY
-        self.base_url = "https://api.openweathermap.org/data/2.5/weather"
+        self.service = WeatherService(settings)
 
-    def get_weather(self, city: str, lang: str = "en") -> dict:
-        params = {
-            "q": city,
-            "appid": self.api_key,
-            "units": "metric",
-            "lang": lang
-        }
+    def run(self, city: str, lang: str = "en") -> str:
+        try:
+            data = self.service.get_weather(city, lang)
 
-        response = requests.get(self.base_url, params=params, timeout=10)
-        response.raise_for_status()
+            return (
+                f"Weather in {data['city']}:\n"
+                f"- Temperature: {data['temp']}°C\n"
+                f"- Feels like: {data['feels_like']}°C\n"
+                f"- Condition: {data['condition']}\n"
+                f"- Humidity: {data['humidity']}%\n"
+                f"- Wind: {data['wind']} m/s"
+            )
 
-        data = response.json()
-
-        return {
-            "city": city,
-            "temp": data["main"]["temp"],
-            "feels_like": data["main"]["feels_like"],
-            "condition": data["weather"][0]["description"],
-            "humidity": data["main"]["humidity"],
-            "wind": data["wind"]["speed"]
-        }
+        except Exception as e:
+            return f"Weather service error: {str(e)}"
