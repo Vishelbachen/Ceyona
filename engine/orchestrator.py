@@ -86,6 +86,9 @@ class Orchestrator:
         except Exception:
             self.access = None
 
+    # =========================================================
+    # MAIN PIPELINE
+    # =========================================================
     async def process(self, user_id: int, text: str) -> str:
         try:
             text = (text or "").strip()
@@ -106,20 +109,28 @@ class Orchestrator:
                     pass
 
             # ======================
-            # ROUTING
+            # ROUTE
             # ======================
             route = self.router.route(text)
+            tool_type = route.get("type")
+            tool_args = route.get("args")
+            confidence = route.get("confidence", 0.5)
 
-            # ======================
-            # TOOL EXECUTION (FAST PATH)
-            # ======================
             tool_result = None
 
-            if route.get("type") in ["weather", "maps", "search"]:
+            # =====================================================
+            # TOOL FAST PATH (IMPROVED SAFE EXECUTION)
+            # =====================================================
+            if tool_type in ["weather", "maps", "search"] and confidence >= 0.65:
                 try:
                     tool_result = await self.tools.execute(route, text)
 
-                    if tool_result:
+                    # SAFE VALIDATION
+                    if (
+                        tool_result
+                        and tool_result.get("status") == "success"
+                        and tool_result.get("data") is not None
+                    ):
                         return self._format_tool_response(tool_result)
 
                 except Exception as e:
@@ -198,7 +209,7 @@ class Orchestrator:
                 response = "No response generated."
 
             # ======================
-            # BRAIN VERIFY
+            # BRAIN VERIFY (SAFE)
             # ======================
             if self.brain:
                 try:
@@ -210,24 +221,29 @@ class Orchestrator:
                     pass
 
             # ======================
-            # PROOF ENGINE
+            # PROOF ENGINE (HARD SAFE)
             # ======================
             try:
-                response = self.proof.validate(
+                verified = self.proof.validate(
                     response,
                     brain.get("domain", "general")
                 )
+
+                if verified:
+                    response = verified
             except Exception:
                 pass
 
             # ======================
-            # SELF IMPROVE
+            # SELF IMPROVEMENT
             # ======================
             if self.scorer and self.corrector and self.improver:
                 try:
                     score = self.scorer.evaluate(response)
+
                     response = self.corrector.correct(response, score)
                     response = self.improver.improve(response, score)
+
                 except Exception:
                     pass
 
@@ -250,11 +266,21 @@ class Orchestrator:
             logger.exception(f"[ORCHESTRATOR FATAL] {e}")
             return self._fallback(text)
 
+    # =========================================================
+    # TOOL RESPONSE FORMATTER
+    # =========================================================
     def _format_tool_response(self, tool_result: dict) -> str:
-        tool = tool_result.get("tool")
-        data = tool_result.get("data")
-        return f"[{tool.upper()} RESULT]\n{data}"
+        tool = tool_result.get("tool", "tool")
+        data = tool_result.get("data", "")
 
+        if isinstance(data, dict):
+            return f"[{tool.upper()} RESULT]\n{data}"
+        else:
+            return f"[{tool.upper()} RESULT]\n{str(data)}"
+
+    # =========================================================
+    # FALLBACK
+    # =========================================================
     def _fallback(self, text: str) -> str:
         return (
             "Ceyona AI system error occurred.\n"
