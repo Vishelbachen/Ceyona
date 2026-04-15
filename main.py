@@ -1,5 +1,4 @@
 import logging
-import signal
 
 from bot import start_bot
 from config.settings import Settings
