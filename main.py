@@ -9,18 +9,19 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s"
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ceyona")
 
 
 async def main():
-    try:
-        settings = Settings()
-        logger.info("Starting Ceyona AI system...")
-        await start_bot(settings)
-    except Exception as e:
-        logger.exception(f"Fatal error: {e}")
-        raise
+    settings = Settings()
+
+    logger.info("Ceyona AI system starting...")
+
+    await start_bot(settings)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Shutdown complete")
