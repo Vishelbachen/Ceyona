@@ -1,6 +1,5 @@
 import logging
 import asyncio
-import os
 
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
@@ -10,9 +9,6 @@ from handler import handle_message
 logger = logging.getLogger(__name__)
 
 
-# =========================
-# MESSAGE HANDLER
-# =========================
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if not update.message:
@@ -46,20 +42,13 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
 
-# =========================
-# BOT START (CLEAN WEBHOOK MODE)
-# =========================
 def start_bot(settings):
-
     app = ApplicationBuilder().token(settings.BOT_TOKEN).build()
 
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler)
     )
 
-    # =========================
-    # INIT WEBHOOK
-    # =========================
     async def post_init(application):
         try:
             await application.bot.delete_webhook(drop_pending_updates=True)
@@ -77,11 +66,8 @@ def start_bot(settings):
 
     app.post_init = post_init
 
-    logger.info("BOT STARTED (PRO WEBHOOK MODE)")
+    logger.info("BOT STARTED (PRO MODE)")
 
-    # =========================
-    # RAILWAY ENTRY POINT
-    # =========================
     app.run_polling(
         drop_pending_updates=True,
         close_loop=False
