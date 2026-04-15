@@ -1,69 +1,33 @@
 class Constants:
+    """
+    Central system constants for AI orchestration engine
+    """
 
-    # =========================
-    # SYSTEM LIMITS (CORE SAFETY)
-    # =========================
-    MAX_MEMORY_ITEMS = 50
-    MAX_RESPONSE_TOKENS = 2000
-    MAX_USER_INPUT_LENGTH = 8000
+    # AI behavior
+    MAX_MEMORY_MESSAGES = 50
+    MAX_REASONING_STEPS = 5
 
-    # =========================
-    # TIMEOUTS (STABILITY LAYER)
-    # =========================
-    REQUEST_TIMEOUT_SECONDS = 45
-    AI_RETRY_ATTEMPTS = 2
+    # scoring thresholds
+    MIN_SCORE_ACCEPT = 2
+    HIGH_SCORE_BONUS = 4
 
-    # =========================
-    # MEMORY CONFIG
-    # =========================
-    MEMORY_EMBEDDING_MODEL = "text-embedding-3-small"
-    MEMORY_TOP_K = 5
-    MEMORY_ENABLE_CACHE = True
+    # routing keys
+    ROUTES = {
+        "CODING": "coding",
+        "KNOWLEDGE": "knowledge",
+        "GENERAL": "general",
+        "WEATHER": "weather",
+        "MAPS": "maps"
+    }
 
-    # =========================
-    # AI ROUTING (SMART FALLBACK SYSTEM)
-    # =========================
-    DEFAULT_MODEL = "gemini"
-    FALLBACK_MODEL = "groq"
+    # tool names
+    TOOLS = {
+        "SEARCH": "search",
+        "WEATHER": "weather",
+        "MAPS": "maps",
+        "ANALYTICS": "analytics"
+    }
 
-    ENABLE_MULTI_MODEL_ROUTING = True
-    ENABLE_AUTO_FALLBACK = True
-
-    # =========================
-    # MODEL PRIORITY ORDER
-    # =========================
-    MODEL_PRIORITY = [
-        "gemini",
-        "openai",
-        "groq",
-        "mistral"
-    ]
-
-    # =========================
-    # PAYMENT SYSTEM
-    # =========================
-    DEFAULT_PLAN = "free"
-    PREMIUM_PLAN = "pro"
-
-    FREE_REQUEST_LIMIT = 30
-    PRO_REQUEST_LIMIT = 500
-
-    # =========================
-    # SECURITY
-    # =========================
-    TOKEN_EXPIRE_MINUTES = 60
-    MAX_LOGIN_ATTEMPTS = 5
-
-    # =========================
-    # ENGINE BEHAVIOR FLAGS
-    # =========================
-    ENABLE_BRAIN_LAYER = True
-    ENABLE_REASONING_LAYER = True
-    ENABLE_SELF_CORRECTION = True
-    ENABLE_SELF_IMPROVE = True
-
-    # =========================
-    # LOGGING
-    # =========================
-    LOG_LEVEL = "INFO"
-    ENABLE_DEBUG_TRACE = False
+    # system limits
+    STREAM_CHUNK_SIZE = 4
+    THREAD_HISTORY_LIMIT = 100
