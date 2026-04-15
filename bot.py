@@ -1,6 +1,8 @@
 import logging
 import os
 import asyncio
+import signal
+
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters
 
@@ -9,14 +11,35 @@ from handler import handle_message
 logger = logging.getLogger(__name__)
 
 # =========================
-# SINGLE INSTANCE GUARD
+# LOCK CONFIG
 # =========================
 LOCK_FILE = "/tmp/ceyona_bot.lock"
 
 
+# =========================
+# SAFE SINGLE INSTANCE GUARD
+# =========================
 def ensure_single_instance():
     if os.path.exists(LOCK_FILE):
-        raise RuntimeError("Bot already running (lock exists)")
+        try:
+            with open(LOCK_FILE, "r") as f:
+                old_pid = int(f.read().strip())
+
+            # check if process exists
+            os.kill(old_pid, 0)
+
+            # process alive → block start
+            raise RuntimeError("Bot already running (active process detected)")
+
+        except ProcessLookupError:
+            # dead process → remove stale lock
+            logger.warning("[LOCK] stale process removed")
+            os.remove(LOCK_FILE)
+
+        except Exception:
+            # broken lock → remove
+            logger.warning("[LOCK] corrupted lock removed")
+            os.remove(LOCK_FILE)
 
     with open(LOCK_FILE, "w") as f:
         f.write(str(os.getpid()))
@@ -31,7 +54,7 @@ def cleanup_lock():
 
 
 # =========================
-# HANDLER WRAPPER
+# MESSAGE HANDLER
 # =========================
 async def message_handler(update: Update, context):
     try:
@@ -51,15 +74,14 @@ async def message_handler(update: Update, context):
             timeout=45
         )
 
-        if not response:
-            response = "No response generated."
+        response = response or "No response generated."
 
         await update.message.reply_text(response)
 
-        logger.info(f"[OUT] success user={user_id}")
+        logger.info(f"[OUT] user={user_id} OK")
 
     except asyncio.TimeoutError:
-        logger.warning("[TIMEOUT] handler exceeded limit")
+        logger.warning("[TIMEOUT] message handler")
         await update.message.reply_text("Request timeout. Try again.")
 
     except Exception as e:
@@ -68,22 +90,36 @@ async def message_handler(update: Update, context):
 
 
 # =========================
+# GRACEFUL SHUTDOWN
+# =========================
+def setup_signal_handlers():
+    def shutdown(signum, frame):
+        logger.info("Shutdown signal received")
+        cleanup_lock()
+        os._exit(0)
+
+    signal.signal(signal.SIGINT, shutdown)
+    signal.signal(signal.SIGTERM, shutdown)
+
+
+# =========================
 # BOT START
 # =========================
 def start_bot(settings):
     ensure_single_instance()
+    setup_signal_handlers()
 
     app = ApplicationBuilder().token(settings.BOT_TOKEN).build()
 
     # =========================
-    # TELEGRAM CLEAN INIT
+    # SAFE TELEGRAM INIT
     # =========================
     async def post_init(application):
         try:
             await application.bot.delete_webhook(drop_pending_updates=True)
             logger.info("[INIT] Webhook cleared")
 
-            # HARD reset updates stream
+            # flush updates safely
             try:
                 await application.bot.get_updates(offset=-1)
             except Exception:
@@ -95,7 +131,7 @@ def start_bot(settings):
     app.post_init = post_init
 
     # =========================
-    # HANDLER
+    # HANDLERS
     # =========================
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler)
