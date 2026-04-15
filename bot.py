@@ -1,14 +1,16 @@
-import logging
-from telegram.ext import ApplicationBuilder, MessageHandler, filters
-from handler import handle_message
-from config.settings import BOT_TOKEN
+import os
+from aiogram import Bot, Dispatcher
+from aiogram.enums import ParseMode
 
-logging.basicConfig(level=logging.INFO)
+from handler import router
 
-def run_bot():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+bot = Bot(
+    token=BOT_TOKEN,
+    parse_mode=ParseMode.HTML
+)
 
-    print("Bot started...")
-    app.run_polling()
+dp = Dispatcher()
+
+dp.include_router(router)
