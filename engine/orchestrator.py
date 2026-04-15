@@ -4,8 +4,10 @@ from engine.selfcorrection import SelfCorrection
 from engine.selfimprove import SelfImprove
 from engine.score import ScoreEngine
 
-from memory.memoryintelligence import MemoryIntelligence
+from engine.thread_manager import ThreadManager
+from engine.function_calling import FunctionCalling
 
+from memory.memoryintelligence import MemoryIntelligence
 from ai.selector import ModelSelector
 
 
@@ -20,19 +22,28 @@ class Orchestrator:
         self.memory = MemoryIntelligence()
         self.selector = ModelSelector()
 
-    async def handle(self, user_input: str, user_id: str, context: dict = None):
+        self.threads = ThreadManager()
+        self.functions = FunctionCalling({})
+
+    async def handle(self, user_input: str, user_id: str, thread_id: str = None, context: dict = None):
         context = context or {}
 
-        # 1. Memory
+        # 1. Thread handling
+        if not thread_id:
+            thread_id = self.threads.create_thread(user_id)
+
+        self.threads.add_message(thread_id, "user", user_input)
+
+        # 2. Memory
         memory_context = await self.memory.retrieve(user_id, user_input)
 
-        # 2. Route
+        # 3. Route
         route = self.router.route(user_input, context)
 
-        # 3. Model
+        # 4. Model selection
         model = self.selector.select(route, user_input, context)
 
-        # 4. Reasoning
+        # 5. Reasoning
         reasoning_output = await self.reasoning.process(
             input_text=user_input,
             memory=memory_context,
@@ -40,35 +51,33 @@ class Orchestrator:
             route=route
         )
 
-        # 5. Correction
+        # 6. Correction
         corrected = await self.corrector.correct(
             user_input,
             reasoning_output,
             model
         )
 
-        # 6. Score
+        # 7. Improve
         score = self.scorer.evaluate(corrected)
 
-        # 7. Improve if weak
-        improved = await self.improver.improve(
+        final = await self.improver.improve(
             user_input,
             corrected,
             score,
             model
         )
 
-        # 8. Store memory
-        await self.memory.store(
-            user_id=user_id,
-            user_input=user_input,
-            response=improved,
-            score=score
-        )
+        # 8. Save memory
+        await self.memory.store(user_id, user_input, final, score)
+
+        # 9. Thread save
+        self.threads.add_message(thread_id, "assistant", final)
 
         return {
-            "response": improved,
+            "response": final,
             "score": score,
             "route": route,
-            "model": model.__class__.__name__
+            "model": model.__class__.__name__,
+            "thread_id": thread_id
         }
