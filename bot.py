@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -13,84 +14,88 @@ logger = logging.getLogger(__name__)
 
 
 # =========================
-# MESSAGE RESOLVER (ROBUST)
+# SAFE MESSAGE EXTRACTOR
 # =========================
 def extract_message(update: Update):
-    """
-    Safely extracts ANY message type:
-    - text
-    - edited text
-    - captions (future extension)
-    """
     if not update:
         return None
 
-    message = (
+    return (
         update.message
         or update.edited_message
         or update.channel_post
         or update.edited_channel_post
     )
 
-    return message
-
 
 # =========================
-# HANDLER
+# SAFE HANDLER WRAPPER
 # =========================
 async def message_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         message = extract_message(update)
 
         if not message:
-            logger.warning("[BOT] No message in update")
             return
 
-        text = getattr(message, "text", None)
+        text = getattr(message, "text", None) or getattr(message, "caption", None)
 
         if not text:
-            text = getattr(message, "caption", None)
-
-        if not text:
-            logger.warning("[BOT] Empty non-text message ignored")
             return
 
         text = text.strip()
-        user_id = update.effective_user.id if update.effective_user else None
+        if not text:
+            return
 
-        logger.info(f"[BOT] IN | user_id={user_id} | text={text}")
+        user_id = update.effective_user.id if update.effective_user else 0
 
-        response = await handle_message(user_id, text)
+        logger.info(f"[BOT] IN | user={user_id}")
+
+        # 🔥 TIMEOUT PROTECTION (VERY IMPORTANT)
+        try:
+            response = await asyncio.wait_for(
+                handle_message(user_id, text),
+                timeout=45
+            )
+        except asyncio.TimeoutError:
+            response = "Request timeout. Please try again."
 
         if not response:
             response = "No response generated."
 
         await message.reply_text(response)
 
-        logger.info("[BOT] OUT | response sent")
+        logger.info(f"[BOT] OUT | success")
 
     except Exception as e:
-        logger.exception(f"[BOT] message_entry failed: {e}")
+        logger.exception(f"[BOT] handler crash: {e}")
+
+        try:
+            await message.reply_text("System error. Try again.")
+        except Exception:
+            pass
 
 
 # =========================
-# START BOT (CLEAN LIFECYCLE)
+# START BOT (RAILWAY SAFE)
 # =========================
 def start_bot(settings):
-    """
-    IMPORTANT:
-    run_polling MUST NOT be awaited (PTB design)
-    """
     app = ApplicationBuilder().token(settings.BOT_TOKEN).build()
 
-    # Catch ALL updates (no silent loss)
-    app.add_handler(
-        MessageHandler(filters.ALL, message_entry)
-    )
+    # 🔥 catch everything (no silent updates lost)
+    app.add_handler(MessageHandler(filters.ALL, message_entry))
 
-    logger.info("[BOT] Starting application...")
+    logger.info("[BOT] Initializing bot...")
 
-    # Single lifecycle entry (NO initialize/start manual calls)
+    # 🔥 IMPORTANT: clean webhook (Railway fix)
+    async def post_init(application):
+        await application.bot.delete_webhook(drop_pending_updates=True)
+        logger.info("[BOT] Webhook cleared")
+
+    app.post_init = post_init
+
+    # 🚀 START
+    logger.info("[BOT] Starting polling...")
     app.run_polling(
         drop_pending_updates=True,
         close_loop=False,
