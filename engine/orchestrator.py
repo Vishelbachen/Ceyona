@@ -11,7 +11,7 @@ from engine.score import Scorer
 from engine.selfcorrection import SelfCorrection
 from engine.selfimprove import SelfImprove
 from engine.brain import Brain
-from engine.proofengine import ProofEngine
+from engine.proof import ProofEngine
 
 from memory.supabase_client import SupabaseClient
 from memory.memorygraph import MemoryGraph
