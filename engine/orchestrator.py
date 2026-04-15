@@ -1,19 +1,59 @@
-from engine.router import route_model
-from engine.memory import retrieve_memory, store_memory
-from engine.reasoning import build_prompt
-from engine.selfcorrection import refine_output
+from engine.router import Router
+from engine.reasoning import ReasoningEngine
+from engine.selfcorrection import SelfCorrection
+from engine.score import ScoreEngine
 
-async def process_request(user_id: str, message: str):
-    memory = await retrieve_memory(user_id)
+from memory.memoryintelligence import MemoryIntelligence
 
-    prompt = build_prompt(message, memory)
+from ai.selector import ModelSelector
 
-    model = route_model(message)
 
-    raw_output = await model.generate(prompt)
+class Orchestrator:
+    def __init__(self):
+        self.router = Router()
+        self.reasoning = ReasoningEngine()
+        self.corrector = SelfCorrection()
+        self.scorer = ScoreEngine()
 
-    improved = refine_output(raw_output)
+        self.memory = MemoryIntelligence()
+        self.selector = ModelSelector()
 
-    await store_memory(user_id, message, improved)
+    async def handle(self, user_input: str, user_id: str, context: dict = None):
+        context = context or {}
 
-    return improved
+        # 1. Retrieve memory
+        memory_context = await self.memory.retrieve(user_id, user_input)
+
+        # 2. Route task
+        route = self.router.route(user_input, context)
+
+        # 3. Select model
+        model = self.selector.select(route, user_input)
+
+        # 4. Reasoning step
+        reasoning_output = await self.reasoning.process(
+            input_text=user_input,
+            memory=memory_context,
+            model=model,
+            route=route
+        )
+
+        # 5. Self-correction
+        corrected_output = await self.corrector.correct(
+            input_text=user_input,
+            output=reasoning_output,
+            model=model
+        )
+
+        # 6. Scoring
+        score = self.scorer.evaluate(corrected_output)
+
+        # 7. Save memory
+        await self.memory.store(user_id, user_input, corrected_output, score)
+
+        return {
+            "response": corrected_output,
+            "score": score,
+            "route": route,
+            "model": model
+        }
