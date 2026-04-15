@@ -1,9 +1,16 @@
-from ai.openai import OpenAIModel
-from ai.mistral import MistralModel
-from ai.groq import GroqModel
+class ModelSelector:
+    def select(self, route: str, user_input: str):
+        if route == "coding":
+            from ai.openai import OpenAIModel
+            return OpenAIModel()
 
-def get_model(message: str):
-    # простая логика, можно расширить
-    if len(message) > 500:
-        return OpenAIModel()
-    return GroqModel()
+        if route == "fast":
+            from ai.groq import GroqModel
+            return GroqModel()
+
+        if route == "creative":
+            from ai.mistral import MistralModel
+            return MistralModel()
+
+        from ai.gemini import GeminiModel
+        return GeminiModel()
