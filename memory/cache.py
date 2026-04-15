@@ -1,29 +1,16 @@
-import json
-import time
-
-
 class MemoryCache:
-    """
-    Simple in-memory cache (can be replaced with Redis later)
-    """
-
     def __init__(self):
-        self.store = {}
+        self.storage = {}
 
-    def set(self, key: str, value: dict, ttl: int = 300):
-        self.store[key] = {
-            "value": value,
-            "expire": time.time() + ttl
-        }
+    async def get(self, user_id: str):
+        return self.storage.get(user_id, [])
 
-    def get(self, key: str):
-        item = self.store.get(key)
+    async def append(self, user_id: str, value: str):
+        if user_id not in self.storage:
+            self.storage[user_id] = []
 
-        if not item:
-            return None
+        self.storage[user_id].append(value)
 
-        if time.time() > item["expire"]:
-            del self.store[key]
-            return None
-
-        return item["value"]
+        # ограничение памяти
+        if len(self.storage[user_id]) > 50:
+            self.storage[user_id] = self.storage[user_id][-50:]
