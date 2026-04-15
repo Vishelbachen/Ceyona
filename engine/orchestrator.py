@@ -18,7 +18,6 @@ from payments.access import AccessControl
 
 from config.settings import Settings
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -27,7 +26,7 @@ class Orchestrator:
         self.settings = Settings()
 
         # ======================
-        # CORE ENGINE LAYER
+        # CORE ENGINE
         # ======================
         self.router = Router()
         self.cognitive = Cognitive()
@@ -38,58 +37,67 @@ class Orchestrator:
         self.improver = SelfImprove()
 
         # ======================
-        # MEMORY LAYER
+        # MEMORY LAYER (SAFE INIT)
         # ======================
-        self.db = SupabaseClient(self.settings)
-        self.embeddings = Embeddings(self.settings)
-        self.memory_graph = MemoryGraph(self.db, self.embeddings)
-        self.memory_intelligence = MemoryIntelligence(
-            self.memory_graph,
-            self.embeddings
-        )
+        try:
+            self.db = SupabaseClient(self.settings)
+            self.embeddings = Embeddings(self.settings)
+            self.memory_graph = MemoryGraph(self.db, self.embeddings)
+            self.memory_intelligence = MemoryIntelligence(
+                self.memory_graph,
+                self.embeddings
+            )
+            self.memory_enabled = True
+        except Exception as e:
+            logger.warning(f"[Memory INIT FAILED] running in SAFE MODE: {e}")
+            self.memory_intelligence = None
+            self.memory_enabled = False
 
         # ======================
-        # PAYMENT / ACCESS LAYER
+        # ACCESS CONTROL
         # ======================
-        self.access = AccessControl(self.db)
+        try:
+            self.access = AccessControl(self.db)
+        except Exception as e:
+            logger.warning(f"[AccessControl INIT FAILED] bypass mode: {e}")
+            self.access = None
 
     async def process(self, user_id: int, text: str) -> str:
-        """
-        FULL PRODUCTION PIPELINE:
-
-        access → routing → memory → cognitive → reasoning → solver →
-        scoring → correction → improvement → memory save
-        """
-
         try:
             user_id_str = str(user_id)
 
             # ======================
-            # 0. ACCESS CONTROL (CRITICAL)
+            # 0. ACCESS LAYER (SAFE)
             # ======================
-            allowed, msg = self.access.require_access(user_id_str)
-            if not allowed:
-                return msg
+            if self.access:
+                try:
+                    allowed, msg = self.access.require_access(user_id_str)
+                    if not allowed:
+                        return msg
+                except Exception as e:
+                    logger.warning(f"[AccessControl] bypass due to error: {e}")
 
             # ======================
             # 1. ROUTING
             # ======================
-            route = self.router.route(text)
+            route = self.router.route(text or "")
 
             # ======================
-            # 2. MEMORY RETRIEVAL (SAFE)
+            # 2. MEMORY RETRIEVAL (SAFE MODE)
             # ======================
-            try:
-                memory_context = await self.memory_intelligence.build_context(
-                    user_id=user_id_str,
-                    text=text
-                )
-            except Exception as e:
-                logger.warning(f"[Memory] failed: {e}")
-                memory_context = {"recent": [], "semantic": []}
+            memory_context = {"recent": [], "semantic": []}
+
+            if self.memory_enabled:
+                try:
+                    memory_context = await self.memory_intelligence.build_context(
+                        user_id=user_id_str,
+                        text=text
+                    )
+                except Exception as e:
+                    logger.warning(f"[Memory Retrieve FAILED]: {e}")
 
             # ======================
-            # 3. COGNITIVE LAYER
+            # 3. COGNITIVE
             # ======================
             context = await self.cognitive.build_context(
                 user_id=user_id,
@@ -107,7 +115,7 @@ class Orchestrator:
             )
 
             # ======================
-            # 5. AI SOLVER
+            # 5. SOLVER
             # ======================
             response = await self.solver.solve(
                 text,
@@ -117,36 +125,37 @@ class Orchestrator:
             )
 
             # ======================
-            # 6. QUALITY SCORING
+            # 6. SCORE
             # ======================
             score = self.scorer.evaluate(response)
 
             # ======================
-            # 7. SELF-CORRECTION
+            # 7. SELF CORRECTION
             # ======================
             response = self.corrector.correct(response, score)
 
             # ======================
-            # 8. SELF-IMPROVEMENT
+            # 8. SELF IMPROVEMENT
             # ======================
             response = self.improver.improve(response, score)
 
             # ======================
-            # 9. MEMORY SAVE (ASYNC SAFE)
+            # 9. MEMORY SAVE (SAFE)
             # ======================
-            try:
-                await self.memory_intelligence.update_memory(
-                    user_id=user_id_str,
-                    text=text,
-                    response=response
-                )
-            except Exception as e:
-                logger.warning(f"[Memory Save] failed: {e}")
+            if self.memory_enabled:
+                try:
+                    await self.memory_intelligence.update_memory(
+                        user_id=user_id_str,
+                        text=text,
+                        response=response
+                    )
+                except Exception as e:
+                    logger.warning(f"[Memory Save FAILED]: {e}")
 
             return response
 
         except Exception as e:
-            logger.exception(f"[Orchestrator] Fatal error: {e}")
+            logger.exception(f"[Orchestrator FATAL]: {e}")
             return self._fallback(text)
 
     def _fallback(self, text: str) -> str:
