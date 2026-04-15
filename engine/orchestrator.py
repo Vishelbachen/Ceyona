@@ -10,6 +10,10 @@ from engine.tool_router import ToolRouter
 from engine.agent import Agent
 from engine.streamer import Streamer
 
+from engine.context_compressor import ContextCompressor
+from engine.memory_ranker import MemoryRanker
+from engine.multi_agent import MultiAgent
+
 from memory.memoryintelligence import MemoryIntelligence
 from ai.selector import ModelSelector
 
@@ -31,35 +35,38 @@ class Orchestrator:
         self.agent = Agent()
         self.streamer = Streamer()
 
+        self.context_compressor = ContextCompressor()
+        self.memory_ranker = MemoryRanker()
+        self.multi_agent = MultiAgent()
+
         self.functions = FunctionCalling({})
 
     async def handle(self, user_input: str, user_id: str, thread_id: str = None, context: dict = None):
         context = context or {}
 
-        # 1. Thread
+        # THREAD
         if not thread_id:
             thread_id = self.threads.create_thread(user_id)
 
         self.threads.add_message(thread_id, "user", user_input)
 
-        # 2. Memory
+        # MEMORY
         memory_context = await self.memory.retrieve(user_id, user_input)
 
-        # 3. Router (intent)
+        # ROUTE
         route = self.router.route(user_input, context)
 
-        # 4. Agent decision
+        # AGENT DECISION
         actions = await self.agent.decide(user_input, route)
 
-        # 5. Model selection
         model = self.selector.select(route, user_input, context)
 
         results = []
 
-        # 6. Execute actions
+        # ACTION EXECUTION
         for action in actions:
 
-            # ================= TOOL PATH =================
+            # TOOL PATH
             if action["type"] == "tool":
                 tool_info = self.tool_router.route(user_input)
 
@@ -68,15 +75,18 @@ class Orchestrator:
                         tool_info["tool"],
                         {"query": user_input}
                     )
-
                     results.append(tool_result)
 
-            # ================= REASONING PATH =================
+            # REASONING PATH
             elif action["type"] == "reason":
+
+                compressed_memory = self.context_compressor.compress(
+                    self.threads.get_thread(thread_id)["messages"]
+                )
 
                 reasoning_output = await self.reasoning.process(
                     input_text=user_input,
-                    memory=memory_context,
+                    memory=str(compressed_memory),
                     model=model,
                     route=route
                 )
@@ -96,12 +106,18 @@ class Orchestrator:
                     model
                 )
 
+                # MULTI-AGENT CHECK
+                final = await self.multi_agent.run(
+                    [model],
+                    final
+                )
+
                 # STREAM OUTPUT
                 streamed = []
                 async for chunk in self.streamer.stream_tokens(final):
                     streamed.append(chunk)
 
-                final_text = "".join(streamed)
+                final_text = "".join([c["token"] for c in streamed])
 
                 # MEMORY SAVE
                 await self.memory.store(user_id, user_input, final_text, score)
@@ -118,7 +134,6 @@ class Orchestrator:
                     "actions": actions
                 }
 
-        # TOOL ONLY RESPONSE
         return {
             "response": results,
             "stream": False,
