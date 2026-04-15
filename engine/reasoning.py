@@ -1,23 +1,12 @@
-from engine.tool_chain import ToolChain
+from engine.prompt import PromptTemplates
 
 
 class ReasoningEngine:
-    def __init__(self):
-        self.tool_chain = ToolChain()
-
     async def process(self, input_text: str, memory: str, model, route: str):
-        prompt = f"""
-You are advanced reasoning system.
 
-Memory:
-{memory}
+        prompt = PromptTemplates.reasoning_prompt(
+            memory=memory,
+            input_text=input_text
+        )
 
-Task:
-{input_text}
-
-Return best possible answer.
-"""
-
-        response = await model.generate(prompt)
-
-        return response
+        return await model.generate(prompt)
