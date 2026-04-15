@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 from engine.prompt import PromptBuilder
 from ai.selector import AISelector
@@ -24,71 +24,58 @@ class Solver:
     ) -> str:
 
         try:
-            prompt = self._build_prompt(text, context, reasoning)
+            prompt = self._build_prompt(text, context, reasoning, route)
 
-            logger.info(f"[Solver] Prompt built successfully")
+            logger.info(f"[Solver] route={route} prompt_ready=True")
 
             response = await self._generate_with_retry(prompt, route)
 
-            response = self._validate_response(response)
-
-            return response
+            return self._validate_response(response)
 
         except Exception as e:
-            logger.exception(f"[Solver] Critical failure: {e}")
+            logger.exception(f"[Solver] FAILURE: {e}")
             return self._fallback_response(text)
 
-    def _build_prompt(
-        self,
-        text: str,
-        context: Dict[str, Any],
-        reasoning: Dict[str, Any]
-    ) -> str:
-
+    def _build_prompt(self, text, context, reasoning, route):
         try:
             return self.prompt_builder.build(text, context, reasoning)
-
         except Exception as e:
             logger.warning(f"[Solver] PromptBuilder failed: {e}")
 
-            return (
-                f"User input: {text}\n"
-                f"Context: {context}\n"
-                f"Reasoning: {reasoning}"
-            )
+            return f"""
+User: {text}
+Context: {context}
+Reasoning: {reasoning}
+Route: {route}
+"""
 
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=8)
     )
-    async def _generate_with_retry(self, prompt: str, route: Dict[str, Any]) -> str:
-
-        if not route:
-            route = {"type": "general"}
+    async def _generate_with_retry(self, prompt: str, route: Dict[str, Any]):
 
         result = await self.selector.generate(prompt, route)
 
         if not result or not isinstance(result, str):
-            raise ValueError("Invalid or empty model response")
+            raise ValueError("Empty or invalid model output")
 
         return result
 
     def _validate_response(self, response: str) -> str:
-
-        if not isinstance(response, str):
-            return "Ceyona AI error: invalid response type"
+        if not response:
+            return "AI error: empty response"
 
         cleaned = response.strip()
 
-        if len(cleaned) < 3:
-            return "Ceyona AI: response too short, retry later."
+        if len(cleaned) < 2:
+            return "AI error: response too short"
 
         return cleaned
 
     def _fallback_response(self, text: str) -> str:
-
         return (
-            "Ceyona AI encountered a system-level issue.\n"
-            "Please try again.\n\n"
+            "AI system temporary error.\n"
+            "Please retry.\n\n"
             f"Input: {text}"
         )
