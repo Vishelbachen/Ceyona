@@ -71,7 +71,7 @@ class Orchestrator:
         memory_context = await self.memory.retrieve(user_id, user_input)
 
         # =========================
-        # ROUTING (intent only)
+        # ROUTING
         # =========================
         route = self.router.route(user_input, context)
 
@@ -101,23 +101,29 @@ class Orchestrator:
         # =========================
         for action in actions:
 
-            # ---------------- TOOL EXECUTION ----------------
-            if action.get("type") == "tool":
+            action_type = action.get("type")
+
+            # ================= TOOL =================
+            if action_type == "tool":
 
                 tool_info = self.tool_router.route(user_input)
 
-                if tool_info and "tool" in tool_info:
+                tool_name = None
+                if isinstance(tool_info, dict):
+                    tool_name = tool_info.get("tool")
+
+                if tool_name:
 
                     tool_result = await self.tool_chain.execute_chain(
-                        [tool_info["tool"]],
+                        [tool_name],
                         user_input,
                         self.functions
                     )
 
                     results.append(tool_result)
 
-            # ---------------- REASONING EXECUTION ----------------
-            elif action.get("type") == "reason":
+            # ================= REASONING =================
+            elif action_type == "reason":
 
                 compressed_memory = self.context_compressor.compress(
                     self.threads.get_thread(thread_id)["messages"]
@@ -125,7 +131,7 @@ class Orchestrator:
 
                 reasoning_output = await self.reasoning.process(
                     input_text=user_input,
-                    memory=str(compressed_memory),
+                    memory=f"{memory_context}\n{compressed_memory}",
                     model=model,
                     route=route
                 )
@@ -145,17 +151,13 @@ class Orchestrator:
                     model
                 )
 
-                # =========================
-                # MULTI-MODEL VALIDATION
-                # =========================
+                # ================= MULTI MODEL =================
                 validated = await self.multi_agent.run(
                     [model],
                     improved
                 )
 
-                # =========================
-                # SELF REFLECTION LOOP
-                # =========================
+                # ================= SELF REFLECTION =================
                 reflection = self.self_reflection.reflect(
                     user_input,
                     validated
@@ -169,19 +171,18 @@ class Orchestrator:
                         model
                     )
 
-                # =========================
-                # STREAM OUTPUT
-                # =========================
+                # ================= STREAM =================
                 streamed_chunks = []
 
                 async for chunk in self.streamer.stream_tokens(validated):
-                    streamed_chunks.append(chunk.get("token", ""))
+                    if isinstance(chunk, dict):
+                        streamed_chunks.append(chunk.get("token", ""))
+                    else:
+                        streamed_chunks.append(str(chunk))
 
                 final_response = "".join(streamed_chunks)
 
-                # =========================
-                # MEMORY SCORING + STORAGE
-                # =========================
+                # ================= MEMORY =================
                 mem_score = self.memory_ranker.score(final_response)
 
                 await self.memory.store(
@@ -197,16 +198,18 @@ class Orchestrator:
                     final_response
                 )
 
-        # =========================
-        # FINAL RESPONSE WRAPPER
-        # =========================
+        # ================= FALLBACK =================
+        if not final_response and results:
+            final_response = str(results)
+
+        # ================= RETURN =================
         return {
-            "response": final_response if final_response else str(results),
+            "response": final_response or "",
             "stream": final_response is not None,
             "score": score,
             "memory_score": mem_score,
             "route": route,
-            "model": model.__class__.__name__,
+            "model": getattr(model, "__class__", type(model)).__name__,
             "thread_id": thread_id,
             "auto_tasks": auto_tasks,
             "actions": actions
