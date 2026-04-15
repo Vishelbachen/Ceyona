@@ -10,10 +10,10 @@ logger = logging.getLogger(__name__)
 
 class Tools:
     """
-    Tool Execution Layer v2 (Ceyona AI)
-    - deterministic routing
+    PRO TOOL EXECUTOR v3
+    - structured execution
     - safe fallback
-    - structured outputs
+    - GPT-style output format
     """
 
     def __init__(self, settings, db=None):
@@ -26,61 +26,47 @@ class Tools:
     # MAIN EXECUTOR
     # =========================
     async def execute(self, route: dict, text: str) -> Dict[str, Any]:
-        """
-        route example:
-        {
-            "type": "weather",
-            "domain": "api"
-        }
-        """
-
         if not route:
-            return {"status": "no_route"}
+            return self._empty()
 
-        tool = (route.get("type") or "").lower()
+        tool = (route.get("tool") or "llm").lower()
+        args = route.get("args")
 
         try:
             # =========================
-            # WEATHER TOOL
+            # WEATHER
             # =========================
             if tool == "weather":
-                city = self._extract_city(text)
+                city = args if isinstance(args, str) else "Tbilisi"
                 data = self.weather.get_weather(city)
 
-                return {
-                    "tool": "weather",
-                    "data": data
-                }
+                return self._wrap("weather", data)
 
             # =========================
-            # MAPS TOOL
+            # MAPS
             # =========================
             if tool == "maps":
-                data = self.maps.geocode(text)
-
-                return {
-                    "tool": "maps",
-                    "data": data
-                }
+                data = self.maps.geocode(args or text)
+                return self._wrap("maps", data)
 
             # =========================
-            # SEARCH TOOL
+            # SEARCH
             # =========================
             if tool == "search":
-                data = self.search.search(text)
+                data = self.search.search(args or text)
+                return self._wrap("search", data)
 
+            # =========================
+            # LLM fallback
+            # =========================
+            if tool == "llm":
                 return {
-                    "tool": "search",
-                    "data": data
+                    "tool": "llm",
+                    "data": text,
+                    "status": "passed_to_solver"
                 }
 
-            # =========================
-            # NO TOOL
-            # =========================
-            return {
-                "tool": "none",
-                "data": None
-            }
+            return self._empty()
 
         except Exception as e:
             logger.exception(f"[TOOLS ERROR]: {e}")
@@ -90,30 +76,21 @@ class Tools:
             }
 
     # =========================
-    # CITY EXTRACTION (SAFE v2)
+    # RESPONSE WRAPPER (GPT STYLE)
     # =========================
-    def _extract_city(self, text: str) -> str:
-        """
-        Better heuristic without ML dependency
-        """
-
-        if not text:
-            return "Tbilisi"
-
-        blacklist = {
-            "weather", "погода", "today", "сегодня",
-            "какая", "каков", "температура", "now"
+    def _wrap(self, tool: str, data: Any) -> Dict[str, Any]:
+        return {
+            "tool": tool,
+            "data": data,
+            "status": "success"
         }
 
-        words = text.replace(",", " ").split()
-
-        candidates = [
-            w for w in words
-            if w.lower() not in blacklist and len(w) > 2
-        ]
-
-        if not candidates:
-            return "Tbilisi"
-
-        # last meaningful token = most likely city
-        return candidates[-1]
+    # =========================
+    # EMPTY SAFE RESPONSE
+    # =========================
+    def _empty(self) -> Dict[str, Any]:
+        return {
+            "tool": "none",
+            "data": None,
+            "status": "no_action"
+        }
