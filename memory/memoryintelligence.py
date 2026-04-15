@@ -1,11 +1,22 @@
+from memory.cache import MemoryCache
+
+
 class MemoryIntelligence:
     def __init__(self):
-        self.storage = {}
+        self.cache = MemoryCache()
 
     async def retrieve(self, user_id: str, query: str):
-        return self.storage.get(user_id, "")
+        history = await self.cache.get(user_id)
+
+        if not history:
+            return ""
+
+        # простая релевантность (заготовка под embeddings)
+        relevant = history[-5:]
+
+        return "\n".join(relevant)
 
     async def store(self, user_id: str, user_input: str, response: str, score: int):
-        history = self.storage.get(user_id, "")
-        new_entry = f"\nUser: {user_input}\nAI: {response}"
-        self.storage[user_id] = history + new_entry
+        entry = f"User: {user_input}\nAI: {response}\nScore: {score}"
+
+        await self.cache.append(user_id, entry)
