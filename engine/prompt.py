@@ -1,59 +1,56 @@
-class PromptBuilder:
-    def build(self, text, context, reasoning):
+import logging
+from typing import Dict, Any
 
-        domain = reasoning.get("domain", "general")
-        route_type = reasoning.get("type", "general")
+from engine.prompt import PromptBuilder
+from ai.selector import AISelector
+from config.settings import Settings
+from tenacity import retry, stop_after_attempt, wait_exponential
 
-        # =========================
-        # MATH MODE (VERY STRICT)
-        # =========================
-        if domain == "math":
-            return f"""
-You are a world-class mathematician and theoretical scientist.
+logger = logging.getLogger(__name__)
 
-RULES:
-- Solve step by step with full logical derivation
-- Use formal mathematical notation
-- Do NOT chat or add filler phrases
-- No emojis
-- No conversational tone
-- Provide final answer clearly
 
-TASK:
-{text}
-"""
+class Solver:
+    def __init__(self):
+        self.settings = Settings()
+        self.prompt_builder = PromptBuilder()
+        self.selector = AISelector(self.settings)
 
-        # =========================
-        # API TOOL MODE
-        # =========================
-        if route_type in ["weather", "maps", "search"]:
-            return f"""
-You are a precise API assistant.
+    async def solve(
+        self,
+        text: str,
+        context: Dict[str, Any],
+        reasoning: Dict[str, Any],
+        route: Dict[str, Any]
+    ) -> str:
 
-RULES:
-- Return only factual structured response
-- No conversation
-- No greetings
-- Be minimal and accurate
+        try:
+            prompt = self._build_prompt(text, context, reasoning)
 
-TASK:
-{text}
-"""
+            response = await self._generate_with_retry(prompt, route)
 
-        # =========================
-        # GENERAL LLM MODE
-        # =========================
-        return f"""
-You are a helpful AI assistant.
+            return self._clean(response)
 
-Context:
-{context}
+        except Exception as e:
+            logger.exception(f"[Solver] Failed: {e}")
+            return self._fallback(text)
 
-Reasoning:
-{reasoning}
+    def _build_prompt(self, text, context, reasoning):
+        return self.prompt_builder.build(text, context, reasoning)
 
-User:
-{text}
+    @retry(stop=stop_after_attempt(2), wait=wait_exponential(min=1, max=4))
+    async def _generate_with_retry(self, prompt: str, route: Dict[str, Any]) -> str:
+        result = await self.selector.generate(prompt, route)
 
-Provide a clear, useful answer.
-"""
+        if not result:
+            raise ValueError("Empty model output")
+
+        return result
+
+    def _clean(self, response: str) -> str:
+        return response.strip()
+
+    def _fallback(self, text: str) -> str:
+        return (
+            "System temporarily unavailable.\n"
+            f"Input: {text}"
+        )
