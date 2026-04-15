@@ -8,21 +8,15 @@ orchestrator = Orchestrator()
 
 async def handle_message(user_id: int, text: str) -> str:
     try:
-        if not text or not text.strip():
-            return "Empty input received."
+        text = (text or "").strip()
 
-        text = text.strip()
+        if not text:
+            return "Empty input."
 
-        result = await orchestrator.process(
-            user_id=user_id,
-            text=text
-        )
+        result = await orchestrator.process(user_id, text)
 
-        if not result:
-            return "No response generated."
-
-        return str(result)
+        return str(result) if result else "No response"
 
     except Exception as e:
-        logger.exception(f"[HANDLER] Error: {e}")
+        logger.exception(f"[HANDLER ERROR] {e}")
         return "System error. Try again later."
