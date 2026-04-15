@@ -38,3 +38,6 @@ MVP in development stage
 ## License
 
 All rights reserved.
+
+This project is proprietary software.
+Unauthorized copying, distribution, or modification is prohibited.
