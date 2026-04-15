@@ -1,19 +1,21 @@
-class SelfCorrection:
-    async def correct(self, input_text: str, output: str, model):
+class SelfReflection:
+    """
+    AI evaluates its own output quality
+    """
+
+    def reflect(self, input_text: str, output: str):
+        score = 0
+
         if len(output) < 20:
-            return output
+            score -= 2
 
-        prompt = f"""
-Check response for hallucinations or incorrect facts.
+        if "I don't know" in output:
+            score -= 1
 
-User:
-{input_text}
+        if len(output) > 200:
+            score += 1
 
-Response:
-{output}
-
-If correct, return as is.
-If incorrect, fix it.
-"""
-
-        return await model.generate(prompt)
+        return {
+            "score": score,
+            "needs_improvement": score < 0
+        }
