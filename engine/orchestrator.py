@@ -1,8 +1,8 @@
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from engine.router import Router
-from tools.tools import Tools
+from services.tools import Tools
 
 from engine.cognitive import Cognitive
 from engine.reasoning import Reasoning
@@ -30,7 +30,7 @@ class Orchestrator:
         self.settings = Settings()
 
         # ======================
-        # ROUTING + TOOLS
+        # ROUTER + TOOLS
         # ======================
         self.router = Router()
         self.tools = Tools(self.settings)
@@ -109,28 +109,22 @@ class Orchestrator:
                     pass
 
             # ======================
-            # ROUTE
+            # ROUTING
             # ======================
             route = self.router.route(text)
+
             tool_type = route.get("type")
             tool_args = route.get("args")
-            confidence = route.get("confidence", 0.5)
-
-            tool_result = None
+            confidence = float(route.get("confidence") or 0.5)
 
             # =====================================================
-            # TOOL FAST PATH (IMPROVED SAFE EXECUTION)
+            # TOOL FAST PATH (SAFE + CONTROLLED)
             # =====================================================
-            if tool_type in ["weather", "maps", "search"] and confidence >= 0.65:
+            if tool_type in ("weather", "maps", "search") and confidence >= 0.65:
                 try:
                     tool_result = await self.tools.execute(route, text)
 
-                    # SAFE VALIDATION
-                    if (
-                        tool_result
-                        and tool_result.get("status") == "success"
-                        and tool_result.get("data") is not None
-                    ):
+                    if self._is_valid_tool_result(tool_result):
                         return self._format_tool_response(tool_result)
 
                 except Exception as e:
@@ -209,7 +203,7 @@ class Orchestrator:
                 response = "No response generated."
 
             # ======================
-            # BRAIN VERIFY (SAFE)
+            # BRAIN VERIFY
             # ======================
             if self.brain:
                 try:
@@ -221,14 +215,13 @@ class Orchestrator:
                     pass
 
             # ======================
-            # PROOF ENGINE (HARD SAFE)
+            # PROOF ENGINE
             # ======================
             try:
                 verified = self.proof.validate(
                     response,
                     brain.get("domain", "general")
                 )
-
                 if verified:
                     response = verified
             except Exception:
@@ -240,10 +233,8 @@ class Orchestrator:
             if self.scorer and self.corrector and self.improver:
                 try:
                     score = self.scorer.evaluate(response)
-
                     response = self.corrector.correct(response, score)
                     response = self.improver.improve(response, score)
-
                 except Exception:
                     pass
 
@@ -267,6 +258,16 @@ class Orchestrator:
             return self._fallback(text)
 
     # =========================================================
+    # TOOL VALIDATION (ANTI-CRASH FIX)
+    # =========================================================
+    def _is_valid_tool_result(self, tool_result: Any) -> bool:
+        return (
+            isinstance(tool_result, dict)
+            and tool_result.get("status") == "success"
+            and tool_result.get("data") is not None
+        )
+
+    # =========================================================
     # TOOL RESPONSE FORMATTER
     # =========================================================
     def _format_tool_response(self, tool_result: dict) -> str:
@@ -275,8 +276,7 @@ class Orchestrator:
 
         if isinstance(data, dict):
             return f"[{tool.upper()} RESULT]\n{data}"
-        else:
-            return f"[{tool.upper()} RESULT]\n{str(data)}"
+        return f"[{tool.upper()} RESULT]\n{str(data)}"
 
     # =========================================================
     # FALLBACK
