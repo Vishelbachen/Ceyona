@@ -1,3 +1,4 @@
+import logging
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -7,11 +8,13 @@ from telegram.ext import (
 )
 
 from handler import handle_message
-import logging
 
 logger = logging.getLogger(__name__)
 
 
+# =========================
+# MESSAGE HANDLER
+# =========================
 async def message_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if not update or not update.message:
@@ -25,7 +28,7 @@ async def message_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         text = update.message.text.strip()
 
-        logger.info(f"[BOT] Incoming message: user_id={user_id} text={text}")
+        logger.info(f"[BOT] Incoming message | user_id={user_id} | text={text}")
 
         response = await handle_message(user_id, text)
 
@@ -47,19 +50,32 @@ async def message_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
 
+# =========================
+# BOT START
+# =========================
 async def start_bot(settings):
     app = ApplicationBuilder().token(settings.BOT_TOKEN).build()
 
+    # handler registration
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, message_entry)
     )
 
+    # lifecycle start
     await app.initialize()
     await app.start()
 
-    # 🔥 CRITICAL FIX (Railway + Telegram stability)
+    logger.info("[BOT] Bot initialized")
+
+    # IMPORTANT: clean webhook (polling mode safety)
     await app.bot.delete_webhook(drop_pending_updates=True)
 
-    # 🔥 CLEAN START
-    await app.updater.start_polling()
-    await app.updater.idle()
+    logger.info("[BOT] Webhook cleared, starting polling")
+
+    # =========================
+    # PRODUCTION SAFE LOOP
+    # =========================
+    await app.run_polling(
+        close_loop=False,
+        drop_pending_updates=True
+    )
