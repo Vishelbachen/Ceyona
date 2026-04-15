@@ -58,7 +58,7 @@ class Orchestrator:
         context = context or {}
 
         # =========================
-        # THREAD MANAGEMENT (SAFE)
+        # THREAD MANAGEMENT (ROBUST)
         # =========================
         if not thread_id:
             thread_id = self.threads.create_thread(user_id)
@@ -66,21 +66,20 @@ class Orchestrator:
         self.threads.add_message(thread_id, "user", user_input)
 
         thread_data = self.threads.get_thread(thread_id) or {}
-        messages = thread_data.get("messages", [])
+        messages = thread_data.get("messages") or []
 
         # =========================
         # MEMORY RETRIEVAL (SAFE)
         # =========================
-        memory_context = await self.memory.retrieve(user_id, user_input)
-        memory_context = memory_context or ""
+        memory_context = await self.memory.retrieve(user_id, user_input) or ""
 
         # =========================
-        # ROUTING (INTENT LAYER)
+        # ROUTING LAYER (INTENT)
         # =========================
         route = self.router.route(user_input, context)
 
         # =========================
-        # AUTONOMOUS SIGNALS
+        # AUTONOMOUS TRIGGERS
         # =========================
         auto_tasks = self.autonomous_loop.decide_next_task(
             user_input,
@@ -96,7 +95,6 @@ class Orchestrator:
 
         results = []
         final_response = ""
-
         score = 0
         mem_score = 0
 
@@ -107,14 +105,11 @@ class Orchestrator:
 
             action_type = action.get("type")
 
-            # ---------------- TOOL PATH ----------------
+            # ---------------- TOOL EXECUTION ----------------
             if action_type == "tool":
 
                 tool_info = self.tool_router.route(user_input)
-
-                tool_name = None
-                if isinstance(tool_info, dict):
-                    tool_name = tool_info.get("tool")
+                tool_name = tool_info.get("tool") if isinstance(tool_info, dict) else None
 
                 if tool_name:
 
@@ -125,10 +120,14 @@ class Orchestrator:
                             self.functions
                         )
                         results.append(tool_result)
-                    except Exception as e:
-                        results.append({"tool_error": str(e)})
 
-            # ---------------- REASONING PATH ----------------
+                    except Exception as e:
+                        results.append({
+                            "tool_error": str(e),
+                            "tool": tool_name
+                        })
+
+            # ---------------- REASONING PIPELINE ----------------
             elif action_type == "reason":
 
                 compressed_memory = self.context_compressor.compress(messages)
@@ -138,13 +137,13 @@ class Orchestrator:
                     memory=f"{memory_context}\n{compressed_memory}",
                     model=model,
                     route=route
-                )
+                ) or ""
 
                 corrected = await self.corrector.correct(
                     user_input,
                     reasoning_output,
                     model
-                )
+                ) or reasoning_output
 
                 score = self.scorer.evaluate(corrected) or 0
 
@@ -153,15 +152,13 @@ class Orchestrator:
                     corrected,
                     score,
                     model
-                )
+                ) or corrected
 
-                # ================= MULTI MODEL VALIDATION =================
+                # ================= MULTI-MODEL VALIDATION =================
                 validated = await self.multi_agent.run(
                     [model],
                     improved
-                )
-
-                validated = validated or improved
+                ) or improved
 
                 # ================= SELF REFLECTION =================
                 reflection = self.self_reflection.reflect(
@@ -175,9 +172,9 @@ class Orchestrator:
                         validated,
                         score,
                         model
-                    )
+                    ) or validated
 
-                # ================= STREAM OUTPUT =================
+                # ================= STREAMING LAYER =================
                 streamed_chunks = []
 
                 try:
@@ -202,25 +199,23 @@ class Orchestrator:
                     mem_score
                 )
 
+                # ================= THREAD STORAGE =================
                 self.threads.add_message(
                     thread_id,
                     "assistant",
                     final_response
                 )
 
-        # ================= FALLBACK (STRICT) =================
+        # ================= FALLBACK SAFETY =================
         if not final_response:
-            if results:
-                final_response = str(results)
-            else:
-                final_response = ""
+            final_response = str(results) if results else ""
 
-        # ================= FINAL RESPONSE =================
+        # ================= FINAL OUTPUT CONTRACT =================
         return {
             "response": final_response,
             "stream": bool(final_response),
-            "score": score,
-            "memory_score": mem_score,
+            "score": score or 0,
+            "memory_score": mem_score or 0,
             "route": route,
             "model": getattr(model, "__class__", type(model)).__name__,
             "thread_id": thread_id,
