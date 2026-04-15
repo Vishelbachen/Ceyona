@@ -1,22 +1,16 @@
 class Agent:
     """
-    Agent mode = system can decide actions autonomously
+    Решает: tool OR reasoning
     """
 
     async def decide(self, user_input: str, route: str):
         text = user_input.lower()
 
-        actions = []
+        tool_keywords = [
+            "weather", "search", "map", "price", "crypto", "ton"
+        ]
 
-        # tool use
-        if "weather" in text:
-            actions.append({"type": "tool", "name": "weather"})
+        if any(x in text for x in tool_keywords):
+            return [{"type": "tool"}]
 
-        if "search" in text:
-            actions.append({"type": "tool", "name": "search"})
-
-        # reasoning fallback
-        if not actions:
-            actions.append({"type": "reason"})
-
-        return actions
+        return [{"type": "reason"}]
