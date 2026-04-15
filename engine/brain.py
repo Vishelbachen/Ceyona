@@ -1,70 +1,83 @@
-import logging
-
-logger = logging.getLogger(__name__)
+import re
+from typing import Dict, Any
 
 
 class Brain:
     """
-    Ceyona Expert Brain v2
-    Domain-aware reasoning controller
+    Ceyona Expert Brain v3
+    - domain routing
+    - reasoning enhancer
+    - structured prompt augmentation
     """
 
-    def analyze(self, text: str, route: dict) -> dict:
-        text_lower = text.lower()
+    def __init__(self):
+        self.math_keywords = ["solve", "equation", "prove", "function", "integral", "derivative", "f(", "lim"]
+        self.physics_keywords = ["force", "energy", "velocity", "acceleration", "newton", "pressure"]
+        self.chemistry_keywords = ["reaction", "molecule", "compound", "acid", "base", "molar"]
+        self.code_keywords = ["code", "python", "bug", "function", "class", "error", "debug"]
 
-        domain = route.get("domain", "general")
+    def detect_domain(self, text: str) -> str:
+        t = text.lower()
 
-        # =========================
-        # DOMAIN DETECTION OVERRIDE
-        # =========================
+        if any(k in t for k in self.math_keywords):
+            return "math"
 
-        if any(x in text_lower for x in ["prove", "theorem", "f(", "limit", "integral", "derivative"]):
-            domain = "math"
+        if any(k in t for k in self.physics_keywords):
+            return "physics"
 
-        elif any(x in text_lower for x in ["force", "energy", "velocity", "physics"]):
-            domain = "physics"
+        if any(k in t for k in self.chemistry_keywords):
+            return "chemistry"
 
-        elif any(x in text_lower for x in ["reaction", "h2o", "chemical", "chemistry"]):
-            domain = "chemistry"
+        if any(k in t for k in self.code_keywords):
+            return "coding"
 
-        elif any(x in text_lower for x in ["code", "function", "algorithm", "python"]):
-            domain = "coding"
+        return "general"
 
-        logger.info(f"[Brain] domain={domain}")
+    def enhance_reasoning(self, text: str, reasoning: Dict[str, Any]) -> Dict[str, Any]:
+        domain = self.detect_domain(text)
+
+        enhanced = dict(reasoning or {})
+        enhanced["domain"] = domain
+
+        enhanced["instructions"] = self._get_domain_instructions(domain)
+
+        return enhanced
+
+    def _get_domain_instructions(self, domain: str) -> str:
+        if domain == "math":
+            return (
+                "Solve step-by-step. "
+                "Show derivation clearly. "
+                "Verify final answer."
+            )
+
+        if domain == "physics":
+            return (
+                "Use physical laws explicitly. "
+                "Define variables. "
+                "Check units consistency."
+            )
+
+        if domain == "chemistry":
+            return (
+                "Balance reactions if needed. "
+                "Explain mechanism logically."
+            )
+
+        if domain == "coding":
+            return (
+                "Explain logic. Provide correct code. "
+                "Check edge cases."
+            )
+
+        return "Be clear, structured and correct."
+
+    def build_brain_context(self, text: str, context: Dict[str, Any], reasoning: Dict[str, Any]) -> Dict[str, Any]:
+        domain = self.detect_domain(text)
 
         return {
             "domain": domain,
-            "mode": self._select_mode(domain),
-            "needs_verification": True
+            "context": context,
+            "reasoning": self.enhance_reasoning(text, reasoning),
+            "mode": f"ceyona_brain_v3::{domain}"
         }
-
-    def _select_mode(self, domain: str) -> str:
-
-        if domain == "math":
-            return "proof_mode"
-
-        if domain == "physics":
-            return "formula_mode"
-
-        if domain == "chemistry":
-            return "reaction_mode"
-
-        if domain == "coding":
-            return "algorithm_mode"
-
-        return "general_mode"
-
-    def verify(self, response: str, domain: str) -> str:
-        """
-        Simple self-check layer (v2 lightweight version)
-        """
-
-        if not response:
-            return "Invalid response"
-
-        # базовая защита от мусора
-        if len(response) < 10:
-            return "Response too short, recompute needed"
-
-        # можно расширить позже (LLM-as-judge)
-        return response
