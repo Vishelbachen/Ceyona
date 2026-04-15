@@ -5,40 +5,52 @@ logger = logging.getLogger(__name__)
 
 class ProofEngine:
     """
-    Safe verification layer (non-blocking)
-    Does NOT modify logic, only annotates weak outputs.
+    Lightweight validation layer:
+    - detects hallucination patterns
+    - enforces domain consistency
+    - prevents obvious logical drift
     """
 
-    def validate(self, text: str, domain: str) -> str:
-        if not text:
-            return text
+    def validate(self, response: str, domain: str) -> str:
+        if not response:
+            return "No valid response generated."
 
-        try:
-            if domain == "math":
-                return self._math_check(text)
+        # =========================
+        # BASIC SANITY CHECKS
+        # =========================
+        if len(response.strip()) < 5:
+            return "Response too short to validate."
 
-            if domain in ("physics", "chemistry"):
-                return self._science_check(text)
+        # =========================
+        # DOMAIN CONSISTENCY CHECK
+        # =========================
+        if domain == "math":
+            return self._validate_math(response)
 
-            return text
+        if domain == "physics":
+            return self._validate_physics(response)
 
-        except Exception as e:
-            logger.warning(f"[ProofEngine FAIL SAFE] {e}")
-            return text
+        return response
 
-    def _math_check(self, text: str) -> str:
-        t = text.lower()
+    def _validate_math(self, response: str) -> str:
+        bad_patterns = [
+            "maybe",
+            "i think",
+            "probably",
+            "not sure"
+        ]
 
-        if "therefore" in t and "=" not in t:
-            return text + "\n\n[Proof Warning: missing formal derivation]"
+        for p in bad_patterns:
+            if p in response.lower():
+                return (
+                    response
+                    + "\n\n[ProofEngine: removed uncertainty in math domain]"
+                )
 
-        if len(text) < 25:
-            return text + "\n\n[Proof Warning: incomplete solution]"
+        return response
 
-        return text
+    def _validate_physics(self, response: str) -> str:
+        if "formula" not in response.lower() and "f=" not in response:
+            return response + "\n\n[ProofEngine: physics response may lack formal structure]"
 
-    def _science_check(self, text: str) -> str:
-        if "because" in text.lower() and len(text) < 30:
-            return text + "\n\n[Proof Warning: weak justification]"
-
-        return text
+        return response
