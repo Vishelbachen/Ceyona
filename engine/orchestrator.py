@@ -51,47 +51,63 @@ class Orchestrator:
     async def handle(self, user_input: str, user_id: str, thread_id: str = None, context: dict = None):
         context = context or {}
 
-        # THREAD
+        # =========================
+        # THREAD MANAGEMENT
+        # =========================
         if not thread_id:
             thread_id = self.threads.create_thread(user_id)
 
         self.threads.add_message(thread_id, "user", user_input)
 
-        # MEMORY
+        # =========================
+        # MEMORY RETRIEVAL
+        # =========================
         memory_context = await self.memory.retrieve(user_id, user_input)
 
-        # ROUTE
+        # =========================
+        # ROUTING LAYER (intent only)
+        # =========================
         route = self.router.route(user_input, context)
 
-        # AUTONOMOUS THINKING
-        auto_tasks = self.autonomous_loop.decide_next_task(user_input, str(memory_context))
+        # =========================
+        # AUTONOMOUS TASK SIGNALS
+        # =========================
+        auto_tasks = self.autonomous_loop.decide_next_task(
+            user_input,
+            str(memory_context)
+        )
 
-        # AGENT DECISION
+        # =========================
+        # AGENT DECISION LAYER
+        # =========================
         actions = await self.agent.decide(user_input, route)
 
         model = self.selector.select(route, user_input, context)
 
         results = []
+        final_response = None
 
-        # EXECUTION LOOP
+        # =========================
+        # EXECUTION ENGINE
+        # =========================
         for action in actions:
 
-            # ================= TOOL PATH =================
+            # ---------------- TOOL EXECUTION ----------------
             if action["type"] == "tool":
+
                 tool_info = self.tool_router.route(user_input)
 
                 if tool_info:
 
-                    # TOOL CHAINING (future support)
-                    result = await self.tool_chain.execute_chain(
+                    tool_result = await self.tool_chain.execute_chain(
                         [tool_info["tool"]],
                         user_input,
                         self.functions
                     )
 
-                    results.append(result)
+                    results.append(tool_result)
 
-            # ================= REASONING PATH =================
+            # ---------------- REASONING EXECUTION ----------------
             elif action["type"] == "reason":
 
                 compressed_memory = self.context_compressor.compress(
@@ -113,60 +129,74 @@ class Orchestrator:
 
                 score = self.scorer.evaluate(corrected)
 
-                final = await self.improver.improve(
+                improved = await self.improver.improve(
                     user_input,
                     corrected,
                     score,
                     model
                 )
 
-                # MULTI MODEL CHECK
-                final = await self.multi_agent.run(
+                # =========================
+                # MULTI MODEL VALIDATION
+                # =========================
+                validated = await self.multi_agent.run(
                     [model],
-                    final
+                    improved
                 )
 
-                # SELF REFLECTION
-                reflection = self.self_reflection.reflect(user_input, final)
+                # =========================
+                # SELF REFLECTION LOOP
+                # =========================
+                reflection = self.self_reflection.reflect(
+                    user_input,
+                    validated
+                )
 
                 if reflection["needs_improvement"]:
-                    final = await self.improver.improve(
+                    validated = await self.improver.improve(
                         user_input,
-                        final,
+                        validated,
                         score,
                         model
                     )
 
+                # =========================
                 # STREAM OUTPUT
+                # =========================
                 streamed = []
-                async for chunk in self.streamer.stream_tokens(final):
+                async for chunk in self.streamer.stream_tokens(validated):
                     streamed.append(chunk)
 
-                final_text = "".join([c["token"] for c in streamed])
+                final_response = "".join([c["token"] for c in streamed])
 
-                # MEMORY SCORING (IMPORTANT)
-                mem_score = self.memory_ranker.score(final_text)
+                # =========================
+                # MEMORY SCORING + STORAGE
+                # =========================
+                mem_score = self.memory_ranker.score(final_response)
 
-                await self.memory.store(user_id, user_input, final_text, mem_score)
+                await self.memory.store(
+                    user_id,
+                    user_input,
+                    final_response,
+                    mem_score
+                )
 
-                self.threads.add_message(thread_id, "assistant", final_text)
+                self.threads.add_message(
+                    thread_id,
+                    "assistant",
+                    final_response
+                )
 
-                return {
-                    "response": final_text,
-                    "stream": True,
-                    "score": score,
-                    "memory_score": mem_score,
-                    "route": route,
-                    "model": model.__class__.__name__,
-                    "thread_id": thread_id,
-                    "auto_tasks": auto_tasks,
-                    "actions": actions
-                }
-
+        # =========================
+        # FINAL RESPONSE WRAPPER
+        # =========================
         return {
-            "response": results,
-            "stream": False,
+            "response": final_response if final_response else str(results),
+            "stream": final_response is not None,
+            "score": score if "score" in locals() else 0,
+            "memory_score": mem_score if "mem_score" in locals() else 0,
             "route": route,
+            "model": model.__class__.__name__,
             "thread_id": thread_id,
             "auto_tasks": auto_tasks,
             "actions": actions
