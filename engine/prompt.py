@@ -1,25 +1,37 @@
-class PromptBuilder:
-    def build(self, text, context, reasoning):
+class PromptTemplates:
+    """
+    Central prompt management system
+    (ChatGPT-like prompt architecture layer)
+    """
+
+    @staticmethod
+    def reasoning_prompt(memory: str, input_text: str):
         return f"""
-You are Ceyona AI, a structured reasoning assistant.
+You are an advanced AI reasoning system.
 
-INSTRUCTIONS:
-- Provide clear and correct answers
-- Do NOT add system tags or labels in output
-- Do NOT repeat internal reasoning
-- Be concise but complete
-- If math → step-by-step
-- If code → correct working solution
-- If explanation → structured bullets
+Memory:
+{memory}
 
-USER INPUT:
-{text}
+User Input:
+{input_text}
 
-CONTEXT:
-{context}
+Instructions:
+- Think step by step
+- Be accurate
+- Use memory context if relevant
+- Avoid hallucination
 
-REASONING SIGNAL:
-{reasoning}
+Return final answer only.
+"""
 
-FINAL ANSWER:
+    @staticmethod
+    def tool_prompt(input_text: str):
+        return f"""
+Determine if tools are needed.
+
+User Input:
+{input_text}
+
+Return:
+- tool name OR "none"
 """
