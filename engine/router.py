@@ -9,84 +9,131 @@ logger = logging.getLogger(__name__)
 # =========================
 class ToolRouter:
     """
-    PRO TOOL ROUTER v3
+    PRO TOOL ROUTER v4 (production hardened)
     - deterministic
-    - safe extraction
-    - production stable
+    - crash-safe
+    - improved NLP heuristics
+    - zero-dependency intelligence layer
     """
 
     def route(self, text: str) -> dict:
-        t = (text or "").lower().strip()
+        try:
+            t = (text or "").lower().strip()
 
-        # ======================
-        # WEATHER
-        # ======================
-        if any(x in t for x in ["weather", "погода", "температура"]):
+            if not t:
+                return self._llm_fallback(text)
+
+            # ======================
+            # WEATHER INTENT
+            # ======================
+            if self._match(t, ["weather", "погода", "температура", "forecast"]):
+                return {
+                    "tool": "weather",
+                    "args": self._extract_city(t),
+                    "confidence": 0.97
+                }
+
+            # ======================
+            # MAPS / ROUTE INTENT
+            # ======================
+            if self._match(t, [
+                "route", "map", "maps", "где", "как доехать",
+                "distance", "from", "to", "маршрут", "дорога", "ехать"
+            ]):
+                return {
+                    "tool": "maps",
+                    "args": self._extract_location(t),
+                    "confidence": 0.93
+                }
+
+            # ======================
+            # SEARCH INTENT
+            # ======================
+            if self._match(t, [
+                "search", "найди", "find",
+                "что такое", "who is", "кто такой", "explain"
+            ]):
+                return {
+                    "tool": "search",
+                    "args": t,
+                    "confidence": 0.85
+                }
+
+            # ======================
+            # DEFAULT
+            # ======================
             return {
-                "tool": "weather",
-                "args": self._extract_city(t),
-                "confidence": 0.95
+                "tool": "llm",
+                "args": text,
+                "confidence": 0.55
             }
 
-        # ======================
-        # MAPS / ROUTE
-        # ======================
-        if any(x in t for x in [
-            "route", "map", "где", "как доехать",
-            "distance", "from", "to", "маршрут"
-        ]):
-            return {
-                "tool": "maps",
-                "args": self._extract_location(t),
-                "confidence": 0.90
-            }
-
-        # ======================
-        # SEARCH
-        # ======================
-        if any(x in t for x in [
-            "search", "найди", "find",
-            "что такое", "who is", "кто такой"
-        ]):
-            return {
-                "tool": "search",
-                "args": t,
-                "confidence": 0.80
-            }
-
-        # ======================
-        # DEFAULT LLM
-        # ======================
-        return {
-            "tool": "llm",
-            "args": text,
-            "confidence": 0.50
-        }
+        except Exception as e:
+            logger.warning(f"[TOOL ROUTER ERROR] {e}")
+            return self._llm_fallback(text)
 
     # ======================
-    # SAFE CITY EXTRACTION
+    # FAST MATCH ENGINE
+    # ======================
+    def _match(self, text: str, keywords: list) -> bool:
+        return any(k in text for k in keywords)
+
+    # ======================
+    # CITY EXTRACTION (ROBUST)
     # ======================
     def _extract_city(self, text: str) -> str:
-        words = re.split(r"\s+", text)
+        try:
+            if not text:
+                return "Tbilisi"
 
-        blacklist = {
-            "weather", "погода", "today", "now",
-            "сегодня", "какая", "температура"
-        }
+            # remove noise words
+            blacklist = {
+                "weather", "погода", "today", "now",
+                "сегодня", "какая", "температура",
+                "like", "is", "in", "at", "what"
+            }
 
-        candidates = [
-            w.strip(",.")
-            for w in words
-            if w not in blacklist and len(w) > 2
-        ]
+            words = re.split(r"\s+", text)
 
-        return candidates[-1] if candidates else "Tbilisi"
+            candidates = []
+            for w in words:
+                clean = w.strip(",.?!:;")
+
+                if (
+                    clean and
+                    clean not in blacklist and
+                    len(clean) > 2 and
+                    not clean.isdigit()
+                ):
+                    candidates.append(clean)
+
+            # heuristic: last meaningful token = most likely city
+            if candidates:
+                return candidates[-1].capitalize()
+
+            return "Tbilisi"
+
+        except Exception:
+            return "Tbilisi"
 
     # ======================
-    # LOCATION EXTRACTION
+    # LOCATION EXTRACTION (SAFE)
     # ======================
     def _extract_location(self, text: str) -> str:
-        return text.strip()
+        try:
+            return (text or "").strip()
+        except Exception:
+            return ""
+
+    # ======================
+    # FALLBACK
+    # ======================
+    def _llm_fallback(self, text: str) -> dict:
+        return {
+            "tool": "llm",
+            "args": text or "",
+            "confidence": 0.0
+        }
 
 
 # =========================
@@ -94,8 +141,9 @@ class ToolRouter:
 # =========================
 class Router:
     """
-    Orchestrator expects this class.
-    Wraps ToolRouter safely.
+    Orchestrator compatibility layer
+    - guarantees stable output schema
+    - prevents crashes from ToolRouter
     """
 
     def __init__(self):
@@ -103,19 +151,24 @@ class Router:
 
     def route(self, text: str) -> dict:
         try:
-            tool_result = self.tool_router.route(text)
+            result = self.tool_router.route(text)
+
+            if not isinstance(result, dict):
+                return self._safe_llm(text)
 
             return {
-                "type": tool_result.get("tool", "llm"),
-                "args": tool_result.get("args"),
-                "confidence": tool_result.get("confidence", 0.5)
+                "type": result.get("tool", "llm"),
+                "args": result.get("args"),
+                "confidence": float(result.get("confidence") or 0.5)
             }
 
         except Exception as e:
             logger.warning(f"[ROUTER FAIL SAFE] {e}")
+            return self._safe_llm(text)
 
-            return {
-                "type": "llm",
-                "args": text,
-                "confidence": 0.0
-            }
+    def _safe_llm(self, text: str) -> dict:
+        return {
+            "type": "llm",
+            "args": text or "",
+            "confidence": 0.0
+        }
