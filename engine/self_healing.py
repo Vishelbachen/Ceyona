@@ -1,17 +1,13 @@
-class SelfHealingSystem:
-    """
-    Detects system issues and triggers recovery actions
-    """
-
-    def analyze_failure(self, error: str):
+class SelfHealing:
+    def analyze(self, error: str):
 
         if "timeout" in error:
-            return "reduce_model_load"
+            return "reduce_load"
 
         if "memory" in error:
-            return "clear_context_cache"
+            return "clear_cache"
 
         if "tool" in error:
-            return "disable_tool_chain"
+            return "disable_tool"
 
-        return "unknown_recovery"
+        return "unknown"
