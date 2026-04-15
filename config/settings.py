@@ -1,11 +1,11 @@
 import os
 from dotenv import load_dotenv
 
+load_dotenv()
+
 
 class Settings:
     def __init__(self):
-        load_dotenv()
-
         # ======================
         # CORE BOT
         # ======================
@@ -46,20 +46,22 @@ class Settings:
         self.ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
 
         # ======================
-        # VALIDATION (CRITICAL)
+        # VALIDATION
         # ======================
         self._validate()
 
     def _validate(self):
-        required = [
-            self.BOT_TOKEN,
-            self.SUPABASE_URL,
-            self.SUPABASE_SERVICE_ROLE_KEY,
-            self.JWT_SECRET,
-            self.ENCRYPTION_KEY
-        ]
+        required = {
+            "BOT_TOKEN": self.BOT_TOKEN,
+            "SUPABASE_URL": self.SUPABASE_URL,
+            "SUPABASE_SERVICE_ROLE_KEY": self.SUPABASE_SERVICE_ROLE_KEY,
+            "JWT_SECRET": self.JWT_SECRET,
+            "ENCRYPTION_KEY": self.ENCRYPTION_KEY,
+        }
 
-        missing = [k for k in required if not k]
+        missing = [k for k, v in required.items() if not v]
 
         if missing:
-            raise ValueError(f"Missing critical env vars: {len(missing)}")
+            raise ValueError(
+                f"Missing critical env vars: {', '.join(missing)}"
+            )
