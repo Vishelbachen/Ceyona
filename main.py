@@ -12,16 +12,11 @@ logger = logging.getLogger("ceyona")
 
 
 def main():
-    try:
-        settings = Settings()
+    settings = Settings()
 
-        logger.info("Ceyona AI system starting...")
+    logger.info("Ceyona AI system starting...")
 
-        start_bot(settings)
-
-    except Exception as e:
-        logger.exception(f"[MAIN] Fatal error: {e}")
-        raise
+    start_bot(settings)
 
 
 if __name__ == "__main__":
