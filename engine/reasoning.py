@@ -1,49 +1,23 @@
-from engine.reason import ReasonPlanner
-from engine.solver import Solver
-from engine.tools import Tools
+from engine.tool_chain import ToolChain
 
 
 class ReasoningEngine:
     def __init__(self):
-        self.planner = ReasonPlanner()
-        self.solver = Solver()
-        self.tools = Tools()
+        self.tool_chain = ToolChain()
 
     async def process(self, input_text: str, memory: str, model, route: str):
-        # 1. Create plan
-        plan = await self.planner.create_plan(input_text, memory, model)
+        prompt = f"""
+You are advanced reasoning system.
 
-        # safety fallback
-        if not isinstance(plan, list):
-            plan = [{"type": "reason", "content": input_text}]
-
-        # 2. Execute plan
-        toolset = self.tools.get_tools()
-        results = await self.solver.solve(plan, model, toolset)
-
-        # 3. Build final answer
-        final_prompt = self._build_final_prompt(input_text, results, memory)
-
-        final_answer = await model.generate(final_prompt)
-
-        return final_answer
-
-    def _build_final_prompt(self, input_text: str, results: list, memory: str):
-        steps_summary = "\n".join(
-            [f"Step: {r['step']} \nResult: {r['result']}" for r in results]
-        )
-
-        return f"""
-You are an advanced AI.
-
-Use context if relevant:
+Memory:
 {memory}
 
-User:
+Task:
 {input_text}
 
-Steps:
-{steps_summary}
-
-Give final, accurate, clean answer.
+Return best possible answer.
 """
+
+        response = await model.generate(prompt)
+
+        return response
