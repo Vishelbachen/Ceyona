@@ -1,48 +1,25 @@
-import requests
-import logging
-
-logger = logging.getLogger(__name__)
+import os
+import httpx
 
 
-class SearchService:
-    def __init__(self, settings):
-        self.api_key = settings.SERPAPI_KEY
+SERPAPI_KEY = os.getenv("SERPAPI_KEY")
 
-    def search(self, query: str, num: int = 5) -> dict:
-        if not query:
-            return {"error": "empty_query"}
 
-        try:
-            url = "https://serpapi.com/search"
+async def search(query: str):
+    url = "https://serpapi.com/search.json"
 
-            params = {
-                "q": query,
-                "api_key": self.api_key,
-                "num": num
-            }
+    params = {
+        "q": query,
+        "api_key": SERPAPI_KEY
+    }
 
-            res = requests.get(url, params=params, timeout=10)
-            res.raise_for_status()
-            data = res.json()
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, params=params)
 
-            results = []
+    data = response.json()
 
-            for item in data.get("organic_results", []) or []:
-                results.append({
-                    "title": item.get("title", ""),
-                    "link": item.get("link", ""),
-                    "snippet": item.get("snippet", "")
-                })
+    results = []
+    for item in data.get("organic_results", [])[:3]:
+        results.append(item.get("snippet"))
 
-            return {
-                "query": query,
-                "results": results
-            }
-
-        except requests.RequestException as e:
-            logger.warning(f"[SEARCH API FAIL] {e}")
-            return {"error": "api_failed", "results": []}
-
-        except Exception as e:
-            logger.exception(f"[SEARCH UNKNOWN ERROR] {e}")
-            return {"error": "unknown", "results": []}
+    return "\n".join(results)
