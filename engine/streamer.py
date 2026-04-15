@@ -2,16 +2,27 @@ import asyncio
 
 
 class Streamer:
-    async def stream_tokens(self, text: str, chunk_size: int = 4):
+    """
+    True streaming system (ChatGPT-like behavior simulation)
+    """
+
+    async def stream_tokens(self, text: str):
         buffer = ""
 
         for char in text:
             buffer += char
 
-            if len(buffer) >= chunk_size or char in ".!?,":
-                yield buffer
-                await asyncio.sleep(0.01)
+            # emit on sentence / punctuation
+            if char in ".!?," or len(buffer) >= 6:
+                yield {
+                    "token": buffer,
+                    "done": False
+                }
+                await asyncio.sleep(0.005)
                 buffer = ""
 
         if buffer:
-            yield buffer
+            yield {
+                "token": buffer,
+                "done": True
+            }
