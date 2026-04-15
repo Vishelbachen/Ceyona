@@ -1,83 +1,75 @@
-import re
+import logging
 from typing import Dict, Any
+
+logger = logging.getLogger(__name__)
 
 
 class Brain:
     """
     Ceyona Expert Brain v3
-    - domain routing
-    - reasoning enhancer
-    - structured prompt augmentation
+    Lightweight deterministic reasoning classifier + domain router
     """
 
-    def __init__(self):
-        self.math_keywords = ["solve", "equation", "prove", "function", "integral", "derivative", "f(", "lim"]
-        self.physics_keywords = ["force", "energy", "velocity", "acceleration", "newton", "pressure"]
-        self.chemistry_keywords = ["reaction", "molecule", "compound", "acid", "base", "molar"]
-        self.code_keywords = ["code", "python", "bug", "function", "class", "error", "debug"]
+    def analyze(self, text: str, route: Dict[str, Any]) -> Dict[str, Any]:
+        text_l = (text or "").lower()
 
-    def detect_domain(self, text: str) -> str:
-        t = text.lower()
-
-        if any(k in t for k in self.math_keywords):
-            return "math"
-
-        if any(k in t for k in self.physics_keywords):
-            return "physics"
-
-        if any(k in t for k in self.chemistry_keywords):
-            return "chemistry"
-
-        if any(k in t for k in self.code_keywords):
-            return "coding"
-
-        return "general"
-
-    def enhance_reasoning(self, text: str, reasoning: Dict[str, Any]) -> Dict[str, Any]:
-        domain = self.detect_domain(text)
-
-        enhanced = dict(reasoning or {})
-        enhanced["domain"] = domain
-
-        enhanced["instructions"] = self._get_domain_instructions(domain)
-
-        return enhanced
-
-    def _get_domain_instructions(self, domain: str) -> str:
-        if domain == "math":
-            return (
-                "Solve step-by-step. "
-                "Show derivation clearly. "
-                "Verify final answer."
-            )
-
-        if domain == "physics":
-            return (
-                "Use physical laws explicitly. "
-                "Define variables. "
-                "Check units consistency."
-            )
-
-        if domain == "chemistry":
-            return (
-                "Balance reactions if needed. "
-                "Explain mechanism logically."
-            )
-
-        if domain == "coding":
-            return (
-                "Explain logic. Provide correct code. "
-                "Check edge cases."
-            )
-
-        return "Be clear, structured and correct."
-
-    def build_brain_context(self, text: str, context: Dict[str, Any], reasoning: Dict[str, Any]) -> Dict[str, Any]:
-        domain = self.detect_domain(text)
+        domain = self._detect_domain(text_l)
+        complexity = self._detect_complexity(text_l)
+        intent = route.get("type", "general")
 
         return {
             "domain": domain,
-            "context": context,
-            "reasoning": self.enhance_reasoning(text, reasoning),
-            "mode": f"ceyona_brain_v3::{domain}"
+            "complexity": complexity,
+            "intent": intent,
+            "mode": self._select_mode(domain, complexity, intent),
         }
+
+    def _detect_domain(self, text: str) -> str:
+        # MATH / PHYSICS / CHEM / CODE / GENERAL
+        if any(x in text for x in ["solve", "prove", "equation", "f(", "∫", "derivative", "="]):
+            return "math"
+
+        if any(x in text for x in ["force", "energy", "velocity", "acceleration", "physics"]):
+            return "physics"
+
+        if any(x in text for x in ["reaction", "molecule", "chemistry", "mol"]):
+            return "chemistry"
+
+        if any(x in text for x in ["code", "python", "function", "bug", "error"]):
+            return "code"
+
+        return "general"
+
+    def _detect_complexity(self, text: str) -> str:
+        if len(text) > 300:
+            return "high"
+        if any(x in text for x in ["prove", "derive", "show that"]):
+            return "high"
+        return "normal"
+
+    def _select_mode(self, domain: str, complexity: str, intent: str) -> str:
+        if domain == "math" and complexity == "high":
+            return "math_proof_engine"
+
+        if domain == "physics":
+            return "physics_solver"
+
+        if domain == "chemistry":
+            return "chem_engine"
+
+        if domain == "code":
+            return "code_reasoning"
+
+        return "general_llm"
+
+    def verify(self, response: str, domain: str) -> str:
+        """
+        lightweight sanity check (NOT rewrite engine)
+        """
+        if not response:
+            return "System error. Empty response."
+
+        if domain == "math" and "?" in response and len(response) < 20:
+            return "Mathematical solution incomplete. Please retry."
+
+        return response
