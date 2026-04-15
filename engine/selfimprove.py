@@ -1,20 +1,19 @@
 class SelfImprove:
-    """
-    NO OUTPUT INJECTION VERSION
-    Only internal scoring logic allowed
-    """
+    async def improve(self, input_text: str, output: str, score: int, model):
+        if score >= 3:
+            return output
 
-    def improve(self, response: str, score: dict) -> str:
-        if not response:
-            return response
+        prompt = f"""
+Improve the following response.
 
-        # ❌ NEVER modify user-visible output with tags
-        # ❌ removed: [Ceyona refined output]
+User:
+{input_text}
 
-        quality = score.get("quality", "high")
+Response:
+{output}
 
-        # safe minimal enhancement only
-        if quality == "low" and len(response) < 40:
-            return response + "\n\n(Answer may be incomplete)"
+Make it more accurate, helpful and complete.
+"""
 
-        return response
+        improved = await model.generate(prompt)
+        return improved
