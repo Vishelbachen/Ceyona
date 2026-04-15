@@ -1,44 +1,28 @@
-import requests
-import logging
-from typing import Dict, Any
-
-logger = logging.getLogger(__name__)
+import os
+import httpx
 
 
-class WeatherService:
-    def __init__(self, settings):
-        self.api_key = settings.OPENWEATHER_API_KEY
-        self.base_url = "https://api.openweathermap.org/data/2.5/weather"
+API_KEY = os.getenv("OPENWEATHER_API_KEY")
 
-    def get_weather(self, city: str, lang: str = "en") -> Dict[str, Any]:
-        if not city:
-            return {"error": "empty_city"}
 
-        params = {
-            "q": city,
-            "appid": self.api_key,
-            "units": "metric",
-            "lang": lang
-        }
+async def get_weather(city: str):
+    url = "https://api.openweathermap.org/data/2.5/weather"
 
-        try:
-            response = requests.get(self.base_url, params=params, timeout=10)
-            response.raise_for_status()
-            data = response.json()
+    params = {
+        "q": city,
+        "appid": API_KEY,
+        "units": "metric"
+    }
 
-            return {
-                "city": city,
-                "temp": data.get("main", {}).get("temp"),
-                "feels_like": data.get("main", {}).get("feels_like"),
-                "condition": (data.get("weather") or [{}])[0].get("description"),
-                "humidity": data.get("main", {}).get("humidity"),
-                "wind": data.get("wind", {}).get("speed"),
-            }
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, params=params)
 
-        except requests.RequestException as e:
-            logger.warning(f"[WEATHER API FAIL] {e}")
-            return {"error": "api_failed"}
+    data = response.json()
 
-        except Exception as e:
-            logger.exception(f"[WEATHER UNKNOWN ERROR] {e}")
-            return {"error": "unknown"}
+    if "main" not in data:
+        return "Weather not found"
+
+    temp = data["main"]["temp"]
+    desc = data["weather"][0]["description"]
+
+    return f"{city}: {temp}°C, {desc}"
