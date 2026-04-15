@@ -2,21 +2,17 @@ import asyncio
 
 
 class TaskQueue:
-    """
-    Lightweight async job queue (Celery-like mini system)
-    """
-
     def __init__(self):
-        self.queue = asyncio.Queue()
+        self.q = asyncio.Queue()
 
     async def add(self, task):
-        await self.queue.put(task)
+        await self.q.put(task)
 
     async def worker(self):
         while True:
-            task = await self.queue.get()
+            task = await self.q.get()
             try:
                 await task()
             except Exception:
                 pass
-            self.queue.task_done()
+            self.q.task_done()
