@@ -1,10 +1,5 @@
 import asyncio
 
-from ai.groq import GroqClient
-from ai.openai import OpenAIClient
-from ai.mistral import MistralClient
-from ai.gemini import GeminiClient
-
 
 class AISelector:
     def __init__(self, settings):
@@ -14,10 +9,6 @@ class AISelector:
         self.gemini = GeminiClient(settings)
 
     def select_order(self, model_type: str):
-        """
-        Deterministic routing strategy
-        """
-
         if model_type == "fast":
             return [self.groq, self.mistral, self.openai]
 
@@ -39,11 +30,12 @@ class AISelector:
             try:
                 result = await model.generate(prompt)
 
-                if result and isinstance(result, str):
-                    return result
+                if isinstance(result, str) and result.strip():
+                    return result.strip()
 
             except Exception as e:
                 last_error = e
                 continue
 
-        return f"Ceyona AI: All models failed. ({last_error})"
+        # 🔥 CRITICAL FIX: NEVER return debug to user
+        return None
