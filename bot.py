@@ -3,22 +3,48 @@ from telegram.ext import (
     ApplicationBuilder,
     ContextTypes,
     MessageHandler,
-    filters
+    filters,
 )
 
 from handler import handle_message
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 async def message_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text:
-        return
+    try:
+        if not update or not update.message:
+            logger.warning("[BOT] Empty update received")
+            return
 
-    user_id = update.effective_user.id
-    text = update.message.text
+        if not update.message.text:
+            logger.warning("[BOT] Non-text message ignored")
+            return
 
-    response = await handle_message(user_id, text)
+        user_id = update.effective_user.id
+        text = update.message.text.strip()
 
-    await update.message.reply_text(response)
+        logger.info(f"[BOT] Incoming message: user_id={user_id} text={text}")
+
+        response = await handle_message(user_id, text)
+
+        if not response:
+            response = "No response generated."
+
+        await update.message.reply_text(response)
+
+        logger.info("[BOT] Response sent successfully")
+
+    except Exception as e:
+        logger.exception(f"[BOT] message_entry failed: {e}")
+
+        try:
+            await update.message.reply_text(
+                "System error occurred. Please try again."
+            )
+        except Exception:
+            pass
 
 
 async def start_bot(settings):
@@ -31,7 +57,9 @@ async def start_bot(settings):
     await app.initialize()
     await app.start()
 
-    # Railway-compatible polling
-    await app.updater.start_polling()
+    # 🔥 CRITICAL FIX (Railway + Telegram stability)
+    await app.bot.delete_webhook(drop_pending_updates=True)
 
+    # 🔥 CLEAN START
+    await app.updater.start_polling()
     await app.updater.idle()
