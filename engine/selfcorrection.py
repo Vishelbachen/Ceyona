@@ -1,4 +1,4 @@
-class SelfReflection:
+class SelfCorrection:
     """
     AI evaluates its own output quality
     """
