@@ -1,8 +1,16 @@
-def refine_output(text: str) -> str:
-    text = text.strip()
+class SelfCorrection:
+    async def correct(self, input_text: str, output: str, model):
+        prompt = f"""
+Check the following response for errors, improve clarity, correctness and usefulness.
 
-    # убираем markdown мусор
-    if text.startswith("**") and text.endswith("**"):
-        text = text[2:-2]
+User Input:
+{input_text}
 
-    return text
+Response:
+{output}
+
+Return improved version only.
+"""
+
+        improved = await model.generate(prompt)
+        return improved
