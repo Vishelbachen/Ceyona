@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import os  # 🔥 FIX CRITICAL
 
 from telegram import Update
 from telegram.ext import (
@@ -51,7 +52,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================
-# START BOT (WEBHOOK MODE)
+# START BOT (HYBRID MODE)
 # =========================
 def start_bot(settings):
     app = ApplicationBuilder().token(settings.BOT_TOKEN).build()
@@ -60,33 +61,50 @@ def start_bot(settings):
         MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler)
     )
 
+    # =========================
+    # POST INIT (WEBHOOK SAFE)
+    # =========================
     async def post_init(application):
         try:
-            # 🔥 CRITICAL: remove polling entirely
             await application.bot.delete_webhook(drop_pending_updates=True)
 
-            # set webhook to Railway URL
-            # IMPORTANT: replace with your real URL
-            webhook_url = settings.WEBHOOK_URL
+            # =========================
+            # WEBHOOK MODE
+            # =========================
+            if settings.WEBHOOK_URL:
+                await application.bot.set_webhook(
+                    url=settings.WEBHOOK_URL + "/webhook",
+                    drop_pending_updates=True
+                )
+                logger.info("[WEBHOOK] enabled mode")
 
-            await application.bot.set_webhook(
-                url=webhook_url,
-                drop_pending_updates=True
-            )
-
-            logger.info("[WEBHOOK] set successfully")
+            else:
+                logger.warning("[WEBHOOK] missing → fallback to polling mode")
 
         except Exception as e:
-            logger.error(f"[WEBHOOK ERROR] {e}")
+            logger.error(f"[POST_INIT ERROR] {e}")
 
     app.post_init = post_init
 
-    logger.info("BOT STARTED (WEBHOOK MODE)")
+    # =========================
+    # MODE SWITCH (AUTO)
+    # =========================
+    if settings.WEBHOOK_URL:
 
-    # 🚀 webhook server instead of polling
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=int(os.environ.get("PORT", 8080)),
-        webhook_path="/webhook",
-        drop_pending_updates=True
-    )
+        logger.info("BOT STARTED (WEBHOOK MODE)")
+
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=int(os.environ.get("PORT", 8080)),
+            webhook_path="/webhook",
+            drop_pending_updates=True
+        )
+
+    else:
+
+        logger.info("BOT STARTED (POLLING FALLBACK MODE)")
+
+        app.run_polling(
+            drop_pending_updates=True,
+            close_loop=False
+        )
