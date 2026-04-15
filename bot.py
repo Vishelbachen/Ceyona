@@ -12,10 +12,12 @@ from handler import handle_message
 
 logger = logging.getLogger(__name__)
 
+# =========================
+# GLOBAL LOCK (ANTI DOUBLE INSTANCE)
+# =========================
+BOT_LOCK = asyncio.Lock()
 
-# =========================
-# SAFE MESSAGE EXTRACTOR
-# =========================
+
 def extract_message(update: Update):
     if not update:
         return None
@@ -28,74 +30,67 @@ def extract_message(update: Update):
     )
 
 
-# =========================
-# SAFE HANDLER WRAPPER
-# =========================
 async def message_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        message = extract_message(update)
-
-        if not message:
-            return
-
-        text = getattr(message, "text", None) or getattr(message, "caption", None)
-
-        if not text:
-            return
-
-        text = text.strip()
-        if not text:
-            return
-
-        user_id = update.effective_user.id if update.effective_user else 0
-
-        logger.info(f"[BOT] IN | user={user_id}")
-
-        # 🔥 TIMEOUT PROTECTION (VERY IMPORTANT)
+    async with BOT_LOCK:  # 🔥 protects parallel overload
         try:
-            response = await asyncio.wait_for(
-                handle_message(user_id, text),
-                timeout=45
-            )
-        except asyncio.TimeoutError:
-            response = "Request timeout. Please try again."
+            message = extract_message(update)
 
-        if not response:
-            response = "No response generated."
+            if not message:
+                return
 
-        await message.reply_text(response)
+            text = getattr(message, "text", None) or getattr(message, "caption", None)
 
-        logger.info(f"[BOT] OUT | success")
+            if not text:
+                return
 
-    except Exception as e:
-        logger.exception(f"[BOT] handler crash: {e}")
+            text = text.strip()
+            if not text:
+                return
 
-        try:
-            await message.reply_text("System error. Try again.")
-        except Exception:
-            pass
+            user_id = update.effective_user.id if update.effective_user else 0
+
+            logger.info(f"[BOT] IN | user={user_id}")
+
+            try:
+                response = await asyncio.wait_for(
+                    handle_message(user_id, text),
+                    timeout=60
+                )
+            except asyncio.TimeoutError:
+                response = "Request timeout. Try again."
+
+            response = response or "No response generated."
+
+            await message.reply_text(response)
+
+            logger.info(f"[BOT] OUT | OK")
+
+        except Exception as e:
+            logger.exception(f"[BOT] crash: {e}")
+
+            try:
+                await message.reply_text("System error. Try again.")
+            except Exception:
+                pass
 
 
-# =========================
-# START BOT (RAILWAY SAFE)
-# =========================
 def start_bot(settings):
     app = ApplicationBuilder().token(settings.BOT_TOKEN).build()
 
-    # 🔥 catch everything (no silent updates lost)
+    # 🔥 catch all updates
     app.add_handler(MessageHandler(filters.ALL, message_entry))
 
-    logger.info("[BOT] Initializing bot...")
+    logger.info("[BOT] Initializing...")
 
-    # 🔥 IMPORTANT: clean webhook (Railway fix)
     async def post_init(application):
         await application.bot.delete_webhook(drop_pending_updates=True)
         logger.info("[BOT] Webhook cleared")
 
     app.post_init = post_init
 
-    # 🚀 START
-    logger.info("[BOT] Starting polling...")
+    logger.info("[BOT] Starting polling (SINGLE INSTANCE MODE)...")
+
+    # 🔥 ONLY ONE ENTRY POINT
     app.run_polling(
         drop_pending_updates=True,
         close_loop=False,
