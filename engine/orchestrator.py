@@ -2,7 +2,6 @@ import logging
 from typing import Dict, Any
 
 from engine.router import Router
-from engine.toolrouter import ToolRouter
 from tools.tools import Tools
 
 from engine.cognitive import Cognitive
@@ -31,10 +30,9 @@ class Orchestrator:
         self.settings = Settings()
 
         # ======================
-        # CORE ROUTING LAYERS
+        # ROUTING + TOOLS
         # ======================
         self.router = Router()
-        self.tool_router = ToolRouter()
         self.tools = Tools(self.settings)
 
         # ======================
@@ -50,19 +48,19 @@ class Orchestrator:
         self.solver = Solver()
 
         # ======================
-        # SELF IMPROVEMENT STACK
+        # SELF IMPROVEMENT
         # ======================
         self.scorer = Scorer() if Constants.ENABLE_SELF_CORRECTION else None
         self.corrector = SelfCorrection() if Constants.ENABLE_SELF_CORRECTION else None
         self.improver = SelfImprove() if Constants.ENABLE_SELF_IMPROVE else None
 
         # ======================
-        # PROOF ENGINE (SAFE)
+        # PROOF ENGINE
         # ======================
         self.proof = ProofEngine()
 
         # ======================
-        # MEMORY SYSTEM (SAFE INIT)
+        # MEMORY SYSTEM
         # ======================
         try:
             self.db = SupabaseClient(self.settings)
@@ -88,9 +86,6 @@ class Orchestrator:
         except Exception:
             self.access = None
 
-    # ======================
-    # MAIN PIPELINE
-    # ======================
     async def process(self, user_id: int, text: str) -> str:
         try:
             text = (text or "").strip()
@@ -111,28 +106,24 @@ class Orchestrator:
                     pass
 
             # ======================
-            # BASE ROUTING (LLM LOGIC)
+            # ROUTING
             # ======================
             route = self.router.route(text)
 
             # ======================
-            # TOOL ROUTING (NEW GPT-LIKE LAYER)
+            # TOOL EXECUTION (FAST PATH)
             # ======================
-            tool_route = self.tool_router.route(text)
-
             tool_result = None
 
-            # EXECUTE TOOL IF NOT LLM
-            if tool_route.get("tool") != "llm":
+            if route.get("type") in ["weather", "maps", "search"]:
                 try:
-                    tool_result = await self.tools.execute(tool_route, text)
+                    tool_result = await self.tools.execute(route, text)
+
+                    if tool_result:
+                        return self._format_tool_response(tool_result)
+
                 except Exception as e:
                     logger.warning(f"[TOOL FAIL SAFE] {e}")
-                    tool_result = None
-
-                # if tool succeeded → return directly (FAST PATH)
-                if tool_result and tool_result.get("status") == "success":
-                    return self._format_tool_response(tool_result)
 
             # ======================
             # BRAIN
@@ -162,7 +153,7 @@ class Orchestrator:
                     pass
 
             # ======================
-            # CONTEXT BUILDER
+            # CONTEXT
             # ======================
             try:
                 context = await self.cognitive.build_context(
@@ -191,7 +182,7 @@ class Orchestrator:
                     pass
 
             # ======================
-            # SOLVER (LLM CORE)
+            # SOLVER
             # ======================
             try:
                 response = await self.solver.solve(
@@ -219,7 +210,7 @@ class Orchestrator:
                     pass
 
             # ======================
-            # PROOF ENGINE (VALIDATION LAYER)
+            # PROOF ENGINE
             # ======================
             try:
                 response = self.proof.validate(
@@ -230,7 +221,7 @@ class Orchestrator:
                 pass
 
             # ======================
-            # SELF IMPROVEMENT
+            # SELF IMPROVE
             # ======================
             if self.scorer and self.corrector and self.improver:
                 try:
@@ -259,18 +250,11 @@ class Orchestrator:
             logger.exception(f"[ORCHESTRATOR FATAL] {e}")
             return self._fallback(text)
 
-    # ======================
-    # TOOL OUTPUT FORMATTER
-    # ======================
     def _format_tool_response(self, tool_result: dict) -> str:
         tool = tool_result.get("tool")
         data = tool_result.get("data")
-
         return f"[{tool.upper()} RESULT]\n{data}"
 
-    # ======================
-    # FALLBACK
-    # ======================
     def _fallback(self, text: str) -> str:
         return (
             "Ceyona AI system error occurred.\n"
