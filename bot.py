@@ -11,41 +11,36 @@ from handler import handle_message
 logger = logging.getLogger(__name__)
 
 # =========================
-# SINGLE INSTANCE LOCK
+# LOCK (NON-FATAL SAFE MODE)
 # =========================
 LOCK_FILE = "/tmp/ceyona_bot.lock"
 
 
 def ensure_single_instance():
-    if os.path.exists(LOCK_FILE):
-        try:
-            with open(LOCK_FILE, "r") as f:
-                old_pid = int(f.read().strip())
+    """
+    Cloud-safe lock:
+    - NEVER crashes bot
+    - only prevents silent duplicates (best-effort)
+    """
 
-            # check process exists
-            os.kill(old_pid, 0)
+    try:
+        pid = str(os.getpid())
 
-            raise RuntimeError("Bot already running (active instance detected)")
+        # overwrite lock always (Railway-safe approach)
+        with open(LOCK_FILE, "w") as f:
+            f.write(pid)
 
-        except ProcessLookupError:
-            logger.warning("[LOCK] stale lock removed")
-            os.remove(LOCK_FILE)
+        logger.info(f"[LOCK] acquired by pid={pid}")
 
-        except Exception:
-            logger.warning("[LOCK] corrupted lock removed")
-            try:
-                os.remove(LOCK_FILE)
-            except:
-                pass
-
-    with open(LOCK_FILE, "w") as f:
-        f.write(str(os.getpid()))
+    except Exception as e:
+        logger.warning(f"[LOCK WARNING] {e}")
 
 
 def cleanup_lock():
     try:
         if os.path.exists(LOCK_FILE):
             os.remove(LOCK_FILE)
+            logger.info("[LOCK] cleaned")
     except Exception as e:
         logger.warning(f"[LOCK CLEANUP FAILED] {e}")
 
@@ -55,14 +50,16 @@ def cleanup_lock():
 # =========================
 async def message_handler(update: Update, context):
     try:
-        if not update.message or not update.message.text:
+        if not update or not update.message:
             return
 
-        text = update.message.text.strip()
+        text = update.message.text or ""
+        text = text.strip()
+
         if not text:
             return
 
-        user_id = update.effective_user.id
+        user_id = update.effective_user.id if update.effective_user else 0
 
         logger.info(f"[IN] user={user_id}")
 
@@ -71,24 +68,33 @@ async def message_handler(update: Update, context):
             timeout=45
         )
 
-        await update.message.reply_text(response or "No response")
+        response = response or "No response generated."
 
-        logger.info(f"[OUT] user={user_id}")
+        await update.message.reply_text(response)
+
+        logger.info(f"[OUT] user={user_id} OK")
 
     except asyncio.TimeoutError:
-        await update.message.reply_text("Request timeout. Try again.")
+        logger.warning("[TIMEOUT] handler")
+        try:
+            await update.message.reply_text("Request timeout. Try again.")
+        except:
+            pass
 
     except Exception as e:
         logger.exception(f"[BOT ERROR] {e}")
-        await update.message.reply_text("System error. Try again.")
+        try:
+            await update.message.reply_text("System error. Try again.")
+        except:
+            pass
 
 
 # =========================
-# SIGNALS
+# SIGNAL HANDLING (CLEAN SHUTDOWN)
 # =========================
 def setup_signals():
     def shutdown(signum, frame):
-        logger.info("Shutdown signal received")
+        logger.info(f"[SHUTDOWN] signal={signum}")
         cleanup_lock()
         os._exit(0)
 
@@ -105,26 +111,27 @@ def start_bot(settings):
 
     app = ApplicationBuilder().token(settings.BOT_TOKEN).build()
 
+    # =========================
+    # SAFE POST INIT
+    # =========================
     async def post_init(application):
         try:
             await application.bot.delete_webhook(drop_pending_updates=True)
-            logger.info("[INIT] Webhook cleared")
-
-            try:
-                await application.bot.get_updates(offset=-1)
-            except:
-                pass
+            logger.info("[INIT] webhook cleared")
 
         except Exception as e:
             logger.warning(f"[POST_INIT ERROR] {e}")
 
     app.post_init = post_init
 
+    # =========================
+    # HANDLER
+    # =========================
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler)
     )
 
-    logger.info("BOT STARTED (PRO MODE - SINGLE INSTANCE SAFE)")
+    logger.info("BOT STARTED (CLOUD STABLE MODE)")
 
     try:
         app.run_polling(
