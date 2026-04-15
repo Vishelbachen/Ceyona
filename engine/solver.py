@@ -24,58 +24,33 @@ class Solver:
     ) -> str:
 
         try:
-            prompt = self._build_prompt(text, context, reasoning, route)
-
-            logger.info(f"[Solver] route={route} prompt_ready=True")
+            prompt = self._build_prompt(text, context, reasoning)
 
             response = await self._generate_with_retry(prompt, route)
 
-            return self._validate_response(response)
+            return self._clean(response)
 
         except Exception as e:
-            logger.exception(f"[Solver] FAILURE: {e}")
-            return self._fallback_response(text)
+            logger.exception(f"[Solver] Failed: {e}")
+            return self._fallback(text)
 
-    def _build_prompt(self, text, context, reasoning, route):
-        try:
-            return self.prompt_builder.build(text, context, reasoning)
-        except Exception as e:
-            logger.warning(f"[Solver] PromptBuilder failed: {e}")
+    def _build_prompt(self, text, context, reasoning):
+        return self.prompt_builder.build(text, context, reasoning)
 
-            return f"""
-User: {text}
-Context: {context}
-Reasoning: {reasoning}
-Route: {route}
-"""
-
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=8)
-    )
-    async def _generate_with_retry(self, prompt: str, route: Dict[str, Any]):
-
+    @retry(stop=stop_after_attempt(2), wait=wait_exponential(min=1, max=4))
+    async def _generate_with_retry(self, prompt: str, route: Dict[str, Any]) -> str:
         result = await self.selector.generate(prompt, route)
 
-        if not result or not isinstance(result, str):
-            raise ValueError("Empty or invalid model output")
+        if not result:
+            raise ValueError("Empty model output")
 
         return result
 
-    def _validate_response(self, response: str) -> str:
-        if not response:
-            return "AI error: empty response"
+    def _clean(self, response: str) -> str:
+        return response.strip()
 
-        cleaned = response.strip()
-
-        if len(cleaned) < 2:
-            return "AI error: response too short"
-
-        return cleaned
-
-    def _fallback_response(self, text: str) -> str:
+    def _fallback(self, text: str) -> str:
         return (
-            "AI system temporary error.\n"
-            "Please retry.\n\n"
+            "System temporarily unavailable.\n"
             f"Input: {text}"
         )
