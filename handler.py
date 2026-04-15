@@ -18,7 +18,10 @@ async def handle_message(user_id: int, text: str) -> str:
             text=text
         )
 
-        return str(result) if result else "No response"
+        if not result:
+            return "No response"
+
+        return str(result)
 
     except Exception as e:
         logger.exception(f"[HANDLER ERROR] {e}")
