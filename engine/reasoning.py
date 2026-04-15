@@ -1,14 +1,21 @@
-def build_prompt(message: str, memory: list):
-    context = "\n".join(memory[-5:]) if memory else ""
+class ReasoningEngine:
+    async def process(self, input_text: str, memory: str, model, route: str):
+        prompt = self._build_prompt(input_text, memory, route)
 
-    return f"""
-You are a high-level AI assistant.
+        response = await model.generate(prompt)
 
-Context:
-{context}
+        return response
 
-User:
-{message}
+    def _build_prompt(self, input_text: str, memory: str, route: str):
+        system = f"""
+You are an advanced AI system.
 
-Answer clearly, intelligently, without markdown artifacts or unnecessary formatting.
+Route: {route}
+
+Use memory context if relevant:
+{memory}
+
+Think step by step internally but provide clean final answer.
 """
+
+        return f"{system}\nUser: {input_text}"
