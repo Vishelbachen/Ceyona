@@ -28,12 +28,10 @@ async def start_bot(settings):
         MessageHandler(filters.TEXT & ~filters.COMMAND, message_entry)
     )
 
-    # PRODUCTION SAFE START
     await app.initialize()
     await app.start()
 
-    # IMPORTANT FIX (Railway compatible polling)
+    # Railway-compatible polling
     await app.updater.start_polling()
 
-    # keep alive
     await app.updater.idle()
