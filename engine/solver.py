@@ -53,7 +53,7 @@ class Solver:
 
         result = await self.selector.generate(prompt, route)
 
-        if not result or not isinstance(result, str):
+        if not isinstance(result, str) or not result.strip():
             raise ValueError("Invalid model output")
 
         return result
@@ -62,16 +62,13 @@ class Solver:
         if not response:
             return "No response generated."
 
-        try:
-            return (
-                response
-                .replace("[Ceyona refined output]", "")
-                .replace("[refined output]", "")
-                .replace("```", "")
-                .strip()
-            )
-        except Exception:
-            return str(response).strip()
+        return (
+            response
+            .replace("[Ceyona refined output]", "")
+            .replace("[refined output]", "")
+            .replace("```", "")
+            .strip()
+        )
 
     def _fallback(self, text: str) -> str:
         return (
