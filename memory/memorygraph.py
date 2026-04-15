@@ -1,42 +1,25 @@
-import datetime
-
-
 class MemoryGraph:
-    def __init__(self, db, embeddings):
-        self.db = db
-        self.embeddings = embeddings
+    def __init__(self):
+        self.nodes = []
 
-    async def store_interaction(self, user_id: str, text: str, response: str):
-        vector = await self.embeddings.embed(text)
-
-        data = {
-            "user_id": user_id,
+    async def add(self, text: str, embedding: list):
+        self.nodes.append({
             "text": text,
-            "response": response,
-            "embedding": vector,
-            "created_at": datetime.datetime.utcnow().isoformat()
-        }
+            "embedding": embedding
+        })
 
-        self.db.insert("memory", data)
+        if len(self.nodes) > 200:
+            self.nodes = self.nodes[-200:]
 
-    def get_recent(self, user_id: str, limit: int = 5):
-        result = self.db.select(
-            "memory",
-            filters={"user_id": user_id},
-            limit=limit
-        )
+    async def search(self, query_embedding, embeddings_model):
+        scored = []
 
-        return result.data if result else []
+        for node in self.nodes:
+            sim = embeddings_model.similarity(
+                query_embedding,
+                node["embedding"]
+            )
+            scored.append((sim, node["text"]))
 
-    def semantic_search(self, embedding: list, user_id: str):
-        result = self.db.rpc(
-            "match_memory",
-            {
-                "query_embedding": embedding,
-                "match_user": user_id,
-                "match_threshold": 0.75,
-                "match_count": 5
-            }
-        )
-
-        return result.data if result else []
+        scored.sort(reverse=True)
+        return [text for _, text in scored[:5]]
