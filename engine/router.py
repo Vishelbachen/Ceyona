@@ -1,6 +1,26 @@
 import re
 
 
+class Router:
+    """
+    COMPAT LAYER (Orchestrator expects Router)
+    Wraps ToolRouter internally
+    """
+
+    def __init__(self):
+        self.tool_router = ToolRouter()
+
+    def route(self, text: str) -> dict:
+        tool_result = self.tool_router.route(text)
+
+        # normalize output for orchestrator
+        return {
+            "type": tool_result.get("tool", "llm"),
+            "args": tool_result.get("args"),
+            "confidence": tool_result.get("confidence", 0.5)
+        }
+
+
 class ToolRouter:
     """
     PRO TOOL ROUTER v3
@@ -12,9 +32,7 @@ class ToolRouter:
     def route(self, text: str) -> dict:
         t = (text or "").lower()
 
-        # ======================
         # WEATHER
-        # ======================
         if any(x in t for x in ["weather", "погода", "температура"]):
             return {
                 "tool": "weather",
@@ -22,9 +40,7 @@ class ToolRouter:
                 "confidence": 0.95
             }
 
-        # ======================
         # MAPS / ROUTE
-        # ======================
         if any(x in t for x in ["route", "map", "где", "как доехать", "distance", "from", "to"]):
             return {
                 "tool": "maps",
@@ -32,9 +48,7 @@ class ToolRouter:
                 "confidence": 0.90
             }
 
-        # ======================
         # SEARCH
-        # ======================
         if any(x in t for x in ["search", "найди", "find", "что такое", "who is"]):
             return {
                 "tool": "search",
@@ -42,18 +56,13 @@ class ToolRouter:
                 "confidence": 0.80
             }
 
-        # ======================
-        # DEFAULT → LLM
-        # ======================
+        # DEFAULT
         return {
             "tool": "llm",
             "args": text,
             "confidence": 0.50
         }
 
-    # ======================
-    # SAFE CITY EXTRACTION
-    # ======================
     def _extract_city(self, text: str) -> str:
         words = re.split(r"\s+", text)
 
@@ -70,8 +79,5 @@ class ToolRouter:
 
         return candidates[-1] if candidates else "Tbilisi"
 
-    # ======================
-    # LOCATION EXTRACTION
-    # ======================
     def _extract_location(self, text: str) -> str:
         return text.strip()
