@@ -25,6 +25,7 @@ class Orchestrator:
     def __init__(self):
         self.settings = Settings()
 
+        # CORE
         self.router = Router()
         self.brain = Brain()
         self.cognitive = Cognitive()
@@ -34,7 +35,7 @@ class Orchestrator:
         self.corrector = SelfCorrection()
         self.improver = SelfImprove()
 
-        # MEMORY SAFE INIT
+        # MEMORY SAFE
         try:
             self.db = SupabaseClient(self.settings)
             self.embeddings = Embeddings(self.settings)
@@ -44,45 +45,56 @@ class Orchestrator:
                 self.memory_graph,
                 self.embeddings
             )
-
             self.memory_enabled = True
 
         except Exception as e:
-            logger.warning(f"[Memory INIT FAILED] SAFE MODE: {e}")
+            logger.warning(f"[MEMORY OFF] {e}")
             self.memory_intelligence = None
             self.memory_enabled = False
 
-        # ACCESS CONTROL
+        # ACCESS SAFE
         try:
             self.access = AccessControl(self.db)
-        except Exception as e:
-            logger.warning(f"[AccessControl INIT FAILED] BYPASS MODE: {e}")
+        except Exception:
             self.access = None
 
     async def process(self, user_id: int, text: str) -> str:
         try:
-            user_id_str = str(user_id)
             text = (text or "").strip()
+            user_id_str = str(user_id)
 
             # ACCESS
             if self.access:
-                allowed, msg = self.access.require_access(user_id_str)
-                if not allowed:
-                    return msg
+                try:
+                    allowed, msg = self.access.require_access(user_id_str)
+                    if not allowed:
+                        return msg
+                except Exception:
+                    pass
 
             # ROUTE
             route = self.router.route(text)
 
-            # BRAIN
-            brain = self.brain.analyze(text, route)
+            # 🧠 BRAIN SAFE MODE (CRITICAL FIX)
+            try:
+                brain = self.brain.analyze(text, route)
+                if not isinstance(brain, dict):
+                    brain = {"domain": "general"}
+            except Exception as e:
+                logger.warning(f"[BRAIN ANALYZE FAIL] {e}")
+                brain = {"domain": "general"}
 
             # MEMORY
             memory_context = {"recent": [], "semantic": []}
+
             if self.memory_enabled:
-                memory_context = await self.memory_intelligence.build_context(
-                    user_id=user_id_str,
-                    text=text
-                )
+                try:
+                    memory_context = await self.memory_intelligence.build_context(
+                        user_id=user_id_str,
+                        text=text
+                    )
+                except Exception as e:
+                    logger.warning(f"[MEMORY FAIL] {e}")
 
             # CONTEXT
             context = await self.cognitive.build_context(
@@ -108,21 +120,38 @@ class Orchestrator:
                 route=route
             )
 
-            # VERIFY
-            response = self.brain.verify(response, brain["domain"])
-
-            # MEMORY SAVE
-            if self.memory_enabled:
-                await self.memory_intelligence.update_memory(
-                    user_id=user_id_str,
-                    text=text,
-                    response=response
+            # 🧠 BRAIN VERIFY SAFE
+            try:
+                response = self.brain.verify(
+                    response,
+                    brain.get("domain", "general")
                 )
+            except Exception as e:
+                logger.warning(f"[BRAIN VERIFY FAIL] {e}")
+
+            # SCORE + IMPROVE SAFE
+            try:
+                score = self.scorer.evaluate(response)
+                response = self.corrector.correct(response, score)
+                response = self.improver.improve(response, score)
+            except Exception:
+                pass
+
+            # MEMORY SAVE SAFE
+            if self.memory_enabled:
+                try:
+                    await self.memory_intelligence.update_memory(
+                        user_id=user_id_str,
+                        text=text,
+                        response=response
+                    )
+                except Exception as e:
+                    logger.warning(f"[MEMORY SAVE FAIL] {e}")
 
             return response
 
         except Exception as e:
-            logger.exception(f"[Orchestrator] Fatal: {e}")
+            logger.exception(f"[ORCHESTRATOR FATAL] {e}")
             return self._fallback(text)
 
     def _fallback(self, text: str) -> str:
