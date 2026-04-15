@@ -48,7 +48,13 @@ class Orchestrator:
 
         self.functions = FunctionCalling({})
 
-    async def handle(self, user_input: str, user_id: str, thread_id: str = None, context: dict = None):
+    async def handle(
+        self,
+        user_input: str,
+        user_id: str,
+        thread_id: str = None,
+        context: dict = None
+    ):
         context = context or {}
 
         # =========================
@@ -65,12 +71,12 @@ class Orchestrator:
         memory_context = await self.memory.retrieve(user_id, user_input)
 
         # =========================
-        # ROUTING LAYER (intent only)
+        # ROUTING (intent only)
         # =========================
         route = self.router.route(user_input, context)
 
         # =========================
-        # AUTONOMOUS TASK SIGNALS
+        # AUTONOMOUS SIGNALS
         # =========================
         auto_tasks = self.autonomous_loop.decide_next_task(
             user_input,
@@ -78,7 +84,7 @@ class Orchestrator:
         )
 
         # =========================
-        # AGENT DECISION LAYER
+        # AGENT DECISION
         # =========================
         actions = await self.agent.decide(user_input, route)
 
@@ -87,17 +93,20 @@ class Orchestrator:
         results = []
         final_response = None
 
+        score = 0
+        mem_score = 0
+
         # =========================
         # EXECUTION ENGINE
         # =========================
         for action in actions:
 
             # ---------------- TOOL EXECUTION ----------------
-            if action["type"] == "tool":
+            if action.get("type") == "tool":
 
                 tool_info = self.tool_router.route(user_input)
 
-                if tool_info:
+                if tool_info and "tool" in tool_info:
 
                     tool_result = await self.tool_chain.execute_chain(
                         [tool_info["tool"]],
@@ -108,7 +117,7 @@ class Orchestrator:
                     results.append(tool_result)
 
             # ---------------- REASONING EXECUTION ----------------
-            elif action["type"] == "reason":
+            elif action.get("type") == "reason":
 
                 compressed_memory = self.context_compressor.compress(
                     self.threads.get_thread(thread_id)["messages"]
@@ -137,7 +146,7 @@ class Orchestrator:
                 )
 
                 # =========================
-                # MULTI MODEL VALIDATION
+                # MULTI-MODEL VALIDATION
                 # =========================
                 validated = await self.multi_agent.run(
                     [model],
@@ -152,7 +161,7 @@ class Orchestrator:
                     validated
                 )
 
-                if reflection["needs_improvement"]:
+                if reflection.get("needs_improvement"):
                     validated = await self.improver.improve(
                         user_input,
                         validated,
@@ -163,11 +172,12 @@ class Orchestrator:
                 # =========================
                 # STREAM OUTPUT
                 # =========================
-                streamed = []
-                async for chunk in self.streamer.stream_tokens(validated):
-                    streamed.append(chunk)
+                streamed_chunks = []
 
-                final_response = "".join([c["token"] for c in streamed])
+                async for chunk in self.streamer.stream_tokens(validated):
+                    streamed_chunks.append(chunk.get("token", ""))
+
+                final_response = "".join(streamed_chunks)
 
                 # =========================
                 # MEMORY SCORING + STORAGE
@@ -193,8 +203,8 @@ class Orchestrator:
         return {
             "response": final_response if final_response else str(results),
             "stream": final_response is not None,
-            "score": score if "score" in locals() else 0,
-            "memory_score": mem_score if "mem_score" in locals() else 0,
+            "score": score,
+            "memory_score": mem_score,
             "route": route,
             "model": model.__class__.__name__,
             "thread_id": thread_id,
