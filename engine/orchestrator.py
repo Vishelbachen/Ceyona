@@ -1,8 +1,8 @@
 import logging
-from typing import Dict, Any, Optional
+from typing import Any
 
 from engine.router import Router
-from tools.tools import Tools
+from services.tools import Tools   # ✅ FIXED IMPORT
 
 from engine.cognitive import Cognitive
 from engine.reasoning import Reasoning
@@ -30,7 +30,7 @@ class Orchestrator:
         self.settings = Settings()
 
         # ======================
-        # CORE LAYERS
+        # CORE
         # ======================
         self.router = Router()
         self.tools = Tools(self.settings)
@@ -42,9 +42,6 @@ class Orchestrator:
         self.cognitive = Cognitive()
         self.reasoning = Reasoning() if Constants.ENABLE_REASONING_LAYER else None
 
-        # ======================
-        # CORE ENGINE
-        # ======================
         self.solver = Solver()
 
         # ======================
@@ -54,13 +51,10 @@ class Orchestrator:
         self.corrector = SelfCorrection() if Constants.ENABLE_SELF_CORRECTION else None
         self.improver = SelfImprove() if Constants.ENABLE_SELF_IMPROVE else None
 
-        # ======================
-        # PROOF ENGINE
-        # ======================
         self.proof = ProofEngine()
 
         # ======================
-        # MEMORY SYSTEM (SAFE INIT)
+        # MEMORY
         # ======================
         try:
             self.db = SupabaseClient(self.settings)
@@ -79,16 +73,13 @@ class Orchestrator:
             self.memory_enabled = False
 
         # ======================
-        # ACCESS CONTROL
+        # ACCESS
         # ======================
         try:
             self.access = AccessControl(self.db)
         except Exception:
             self.access = None
 
-    # =========================================================
-    # MAIN PIPELINE
-    # =========================================================
     async def process(self, user_id: int, text: str) -> str:
         try:
             text = (text or "").strip()
@@ -98,7 +89,7 @@ class Orchestrator:
             user_id_str = str(user_id)
 
             # ======================
-            # ACCESS CONTROL
+            # ACCESS
             # ======================
             if self.access:
                 try:
@@ -109,24 +100,22 @@ class Orchestrator:
                     pass
 
             # ======================
-            # ROUTING
+            # ROUTE
             # ======================
             route = self.router.route(text)
 
-            tool_type = route.get("type", "llm")
+            tool_type = route.get("type")
             confidence = float(route.get("confidence") or 0.5)
 
             # ======================
-            # TOOL FAST PATH (SAFE + CONTROLLED)
+            # TOOL FAST PATH (SAFE)
             # ======================
-            tool_response = None
-
-            if self._should_use_tool(tool_type, confidence):
+            if tool_type in ("weather", "maps", "search") and confidence >= 0.65:
                 try:
-                    tool_response = await self.tools.execute(route, text)
+                    tool_result = await self.tools.execute(route, text)
 
-                    if self._is_valid_tool_result(tool_response):
-                        return self._format_tool_response(tool_response)
+                    if self._valid_tool(tool_result):
+                        return self._format_tool(tool_result)
 
                 except Exception as e:
                     logger.warning(f"[TOOL FAIL SAFE] {e}")
@@ -138,9 +127,9 @@ class Orchestrator:
 
             if self.brain:
                 try:
-                    result = self.brain.analyze(text, route)
-                    if isinstance(result, dict):
-                        brain = result
+                    res = self.brain.analyze(text, route)
+                    if isinstance(res, dict):
+                        brain = res
                 except Exception:
                     pass
 
@@ -200,38 +189,21 @@ class Orchestrator:
             except Exception:
                 return self._fallback(text)
 
-            if not response:
-                response = "No response generated."
+            response = response or "No response generated."
 
             # ======================
-            # BRAIN VERIFY
-            # ======================
-            if self.brain:
-                try:
-                    response = self.brain.verify(
-                        response,
-                        brain.get("domain", "general")
-                    )
-                except Exception:
-                    pass
-
-            # ======================
-            # PROOF ENGINE (SAFE PATCH)
+            # PROOF
             # ======================
             try:
-                proof_result = self.proof.validate(
+                response = self.proof.validate(
                     response,
                     brain.get("domain", "general")
                 )
-
-                if isinstance(proof_result, str) and proof_result:
-                    response = proof_result
-
             except Exception:
                 pass
 
             # ======================
-            # SELF IMPROVEMENT
+            # SELF IMPROVE
             # ======================
             if self.scorer and self.corrector and self.improver:
                 try:
@@ -260,37 +232,19 @@ class Orchestrator:
             logger.exception(f"[ORCHESTRATOR FATAL] {e}")
             return self._fallback(text)
 
-    # =========================================================
-    # TOOL DECISION LOGIC
-    # =========================================================
-    def _should_use_tool(self, tool_type: str, confidence: float) -> bool:
-        return tool_type in {"weather", "maps", "search"} and confidence >= 0.65
-
-    # =========================================================
-    # TOOL VALIDATION
-    # =========================================================
-    def _is_valid_tool_result(self, tool_result: Any) -> bool:
+    def _valid_tool(self, tool_result: Any) -> bool:
         return (
             isinstance(tool_result, dict)
             and tool_result.get("status") == "success"
             and tool_result.get("data") is not None
         )
 
-    # =========================================================
-    # TOOL FORMATTER
-    # =========================================================
-    def _format_tool_response(self, tool_result: dict) -> str:
+    def _format_tool(self, tool_result: dict) -> str:
         tool = tool_result.get("tool", "tool")
         data = tool_result.get("data", "")
 
-        if isinstance(data, dict):
-            return f"[{tool.upper()} RESULT]\n{str(data)}"
-
         return f"[{tool.upper()} RESULT]\n{data}"
 
-    # =========================================================
-    # FALLBACK
-    # =========================================================
     def _fallback(self, text: str) -> str:
         return (
             "Ceyona AI system error occurred.\n"
