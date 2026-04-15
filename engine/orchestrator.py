@@ -23,30 +23,37 @@ from ai.selector import ModelSelector
 
 class Orchestrator:
     def __init__(self):
+        # ================= CORE LAYERS =================
         self.router = Router()
         self.reasoning = ReasoningEngine()
         self.corrector = SelfCorrection()
         self.improver = SelfImprove()
         self.scorer = ScoreEngine()
 
+        # ================= MEMORY LAYER =================
         self.memory = MemoryIntelligence()
         self.selector = ModelSelector()
 
+        # ================= THREADING =================
         self.threads = ThreadManager()
 
+        # ================= TOOLING =================
         self.tool_router = ToolRouter()
+        self.tool_chain = ToolChain()
+        self.functions = FunctionCalling({})
+
+        # ================= AGENT LAYER =================
         self.agent = Agent()
+
+        # ================= STREAMING =================
         self.streamer = Streamer()
 
+        # ================= ADVANCED LAYERS =================
         self.context_compressor = ContextCompressor()
         self.memory_ranker = MemoryRanker()
         self.multi_agent = MultiAgent()
-
-        self.tool_chain = ToolChain()
         self.self_reflection = SelfReflection()
         self.autonomous_loop = AutonomousLoop()
-
-        self.functions = FunctionCalling({})
 
     async def handle(
         self,
@@ -57,9 +64,7 @@ class Orchestrator:
     ):
         context = context or {}
 
-        # =========================
-        # THREAD MANAGEMENT (ROBUST)
-        # =========================
+        # ================= THREAD SAFETY =================
         if not thread_id:
             thread_id = self.threads.create_thread(user_id)
 
@@ -68,27 +73,19 @@ class Orchestrator:
         thread_data = self.threads.get_thread(thread_id) or {}
         messages = thread_data.get("messages") or []
 
-        # =========================
-        # MEMORY RETRIEVAL (SAFE)
-        # =========================
+        # ================= MEMORY RETRIEVAL =================
         memory_context = await self.memory.retrieve(user_id, user_input) or ""
 
-        # =========================
-        # ROUTING LAYER (INTENT)
-        # =========================
+        # ================= ROUTING =================
         route = self.router.route(user_input, context)
 
-        # =========================
-        # AUTONOMOUS TRIGGERS
-        # =========================
+        # ================= AUTONOMOUS SIGNALS =================
         auto_tasks = self.autonomous_loop.decide_next_task(
             user_input,
             str(memory_context)
         ) or []
 
-        # =========================
-        # AGENT DECISION LAYER
-        # =========================
+        # ================= AGENT DECISION =================
         actions = await self.agent.decide(user_input, route) or []
 
         model = self.selector.select(route, user_input, context)
@@ -98,21 +95,18 @@ class Orchestrator:
         score = 0
         mem_score = 0
 
-        # =========================
-        # EXECUTION ENGINE
-        # =========================
+        # ================= EXECUTION ENGINE =================
         for action in actions:
 
             action_type = action.get("type")
 
-            # ---------------- TOOL EXECUTION ----------------
+            # ---------------- TOOL PATH ----------------
             if action_type == "tool":
 
                 tool_info = self.tool_router.route(user_input)
                 tool_name = tool_info.get("tool") if isinstance(tool_info, dict) else None
 
                 if tool_name:
-
                     try:
                         tool_result = await self.tool_chain.execute_chain(
                             [tool_name],
@@ -120,14 +114,13 @@ class Orchestrator:
                             self.functions
                         )
                         results.append(tool_result)
-
                     except Exception as e:
                         results.append({
                             "tool_error": str(e),
                             "tool": tool_name
                         })
 
-            # ---------------- REASONING PIPELINE ----------------
+            # ---------------- REASONING PATH ----------------
             elif action_type == "reason":
 
                 compressed_memory = self.context_compressor.compress(messages)
@@ -174,7 +167,7 @@ class Orchestrator:
                         model
                     ) or validated
 
-                # ================= STREAMING LAYER =================
+                # ================= STREAMING =================
                 streamed_chunks = []
 
                 try:
@@ -206,16 +199,16 @@ class Orchestrator:
                     final_response
                 )
 
-        # ================= FALLBACK SAFETY =================
+        # ================= FALLBACK LAYER =================
         if not final_response:
             final_response = str(results) if results else ""
 
-        # ================= FINAL OUTPUT CONTRACT =================
+        # ================= OUTPUT CONTRACT =================
         return {
             "response": final_response,
             "stream": bool(final_response),
-            "score": score or 0,
-            "memory_score": mem_score or 0,
+            "score": score,
+            "memory_score": mem_score,
             "route": route,
             "model": getattr(model, "__class__", type(model)).__name__,
             "thread_id": thread_id,
