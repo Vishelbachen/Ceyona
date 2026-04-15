@@ -2,7 +2,7 @@ import logging
 from typing import Dict, Any, Optional
 
 from engine.router import Router
-from services.tools import Tools
+from tools.tools import Tools
 
 from engine.cognitive import Cognitive
 from engine.reasoning import Reasoning
@@ -30,13 +30,13 @@ class Orchestrator:
         self.settings = Settings()
 
         # ======================
-        # ROUTER + TOOLS
+        # CORE LAYERS
         # ======================
         self.router = Router()
         self.tools = Tools(self.settings)
 
         # ======================
-        # INTELLIGENCE LAYERS
+        # INTELLIGENCE
         # ======================
         self.brain = Brain() if Constants.ENABLE_BRAIN_LAYER else None
         self.cognitive = Cognitive()
@@ -60,7 +60,7 @@ class Orchestrator:
         self.proof = ProofEngine()
 
         # ======================
-        # MEMORY SYSTEM
+        # MEMORY SYSTEM (SAFE INIT)
         # ======================
         try:
             self.db = SupabaseClient(self.settings)
@@ -113,19 +113,20 @@ class Orchestrator:
             # ======================
             route = self.router.route(text)
 
-            tool_type = route.get("type")
-            tool_args = route.get("args")
+            tool_type = route.get("type", "llm")
             confidence = float(route.get("confidence") or 0.5)
 
-            # =====================================================
+            # ======================
             # TOOL FAST PATH (SAFE + CONTROLLED)
-            # =====================================================
-            if tool_type in ("weather", "maps", "search") and confidence >= 0.65:
-                try:
-                    tool_result = await self.tools.execute(route, text)
+            # ======================
+            tool_response = None
 
-                    if self._is_valid_tool_result(tool_result):
-                        return self._format_tool_response(tool_result)
+            if self._should_use_tool(tool_type, confidence):
+                try:
+                    tool_response = await self.tools.execute(route, text)
+
+                    if self._is_valid_tool_result(tool_response):
+                        return self._format_tool_response(tool_response)
 
                 except Exception as e:
                     logger.warning(f"[TOOL FAIL SAFE] {e}")
@@ -215,15 +216,17 @@ class Orchestrator:
                     pass
 
             # ======================
-            # PROOF ENGINE
+            # PROOF ENGINE (SAFE PATCH)
             # ======================
             try:
-                verified = self.proof.validate(
+                proof_result = self.proof.validate(
                     response,
                     brain.get("domain", "general")
                 )
-                if verified:
-                    response = verified
+
+                if isinstance(proof_result, str) and proof_result:
+                    response = proof_result
+
             except Exception:
                 pass
 
@@ -258,7 +261,13 @@ class Orchestrator:
             return self._fallback(text)
 
     # =========================================================
-    # TOOL VALIDATION (ANTI-CRASH FIX)
+    # TOOL DECISION LOGIC
+    # =========================================================
+    def _should_use_tool(self, tool_type: str, confidence: float) -> bool:
+        return tool_type in {"weather", "maps", "search"} and confidence >= 0.65
+
+    # =========================================================
+    # TOOL VALIDATION
     # =========================================================
     def _is_valid_tool_result(self, tool_result: Any) -> bool:
         return (
@@ -268,15 +277,16 @@ class Orchestrator:
         )
 
     # =========================================================
-    # TOOL RESPONSE FORMATTER
+    # TOOL FORMATTER
     # =========================================================
     def _format_tool_response(self, tool_result: dict) -> str:
         tool = tool_result.get("tool", "tool")
         data = tool_result.get("data", "")
 
         if isinstance(data, dict):
-            return f"[{tool.upper()} RESULT]\n{data}"
-        return f"[{tool.upper()} RESULT]\n{str(data)}"
+            return f"[{tool.upper()} RESULT]\n{str(data)}"
+
+        return f"[{tool.upper()} RESULT]\n{data}"
 
     # =========================================================
     # FALLBACK
