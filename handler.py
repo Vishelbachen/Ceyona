@@ -1,18 +1,30 @@
-from engine.orchestrator import process_request
+from aiogram import Router, types
+from aiogram.filters import CommandStart
 
-async def handle_message(update, context):
-    user_input = update.message.text
+from engine.orchestrator import Orchestrator
 
-    response = await process_request(
-        user_id=str(update.effective_user.id),
-        message=user_input
+router = Router()
+orchestrator = Orchestrator()
+
+
+@router.message(CommandStart())
+async def start(message: types.Message):
+    await message.answer("🚀 AI System Online")
+
+
+@router.message()
+async def handle_message(message: types.Message):
+    user_id = str(message.from_user.id)
+    user_input = message.text
+
+    result = await orchestrator.handle(
+        user_input=user_input,
+        user_id=user_id
     )
 
-    # Убираем мусор вроде ** и лишних символов
-    clean = sanitize_response(response)
+    response = result.get("response", "")
 
-    await update.message.reply_text(clean)
+    if not response:
+        response = "⚠️ No response generated"
 
-
-def sanitize_response(text: str) -> str:
-    return text.replace("**", "").strip()
+    await message.answer(response)
