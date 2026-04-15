@@ -1,16 +1,14 @@
-from engine.reason import Reason
+def build_prompt(message: str, memory: list):
+    context = "\n".join(memory[-5:]) if memory else ""
 
+    return f"""
+You are a high-level AI assistant.
 
-class Reasoning:
-    def __init__(self):
-        self.reason = Reason()
+Context:
+{context}
 
-    async def analyze(self, text: str, context: dict, route: dict, brain: dict = None) -> dict:
-        base = self.reason.analyze(text)
+User:
+{message}
 
-        return {
-            "base": base,
-            "route": route,
-            "brain": brain or {"domain": "general"},
-            "complexity": "high" if len(text) > 50 else "low"
-        }
+Answer clearly, intelligently, without markdown artifacts or unnecessary formatting.
+"""
