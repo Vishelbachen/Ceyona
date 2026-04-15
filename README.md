@@ -34,3 +34,7 @@ Never expose:
 
 ## 🧠 Status
 MVP in development stage
+
+## License
+
+All rights reserved.
