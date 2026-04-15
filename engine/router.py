@@ -1,59 +1,77 @@
+import re
+
+
 class ToolRouter:
     """
-    Decides REAL execution tool (not just intent)
+    PRO TOOL ROUTER v3
+    - deterministic
+    - safe extraction
+    - confidence scoring
     """
 
     def route(self, text: str) -> dict:
         t = (text or "").lower()
 
         # ======================
-        # WEATHER TOOL
+        # WEATHER
         # ======================
         if any(x in t for x in ["weather", "погода", "температура"]):
             return {
                 "tool": "weather",
-                "args": self._extract_city(t)
+                "args": self._extract_city(t),
+                "confidence": 0.95
             }
 
         # ======================
-        # MAPS TOOL
+        # MAPS / ROUTE
         # ======================
-        if any(x in t for x in ["route", "map", "где", "как доехать", "distance"]):
+        if any(x in t for x in ["route", "map", "где", "как доехать", "distance", "from", "to"]):
             return {
                 "tool": "maps",
-                "args": self._extract_location(t)
+                "args": self._extract_location(t),
+                "confidence": 0.90
             }
 
         # ======================
-        # SEARCH TOOL
+        # SEARCH
         # ======================
-        if any(x in t for x in ["search", "найди", "find", "что такое"]):
+        if any(x in t for x in ["search", "найди", "find", "что такое", "who is"]):
             return {
                 "tool": "search",
-                "args": t
+                "args": t,
+                "confidence": 0.80
             }
 
         # ======================
-        # NO TOOL → LLM
+        # DEFAULT → LLM
         # ======================
         return {
             "tool": "llm",
-            "args": text
+            "args": text,
+            "confidence": 0.50
         }
 
-    # ----------------------
-    # SIMPLE EXTRACTION (SAFE)
-    # ----------------------
+    # ======================
+    # SAFE CITY EXTRACTION
+    # ======================
     def _extract_city(self, text: str) -> str:
-        words = text.split()
+        words = re.split(r"\s+", text)
 
-        blacklist = {"weather", "погода", "какая", "сегодня", "now", "today"}
+        blacklist = {
+            "weather", "погода", "today", "now",
+            "сегодня", "какая", "температура"
+        }
 
-        for w in words:
-            if w not in blacklist and len(w) > 2:
-                return w
+        candidates = [
+            w.strip(",.")
+            for w in words
+            if w not in blacklist and len(w) > 2
+        ]
 
-        return "Tbilisi"
+        return candidates[-1] if candidates else "Tbilisi"
 
+    # ======================
+    # LOCATION EXTRACTION
+    # ======================
     def _extract_location(self, text: str) -> str:
-        return text
+        return text.strip()
