@@ -5,13 +5,22 @@ logger = logging.getLogger(__name__)
 
 
 class ToolRouter:
+    """
+    PRO TOOL ROUTER V2++
+    - deterministic
+    - normalized schema
+    - production stable
+    """
+
     def route(self, text: str) -> dict:
         t = (text or "").lower().strip()
 
         if not t:
             return self._fallback(text)
 
+        # ======================
         # WEATHER
+        # ======================
         if any(x in t for x in ["weather", "погода", "температура"]):
             return {
                 "tool": "weather",
@@ -19,10 +28,12 @@ class ToolRouter:
                 "confidence": 0.97
             }
 
-        # MAPS
+        # ======================
+        # MAPS / ROUTE
+        # ======================
         if any(x in t for x in [
             "route", "map", "где", "как доехать",
-            "distance", "from", "to"
+            "distance", "from", "to", "маршрут"
         ]):
             return {
                 "tool": "maps",
@@ -30,7 +41,9 @@ class ToolRouter:
                 "confidence": 0.92
             }
 
+        # ======================
         # SEARCH
+        # ======================
         if any(x in t for x in [
             "search", "найди", "find",
             "who is", "что такое", "кто такой"
@@ -41,6 +54,9 @@ class ToolRouter:
                 "confidence": 0.85
             }
 
+        # ======================
+        # DEFAULT
+        # ======================
         return {
             "tool": "llm",
             "args": text,
@@ -48,14 +64,17 @@ class ToolRouter:
         }
 
     def _extract_city(self, text: str) -> str:
-        blacklist = {"weather", "погода", "today", "now", "температура"}
+        blacklist = {
+            "weather", "погода", "today", "now",
+            "сегодня", "какая", "температура"
+        }
 
         words = re.split(r"\s+", text)
 
         for w in reversed(words):
-            clean = w.strip(",.")
-            if clean and clean not in blacklist:
-                return clean.capitalize()
+            w = w.strip(",.")
+            if w and w not in blacklist:
+                return w.capitalize()
 
         return "Tbilisi"
 
@@ -72,7 +91,7 @@ class ToolRouter:
 
 class Router:
     """
-    COMPAT LAYER (Orchestrator-safe)
+    COMPAT LAYER (DO NOT BREAK ORCHESTRATOR)
     """
 
     def __init__(self):
@@ -90,6 +109,7 @@ class Router:
 
         except Exception as e:
             logger.warning(f"[ROUTER FAILSAFE] {e}")
+
             return {
                 "type": "llm",
                 "args": text,
