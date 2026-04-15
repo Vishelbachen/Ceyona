@@ -1,24 +1,44 @@
+from ai.openai import OpenAIModel
+from ai.gemini import GeminiModel
+from ai.groq import GroqModel
+from ai.mistral import MistralModel
+
+
 class ModelSelector:
+    """
+    Smart cost + performance routing layer
+    """
+
     def select(self, route: str, user_input: str, context: dict = None):
         context = context or {}
 
         length = len(user_input)
 
-        # FAST MODE (cheap + quick)
+        # =========================
+        # FAST MODE (lowest cost)
+        # =========================
         if context.get("fast_mode"):
-            from ai.groq import GroqModel
             return GroqModel()
 
-        # LONG / COMPLEX → GPT
-        if length > 500 or route == "coding":
-            from ai.openai import OpenAIModel
+        # =========================
+        # CODING / LOGIC HEAVY
+        # =========================
+        if route == "coding":
             return OpenAIModel()
 
-        # CREATIVE / BALANCED
+        # =========================
+        # COMPLEX LONG INPUT
+        # =========================
+        if length > 800:
+            return OpenAIModel()
+
+        # =========================
+        # DEFAULT BALANCED
+        # =========================
         if route in ["knowledge", "general"]:
-            from ai.gemini import GeminiModel
             return GeminiModel()
 
-        # DEFAULT
-        from ai.mistral import MistralModel
+        # =========================
+        # FALLBACK CHEAP
+        # =========================
         return MistralModel()
