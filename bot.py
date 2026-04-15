@@ -1,3 +1,5 @@
+
+
 import logging
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters
@@ -32,3 +34,13 @@ def start_bot(settings):
         drop_pending_updates=True,
         close_loop=False
     )
+
+async def post_init(application):
+    # kill EVERYTHING Telegram knows
+    await application.bot.delete_webhook(drop_pending_updates=True)
+
+    # HARD reset updates stream
+    try:
+        await application.bot.get_updates(offset=-1)
+    except Exception:
+        pass
