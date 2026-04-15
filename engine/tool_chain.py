@@ -1,18 +1,15 @@
 class ToolChain:
     """
-    Allows tools to call other tools (agentic behavior)
+    Executes tools in sequence (tool → tool → reasoning)
     """
 
-    async def execute_chain(self, tools, initial_input: str):
-        results = []
-        current_input = initial_input
+    async def execute_chain(self, tools, input_text: str, function_executor):
+        result = input_text
 
         for tool in tools:
-            result = await tool(current_input)
+            result = await function_executor.execute(
+                tool,
+                {"query": result}
+            )
 
-            results.append(result)
-
-            # output becomes next input (chain behavior)
-            current_input = str(result)
-
-        return results
+        return result
