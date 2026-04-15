@@ -1,8 +1,8 @@
 import logging
-from typing import Any
+from typing import Any, Dict, Optional
 
 from engine.router import Router
-from engine.tools import Tools   # ✅ FIXED IMPORT
+from engine.tools import Tools
 
 from engine.cognitive import Cognitive
 from engine.reasoning import Reasoning
@@ -30,32 +30,42 @@ class Orchestrator:
         self.settings = Settings()
 
         # ======================
-        # CORE
+        # CORE LAYERS
         # ======================
         self.router = Router()
         self.tools = Tools(self.settings)
 
         # ======================
-        # INTELLIGENCE
+        # INTELLIGENCE LAYERS
         # ======================
         self.brain = Brain() if Constants.ENABLE_BRAIN_LAYER else None
         self.cognitive = Cognitive()
         self.reasoning = Reasoning() if Constants.ENABLE_REASONING_LAYER else None
 
+        # ======================
+        # CORE SOLVER
+        # ======================
         self.solver = Solver()
 
         # ======================
-        # SELF IMPROVEMENT
+        # SELF IMPROVEMENT STACK
         # ======================
         self.scorer = Scorer() if Constants.ENABLE_SELF_CORRECTION else None
         self.corrector = SelfCorrection() if Constants.ENABLE_SELF_CORRECTION else None
         self.improver = SelfImprove() if Constants.ENABLE_SELF_IMPROVE else None
 
+        # ======================
+        # PROOF ENGINE
+        # ======================
         self.proof = ProofEngine()
 
         # ======================
-        # MEMORY
+        # MEMORY SYSTEM (SAFE INIT)
         # ======================
+        self.memory_enabled = False
+        self.memory_intelligence = None
+        self.db = None
+
         try:
             self.db = SupabaseClient(self.settings)
             self.embeddings = Embeddings(self.settings)
@@ -65,31 +75,34 @@ class Orchestrator:
                 self.memory_graph,
                 self.embeddings
             )
+
             self.memory_enabled = True
 
         except Exception as e:
             logger.warning(f"[MEMORY DISABLED] {e}")
-            self.memory_intelligence = None
-            self.memory_enabled = False
 
         # ======================
-        # ACCESS
+        # ACCESS CONTROL (SAFE INIT)
         # ======================
         try:
             self.access = AccessControl(self.db)
         except Exception:
             self.access = None
 
+    # =========================================================
+    # MAIN PIPELINE
+    # =========================================================
     async def process(self, user_id: int, text: str) -> str:
         try:
             text = (text or "").strip()
+
             if not text:
                 return "Empty input."
 
             user_id_str = str(user_id)
 
             # ======================
-            # ACCESS
+            # ACCESS CONTROL
             # ======================
             if self.access:
                 try:
@@ -97,24 +110,25 @@ class Orchestrator:
                     if not allowed:
                         return msg
                 except Exception:
+                    logger.warning("[ACCESS CONTROL FAILSAFE]")
                     pass
 
             # ======================
-            # ROUTE
+            # ROUTER
             # ======================
             route = self.router.route(text)
 
-            tool_type = route.get("type")
-            confidence = float(route.get("confidence") or 0.5)
+            tool_type = route.get("type") or "llm"
+            confidence = self._safe_float(route.get("confidence"))
 
             # ======================
-            # TOOL FAST PATH (SAFE)
+            # TOOL FAST PATH (SAFE EXECUTION)
             # ======================
             if tool_type in ("weather", "maps", "search") and confidence >= 0.65:
                 try:
                     tool_result = await self.tools.execute(route, text)
 
-                    if self._valid_tool(tool_result):
+                    if self._is_valid_tool(tool_result):
                         return self._format_tool(tool_result)
 
                 except Exception as e:
@@ -131,24 +145,24 @@ class Orchestrator:
                     if isinstance(res, dict):
                         brain = res
                 except Exception:
-                    pass
+                    logger.warning("[BRAIN FAILSAFE]")
 
             # ======================
             # MEMORY
             # ======================
             memory_context = {"recent": [], "semantic": []}
 
-            if self.memory_enabled:
+            if self.memory_enabled and self.memory_intelligence:
                 try:
                     memory_context = await self.memory_intelligence.build_context(
                         user_id=user_id_str,
                         text=text
                     )
                 except Exception:
-                    pass
+                    logger.warning("[MEMORY FAILSAFE]")
 
             # ======================
-            # CONTEXT
+            # CONTEXT BUILD
             # ======================
             try:
                 context = await self.cognitive.build_context(
@@ -158,7 +172,12 @@ class Orchestrator:
                     brain=brain
                 )
             except Exception:
-                context = {"memory": memory_context}
+                context = {
+                    "user_id": user_id,
+                    "input": text,
+                    "memory": memory_context,
+                    "brain": brain
+                }
 
             # ======================
             # REASONING
@@ -174,7 +193,7 @@ class Orchestrator:
                         brain=brain
                     )
                 except Exception:
-                    pass
+                    logger.warning("[REASONING FAILSAFE]")
 
             # ======================
             # SOLVER
@@ -186,37 +205,40 @@ class Orchestrator:
                     reasoning=reasoning,
                     route=route
                 )
-            except Exception:
+            except Exception as e:
+                logger.error(f"[SOLVER CRASH] {e}")
                 return self._fallback(text)
 
             response = response or "No response generated."
 
             # ======================
-            # PROOF
+            # PROOF ENGINE (NON-BLOCKING)
             # ======================
             try:
                 response = self.proof.validate(
                     response,
                     brain.get("domain", "general")
-                )
+                ) or response
             except Exception:
                 pass
 
             # ======================
-            # SELF IMPROVE
+            # SELF IMPROVE (SAFE CHAIN)
             # ======================
             if self.scorer and self.corrector and self.improver:
                 try:
                     score = self.scorer.evaluate(response)
-                    response = self.corrector.correct(response, score)
-                    response = self.improver.improve(response, score)
+
+                    response = self.corrector.correct(response, score) or response
+                    response = self.improver.improve(response, score) or response
+
                 except Exception:
-                    pass
+                    logger.warning("[SELF IMPROVE FAILSAFE]")
 
             # ======================
             # MEMORY SAVE
             # ======================
-            if self.memory_enabled:
+            if self.memory_enabled and self.memory_intelligence:
                 try:
                     await self.memory_intelligence.update_memory(
                         user_id=user_id_str,
@@ -224,7 +246,7 @@ class Orchestrator:
                         response=response
                     )
                 except Exception:
-                    pass
+                    logger.warning("[MEMORY SAVE FAILSAFE]")
 
             return str(response)
 
@@ -232,7 +254,16 @@ class Orchestrator:
             logger.exception(f"[ORCHESTRATOR FATAL] {e}")
             return self._fallback(text)
 
-    def _valid_tool(self, tool_result: Any) -> bool:
+    # =========================================================
+    # SAFE HELPERS
+    # =========================================================
+    def _safe_float(self, value: Any) -> float:
+        try:
+            return float(value)
+        except Exception:
+            return 0.5
+
+    def _is_valid_tool(self, tool_result: Any) -> bool:
         return (
             isinstance(tool_result, dict)
             and tool_result.get("status") == "success"
@@ -243,7 +274,12 @@ class Orchestrator:
         tool = tool_result.get("tool", "tool")
         data = tool_result.get("data", "")
 
-        return f"[{tool.upper()} RESULT]\n{data}"
+        try:
+            if isinstance(data, dict):
+                return f"[{tool.upper()} RESULT]\n{str(data)}"
+            return f"[{tool.upper()} RESULT]\n{data}"
+        except Exception:
+            return f"[{tool.upper()} RESULT]\n<unformatted>"
 
     def _fallback(self, text: str) -> str:
         return (
