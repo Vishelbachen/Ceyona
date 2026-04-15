@@ -2,7 +2,7 @@ import logging
 from typing import Any
 
 from engine.router import Router
-from services.tools import Tools   # ✅ FIXED IMPORT
+from engine.tools import Tools   # ✅ FIXED IMPORT
 
 from engine.cognitive import Cognitive
 from engine.reasoning import Reasoning
