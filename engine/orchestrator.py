@@ -23,32 +23,32 @@ from ai.selector import ModelSelector
 
 class Orchestrator:
     def __init__(self):
-        # ================= CORE LAYERS =================
+        # ================= CORE =================
         self.router = Router()
         self.reasoning = ReasoningEngine()
         self.corrector = SelfCorrection()
         self.improver = SelfImprove()
         self.scorer = ScoreEngine()
 
-        # ================= MEMORY LAYER =================
+        # ================= MEMORY =================
         self.memory = MemoryIntelligence()
         self.selector = ModelSelector()
 
-        # ================= THREADING =================
+        # ================= THREADS =================
         self.threads = ThreadManager()
 
-        # ================= TOOLING =================
+        # ================= TOOLS =================
         self.tool_router = ToolRouter()
         self.tool_chain = ToolChain()
         self.functions = FunctionCalling({})
 
-        # ================= AGENT LAYER =================
+        # ================= AGENT =================
         self.agent = Agent()
 
-        # ================= STREAMING =================
+        # ================= STREAM =================
         self.streamer = Streamer()
 
-        # ================= ADVANCED LAYERS =================
+        # ================= ADVANCED =================
         self.context_compressor = ContextCompressor()
         self.memory_ranker = MemoryRanker()
         self.multi_agent = MultiAgent()
@@ -73,19 +73,19 @@ class Orchestrator:
         thread_data = self.threads.get_thread(thread_id) or {}
         messages = thread_data.get("messages") or []
 
-        # ================= MEMORY RETRIEVAL =================
+        # ================= MEMORY =================
         memory_context = await self.memory.retrieve(user_id, user_input) or ""
 
         # ================= ROUTING =================
         route = self.router.route(user_input, context)
 
-        # ================= AUTONOMOUS SIGNALS =================
+        # ================= AUTONOMOUS =================
         auto_tasks = self.autonomous_loop.decide_next_task(
             user_input,
             str(memory_context)
         ) or []
 
-        # ================= AGENT DECISION =================
+        # ================= AGENT =================
         actions = await self.agent.decide(user_input, route) or []
 
         model = self.selector.select(route, user_input, context)
@@ -95,16 +95,20 @@ class Orchestrator:
         score = 0
         mem_score = 0
 
-        # ================= EXECUTION ENGINE =================
+        # ================= EXECUTION LOOP =================
         for action in actions:
-
             action_type = action.get("type")
 
-            # ---------------- TOOL PATH ----------------
+            # ================= TOOL EXECUTION =================
             if action_type == "tool":
 
                 tool_info = self.tool_router.route(user_input)
-                tool_name = tool_info.get("tool") if isinstance(tool_info, dict) else None
+
+                tool_name = None
+                if isinstance(tool_info, dict):
+                    tool_name = tool_info.get("tool")
+                elif isinstance(tool_info, str):
+                    tool_name = tool_info
 
                 if tool_name:
                     try:
@@ -120,7 +124,7 @@ class Orchestrator:
                             "tool": tool_name
                         })
 
-            # ---------------- REASONING PATH ----------------
+            # ================= REASONING =================
             elif action_type == "reason":
 
                 compressed_memory = self.context_compressor.compress(messages)
@@ -153,6 +157,9 @@ class Orchestrator:
                     improved
                 ) or improved
 
+                if not isinstance(validated, str):
+                    validated = str(validated)
+
                 # ================= SELF REFLECTION =================
                 reflection = self.self_reflection.reflect(
                     user_input,
@@ -181,10 +188,13 @@ class Orchestrator:
 
                 final_response = "".join(streamed_chunks).strip()
 
-                # ================= MEMORY SCORING =================
+                if not isinstance(final_response, str):
+                    final_response = str(final_response)
+
+                # ================= MEMORY SCORE =================
                 mem_score = self.memory_ranker.score(final_response) or 0
 
-                # ================= MEMORY STORAGE =================
+                # ================= STORE MEMORY =================
                 await self.memory.store(
                     user_id,
                     user_input,
@@ -192,14 +202,14 @@ class Orchestrator:
                     mem_score
                 )
 
-                # ================= THREAD STORAGE =================
+                # ================= THREAD STORE =================
                 self.threads.add_message(
                     thread_id,
                     "assistant",
                     final_response
                 )
 
-        # ================= FALLBACK LAYER =================
+        # ================= FALLBACK =================
         if not final_response:
             final_response = str(results) if results else ""
 
@@ -207,8 +217,8 @@ class Orchestrator:
         return {
             "response": final_response,
             "stream": bool(final_response),
-            "score": score,
-            "memory_score": mem_score,
+            "score": score or 0,
+            "memory_score": mem_score or 0,
             "route": route,
             "model": getattr(model, "__class__", type(model)).__name__,
             "thread_id": thread_id,
