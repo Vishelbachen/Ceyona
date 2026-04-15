@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from engine.prompt import PromptBuilder
 from ai.selector import AISelector
@@ -22,22 +22,17 @@ class Solver:
         reasoning: Dict[str, Any],
         route: Dict[str, Any]
     ) -> str:
-        """
-        Main AI execution pipeline:
-        - build prompt
-        - select model
-        - generate response
-        - validate output
-        """
-
-        prompt = self._build_prompt(text, context, reasoning)
 
         try:
+            prompt = self._build_prompt(text, context, reasoning)
+
+            logger.info(f"[Solver] Prompt built successfully")
+
             response = await self._generate_with_retry(prompt, route)
 
-            validated = self._validate_response(response)
+            response = self._validate_response(response)
 
-            return validated
+            return response
 
         except Exception as e:
             logger.exception(f"[Solver] Critical failure: {e}")
@@ -49,31 +44,36 @@ class Solver:
         context: Dict[str, Any],
         reasoning: Dict[str, Any]
     ) -> str:
+
         try:
             return self.prompt_builder.build(text, context, reasoning)
+
         except Exception as e:
-            logger.warning(f"[Solver] Prompt build failed: {e}")
-            return f"User input: {text}"
+            logger.warning(f"[Solver] PromptBuilder failed: {e}")
+
+            return (
+                f"User input: {text}\n"
+                f"Context: {context}\n"
+                f"Reasoning: {reasoning}"
+            )
 
     @retry(
         stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10)
+        wait=wait_exponential(multiplier=1, min=2, max=8)
     )
     async def _generate_with_retry(self, prompt: str, route: Dict[str, Any]) -> str:
-        """
-        Retry layer for unstable APIs
-        """
+
+        if not route:
+            route = {"type": "general"}
+
         result = await self.selector.generate(prompt, route)
 
-        if not result or not result.strip():
-            raise ValueError("Empty response from model")
+        if not result or not isinstance(result, str):
+            raise ValueError("Invalid or empty model response")
 
         return result
 
     def _validate_response(self, response: str) -> str:
-        """
-        Output validation layer
-        """
 
         if not isinstance(response, str):
             return "Ceyona AI error: invalid response type"
@@ -86,11 +86,9 @@ class Solver:
         return cleaned
 
     def _fallback_response(self, text: str) -> str:
-        """
-        Final safety layer if everything fails
-        """
+
         return (
-            "Ceyona AI encountered an issue processing your request.\n"
+            "Ceyona AI encountered a system-level issue.\n"
             "Please try again.\n\n"
             f"Input: {text}"
         )
