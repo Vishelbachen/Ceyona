@@ -1,16 +1,19 @@
 class SelfCorrection:
     async def correct(self, input_text: str, output: str, model):
-        prompt = f"""
-Check the following response for errors, improve clarity, correctness and usefulness.
+        if len(output) < 20:
+            return output
 
-User Input:
+        prompt = f"""
+Check response for hallucinations or incorrect facts.
+
+User:
 {input_text}
 
 Response:
 {output}
 
-Return improved version only.
+If correct, return as is.
+If incorrect, fix it.
 """
 
-        improved = await model.generate(prompt)
-        return improved
+        return await model.generate(prompt)
