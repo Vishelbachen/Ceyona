@@ -1,28 +1,18 @@
-import logging
-from engine.orchestrator import Orchestrator
+from engine.orchestrator import process_request
 
-logger = logging.getLogger(__name__)
+async def handle_message(update, context):
+    user_input = update.message.text
 
-orchestrator = Orchestrator()
+    response = await process_request(
+        user_id=str(update.effective_user.id),
+        message=user_input
+    )
+
+    # Убираем мусор вроде ** и лишних символов
+    clean = sanitize_response(response)
+
+    await update.message.reply_text(clean)
 
 
-async def handle_message(user_id: int, text: str) -> str:
-    try:
-        text = (text or "").strip()
-
-        if not text:
-            return "Empty input"
-
-        result = await orchestrator.process(
-            user_id=user_id,
-            text=text
-        )
-
-        if not result:
-            return "No response"
-
-        return str(result)
-
-    except Exception as e:
-        logger.exception(f"[HANDLER ERROR] {e}")
-        return "System error. Try again later."
+def sanitize_response(text: str) -> str:
+    return text.replace("**", "").strip()
