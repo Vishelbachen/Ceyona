@@ -10,16 +10,14 @@ class Settings:
         # ======================
         # ENV MODE
         # ======================
-        self.ENV = self._get("ENV", "production")  # production / dev
+        self.ENV = self._get("ENV", "production")
         self.DEBUG = self._bool("DEBUG", False)
 
         # ======================
         # BOT CORE
         # ======================
         self.BOT_TOKEN = self._get("BOT_TOKEN")
-
-        # webhook (NEW - needed for Railway production mode)
-        self.WEBHOOK_URL = self._get("WEBHOOK_URL", "")
+        self.WEBHOOK_URL = self._get("WEBHOOK_URL", "").rstrip("/")
 
         # ======================
         # AI MODELS
@@ -30,24 +28,19 @@ class Settings:
         self.MISTRAL_API_KEY = self._get("MISTRAL_API_KEY")
 
         # ======================
-        # MEMORY (SUPABASE)
+        # MEMORY
         # ======================
         self.SUPABASE_URL = self._get("SUPABASE_URL")
         self.SUPABASE_ANON_KEY = self._get("SUPABASE_ANON_KEY")
         self.SUPABASE_SERVICE_ROLE_KEY = self._get("SUPABASE_SERVICE_ROLE_KEY")
 
         # ======================
-        # SEARCH / TOOLS
+        # TOOLS
         # ======================
         self.SERPAPI_KEY = self._get("SERPAPI_KEY")
         self.OPENWEATHER_API_KEY = self._get("OPENWEATHER_API_KEY")
         self.MAPBOX_TOKEN = self._get("MAPBOX_TOKEN")
         self.GOOGLE_MAPS_API_KEY = self._get("GOOGLE_MAPS_API_KEY")
-
-        # ======================
-        # PAYMENTS
-        # ======================
-        self.TON_WALLET = self._get("TON_WALLET", "")
 
         # ======================
         # SECURITY
@@ -56,29 +49,16 @@ class Settings:
         self.ENCRYPTION_KEY = self._get("ENCRYPTION_KEY")
 
         # ======================
-        # PERFORMANCE SETTINGS
+        # PERFORMANCE
         # ======================
         self.REQUEST_TIMEOUT = int(self._get("REQUEST_TIMEOUT", 45))
         self.MAX_RETRIES = int(self._get("MAX_RETRIES", 2))
 
-        # ======================
-        # MEMORY FLAGS
-        # ======================
-        self.MEMORY_ENABLED = self._bool("MEMORY_ENABLED", True)
-
-        # ======================
-        # VALIDATION
-        # ======================
         self._validate()
 
-    # =========================
-    # HELPERS
-    # =========================
     def _get(self, key: str, default: str = None):
         value = os.getenv(key, default)
-        if value is not None:
-            value = str(value).strip()
-        return value
+        return str(value).strip() if value else default
 
     def _bool(self, key: str, default: bool = False):
         value = os.getenv(key)
@@ -86,30 +66,19 @@ class Settings:
             return default
         return value.lower() in ("1", "true", "yes", "on")
 
-    # =========================
-    # VALIDATION (SAFE MODE)
-    # =========================
     def _validate(self):
+        required = [
+            "BOT_TOKEN",
+            "SUPABASE_URL",
+            "SUPABASE_SERVICE_ROLE_KEY",
+            "JWT_SECRET",
+            "ENCRYPTION_KEY",
+        ]
 
-        required = {
-            "BOT_TOKEN": self.BOT_TOKEN,
-            "SUPABASE_URL": self.SUPABASE_URL,
-            "SUPABASE_SERVICE_ROLE_KEY": self.SUPABASE_SERVICE_ROLE_KEY,
-            "JWT_SECRET": self.JWT_SECRET,
-            "ENCRYPTION_KEY": self.ENCRYPTION_KEY,
-        }
-
-        missing = [k for k, v in required.items() if not v]
+        missing = [k for k in required if not getattr(self, k)]
 
         if missing:
-            raise ValueError(
-                "❌ Missing critical env vars: "
-                + ", ".join(missing)
-            )
+            raise ValueError("Missing env vars: " + ", ".join(missing))
 
-        # webhook safety check
-        if self.WEBHOOK_URL == "" and self.ENV == "production":
-            print(
-                "⚠️ WARNING: WEBHOOK_URL is empty. "
-                "Bot may not receive updates in production."
-            )
+        if self.ENV == "production" and not self.WEBHOOK_URL:
+            print("⚠️ WEBHOOK_URL missing → polling fallback will be used")
