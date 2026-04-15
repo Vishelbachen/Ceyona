@@ -1,19 +1,8 @@
-class SelfCorrection:
-    """
-    NO text mutation noise anymore.
-    Only optional improvement flag (internal use safe)
-    """
+def refine_output(text: str) -> str:
+    text = text.strip()
 
-    def correct(self, response: str, score: dict) -> str:
-        if not response:
-            return response
+    # убираем markdown мусор
+    if text.startswith("**") and text.endswith("**"):
+        text = text[2:-2]
 
-        quality = score.get("quality", "high")
-
-        # ❌ removed: no more appended junk text
-        # ❌ removed: "[Improved: ...]"
-
-        if quality == "low" and len(response) < 30:
-            return response + "\n\n(Note: answer may be incomplete)"
-
-        return response
+    return text
