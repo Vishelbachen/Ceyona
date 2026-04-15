@@ -12,42 +12,86 @@ from handler import handle_message
 logger = logging.getLogger(__name__)
 
 
+# =========================
+# MESSAGE RESOLVER (ROBUST)
+# =========================
+def extract_message(update: Update):
+    """
+    Safely extracts ANY message type:
+    - text
+    - edited text
+    - captions (future extension)
+    """
+    if not update:
+        return None
+
+    message = (
+        update.message
+        or update.edited_message
+        or update.channel_post
+        or update.edited_channel_post
+    )
+
+    return message
+
+
+# =========================
+# HANDLER
+# =========================
 async def message_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        if not update:
+        message = extract_message(update)
+
+        if not message:
+            logger.warning("[BOT] No message in update")
             return
 
-        message = update.message or update.edited_message
+        text = getattr(message, "text", None)
 
-        if not message or not message.text:
-            logger.warning("[BOT] Non-text or empty message")
+        if not text:
+            text = getattr(message, "caption", None)
+
+        if not text:
+            logger.warning("[BOT] Empty non-text message ignored")
             return
 
-        user_id = update.effective_user.id
-        text = message.text.strip()
+        text = text.strip()
+        user_id = update.effective_user.id if update.effective_user else None
 
-        logger.info(f"[BOT] Incoming | user_id={user_id} | text={text}")
+        logger.info(f"[BOT] IN | user_id={user_id} | text={text}")
 
         response = await handle_message(user_id, text)
 
-        await message.reply_text(response or "No response generated.")
+        if not response:
+            response = "No response generated."
 
-        logger.info("[BOT] Response sent")
+        await message.reply_text(response)
+
+        logger.info("[BOT] OUT | response sent")
 
     except Exception as e:
-        logger.exception(f"[BOT] Error: {e}")
+        logger.exception(f"[BOT] message_entry failed: {e}")
 
 
-async def start_bot(settings):
+# =========================
+# START BOT (CLEAN LIFECYCLE)
+# =========================
+def start_bot(settings):
+    """
+    IMPORTANT:
+    run_polling MUST NOT be awaited (PTB design)
+    """
     app = ApplicationBuilder().token(settings.BOT_TOKEN).build()
 
-    # IMPORTANT: broader filter (fix silent messages)
+    # Catch ALL updates (no silent loss)
     app.add_handler(
         MessageHandler(filters.ALL, message_entry)
     )
 
-    logger.info("[BOT] Starting application")
+    logger.info("[BOT] Starting application...")
 
-    await app.run_polling(
-        drop_pending_updates=True
+    # Single lifecycle entry (NO initialize/start manual calls)
+    app.run_polling(
+        drop_pending_updates=True,
+        close_loop=False,
     )
