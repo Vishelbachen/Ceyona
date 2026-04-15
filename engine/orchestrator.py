@@ -1,3 +1,6 @@
+import logging
+from typing import Dict, Any
+
 from engine.router import Router
 from engine.cognitive import Cognitive
 from engine.reasoning import Reasoning
@@ -6,9 +9,22 @@ from engine.score import Scorer
 from engine.selfcorrection import SelfCorrection
 from engine.selfimprove import SelfImprove
 
+from memory.supabase_client import SupabaseClient
+from memory.memorygraph import MemoryGraph
+from memory.memoryintelligence import MemoryIntelligence
+from memory.embeddings import Embeddings
+
+from config.settings import Settings
+
+
+logger = logging.getLogger(__name__)
+
 
 class Orchestrator:
     def __init__(self):
+        self.settings = Settings()
+
+        # CORE ENGINE
         self.router = Router()
         self.cognitive = Cognitive()
         self.reasoning = Reasoning()
@@ -17,26 +33,78 @@ class Orchestrator:
         self.corrector = SelfCorrection()
         self.improver = SelfImprove()
 
+        # MEMORY LAYER (CRITICAL)
+        self.db = SupabaseClient(self.settings)
+        self.embeddings = Embeddings(self.settings)
+        self.memory_graph = MemoryGraph(self.db, self.embeddings)
+        self.memory_intelligence = MemoryIntelligence(
+            self.memory_graph,
+            self.embeddings
+        )
+
     async def process(self, user_id: int, text: str) -> str:
-        # 1. Определение типа задачи
-        route = self.router.route(text)
+        """
+        Full AI pipeline:
+        router → memory → cognitive → reasoning → solver → score → correction → improve → memory save
+        """
 
-        # 2. Когнитивная обработка (контекст)
-        context = await self.cognitive.build_context(user_id, text)
+        try:
+            # 1. ROUTING (intent)
+            route = self.router.route(text)
 
-        # 3. Логическое рассуждение
-        reasoning = await self.reasoning.analyze(text, context, route)
+            # 2. MEMORY CONTEXT (NEW 🔥)
+            memory_context = await self.memory_intelligence.build_context(
+                user_id=str(user_id),
+                text=text
+            )
 
-        # 4. Генерация ответа
-        response = await self.solver.solve(text, context, reasoning, route)
+            # 3. COGNITIVE (merge context)
+            context = await self.cognitive.build_context(
+                user_id=user_id,
+                text=text,
+                memory=memory_context
+            )
 
-        # 5. Оценка качества
-        score = self.scorer.evaluate(response)
+            # 4. REASONING
+            reasoning = await self.reasoning.analyze(
+                text,
+                context,
+                route
+            )
 
-        # 6. Самокоррекция
-        response = self.corrector.correct(response, score)
+            # 5. SOLVER (AI)
+            response = await self.solver.solve(
+                text,
+                context,
+                reasoning,
+                route
+            )
 
-        # 7. Самоулучшение
-        response = self.improver.improve(response, score)
+            # 6. SCORE
+            score = self.scorer.evaluate(response)
 
-        return response
+            # 7. SELF-CORRECTION
+            response = self.corrector.correct(response, score)
+
+            # 8. SELF-IMPROVEMENT
+            response = self.improver.improve(response, score)
+
+            # 9. SAVE MEMORY (CRITICAL 🔥)
+            await self.memory_intelligence.update_memory(
+                user_id=str(user_id),
+                text=text,
+                response=response
+            )
+
+            return response
+
+        except Exception as e:
+            logger.exception(f"[Orchestrator] Critical failure: {e}")
+            return self._fallback(text)
+
+    def _fallback(self, text: str) -> str:
+        return (
+            "Ceyona AI encountered a system error.\n"
+            "Please try again.\n\n"
+            f"Input: {text}"
+        )
