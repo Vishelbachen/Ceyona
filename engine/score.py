@@ -5,7 +5,7 @@ class ScoreEngine:
         if len(output) > 50:
             score += 1
 
-        if "error" not in output.lower():
+        if any(x in output.lower() for x in ["because", "therefore", "so"]):
             score += 1
 
         if "." in output:
