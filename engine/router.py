@@ -1,18 +1,26 @@
 import re
+import logging
+
+logger = logging.getLogger(__name__)
 
 
+# =========================
+# TOOL ROUTER (CORE ENGINE)
+# =========================
 class ToolRouter:
     """
     PRO TOOL ROUTER v3
     - deterministic
     - safe extraction
-    - confidence scoring
+    - production stable
     """
 
     def route(self, text: str) -> dict:
-        t = (text or "").lower()
+        t = (text or "").lower().strip()
 
+        # ======================
         # WEATHER
+        # ======================
         if any(x in t for x in ["weather", "погода", "температура"]):
             return {
                 "tool": "weather",
@@ -20,29 +28,44 @@ class ToolRouter:
                 "confidence": 0.95
             }
 
+        # ======================
         # MAPS / ROUTE
-        if any(x in t for x in ["route", "map", "где", "как доехать", "distance", "from", "to"]):
+        # ======================
+        if any(x in t for x in [
+            "route", "map", "где", "как доехать",
+            "distance", "from", "to", "маршрут"
+        ]):
             return {
                 "tool": "maps",
                 "args": self._extract_location(t),
                 "confidence": 0.90
             }
 
+        # ======================
         # SEARCH
-        if any(x in t for x in ["search", "найди", "find", "что такое", "who is"]):
+        # ======================
+        if any(x in t for x in [
+            "search", "найди", "find",
+            "что такое", "who is", "кто такой"
+        ]):
             return {
                 "tool": "search",
                 "args": t,
                 "confidence": 0.80
             }
 
-        # DEFAULT
+        # ======================
+        # DEFAULT LLM
+        # ======================
         return {
             "tool": "llm",
             "args": text,
             "confidence": 0.50
         }
 
+    # ======================
+    # SAFE CITY EXTRACTION
+    # ======================
     def _extract_city(self, text: str) -> str:
         words = re.split(r"\s+", text)
 
@@ -59,23 +82,40 @@ class ToolRouter:
 
         return candidates[-1] if candidates else "Tbilisi"
 
+    # ======================
+    # LOCATION EXTRACTION
+    # ======================
     def _extract_location(self, text: str) -> str:
         return text.strip()
 
 
+# =========================
+# COMPATIBILITY LAYER
+# =========================
 class Router:
     """
-    COMPAT LAYER (Orchestrator expects Router)
+    Orchestrator expects this class.
+    Wraps ToolRouter safely.
     """
 
     def __init__(self):
         self.tool_router = ToolRouter()
 
     def route(self, text: str) -> dict:
-        tool_result = self.tool_router.route(text)
+        try:
+            tool_result = self.tool_router.route(text)
 
-        return {
-            "type": tool_result.get("tool", "llm"),
-            "args": tool_result.get("args"),
-            "confidence": tool_result.get("confidence", 0.5)
-        }
+            return {
+                "type": tool_result.get("tool", "llm"),
+                "args": tool_result.get("args"),
+                "confidence": tool_result.get("confidence", 0.5)
+            }
+
+        except Exception as e:
+            logger.warning(f"[ROUTER FAIL SAFE] {e}")
+
+            return {
+                "type": "llm",
+                "args": text,
+                "confidence": 0.0
+            }
