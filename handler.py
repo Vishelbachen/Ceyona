@@ -11,9 +11,12 @@ async def handle_message(user_id: int, text: str) -> str:
         text = (text or "").strip()
 
         if not text:
-            return "Empty input."
+            return "Empty input"
 
-        result = await orchestrator.process(user_id, text)
+        result = await orchestrator.process(
+            user_id=user_id,
+            text=text
+        )
 
         return str(result) if result else "No response"
 
