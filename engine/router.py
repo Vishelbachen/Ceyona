@@ -5,22 +5,12 @@ logger = logging.getLogger(__name__)
 
 
 class ToolRouter:
-    """
-    PRO TOOL ROUTER V2++
-    - deterministic
-    - normalized schema
-    - production stable
-    """
-
     def route(self, text: str) -> dict:
         t = (text or "").lower().strip()
 
         if not t:
             return self._fallback(text)
 
-        # ======================
-        # WEATHER
-        # ======================
         if any(x in t for x in ["weather", "погода", "температура"]):
             return {
                 "tool": "weather",
@@ -28,9 +18,6 @@ class ToolRouter:
                 "confidence": 0.97
             }
 
-        # ======================
-        # MAPS / ROUTE
-        # ======================
         if any(x in t for x in [
             "route", "map", "где", "как доехать",
             "distance", "from", "to", "маршрут"
@@ -41,9 +28,6 @@ class ToolRouter:
                 "confidence": 0.92
             }
 
-        # ======================
-        # SEARCH
-        # ======================
         if any(x in t for x in [
             "search", "найди", "find",
             "who is", "что такое", "кто такой"
@@ -54,9 +38,6 @@ class ToolRouter:
                 "confidence": 0.85
             }
 
-        # ======================
-        # DEFAULT
-        # ======================
         return {
             "tool": "llm",
             "args": text,
@@ -90,10 +71,6 @@ class ToolRouter:
 
 
 class Router:
-    """
-    COMPAT LAYER (DO NOT BREAK ORCHESTRATOR)
-    """
-
     def __init__(self):
         self.tool_router = ToolRouter()
 
@@ -104,7 +81,7 @@ class Router:
             return {
                 "type": r.get("tool", "llm"),
                 "args": r.get("args"),
-                "confidence": float(r.get("confidence", 0.5))
+                "confidence": float(r.get("confidence") or 0.5)
             }
 
         except Exception as e:
