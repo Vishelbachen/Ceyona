@@ -10,10 +10,10 @@ logger = logging.getLogger(__name__)
 
 class Tools:
     """
-    PRO TOOL EXECUTOR v3
-    - structured execution
-    - safe fallback
-    - GPT-style output format
+    PRO TOOL EXECUTOR V2++
+    - safe execution
+    - structured output
+    - crash-proof
     """
 
     def __init__(self, settings, db=None):
@@ -22,43 +22,40 @@ class Tools:
         self.search = SearchService(settings)
         self.db = db
 
-    # =========================
-    # MAIN EXECUTOR
-    # =========================
     async def execute(self, route: dict, text: str) -> Dict[str, Any]:
-        if not route:
-            return self._empty()
-
-        tool = (route.get("tool") or "llm").lower()
-        args = route.get("args")
-
         try:
-            # =========================
+            if not route:
+                return self._empty()
+
+            tool = (route.get("type") or "llm").lower()
+            args = route.get("args")
+
+            # ======================
             # WEATHER
-            # =========================
+            # ======================
             if tool == "weather":
-                city = args if isinstance(args, str) else "Tbilisi"
+                city = self._safe_city(args, text)
                 data = self.weather.get_weather(city)
 
                 return self._wrap("weather", data)
 
-            # =========================
+            # ======================
             # MAPS
-            # =========================
+            # ======================
             if tool == "maps":
                 data = self.maps.geocode(args or text)
                 return self._wrap("maps", data)
 
-            # =========================
+            # ======================
             # SEARCH
-            # =========================
+            # ======================
             if tool == "search":
                 data = self.search.search(args or text)
                 return self._wrap("search", data)
 
-            # =========================
-            # LLM fallback
-            # =========================
+            # ======================
+            # LLM PASS THROUGH
+            # ======================
             if tool == "llm":
                 return {
                     "tool": "llm",
@@ -72,12 +69,16 @@ class Tools:
             logger.exception(f"[TOOLS ERROR]: {e}")
             return {
                 "tool": "error",
-                "message": str(e)
+                "message": str(e),
+                "status": "failed"
             }
 
-    # =========================
-    # RESPONSE WRAPPER (GPT STYLE)
-    # =========================
+    def _safe_city(self, args, text: str) -> str:
+        if isinstance(args, str) and args.strip():
+            return args
+
+        return text.split()[-1] if text else "Tbilisi"
+
     def _wrap(self, tool: str, data: Any) -> Dict[str, Any]:
         return {
             "tool": tool,
@@ -85,9 +86,6 @@ class Tools:
             "status": "success"
         }
 
-    # =========================
-    # EMPTY SAFE RESPONSE
-    # =========================
     def _empty(self) -> Dict[str, Any]:
         return {
             "tool": "none",
