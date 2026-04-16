@@ -2,6 +2,13 @@ import os
 from groq import Groq
 from google import genai
 
+# memory import (safe)
+try:
+    from engine.memory.retriever import get_memory
+except Exception as e:
+    print("Memory module not available:", e)
+    get_memory = None
+
 
 class LLMEngine:
     def __init__(self):
@@ -13,7 +20,49 @@ class LLMEngine:
         if self.gemini_key:
             self.gemini_client = genai.Client(api_key=self.gemini_key)
 
-    async def generate(self, text: str) -> str:
+    # =========================
+    # CONTEXT BUILDER (SAFE)
+    # =========================
+    def _build_context(self, user_id: str, text: str) -> str:
+        """
+        Injects memory safely into prompt context
+        """
+
+        if not user_id or not get_memory:
+            return text
+
+        try:
+            memory = get_memory(user_id, limit=10)
+        except Exception as e:
+            print("Memory error:", e)
+            memory = []
+
+        memory_context = "\n".join(
+            [m.get("content", "") for m in memory if m.get("content")]
+        )
+
+        if not memory_context.strip():
+            return text
+
+        return f"""[USER MEMORY]
+{memory_context}
+
+[USER MESSAGE]
+{text}
+"""
+
+    # =========================
+    # MAIN GENERATE METHOD
+    # =========================
+    async def generate(self, text: str, user_id: str = None) -> str:
+
+        # inject memory safely
+        if user_id:
+            try:
+                text = self._build_context(user_id, text)
+            except Exception as e:
+                print("Context build error:", e)
+
         groq_answer = None
         gemini_answer = None
 
@@ -50,13 +99,14 @@ class LLMEngine:
     # =========================
     # GROQ
     # =========================
-
     async def _groq(self, text: str) -> str:
         client = Groq(api_key=self.groq_key)
 
         res = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": text}]
+            messages=[
+                {"role": "user", "content": text}
+            ]
         )
 
         return res.choices[0].message.content
@@ -64,7 +114,6 @@ class LLMEngine:
     # =========================
     # GEMINI
     # =========================
-
     async def _gemini(self, text: str) -> str:
         response = self.gemini_client.models.generate_content(
             model="gemini-1.5-flash",
