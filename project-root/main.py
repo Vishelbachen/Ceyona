@@ -3,6 +3,9 @@ from fastapi import FastAPI, Request
 from aiogram import Bot, Dispatcher
 from aiogram.types import Update
 
+# 🔥 НОВОЕ — подключение Router
+from engine.router import Router
+
 # =========================
 # ENV
 # =========================
@@ -17,15 +20,16 @@ app = FastAPI()
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
+# 🔥 создаём Router
+router = Router()
+
 
 # =========================
-# DEBUG STARTUP (КРИТИЧНО)
+# DEBUG STARTUP
 # =========================
 @app.on_event("startup")
 async def on_startup():
     print("🔥 MAIN STARTED")
-
-    # 🔍 Проверяем токен прямо в runtime
     print("🔍 BOT_TOKEN RAW:", repr(BOT_TOKEN))
 
     if not BOT_TOKEN:
@@ -49,25 +53,11 @@ async def on_shutdown():
 
 
 # =========================
-# SIMPLE ROUTER (заглушка AI)
-# =========================
-async def router(text: str) -> str:
-    text = (text or "").lower()
-
-    if "привет" in text:
-        return "Привет 👋 бот работает стабильно"
-    if "как дела" in text:
-        return "Всё отлично 🚀"
-
-    return f"Я получил: {text}"
-
-
-# =========================
 # AIogram HANDLER
 # =========================
 @dp.message()
 async def handle_message(message):
-    response = await router(message.text)
+    response = await router.handle(message.text)
     await message.answer(response)
 
 
