@@ -1,0 +1,7 @@
+class LLMEngine:
+    def __init__(self):
+        self.groq_key = os.getenv("GROQ_API_KEY")
+        self.gemini_key = os.getenv("GEMINI_API_KEY")
+
+        print("🔍 GROQ KEY:", "SET" if self.groq_key else "MISSING")
+        print("🔍 GEMINI KEY:", "SET" if self.gemini_key else "MISSING")
