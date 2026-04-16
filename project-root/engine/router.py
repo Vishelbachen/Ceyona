@@ -1,14 +1,11 @@
+from engine.llm import LLMEngine
+
+llm = LLMEngine()
+
+
 class Router:
-    def __init__(self):
-        pass
-
     async def handle(self, text: str) -> str:
-        text = (text or "").lower()
+        text = (text or "").strip()
 
-        if "привет" in text:
-            return "Привет 👋 я уже с мозгами"
-
-        if "как дела" in text:
-            return "Работаю стабильно и уже умнее 😏"
-
-        return f"[Router] Ты написал: {text}"
+        # простая логика маршрутизации (пока минимальная)
+        return await llm.generate(text)
