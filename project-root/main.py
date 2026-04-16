@@ -44,13 +44,17 @@ async def handle_message(message: types.Message):
     global llm
 
     text = message.text
+    user_id = message.from_user.id  # ✅ FIX: ДОБАВИЛИ USER_ID
 
     if not llm:
         await message.answer("❌ LLM not available")
         return
 
     try:
-        reply = await llm.generate(text)
+        reply = await llm.generate(
+            text,
+            user_id=str(user_id)  # ✅ FIX: ПЕРЕДАЁМ USER_ID
+        )
     except Exception as e:
         reply = f"AI error: {e}"
 
