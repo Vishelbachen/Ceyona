@@ -25,7 +25,7 @@ class LLMEngine:
     # =========================
     def _build_context(self, user_id: str, text: str) -> str:
         """
-        Injects memory safely into prompt context
+        Safely injects memory into input text
         """
 
         if not user_id or not get_memory:
@@ -37,24 +37,34 @@ class LLMEngine:
             print("Memory error:", e)
             memory = []
 
-        memory_context = "\n".join(
-            [m.get("content", "") for m in memory if m.get("content")]
-        )
+        # безопасная очистка памяти
+        memory_lines = []
+        for m in memory:
+            content = m.get("content")
+            if content and isinstance(content, str):
+                memory_lines.append(content)
 
-        if not memory_context.strip():
+        memory_context = "\n".join(memory_lines).strip()
+
+        if not memory_context:
             return text
 
-        return f"""[USER MEMORY]
-{memory_context}
-
-[USER MESSAGE]
-{text}
-"""
+        # безопасная обёртка (чтобы модель не путала память с запросом)
+        return (
+            "[USER MEMORY]\n"
+            f"{memory_context}\n\n"
+            "[CURRENT USER MESSAGE]\n"
+            f"{text}"
+        )
 
     # =========================
     # MAIN GENERATE METHOD
     # =========================
     async def generate(self, text: str, user_id: str = None) -> str:
+
+        # normalize user_id (очень важно)
+        if user_id is not None:
+            user_id = str(user_id)
 
         # inject memory safely
         if user_id:
@@ -66,21 +76,27 @@ class LLMEngine:
         groq_answer = None
         gemini_answer = None
 
-        # ===== GROQ =====
+        # =========================
+        # GROQ
+        # =========================
         if self.groq_key:
             try:
                 groq_answer = await self._groq(text)
             except Exception as e:
                 print("Groq error:", e)
 
-        # ===== GEMINI =====
+        # =========================
+        # GEMINI
+        # =========================
         if self.gemini_client:
             try:
                 gemini_answer = await self._gemini(text)
             except Exception as e:
                 print("Gemini error:", e)
 
-        # ===== FALLBACKS =====
+        # =========================
+        # FALLBACKS
+        # =========================
         if groq_answer and not gemini_answer:
             return f"🧠 GROQ:\n{groq_answer}"
 
@@ -90,8 +106,10 @@ class LLMEngine:
         if not groq_answer and not gemini_answer:
             return "❌ No models available"
 
-        # ===== SIMPLE DECISION =====
-        if len(groq_answer) >= len(gemini_answer):
+        # =========================
+        # SIMPLE DECISION
+        # =========================
+        if len(str(groq_answer)) >= len(str(gemini_answer)):
             return f"🔥 FINAL (GROQ):\n{groq_answer}"
         else:
             return f"🔥 FINAL (GEMINI):\n{gemini_answer}"
