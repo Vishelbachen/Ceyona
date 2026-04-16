@@ -2,6 +2,8 @@ import os
 from groq import Groq
 import google.generativeai as genai
 
+from engine.verifier import Verifier
+
 
 class LLMEngine:
     def __init__(self):
@@ -11,18 +13,24 @@ class LLMEngine:
         if self.gemini_key:
             genai.configure(api_key=self.gemini_key)
 
+        self.verifier = Verifier()
+
+    # =========================
+    # MAIN PIPELINE
+    # =========================
+
     async def generate(self, text: str) -> str:
         groq_answer = None
         gemini_answer = None
 
-        # ===== AGENT 1: GROQ =====
+        # ===== GROQ =====
         if self.groq_key:
             try:
                 groq_answer = await self._groq(text)
             except Exception as e:
                 print("Groq error:", e)
 
-        # ===== AGENT 2: GEMINI =====
+        # ===== GEMINI =====
         if self.gemini_key:
             try:
                 gemini_answer = await self._gemini(text)
@@ -38,11 +46,28 @@ class LLMEngine:
         if gemini_answer and not groq_answer:
             return f"✨ GEMINI:\n{gemini_answer}"
 
-        # ===== JUDGE (логика без AI зависимости) =====
-        best = self._judge_logic(groq_answer, gemini_answer)
+        # ===== JUDGE (REAL AI judge) =====
+        best = await self._judge(text, groq_answer, gemini_answer)
 
-        # ===== FIXER (ОТДЕЛЬНЫЙ ПРОХОД) =====
+        # ===== FIXER =====
         fixed = await self._fix(text, best)
+
+        # ===== VERIFIER (КРИТИЧЕСКИЙ СЛОЙ) =====
+        if not self.verifier.check(fixed):
+            fixed = await self._fix(
+                text,
+                f"""
+The previous answer is physically or mathematically incorrect.
+
+Question:
+{text}
+
+Wrong answer:
+{fixed}
+
+Please correct it strictly using correct physics laws.
+"""
+            )
 
         return f"🔥 FINAL:\n{fixed}"
 
@@ -66,30 +91,54 @@ class LLMEngine:
         return res.text
 
     # =========================
-    # JUDGE (НЕ ИИ, А ПРАВИЛА)
+    # JUDGE (умный, НЕ по длине)
     # =========================
 
-    def _judge_logic(self, a1, a2):
-        # простая эвристика (очень важно!)
-        if len(a2) > len(a1):
-            return a2
-        return a1
-
-    # =========================
-    # FIXER (Gemini как редактор)
-    # =========================
-
-    async def _fix(self, question, answer):
+    async def _judge(self, question, a1, a2):
         prompt = f"""
-Improve and correct the answer if needed.
+You are a strict evaluator.
 
 Question:
 {question}
 
-Answer:
+Answer A:
+{a1}
+
+Answer B:
+{a2}
+
+Task:
+- Check correctness
+- Check physics/math validity
+- Choose the better answer
+
+Return ONLY the best answer.
+"""
+
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        res = model.generate_content(prompt)
+
+        return res.text
+
+    # =========================
+    # FIXER
+    # =========================
+
+    async def _fix(self, question, answer):
+        prompt = f"""
+You are a precision correction system.
+
+Question:
+{question}
+
+Draft answer:
 {answer}
 
-Return only final corrected answer.
+Task:
+- fix errors
+- improve correctness
+- ensure physical/mathematical validity
+- return ONLY final answer
 """
 
         model = genai.GenerativeModel("gemini-1.5-flash")
