@@ -2,4 +2,4 @@ fastapi
 uvicorn
 aiogram
 groq
-google-generativeai
+google-genai
