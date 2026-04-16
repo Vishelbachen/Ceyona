@@ -15,36 +15,36 @@ class LLMEngine:
         groq_answer = None
         gemini_answer = None
 
-        # ===== GENERATION =====
+        # ===== AGENT 1: GROQ =====
         if self.groq_key:
             try:
                 groq_answer = await self._groq(text)
             except Exception as e:
                 print("Groq error:", e)
 
+        # ===== AGENT 2: GEMINI =====
         if self.gemini_key:
             try:
                 gemini_answer = await self._gemini(text)
             except Exception as e:
                 print("Gemini error:", e)
 
-        # ===== SINGLE MODEL FALLBACK =====
+        if not groq_answer and not gemini_answer:
+            return "❌ No models available"
+
         if groq_answer and not gemini_answer:
             return f"🧠 GROQ:\n{groq_answer}"
 
         if gemini_answer and not groq_answer:
             return f"✨ GEMINI:\n{gemini_answer}"
 
-        if not groq_answer and not gemini_answer:
-            return "❌ Нет доступных моделей"
+        # ===== JUDGE (логика без AI зависимости) =====
+        best = self._judge_logic(groq_answer, gemini_answer)
 
-        # ===== JUDGE =====
-        best = await self._judge(text, groq_answer, gemini_answer)
-
-        # ===== FIXER =====
+        # ===== FIXER (ОТДЕЛЬНЫЙ ПРОХОД) =====
         fixed = await self._fix(text, best)
 
-        return f"🧠 FINAL ANSWER:\n{fixed}"
+        return f"🔥 FINAL:\n{fixed}"
 
     # =========================
     # MODELS
@@ -61,53 +61,38 @@ class LLMEngine:
         return res.choices[0].message.content
 
     async def _gemini(self, text: str) -> str:
-        model = genai.GenerativeModel("gemini-pro")
+        model = genai.GenerativeModel("gemini-1.5-flash")
         res = model.generate_content(text)
         return res.text
 
     # =========================
-    # JUDGE
+    # JUDGE (НЕ ИИ, А ПРАВИЛА)
     # =========================
 
-    async def _judge(self, question, a1, a2):
-        prompt = f"""
-Ты — строгий эксперт.
-
-Вопрос:
-{question}
-
-Ответ 1:
-{a1}
-
-Ответ 2:
-{a2}
-
-Задача:
-1. Найди ошибки
-2. Выбери лучший ответ
-3. Верни ТОЛЬКО лучший ответ (без объяснений)
-"""
-
-        return await self._gemini(prompt)
+    def _judge_logic(self, a1, a2):
+        # простая эвристика (очень важно!)
+        if len(a2) > len(a1):
+            return a2
+        return a1
 
     # =========================
-    # FIXER
+    # FIXER (Gemini как редактор)
     # =========================
 
     async def _fix(self, question, answer):
         prompt = f"""
-Ты — AI, который исправляет ошибки.
+Improve and correct the answer if needed.
 
-Вопрос:
+Question:
 {question}
 
-Ответ:
+Answer:
 {answer}
 
-Задача:
-- исправь возможные ошибки
-- сделай ответ точным
-- не добавляй лишнего
+Return only final corrected answer.
 """
 
-        return await self._gemini(prompt)
+        model = genai.GenerativeModel("gemini-1.5-flash")
+        res = model.generate_content(prompt)
+
+        return res.text
