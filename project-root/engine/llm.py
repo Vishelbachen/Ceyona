@@ -1,6 +1,6 @@
 import os
 from groq import Groq
-from google import genai
+import google.generativeai as genai
 
 from engine.memory.service import build_memory_context
 from engine.memory.project_memory import get_project_memory
@@ -14,13 +14,21 @@ class LLMEngine:
 
         self.tools = ToolRouter()
 
-        self.gemini_client = None
+        # =========================
+        # GEMINI STABLE INIT
+        # =========================
+        self.gemini_model = None
+
         if self.gemini_key:
             try:
-                self.gemini_client = genai.Client(api_key=self.gemini_key)
+                genai.configure(api_key=self.gemini_key)
+
+                # сразу создаём модель (без v1beta клиента)
+                self.gemini_model = genai.GenerativeModel("gemini-1.5-flash")
+
             except Exception as e:
                 print("Gemini init failed:", e)
-                self.gemini_client = None
+                self.gemini_model = None
 
     # =========================
     # CONTEXT BUILDER (SAFE)
@@ -52,12 +60,12 @@ class LLMEngine:
 """
 
     # =========================
-    # MAIN GENERATE
+    # MAIN PIPELINE
     # =========================
     async def generate(self, text: str, user_id: str = None):
 
         # =========================
-        # 1. TOOL LAYER (NEW)
+        # 1. TOOL LAYER (FIRST)
         # =========================
         try:
             tool_result = await self.tools.route(text)
@@ -88,9 +96,9 @@ class LLMEngine:
                 print("Groq error:", e)
 
         # =========================
-        # 4. GEMINI (SAFE MODEL FIX)
+        # 4. GEMINI (SAFE)
         # =========================
-        if self.gemini_client:
+        if self.gemini_model:
             try:
                 gemini_answer = await self._gemini(text)
             except Exception as e:
@@ -109,7 +117,7 @@ class LLMEngine:
             return "❌ No models available"
 
         # =========================
-        # 6. DECISION (STABLE)
+        # 6. DECISION
         # =========================
         if len(str(groq_answer)) >= len(str(gemini_answer)):
             return f"🔥 FINAL (GROQ):\n{groq_answer}"
@@ -130,23 +138,11 @@ class LLMEngine:
         return res.choices[0].message.content
 
     # =========================
-    # GEMINI (FIXED MODELS SAFETY)
+    # GEMINI (STABLE + NO 404 CRASH)
     # =========================
     async def _gemini(self, text: str):
-        # безопасный fallback модель список
-        models_to_try = [
-            "gemini-1.5-pro",
-            "gemini-1.5-flash"
-        ]
-
-        for model in models_to_try:
-            try:
-                res = self.gemini_client.models.generate_content(
-                    model=model,
-                    contents=text
-                )
-                return res.text
-            except Exception as e:
-                print(f"Gemini model {model} failed:", e)
-
-        return None
+        try:
+            return self.gemini_model.generate_content(text).text
+        except Exception as e:
+            print("Gemini runtime error:", e)
+            return None
