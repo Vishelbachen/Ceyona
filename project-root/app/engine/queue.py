@@ -1,5 +1,6 @@
 import asyncio
 
+
 class TaskQueue:
     def __init__(self):
         self.queue = asyncio.Queue()
@@ -12,5 +13,7 @@ class TaskQueue:
             task = await self.queue.get()
             try:
                 await task()
-            except:
+            except Exception:
                 pass
+            finally:
+                self.queue.task_done()
