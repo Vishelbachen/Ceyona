@@ -12,122 +12,88 @@ class LLMEngine:
         self.groq_key = os.getenv("GROQ_API_KEY")
         self.gemini_key = os.getenv("GEMINI_API_KEY")
 
-        self.tools = ToolRouter()
+        self.tools = None
+        try:
+            self.tools = ToolRouter()
+        except Exception as e:
+            print("ToolRouter disabled:", e)
 
-        # =========================
-        # GEMINI STABLE INIT
-        # =========================
         self.gemini_model = None
 
         if self.gemini_key:
             try:
                 genai.configure(api_key=self.gemini_key)
-
-                # сразу создаём модель (без v1beta клиента)
                 self.gemini_model = genai.GenerativeModel("gemini-1.5-flash")
-
             except Exception as e:
-                print("Gemini init failed:", e)
-                self.gemini_model = None
+                print("Gemini disabled:", e)
 
-    # =========================
-    # CONTEXT BUILDER (SAFE)
-    # =========================
     def _build_context(self, user_id: str, text: str) -> str:
         try:
             user_memory = build_memory_context(user_id)
-        except Exception as e:
-            print("User memory error:", e)
+        except:
             user_memory = ""
 
         try:
             project_memory = get_project_memory()
-        except Exception as e:
-            print("Project memory error:", e)
+        except:
             project_memory = []
 
-        pm_text = "\n".join([str(x) for x in project_memory if x])
-
         return f"""
-[PROJECT MEMORY]
-{pm_text}
+[PROJECT]
+{project_memory}
 
-[USER MEMORY]
+[USER]
 {user_memory}
 
-[USER MESSAGE]
+[INPUT]
 {text}
 """
 
-    # =========================
-    # MAIN PIPELINE
-    # =========================
     async def generate(self, text: str, user_id: str = None):
 
-        # =========================
-        # 1. TOOL LAYER (FIRST)
-        # =========================
-        try:
-            tool_result = await self.tools.route(text)
-            if tool_result:
-                return f"🛠 TOOL RESULT:\n{tool_result}"
-        except Exception as e:
-            print("Tool error:", e)
+        # TOOL FIRST (SAFE)
+        if self.tools:
+            try:
+                tool = await self.tools.route(text)
+                if tool:
+                    return f"🛠 {tool}"
+            except:
+                pass
 
-        # =========================
-        # 2. CONTEXT
-        # =========================
+        # CONTEXT
         if user_id:
             try:
                 text = self._build_context(user_id, text)
-            except Exception as e:
-                print("Context build error:", e)
+            except:
+                pass
 
         groq_answer = None
         gemini_answer = None
 
-        # =========================
-        # 3. GROQ
-        # =========================
-        if self.groq_key:
-            try:
+        # GROQ
+        try:
+            if self.groq_key:
                 groq_answer = await self._groq(text)
-            except Exception as e:
-                print("Groq error:", e)
+        except:
+            pass
 
-        # =========================
-        # 4. GEMINI (SAFE)
-        # =========================
-        if self.gemini_model:
-            try:
+        # GEMINI
+        try:
+            if self.gemini_model:
                 gemini_answer = await self._gemini(text)
-            except Exception as e:
-                print("Gemini error:", e)
+        except:
+            pass
 
-        # =========================
-        # 5. FALLBACKS
-        # =========================
-        if groq_answer and not gemini_answer:
+        # FALLBACK
+        if groq_answer:
             return f"🧠 GROQ:\n{groq_answer}"
 
-        if gemini_answer and not groq_answer:
+        if gemini_answer:
             return f"✨ GEMINI:\n{gemini_answer}"
 
-        if not groq_answer and not gemini_answer:
-            return "❌ No models available"
+        return "❌ No models available"
 
-        # =========================
-        # 6. DECISION
-        # =========================
-        if len(str(groq_answer)) >= len(str(gemini_answer)):
-            return f"🔥 FINAL (GROQ):\n{groq_answer}"
-
-        return f"🔥 FINAL (GEMINI):\n{gemini_answer}"
-
-    # =========================
-    # GROQ
-    # =========================
-    async def _groq(self, text: str):
+    async def _groq(self, text):
         client = Groq(api_key=self.groq_key)
 
         res = client.chat.completions.create(
@@ -137,12 +103,5 @@ class LLMEngine:
 
         return res.choices[0].message.content
 
-    # =========================
-    # GEMINI (STABLE + NO 404 CRASH)
-    # =========================
-    async def _gemini(self, text: str):
-        try:
-            return self.gemini_model.generate_content(text).text
-        except Exception as e:
-            print("Gemini runtime error:", e)
-            return None
+    async def _gemini(self, text):
+        return self.gemini_model.generate_content(text).text
