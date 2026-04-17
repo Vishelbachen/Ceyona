@@ -3,14 +3,13 @@ class Swarm:
         self.agents = agents
 
     async def run(self, text: str):
-
         results = []
 
         for agent in self.agents:
             try:
                 res = await agent.run(text)
                 results.append(res)
-            except:
+            except Exception:
                 continue
 
         return self.select_best(results)
@@ -19,5 +18,9 @@ class Swarm:
         if not results:
             return None
 
-        # простая эвристика качества
-        return max(results, key=lambda x: len(str(x)))
+        def score(x):
+            if isinstance(x, dict) and "error" in x:
+                return 0
+            return len(str(x))
+
+        return max(results, key=score)
