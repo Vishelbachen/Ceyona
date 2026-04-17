@@ -1,23 +1,31 @@
 import os
+import importlib
 from groq import Groq
 from google import genai
 
 # =========================
-# USER MEMORY
+# SAFE USER MEMORY IMPORT
 # =========================
+get_memory = None
+
 try:
-    from engine.memory.retriever import get_memory
+    memory_module = importlib.import_module("engine.memory.retriever")
+    get_memory = getattr(memory_module, "get_memory", None)
 except Exception as e:
-    print("Memory module not available:", e)
+    print("Memory disabled:", e)
     get_memory = None
 
 
 # =========================
-# PROJECT MEMORY (NEW SAFE LAYER)
+# SAFE PROJECT MEMORY IMPORT
 # =========================
+get_project_memory = None
+
 try:
-    from engine.memory.project_retriever import get_project_memory
-except Exception:
+    project_module = importlib.import_module("engine.memory.project_retriever")
+    get_project_memory = getattr(project_module, "get_project_memory", None)
+except Exception as e:
+    print("Project memory disabled:", e)
     get_project_memory = None
 
 
@@ -29,69 +37,73 @@ class LLMEngine:
         self.gemini_client = None
 
         if self.gemini_key:
-            self.gemini_client = genai.Client(api_key=self.gemini_key)
+            try:
+                self.gemini_client = genai.Client(api_key=self.gemini_key)
+            except Exception as e:
+                print("Gemini init failed:", e)
+                self.gemini_client = None
 
     # =========================
-    # CONTEXT BUILDER (SAFE)
+    # CONTEXT BUILDER
     # =========================
     def _build_context(self, user_id: str, text: str) -> str:
-        """
-        Injects:
-        - project memory (code/project context)
-        - user memory (chat memory)
-        """
+        project_context = ""
+        memory_context = ""
 
         # =========================
         # PROJECT MEMORY
         # =========================
-        project_context = ""
         if get_project_memory:
             try:
-                pm = get_project_memory(limit=10)
+                pm = get_project_memory(limit=10) or []
 
                 project_lines = []
                 for p in pm:
+                    if not isinstance(p, dict):
+                        continue
+
                     file = p.get("file")
                     action = p.get("action")
                     content = p.get("content")
 
                     if file or content:
-                        project_lines.append(f"{file} | {action} | {content}")
+                        project_lines.append(
+                            f"{file or ''} | {action or ''} | {content or ''}"
+                        )
 
                 project_context = "\n".join(project_lines).strip()
 
             except Exception as e:
                 print("Project memory error:", e)
-                project_context = ""
 
         # =========================
         # USER MEMORY
         # =========================
-        memory_context = ""
-
         if user_id and get_memory:
             try:
-                memory = get_memory(user_id, limit=10)
+                memory = get_memory(user_id, limit=10) or []
+
+                memory_lines = []
+                for m in memory:
+                    if not isinstance(m, dict):
+                        continue
+
+                    content = m.get("content")
+                    if content and isinstance(content, str):
+                        memory_lines.append(content)
+
+                memory_context = "\n".join(memory_lines).strip()
+
             except Exception as e:
                 print("Memory error:", e)
-                memory = []
-
-            memory_lines = []
-            for m in memory:
-                content = m.get("content")
-                if content and isinstance(content, str):
-                    memory_lines.append(content)
-
-            memory_context = "\n".join(memory_lines).strip()
 
         # =========================
-        # FINAL CONTEXT BUILD
+        # FINAL CONTEXT
         # =========================
         if not project_context and not memory_context:
             return text
 
-        return f"""
-[PROJECT MEMORY]
+        return f"""[PROJECT MEMORY]
 {project_context}
 
 [USER MEMORY]
