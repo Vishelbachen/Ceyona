@@ -1,23 +1,40 @@
-from supabase import create_client
 import os
-
-supabase = create_client(
-    os.getenv("SUPABASE_URL"),
-    os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-)
+from supabase import create_client, Client
 
 
-def save_project_memory(file: str, action: str, content: str):
+def _get_client() -> Client | None:
     try:
-        res = supabase.table("project_memory").insert({
-            "file": file,
-            "action": action,
-            "content": content
-        }).execute()
+        url = os.getenv("SUPABASE_URL")
+        key = os.getenv("SUPABASE_KEY")
 
-        print("📦 PROJECT MEMORY SAVED:", res.data)
+        if not url or not key:
+            print("⚠️ SUPABASE ENV MISSING")
+            return None
+
+        return create_client(url, key)
+
+    except Exception as e:
+        print("❌ SUPABASE INIT ERROR:", e)
+        return None
+
+
+def save_memory(user_id: str, content: str):
+    try:
+        client = _get_client()
+
+        if not client:
+            return "no_client"
+
+        data = {
+            "user_id": str(user_id),
+            "content": content,
+            "importance": 1.0
+        }
+
+        res = client.table("memory").insert(data).execute()
+
         return res.data
 
     except Exception as e:
-        print("❌ PROJECT MEMORY ERROR:", e)
-        return None
+        print("❌ SAVE MEMORY ERROR:", e)
+        return "error"
