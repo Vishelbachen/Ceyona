@@ -2,6 +2,7 @@ from fastapi import FastAPI, Request
 from aiogram import Bot, Dispatcher, types
 import os
 import sys
+import traceback
 
 sys.path.append(os.getcwd())
 
@@ -30,6 +31,7 @@ async def startup():
             print("✅ BOT INIT OK")
         except Exception as e:
             print("❌ BOT INIT ERROR:", e)
+            traceback.print_exc()
 
     try:
         from engine.llm import LLMEngine
@@ -37,6 +39,7 @@ async def startup():
         print("✅ LLM INIT OK")
     except Exception as e:
         print("❌ LLM INIT ERROR:", e)
+        traceback.print_exc()
         llm = None
 
 
@@ -58,12 +61,14 @@ async def handle_message(message: types.Message):
     try:
         reply = await llm.generate(text, user_id=user_id)
     except Exception as e:
+        print("❌ GENERATE ERROR:", e)
+        traceback.print_exc()
         reply = f"AI error: {e}"
 
     await message.answer(reply)
 
     # =========================
-    # 💾 MEMORY SAVE (FINAL SAFE)
+    # MEMORY SAVE
     # =========================
     try:
         print("💾 SAVE MEMORY START")
@@ -78,6 +83,7 @@ async def handle_message(message: types.Message):
 
     except Exception as e:
         print("❌ MEMORY SAVE FAILED:", e)
+        traceback.print_exc()
 
 
 @app.post("/webhook")
