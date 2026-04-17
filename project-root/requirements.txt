@@ -4,4 +4,5 @@ aiogram
 groq
 google-genai
 supabase
+python-dotenv
 httpx
