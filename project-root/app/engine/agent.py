@@ -2,17 +2,30 @@ import json
 
 
 class Agent:
-    def __init__(self, planner, router, formatter, llm, memory):
+    def __init__(self, planner, router, formatter, llm, memory, event_bus=None):
         self.planner = planner
         self.router = router
         self.formatter = formatter
         self.llm = llm
         self.memory = memory
+        self.event_bus = event_bus
 
     # =========================
     # MAIN ENTRY
     # =========================
     async def run(self, text: str, user_id: str = None):
+
+        # =========================
+        # EVENT: USER INPUT (V6)
+        # =========================
+        if self.event_bus:
+            try:
+                await self.event_bus.emit("user_message", {
+                    "user_id": user_id,
+                    "text": text
+                })
+            except:
+                pass
 
         # =========================
         # MEMORY CONTEXT
@@ -29,7 +42,8 @@ class Agent:
         # =========================
         intent = await self.planner.parse(text, memory_context)
 
-        if not intent:
+        # STRICT VALIDATION (V6)
+        if not self._is_valid_intent(intent):
             return await self.llm(text)
 
         # =========================
@@ -44,12 +58,24 @@ class Agent:
         result = await self.router.execute(intent)
 
         # =========================
+        # EVENT: TOOL FAILURE (V6)
+        # =========================
+        if self.event_bus and self.is_broken(result):
+            try:
+                await self.event_bus.emit("tool_failure", {
+                    "intent": intent,
+                    "result": result
+                })
+            except:
+                pass
+
+        # =========================
         # SELF HEALING
         # =========================
         if await self.is_broken(result):
             fixed_intent = await self.debug(text, intent, result)
 
-            if fixed_intent:
+            if self._is_valid_intent(fixed_intent):
                 intent = fixed_intent
                 result = await self.router.execute(intent)
 
@@ -59,7 +85,7 @@ class Agent:
         response = await self.formatter.format(intent, result)
 
         # =========================
-        # MEMORY SAVE
+        # MEMORY SAVE (ASYNC SAFE)
         # =========================
         if user_id:
             try:
@@ -70,12 +96,21 @@ class Agent:
         return response
 
     # =========================
+    # INTENT VALIDATION (V6)
+    # =========================
+    def _is_valid_intent(self, intent):
+        if not isinstance(intent, dict):
+            return False
+
+        if "tool" not in intent and "steps" not in intent:
+            return False
+
+        return True
+
+    # =========================
     # COST CONTROL
     # =========================
     async def is_expensive(self, intent):
-        if not intent:
-            return False
-
         expensive_tools = ["multi_map_chain", "deep_search"]
 
         if intent.get("tool") in expensive_tools:
@@ -88,9 +123,6 @@ class Agent:
         return False
 
     async def optimize_intent(self, intent):
-        if not intent:
-            return intent
-
         if "steps" in intent and isinstance(intent["steps"], list):
             intent["steps"] = intent["steps"][:2]
 
@@ -99,7 +131,7 @@ class Agent:
     # =========================
     # FAILURE DETECTION
     # =========================
-    async def is_broken(self, result):
+    def is_broken(self, result):
         if result is None:
             return True
 
@@ -109,12 +141,12 @@ class Agent:
         return False
 
     # =========================
-    # SELF DEBUGGER (SAFE PARSER)
+    # SELF DEBUGGER (SAFE)
     # =========================
     async def debug(self, text, intent, result):
 
         prompt = f"""
-Analyze failure and fix intent.
+Fix failed execution intent.
 
 User:
 {text}
@@ -125,7 +157,7 @@ Intent:
 Result:
 {json.dumps(result, ensure_ascii=False)}
 
-Return ONLY valid JSON:
+Return ONLY JSON:
 {{
   "tool": "...",
   "query": "..."
@@ -141,7 +173,6 @@ Return ONLY valid JSON:
             if isinstance(raw, dict):
                 return raw
 
-            # safe JSON parse (NO eval)
             return json.loads(raw)
 
         except:
