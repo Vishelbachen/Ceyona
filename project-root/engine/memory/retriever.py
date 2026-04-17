@@ -1,22 +1,46 @@
-from supabase import create_client
 import os
-
-supabase = create_client(
-    os.getenv("SUPABASE_URL"),
-    os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-)
+from supabase import create_client
 
 
-def get_project_memory(limit: int = 20):
+def _get_client():
     try:
-        res = supabase.table("project_memory") \
-            .select("*") \
-            .order("created_at", desc=True) \
-            .limit(limit) \
-            .execute()
+        url = os.getenv("SUPABASE_URL")
+        key = os.getenv("SUPABASE_KEY")
 
-        return res.data or []
+        if not url or not key:
+            print("⚠️ SUPABASE ENV MISSING")
+            return None
+
+        return create_client(url, key)
 
     except Exception as e:
-        print("❌ PROJECT MEMORY READ ERROR:", e)
+        print("❌ SUPABASE INIT ERROR:", e)
+        return None
+
+
+def get_memory(user_id: str, limit: int = 5):
+    try:
+        client = _get_client()
+
+        if not client:
+            return []
+
+        res = (
+            client
+            .table("memory")
+            .select("content, created_at")
+            .eq("user_id", str(user_id))
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+
+        memories = [row["content"] for row in res.data]
+
+        print(f"🧠 RETRIEVED MEMORY: {memories}")
+
+        return memories
+
+    except Exception as e:
+        print("❌ MEMORY RETRIEVE ERROR:", e)
         return []
