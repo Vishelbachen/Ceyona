@@ -1,17 +1,17 @@
 import os
 from supabase import create_client, Client
 
-_supabase: Client | None = None
+_supabase = None
 
 
 def get_client() -> Client:
     global _supabase
 
-    if _supabase is not None:
+    if _supabase:
         return _supabase
 
     url = os.getenv("SUPABASE_URL")
-    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY")
+    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
     if not url or not key:
         raise Exception("SUPABASE ENV MISSING")
