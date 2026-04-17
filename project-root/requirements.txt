@@ -4,3 +4,4 @@ aiogram
 groq
 google-genai
 supabase
+httpx
