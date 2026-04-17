@@ -6,15 +6,18 @@ supabase = create_client(
     os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 )
 
-def save_memory(user_id: str, content: str):
+
+def save_project_memory(file: str, action: str, content: str):
     try:
-        res = supabase.table("memory").insert({
-            "user_id": str(user_id),
+        res = supabase.table("project_memory").insert({
+            "file": file,
+            "action": action,
             "content": content
         }).execute()
 
+        print("📦 PROJECT MEMORY SAVED:", res.data)
         return res.data
 
     except Exception as e:
-        print("Memory write error:", e)
+        print("❌ PROJECT MEMORY ERROR:", e)
         return None
