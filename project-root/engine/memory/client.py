@@ -1,17 +1,20 @@
 import os
-from supabase import create_client
+from supabase import create_client, Client
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY")  # фиксируем единый стандарт
+_supabase: Client | None = None
 
-if not SUPABASE_URL or not SUPABASE_KEY:
-    print("⚠️ SUPABASE ENV MISSING")
 
-supabase = None
+def get_client() -> Client:
+    global _supabase
 
-try:
-    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-    print("✅ Supabase client initialized")
-except Exception as e:
-    print("❌ Supabase init failed:", e)
-    supabase = None
+    if _supabase is not None:
+        return _supabase
+
+    url = os.getenv("SUPABASE_URL")
+    key = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY")
+
+    if not url or not key:
+        raise Exception("SUPABASE ENV MISSING")
+
+    _supabase = create_client(url, key)
+    return _supabase
