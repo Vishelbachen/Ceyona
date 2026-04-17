@@ -2,14 +2,8 @@ import os
 from groq import Groq
 from google import genai
 
-# =========================
-# SAFE MEMORY IMPORT
-# =========================
-try:
-    from engine.memory.retriever import get_memory
-except Exception as e:
-    print("Memory disabled:", e)
-    get_memory = None
+from engine.memory.service import build_memory_context
+from engine.memory.project_memory import get_project_memory
 
 
 class LLMEngine:
@@ -18,110 +12,46 @@ class LLMEngine:
         self.gemini_key = os.getenv("GEMINI_API_KEY")
 
         self.gemini_client = None
-
-        # =========================
-        # GEMINI INIT (SAFE)
-        # =========================
         if self.gemini_key:
-            try:
-                self.gemini_client = genai.Client(api_key=self.gemini_key)
-                print("✅ Gemini initialized")
-            except Exception as e:
-                print("❌ Gemini init failed:", e)
-                self.gemini_client = None
+            self.gemini_client = genai.Client(api_key=self.gemini_key)
 
-    # =========================
-    # CONTEXT BUILDER (V2 SAFE)
-    # =========================
     def _build_context(self, user_id: str, text: str) -> str:
-        """
-        Memory v2:
-        - ignores broken records
-        - avoids NoneType crashes
-        - clean formatting
-        """
+        user_memory = build_memory_context(user_id)
+        project_memory = get_project_memory()
 
-        memory_context = ""
+        pm_text = "\n".join([str(x) for x in project_memory])
 
-        if not user_id or not get_memory:
-            return text
+        return f"""
+[PROJECT MEMORY]
+{pm_text}
 
-        try:
-            memory = get_memory(user_id, limit=10) or []
+[USER MEMORY]
+{user_memory}
 
-            memory_lines = []
+[USER MESSAGE]
+{text}
+"""
 
-            for m in memory:
-                if not isinstance(m, dict):
-                    continue
+    async def generate(self, text: str, user_id: str = None):
 
-                content = m.get("content")
-
-                if isinstance(content, str) and content.strip():
-                    memory_lines.append(content.strip())
-
-            memory_context = "\n".join(memory_lines).strip()
-
-        except Exception as e:
-            print("❌ Memory error:", e)
-            memory_context = ""
-
-        # =========================
-        # NO MEMORY CASE
-        # =========================
-        if not memory_context:
-            return text
-
-        # =========================
-        # SAFE CONTEXT FORMAT
-        # =========================
-        return (
-            "[USER MEMORY]\n"
-            f"{memory_context}\n\n"
-            "[CURRENT MESSAGE]\n"
-            f"{text}"
-        )
-
-    # =========================
-    # MAIN GENERATE
-    # =========================
-    async def generate(self, text: str, user_id: str = None) -> str:
-
-        # normalize user_id safely
-        if user_id is not None:
-            user_id = str(user_id)
-
-        # inject memory safely
         if user_id:
-            try:
-                text = self._build_context(user_id, text)
-            except Exception as e:
-                print("❌ Context build error:", e)
+            text = self._build_context(user_id, text)
 
         groq_answer = None
         gemini_answer = None
 
-        # =========================
-        # GROQ
-        # =========================
         if self.groq_key:
             try:
                 groq_answer = await self._groq(text)
             except Exception as e:
-                print("❌ Groq error:", e)
+                print("Groq error:", e)
 
-        # =========================
-        # GEMINI
-        # =========================
         if self.gemini_client:
             try:
                 gemini_answer = await self._gemini(text)
             except Exception as e:
-                print("❌ Gemini error:", e)
+                print("Gemini error:", e)
 
-        # =========================
-        # FALLBACKS
-        # =========================
         if groq_answer and not gemini_answer:
             return f"🧠 GROQ:\n{groq_answer}"
 
@@ -131,21 +61,9 @@ class LLMEngine:
         if not groq_answer and not gemini_answer:
             return "❌ No models available"
 
-        # =========================
-        # DECISION (SAFE)
-        # =========================
-        try:
-            if len(str(groq_answer)) >= len(str(gemini_answer)):
-                return f"🔥 GROQ:\n{groq_answer}"
-            else:
-                return f"🔥 GEMINI:\n{gemini_answer}"
-        except Exception:
-            return f"🧠 GROQ:\n{groq_answer or gemini_answer}"
+        return f"🔥 GROQ:\n{groq_answer}"
 
-    # =========================
-    # GROQ CALL
-    # =========================
-    async def _groq(self, text: str) -> str:
+    async def _groq(self, text: str):
         client = Groq(api_key=self.groq_key)
 
         res = client.chat.completions.create(
@@ -155,12 +73,9 @@ class LLMEngine:
 
         return res.choices[0].message.content
 
-    # =========================
-    # GEMINI CALL
-    # =========================
-    async def _gemini(self, text: str) -> str:
-        response = self.gemini_client.models.generate_content(
+    async def _gemini(self, text: str):
+        res = self.gemini_client.models.generate_content(
             model="gemini-1.5-flash",
             contents=text
         )
-        return response.text
+        return res.text
