@@ -1,90 +1,126 @@
+from fastapi import FastAPI, Request
+from aiogram import Bot, Dispatcher, types
 import os
+import sys
+import traceback
 import importlib
-from groq import Groq
+
+sys.path.append(os.getcwd())
+
+app = FastAPI()  # ❗ MUST BE HERE AND OUTSIDE EVERYTHING
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+bot = None
+dp = Dispatcher()
+llm = None
+save_memory = None
+
 
 # =========================
 # SAFE MEMORY IMPORT
 # =========================
-get_memory = None
-
 try:
-    memory_module = importlib.import_module("engine.memory.retriever")
-    get_memory = getattr(memory_module, "get_memory", None)
+    memory_writer = importlib.import_module("engine.memory.writer")
+    save_memory = getattr(memory_writer, "save_memory", None)
+    print("✅ Memory writer loaded")
 except Exception as e:
-    print("Memory disabled:", e)
-    get_memory = None
+    print("⚠️ Memory writer disabled:", e)
+    save_memory = None
 
 
-class LLMEngine:
-    def __init__(self):
-        self.groq_key = os.getenv("GROQ_API_KEY")
+# =========================
+# STARTUP
+# =========================
+@app.on_event("startup")
+async def startup():
+    global bot, llm
 
-        # Gemini intentionally DISABLED for stability (fix later)
-        self.gemini_enabled = False
+    print("🔥 STARTING APP...")
 
-    # =========================
-    # MEMORY CONTEXT
-    # =========================
-    def _build_context(self, user_id: str, text: str) -> str:
-        memory_context = ""
-
-        if user_id and get_memory:
-            try:
-                memory = get_memory(user_id, limit=10) or []
-
-                lines = []
-                for m in memory:
-                    if isinstance(m, dict):
-                        c = m.get("content")
-                        if isinstance(c, str) and len(c) < 500:
-                            lines.append(c)
-
-                memory_context = "\n".join(lines).strip()
-
-            except Exception as e:
-                print("Memory error:", e)
-
-        if not memory_context:
-            return text
-
-        return f"""[MEMORY]
-{memory_context}
-
-[USER]
-{text}
-"""
-
-    # =========================
-    # MAIN GENERATE
-    # =========================
-    async def generate(self, text: str, user_id: str = None) -> str:
-
-        if user_id:
-            user_id = str(user_id)
-            text = self._build_context(user_id, text)
-
-        if not self.groq_key:
-            return "❌ GROQ_API_KEY missing"
-
+    # BOT
+    if BOT_TOKEN:
         try:
-            return await self._groq(text)
+            bot = Bot(token=BOT_TOKEN)
+            print("✅ BOT INIT OK")
         except Exception as e:
-            return f"❌ LLM ERROR: {e}"
+            print("❌ BOT INIT ERROR:", e)
+            traceback.print_exc()
+    else:
+        print("❌ BOT_TOKEN missing")
 
-    # =========================
-    # GROQ (MAIN ENGINE)
-    # =========================
-    async def _groq(self, text: str) -> str:
-        client = Groq(api_key=self.groq_key)
+    # LLM
+    try:
+        from engine.llm import LLMEngine
+        llm = LLMEngine()
+        print("✅ LLM INIT OK")
+    except Exception as e:
+        print("❌ LLM INIT ERROR:", e)
+        traceback.print_exc()
+        llm = None
 
-        res = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[
-                {
-                    "role": "user",
-                    "content": text
-                }
-            ]
-        )
 
-        return res.choices[0].message.content
+# =========================
+# HANDLER
+# =========================
+@dp.message()
+async def handle_message(message: types.Message):
+    global llm
+
+    text = message.text
+    user_id = str(message.from_user.id)
+
+    print("🔥 HANDLER ENTERED")
+
+    if not llm:
+        await message.answer("❌ LLM not available")
+        return
+
+    try:
+        reply = await llm.generate(text, user_id=user_id)
+    except Exception as e:
+        print("❌ GENERATE ERROR:", e)
+        traceback.print_exc()
+        reply = f"AI error: {e}"
+
+    await message.answer(reply)
+
+    # MEMORY SAFE
+    if save_memory:
+        try:
+            save_memory(user_id, text)
+            save_memory(user_id, reply)
+        except Exception as e:
+            print("❌ MEMORY ERROR:", e)
+
+
+# =========================
+# WEBHOOK
+# =========================
+@app.post("/webhook")
+async def webhook(req: Request):
+    global bot
+
+    if not bot:
+        return {"ok": False, "error": "bot not initialized"}
+
+    try:
+        data = await req.json()
+        update = types.Update(**data)
+
+        await dp.feed_update(bot, update)
+
+        return {"ok": True}
+
+    except Exception as e:
+        print("❌ WEBHOOK ERROR:", e)
+        traceback.print_exc()
+        return {"ok": False}
+
+
+# =========================
+# HEALTHCHECK
+# =========================
+@app.get("/")
+async def root():
+    return {"status": "alive"}
