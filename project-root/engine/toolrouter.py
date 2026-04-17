@@ -1,10 +1,15 @@
 import os
 import requests
+import re
+import asyncio
 
 
 class ToolRouter:
     """
-    Централизованный роутер инструментов (maps, weather, etc.)
+    Production Tool Router v2
+    - regex intent detection
+    - no LLM bypass
+    - async-safe requests
     """
 
     def __init__(self):
@@ -14,38 +19,41 @@ class ToolRouter:
     # =========================
     # MAIN ENTRY
     # =========================
-    async def route(self, text: str) -> dict | None:
-        """
-        Returns:
-        - dict (tool result)
-        - None (if should go to LLM)
-        """
-
+    async def route(self, text: str):
         if not text:
             return None
 
         t = text.lower().strip()
 
         # =========================
-        # MAP TOOL
+        # MAP INTENT DETECTION (ROBUST)
         # =========================
-        if t.startswith("map"):
-            query = text[3:].strip()
+        if re.search(r"^(map|maps|show map|open map)\b", t):
+            query = self._extract_after_keyword(text)
             return await self.handle_map(query)
 
         # =========================
-        # WEATHER TOOL
+        # WEATHER INTENT DETECTION
         # =========================
-        if t.startswith("weather"):
-            query = text[7:].strip()
+        if re.search(r"^(weather|forecast)\b", t):
+            query = self._extract_after_keyword(text)
             return await self.handle_weather(query)
 
         return None
 
     # =========================
-    # GOOGLE MAPS (GEOCODING SIMPLE)
+    # EXTRACT QUERY SAFELY
     # =========================
-    async def handle_map(self, query: str) -> dict:
+    def _extract_after_keyword(self, text: str) -> str:
+        parts = text.split(" ", 1)
+        if len(parts) == 1:
+            return ""
+        return parts[1].strip()
+
+    # =========================
+    # GOOGLE MAPS (GEOCODING)
+    # =========================
+    async def handle_map(self, query: str):
         if not self.google_maps_key:
             return {"error": "GOOGLE_MAPS_API_KEY missing"}
 
@@ -60,8 +68,9 @@ class ToolRouter:
         }
 
         try:
-            r = requests.get(url, params=params, timeout=10)
-            data = r.json()
+            data = await asyncio.to_thread(
+                lambda: requests.get(url, params=params, timeout=10).json()
+            )
 
             if data.get("status") != "OK":
                 return {
@@ -73,18 +82,18 @@ class ToolRouter:
             return {
                 "type": "map",
                 "query": query,
-                "formatted_address": result["formatted_address"],
-                "location": result["geometry"]["location"],
-                "place_id": result["place_id"]
+                "formatted_address": result.get("formatted_address"),
+                "location": result.get("geometry", {}).get("location"),
+                "place_id": result.get("place_id")
             }
 
         except Exception as e:
             return {"error": str(e)}
 
     # =========================
-    # WEATHER (OpenWeather)
+    # WEATHER
     # =========================
-    async def handle_weather(self, query: str) -> dict:
+    async def handle_weather(self, query: str):
         if not self.openweather_key:
             return {"error": "OPENWEATHER_API_KEY missing"}
 
@@ -100,17 +109,18 @@ class ToolRouter:
         }
 
         try:
-            r = requests.get(url, params=params, timeout=10)
-            data = r.json()
+            data = await asyncio.to_thread(
+                lambda: requests.get(url, params=params, timeout=10).json()
+            )
 
-            if r.status_code != 200:
+            if not data or data.get("cod") != 200:
                 return {"error": data.get("message", "weather error")}
 
             return {
                 "type": "weather",
-                "city": data["name"],
-                "temp": data["main"]["temp"],
-                "description": data["weather"][0]["description"]
+                "city": data.get("name"),
+                "temp": data.get("main", {}).get("temp"),
+                "description": data.get("weather", [{}])[0].get("description")
             }
 
         except Exception as e:
