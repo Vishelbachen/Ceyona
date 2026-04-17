@@ -71,28 +71,29 @@ async def handle_message(message: types.Message):
     await message.answer(reply)
 
     # =========================
-    # 💾 MEMORY SAVE (HARD SAFE VERSION)
+    # 💾 MEMORY SAVE (STABLE VERSION)
     # =========================
     try:
         print("💾 SAVE MEMORY START")
 
+        # USER MEMORY
         result1 = save_memory(
             user_id=user_id,
             content=text,
-            mem_type="user",
-            importance=0.7
+            mem_type="user"
         )
 
         print("💾 USER SAVED:", result1)
 
+        # ASSISTANT MEMORY
         result2 = save_memory(
             user_id=user_id,
             content=reply,
-            mem_type="assistant",
-            importance=0.8
+            mem_type="assistant"
         )
 
         print("💾 ASSISTANT SAVED:", result2)
+
         print("💾 SAVE MEMORY DONE")
 
     except Exception as e:
