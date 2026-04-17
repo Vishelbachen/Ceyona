@@ -1,43 +1,45 @@
-def get_memory(user_id: str, limit: int = 10):
+import os
+from supabase import create_client
+
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+
+supabase = None
+
+
+# =========================
+# INIT CLIENT
+# =========================
+if SUPABASE_URL and SUPABASE_KEY:
     try:
-        client = _get_client()
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        print("✅ Supabase retriever loaded")
+    except Exception as e:
+        print("❌ Supabase init error:", e)
+else:
+    print("⚠️ SUPABASE ENV MISSING")
 
-        if not client:
-            return []
 
+# =========================
+# GET MEMORY
+# =========================
+def get_memory(user_id: str, limit: int = 10):
+    if not supabase:
+        print("⚠️ SUPABASE NOT INITIALIZED")
+        return []
+
+    try:
         res = (
-            client
+            supabase
             .table("memory")
-            .select("content, created_at")
+            .select("*")
             .eq("user_id", str(user_id))
-            .order("created_at", desc=True)
+            .order("id", desc=True)
             .limit(limit)
             .execute()
         )
 
-        memories = []
-
-        for row in res.data:
-            text = row["content"]
-
-            # 🔥 ФИЛЬТР
-            if not text:
-                continue
-
-            if "🧠 GROQ" in text:
-                continue  # убираем ответы модели
-
-            if "Как меня зовут" in text:
-                continue  # убираем вопросы
-
-            if len(text) < 5:
-                continue
-
-            memories.append(text)
-
-        print(f"🧠 CLEAN MEMORY: {memories}")
-
-        return memories[:5]
+        return res.data or []
 
     except Exception as e:
         print("❌ MEMORY RETRIEVE ERROR:", e)
