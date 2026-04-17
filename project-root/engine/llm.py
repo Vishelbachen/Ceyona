@@ -50,9 +50,7 @@ class LLMEngine:
         project_context = ""
         memory_context = ""
 
-        # =========================
         # PROJECT MEMORY
-        # =========================
         if get_project_memory:
             try:
                 pm = get_project_memory(limit=10) or []
@@ -76,9 +74,7 @@ class LLMEngine:
             except Exception as e:
                 print("Project memory error:", e)
 
-        # =========================
         # USER MEMORY
-        # =========================
         if user_id and get_memory:
             try:
                 memory = get_memory(user_id, limit=10) or []
@@ -97,9 +93,6 @@ class LLMEngine:
             except Exception as e:
                 print("Memory error:", e)
 
-        # =========================
-        # FINAL CONTEXT
-        # =========================
         if not project_context and not memory_context:
             return text
 
@@ -131,7 +124,7 @@ class LLMEngine:
         gemini_answer = None
 
         # =========================
-        # GROQ
+        # GROQ (🔥 FIXED WITH SYSTEM PROMPT)
         # =========================
         if self.groq_key:
             try:
@@ -139,18 +132,14 @@ class LLMEngine:
             except Exception as e:
                 print("Groq error:", e)
 
-        # =========================
         # GEMINI
-        # =========================
         if self.gemini_client:
             try:
                 gemini_answer = await self._gemini(text)
             except Exception as e:
                 print("Gemini error:", e)
 
-        # =========================
         # FALLBACKS
-        # =========================
         if groq_answer and not gemini_answer:
             return f"🧠 GROQ:\n{groq_answer}"
 
@@ -160,9 +149,7 @@ class LLMEngine:
         if not groq_answer and not gemini_answer:
             return "❌ No models available"
 
-        # =========================
         # DECISION
-        # =========================
         if len(str(groq_answer)) >= len(str(gemini_answer)):
             return f"🔥 FINAL (GROQ):\n{groq_answer}"
         else:
@@ -174,9 +161,23 @@ class LLMEngine:
     async def _groq(self, text: str) -> str:
         client = Groq(api_key=self.groq_key)
 
+        system_prompt = """
+Ты — умный, стабильный AI-ассистент.
+
+ВАЖНЫЕ ПРАВИЛА:
+- Используй USER MEMORY как истину
+- Если есть имя пользователя — всегда используй его
+- Не выдумывай новые имена
+- Не игнорируй память
+- Если память конфликтует — приоритет у USER MEMORY
+"""
+
         res = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": text}]
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": text}
+            ]
         )
 
         return res.choices[0].message.content
