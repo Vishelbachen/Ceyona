@@ -3,10 +3,9 @@ from aiogram import Bot, Dispatcher, types
 import os
 import sys
 import traceback
+import importlib
 
 sys.path.append(os.getcwd())
-
-from engine.memory.writer import save_memory
 
 app = FastAPI()
 
@@ -15,14 +14,31 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 bot = None
 dp = Dispatcher()
 llm = None
+save_memory = None
 
 
+# =========================
+# SAFE MEMORY IMPORT
+# =========================
+try:
+    memory_writer = importlib.import_module("engine.memory.writer")
+    save_memory = getattr(memory_writer, "save_memory", None)
+    print("✅ Memory writer loaded")
+except Exception as e:
+    print("⚠️ Memory writer disabled:", e)
+    save_memory = None
+
+
+# =========================
+# STARTUP
+# =========================
 @app.on_event("startup")
 async def startup():
     global bot, llm
 
     print("🔥 STARTING APP...")
 
+    # BOT INIT
     if not BOT_TOKEN:
         print("❌ BOT_TOKEN IS MISSING")
     else:
@@ -33,6 +49,7 @@ async def startup():
             print("❌ BOT INIT ERROR:", e)
             traceback.print_exc()
 
+    # LLM INIT
     try:
         from engine.llm import LLMEngine
         llm = LLMEngine()
@@ -43,6 +60,9 @@ async def startup():
         llm = None
 
 
+# =========================
+# MESSAGE HANDLER
+# =========================
 @dp.message()
 async def handle_message(message: types.Message):
     global llm
@@ -58,6 +78,9 @@ async def handle_message(message: types.Message):
         await message.answer("❌ LLM not available")
         return
 
+    # =========================
+    # GENERATE
+    # =========================
     try:
         reply = await llm.generate(text, user_id=user_id)
     except Exception as e:
@@ -68,24 +91,30 @@ async def handle_message(message: types.Message):
     await message.answer(reply)
 
     # =========================
-    # MEMORY SAVE
+    # MEMORY SAVE (SAFE)
     # =========================
-    try:
-        print("💾 SAVE MEMORY START")
+    if save_memory:
+        try:
+            print("💾 SAVE MEMORY START")
 
-        result1 = save_memory(user_id, text)
-        print("💾 USER SAVED:", result1)
+            result1 = save_memory(user_id, text)
+            print("💾 USER SAVED:", result1)
 
-        result2 = save_memory(user_id, reply)
-        print("💾 ASSISTANT SAVED:", result2)
+            result2 = save_memory(user_id, reply)
+            print("💾 ASSISTANT SAVED:", result2)
 
-        print("💾 SAVE MEMORY DONE")
+            print("💾 SAVE MEMORY DONE")
 
-    except Exception as e:
-        print("❌ MEMORY SAVE FAILED:", e)
-        traceback.print_exc()
+        except Exception as e:
+            print("❌ MEMORY SAVE FAILED:", e)
+            traceback.print_exc()
+    else:
+        print("⚠️ MEMORY DISABLED")
 
 
+# =========================
+# WEBHOOK
+# =========================
 @app.post("/webhook")
 async def webhook(req: Request):
     global bot
@@ -93,14 +122,23 @@ async def webhook(req: Request):
     if not bot:
         return {"ok": False, "error": "bot not initialized"}
 
-    data = await req.json()
-    update = types.Update(**data)
+    try:
+        data = await req.json()
+        update = types.Update(**data)
 
-    await dp.feed_update(bot, update)
+        await dp.feed_update(bot, update)
 
-    return {"ok": True}
+        return {"ok": True}
+
+    except Exception as e:
+        print("❌ WEBHOOK ERROR:", e)
+        traceback.print_exc()
+        return {"ok": False, "error": str(e)}
 
 
+# =========================
+# HEALTHCHECK
+# =========================
 @app.get("/")
 async def root():
     return {"status": "alive"}
