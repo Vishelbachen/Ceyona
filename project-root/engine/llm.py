@@ -2,12 +2,23 @@ import os
 from groq import Groq
 from google import genai
 
-# memory import (safe)
+# =========================
+# USER MEMORY
+# =========================
 try:
     from engine.memory.retriever import get_memory
 except Exception as e:
     print("Memory module not available:", e)
     get_memory = None
+
+
+# =========================
+# PROJECT MEMORY (NEW SAFE LAYER)
+# =========================
+try:
+    from engine.memory.project_retriever import get_project_memory
+except Exception:
+    get_project_memory = None
 
 
 class LLMEngine:
@@ -25,48 +36,79 @@ class LLMEngine:
     # =========================
     def _build_context(self, user_id: str, text: str) -> str:
         """
-        Safely injects memory into input text
+        Injects:
+        - project memory (code/project context)
+        - user memory (chat memory)
         """
 
-        if not user_id or not get_memory:
+        # =========================
+        # PROJECT MEMORY
+        # =========================
+        project_context = ""
+        if get_project_memory:
+            try:
+                pm = get_project_memory(limit=10)
+
+                project_lines = []
+                for p in pm:
+                    file = p.get("file")
+                    action = p.get("action")
+                    content = p.get("content")
+
+                    if file or content:
+                        project_lines.append(f"{file} | {action} | {content}")
+
+                project_context = "\n".join(project_lines).strip()
+
+            except Exception as e:
+                print("Project memory error:", e)
+                project_context = ""
+
+        # =========================
+        # USER MEMORY
+        # =========================
+        memory_context = ""
+
+        if user_id and get_memory:
+            try:
+                memory = get_memory(user_id, limit=10)
+            except Exception as e:
+                print("Memory error:", e)
+                memory = []
+
+            memory_lines = []
+            for m in memory:
+                content = m.get("content")
+                if content and isinstance(content, str):
+                    memory_lines.append(content)
+
+            memory_context = "\n".join(memory_lines).strip()
+
+        # =========================
+        # FINAL CONTEXT BUILD
+        # =========================
+        if not project_context and not memory_context:
             return text
 
-        try:
-            memory = get_memory(user_id, limit=10)
-        except Exception as e:
-            print("Memory error:", e)
-            memory = []
+        return f"""
+[PROJECT MEMORY]
+{project_context}
 
-        # безопасная очистка памяти
-        memory_lines = []
-        for m in memory:
-            content = m.get("content")
-            if content and isinstance(content, str):
-                memory_lines.append(content)
+[USER MEMORY]
+{memory_context}
 
-        memory_context = "\n".join(memory_lines).strip()
-
-        if not memory_context:
-            return text
-
-        # безопасная обёртка (чтобы модель не путала память с запросом)
-        return (
-            "[USER MEMORY]\n"
-            f"{memory_context}\n\n"
-            "[CURRENT USER MESSAGE]\n"
-            f"{text}"
-        )
+[CURRENT USER MESSAGE]
+{text}
+"""
 
     # =========================
-    # MAIN GENERATE METHOD
+    # MAIN GENERATE
     # =========================
     async def generate(self, text: str, user_id: str = None) -> str:
 
-        # normalize user_id (очень важно)
         if user_id is not None:
             user_id = str(user_id)
 
-        # inject memory safely
         if user_id:
             try:
                 text = self._build_context(user_id, text)
@@ -107,7 +149,7 @@ class LLMEngine:
             return "❌ No models available"
 
         # =========================
-        # SIMPLE DECISION
+        # DECISION
         # =========================
         if len(str(groq_answer)) >= len(str(gemini_answer)):
             return f"🔥 FINAL (GROQ):\n{groq_answer}"
@@ -122,9 +164,7 @@ class LLMEngine:
 
         res = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            messages=[
-                {"role": "user", "content": text}
-            ]
+            messages=[{"role": "user", "content": text}]
         )
 
         return res.choices[0].message.content
