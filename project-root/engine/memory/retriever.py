@@ -1,24 +1,4 @@
-import os
-from supabase import create_client
-
-
-def _get_client():
-    try:
-        url = os.getenv("SUPABASE_URL")
-        key = os.getenv("SUPABASE_KEY")
-
-        if not url or not key:
-            print("⚠️ SUPABASE ENV MISSING")
-            return None
-
-        return create_client(url, key)
-
-    except Exception as e:
-        print("❌ SUPABASE INIT ERROR:", e)
-        return None
-
-
-def get_memory(user_id: str, limit: int = 5):
+def get_memory(user_id: str, limit: int = 10):
     try:
         client = _get_client()
 
@@ -35,11 +15,29 @@ def get_memory(user_id: str, limit: int = 5):
             .execute()
         )
 
-        memories = [row["content"] for row in res.data]
+        memories = []
 
-        print(f"🧠 RETRIEVED MEMORY: {memories}")
+        for row in res.data:
+            text = row["content"]
 
-        return memories
+            # 🔥 ФИЛЬТР
+            if not text:
+                continue
+
+            if "🧠 GROQ" in text:
+                continue  # убираем ответы модели
+
+            if "Как меня зовут" in text:
+                continue  # убираем вопросы
+
+            if len(text) < 5:
+                continue
+
+            memories.append(text)
+
+        print(f"🧠 CLEAN MEMORY: {memories}")
+
+        return memories[:5]
 
     except Exception as e:
         print("❌ MEMORY RETRIEVE ERROR:", e)
