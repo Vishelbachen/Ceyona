@@ -5,13 +5,7 @@ from supabase import create_client, Client
 def _get_client() -> Client | None:
     try:
         url = os.getenv("SUPABASE_URL")
-
-        # поддержка двух вариантов ключей
-        key = (
-            os.getenv("SUPABASE_KEY")
-            or os.getenv("SUPABASE_ANON_KEY")
-            or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-        )
+        key = os.getenv("SUPABASE_KEY")
 
         if not url or not key:
             print("⚠️ SUPABASE ENV MISSING")
