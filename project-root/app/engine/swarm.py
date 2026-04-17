@@ -1,16 +1,23 @@
-class AgentSwarm:
+class Swarm:
     def __init__(self, agents):
         self.agents = agents
 
-    async def run_all(self, task: str):
+    async def run(self, text: str):
 
         results = []
 
         for agent in self.agents:
-            result = await agent.run(task)
-            results.append(result)
+            try:
+                res = await agent.run(text)
+                results.append(res)
+            except:
+                continue
 
-        return self.merge(results)
+        return self.select_best(results)
 
-    def merge(self, results):
+    def select_best(self, results):
+        if not results:
+            return None
+
+        # простая эвристика качества
         return max(results, key=lambda x: len(str(x)))
