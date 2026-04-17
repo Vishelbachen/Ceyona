@@ -3,47 +3,100 @@ import requests
 
 
 class ToolRouter:
+    """
+    Mapbox-based tools (no Google dependency)
+    """
+
     def __init__(self):
-        self.google_maps_key = os.getenv("GOOGLE_MAPS_API_KEY")
+        self.mapbox_token = os.getenv("MAPBOX_TOKEN")
         self.openweather_key = os.getenv("OPENWEATHER_API_KEY")
 
+    # =========================
+    # ENTRY POINT
+    # =========================
     async def route(self, text: str):
         if not text:
             return None
 
         t = text.lower().strip()
 
+        # MAP TOOL
         if t.startswith("map"):
-            return await self.handle_map(text[3:].strip())
+            query = text[3:].strip()
+            return await self.handle_map(query)
 
+        # WEATHER TOOL
         if t.startswith("weather"):
-            return await self.handle_weather(text[7:].strip())
+            query = text[7:].strip()
+            return await self.handle_weather(query)
 
         return None
 
+    # =========================
+    # MAPBOX GEOCODING
+    # =========================
     async def handle_map(self, query: str):
-        if not self.google_maps_key:
-            return {"error": "GOOGLE_MAPS_API_KEY missing"}
+        if not self.mapbox_token:
+            return {"error": "MAPBOX_TOKEN missing"}
 
-        url = "https://maps.googleapis.com/maps/api/geocode/json"
+        if not query:
+            return {"error": "empty query"}
 
-        r = requests.get(url, params={
-            "address": query,
-            "key": self.google_maps_key
-        })
+        try:
+            url = f"https://api.mapbox.com/geocoding/v5/mapbox.places/{query}.json"
 
-        return r.json()
+            params = {
+                "access_token": self.mapbox_token,
+                "limit": 1
+            }
 
+            r = requests.get(url, params=params, timeout=10)
+            data = r.json()
+
+            if not data.get("features"):
+                return {"error": "no results found"}
+
+            feature = data["features"][0]
+
+            return {
+                "type": "map",
+                "query": query,
+                "place_name": feature.get("place_name"),
+                "longitude": feature["center"][0],
+                "latitude": feature["center"][1]
+            }
+
+        except Exception as e:
+            return {"error": str(e)}
+
+    # =========================
+    # WEATHER (OpenWeather)
+    # =========================
     async def handle_weather(self, query: str):
         if not self.openweather_key:
             return {"error": "OPENWEATHER_API_KEY missing"}
 
-        url = "https://api.openweathermap.org/data/2.5/weather"
+        try:
+            url = "https://api.openweathermap.org/data/2.5/weather"
 
-        r = requests.get(url, params={
-            "q": query,
-            "appid": self.openweather_key,
-            "units": "metric"
-        })
+            params = {
+                "q": query,
+                "appid": self.openweather_key,
+                "units": "metric"
+            }
 
-        return r.json()
+            r = requests.get(url, params=params, timeout=10)
+            data = r.json()
+
+            if r.status_code != 200:
+                return {"error": data.get("message", "weather error")}
+
+            return {
+                "type": "weather",
+                "city": data["name"],
+                "temp": data["main"]["temp"],
+                "description": data["weather"][0]["description"]
+            }
+
+        except Exception as e:
+            return {"error": str(e)}
