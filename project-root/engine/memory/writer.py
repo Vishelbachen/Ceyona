@@ -1,20 +1,20 @@
 from supabase import create_client
 import os
-import time
 
 supabase = create_client(
     os.getenv("SUPABASE_URL"),
-    os.getenv("SUPABASE_SERVICE_ROLE_KEY")  # ВАЖНО
+    os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 )
 
-def save_memory(user_id: str, content: str, mem_type: str = "note", importance: float = 0.5):
+def save_memory(user_id: str, content: str):
     try:
-        supabase.table("memory").insert({
+        res = supabase.table("memory").insert({
             "user_id": str(user_id),
-            "content": content,
-            "type": mem_type,
-            "importance": importance,
-            "created_at": int(time.time())
+            "content": content
         }).execute()
+
+        return res.data
+
     except Exception as e:
         print("Memory write error:", e)
+        return None
