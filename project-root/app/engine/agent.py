@@ -1,116 +1,57 @@
 class Agent:
-    def __init__(self, planner, router, formatter, llm, memory):
+    def __init__(self, planner, router, formatter, llm, memory, event_bus):
         self.planner = planner
         self.router = router
         self.formatter = formatter
         self.llm = llm
         self.memory = memory
+        self.event_bus = event_bus
 
     async def run(self, text: str, user_id: str = None):
 
         # =========================
-        # 1. MEMORY CONTEXT
+        # EMIT EVENT (NEW)
+        # =========================
+        await self.event_bus.emit("user_interaction", {
+            "user_id": user_id,
+            "text": text
+        })
+
+        # =========================
+        # MEMORY
         # =========================
         memory_context = ""
         if user_id:
             memory_context = await self.memory.get(user_id)
 
         # =========================
-        # 2. PLAN
+        # PLAN
         # =========================
         intent = await self.planner.parse(text, memory_context)
 
         # =========================
-        # 3. COST FILTER (NEW)
-        # =========================
-        if await self.is_expensive(intent):
-            intent = await self.optimize_intent(intent)
-
-        # =========================
-        # 4. EXECUTION
+        # EXECUTE
         # =========================
         result = await self.router.execute(intent)
 
         # =========================
-        # 5. SELF DEBUGGER (NEW)
+        # FAILURE EVENT
         # =========================
-        if await self.is_broken(result):
-            debug_info = await self.debug(text, intent, result)
-            intent = debug_info.get("fixed_intent", intent)
-            result = await self.router.execute(intent)
+        if not result or "error" in str(result):
+            await self.event_bus.emit("tool_failure", {
+                "intent": intent,
+                "result": result
+            })
 
         # =========================
-        # 6. FORMAT RESPONSE
+        # FORMAT
         # =========================
         response = await self.formatter.format(intent, result)
 
         # =========================
-        # 7. SAVE MEMORY
+        # MEMORY SAVE
         # =========================
         if user_id:
             await self.memory.save(user_id, text, response)
 
         return response
-
-    # =========================
-    # COST CONTROL
-    # =========================
-    async def is_expensive(self, intent):
-        expensive_tools = ["multi_map_chain", "deep_search"]
-
-        if intent.get("tool") in expensive_tools:
-            return True
-
-        if intent.get("steps") and len(intent["steps"]) > 2:
-            return True
-
-        return False
-
-    async def optimize_intent(self, intent):
-        # упрощение запроса
-        intent["steps"] = intent.get("steps", [])[:2]
-        return intent
-
-    # =========================
-    # FAILURE DETECTION
-    # =========================
-    async def is_broken(self, result):
-        if not result:
-            return True
-
-        if isinstance(result, dict) and "error" in result:
-            return True
-
-        return False
-
-    # =========================
-    # SELF DEBUGGER
-    # =========================
-    async def debug(self, text, intent, result):
-
-        prompt = f"""
-Find problem in execution.
-
-User:
-{text}
-
-Intent:
-{intent}
-
-Result:
-{result}
-
-Return JSON:
-{{
-  "fixed_intent": {{
-    "tool": "...",
-    "query": "..."
-  }}
-}}
-"""
-
-        try:
-            res = await self.llm(prompt)
-            return eval(res) if isinstance(res, str) else res
-        except:
-            return {"fixed_intent": intent}
