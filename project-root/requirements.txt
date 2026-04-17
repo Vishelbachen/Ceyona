@@ -4,3 +4,5 @@ aiogram
 groq
 supabase
 httpx
+requests
+python-dotenv
