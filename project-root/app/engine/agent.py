@@ -9,48 +9,43 @@ class Agent:
     async def run(self, text: str, user_id: str = None):
 
         # =========================
-        # 0. MEMORY CONTEXT (NEW)
+        # 1. MEMORY CONTEXT
         # =========================
         memory_context = ""
         if user_id:
             memory_context = await self.memory.get(user_id)
 
         # =========================
-        # 1. PLAN (memory-aware)
+        # 2. PLAN
         # =========================
         intent = await self.planner.parse(text, memory_context)
 
-        if not intent or intent.get("tool") == "none":
-            return await self.llm(text)
+        # =========================
+        # 3. COST FILTER (NEW)
+        # =========================
+        if await self.is_expensive(intent):
+            intent = await self.optimize_intent(intent)
 
         # =========================
-        # 2. MULTI-TOOL CHAINING (NEW)
+        # 4. EXECUTION
         # =========================
-        results = []
-
-        for step in intent.get("steps", [intent]):
-            tool_result = await self.router.execute(step)
-            results.append(tool_result)
+        result = await self.router.execute(intent)
 
         # =========================
-        # 3. MERGE RESULTS
+        # 5. SELF DEBUGGER (NEW)
         # =========================
-        merged = await self.merge_results(results)
+        if await self.is_broken(result):
+            debug_info = await self.debug(text, intent, result)
+            intent = debug_info.get("fixed_intent", intent)
+            result = await self.router.execute(intent)
 
         # =========================
-        # 4. REFLECTION (light v3)
+        # 6. FORMAT RESPONSE
         # =========================
-        if await self.needs_refine(text, merged):
-            intent = await self.planner.parse(text, memory_context)
-            merged = await self.router.execute(intent)
+        response = await self.formatter.format(intent, result)
 
         # =========================
-        # 5. FORMAT RESPONSE
-        # =========================
-        response = await self.formatter.format(intent, merged)
-
-        # =========================
-        # 6. SAVE MEMORY (NEW)
+        # 7. SAVE MEMORY
         # =========================
         if user_id:
             await self.memory.save(user_id, text, response)
@@ -58,37 +53,64 @@ class Agent:
         return response
 
     # =========================
-    # MERGE MULTI TOOL RESULTS
+    # COST CONTROL
     # =========================
-    async def merge_results(self, results):
-        clean = []
+    async def is_expensive(self, intent):
+        expensive_tools = ["multi_map_chain", "deep_search"]
 
-        for r in results:
-            if isinstance(r, dict) and "error" not in r:
-                clean.append(r)
+        if intent.get("tool") in expensive_tools:
+            return True
 
-        return clean if clean else results
+        if intent.get("steps") and len(intent["steps"]) > 2:
+            return True
+
+        return False
+
+    async def optimize_intent(self, intent):
+        # упрощение запроса
+        intent["steps"] = intent.get("steps", [])[:2]
+        return intent
 
     # =========================
-    # LIGHT REFLECTION (OPTIMIZED)
+    # FAILURE DETECTION
     # =========================
-    async def needs_refine(self, text: str, result):
+    async def is_broken(self, result):
+        if not result:
+            return True
+
+        if isinstance(result, dict) and "error" in result:
+            return True
+
+        return False
+
+    # =========================
+    # SELF DEBUGGER
+    # =========================
+    async def debug(self, text, intent, result):
 
         prompt = f"""
-Check if result is sufficient.
+Find problem in execution.
 
 User:
 {text}
 
+Intent:
+{intent}
+
 Result:
 {result}
 
-Return:
-true or false only
+Return JSON:
+{{
+  "fixed_intent": {{
+    "tool": "...",
+    "query": "..."
+  }}
+}}
 """
 
         try:
             res = await self.llm(prompt)
-            return "true" in str(res).lower()
+            return eval(res) if isinstance(res, str) else res
         except:
-            return False
+            return {"fixed_intent": intent}
