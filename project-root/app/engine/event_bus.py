@@ -1,3 +1,6 @@
+import asyncio
+
+
 class EventBus:
     def __init__(self):
         self.subscribers = {}
@@ -7,8 +10,10 @@ class EventBus:
 
     async def emit(self, event_type: str, data: dict):
         handlers = self.subscribers.get(event_type, [])
-        for h in handlers:
-            try:
-                await h(data)
-            except:
-                pass
+        await asyncio.gather(*(self._safe_call(h, data) for h in handlers))
+
+    async def _safe_call(self, handler, data):
+        try:
+            await handler(data)
+        except Exception:
+            pass
