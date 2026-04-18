@@ -3,8 +3,6 @@ from app.core.orchestrator import Orchestrator
 
 router = APIRouter()
 
-orchestrator = Orchestrator()
-
 
 @router.post("/webhook")
 async def webhook(request: Request):
@@ -15,9 +13,11 @@ async def webhook(request: Request):
     if not message:
         return {"error": "empty_message"}
 
-    response = await orchestrator.handle(
+    orchestrator = Orchestrator()
+
+    result = await orchestrator.handle(
         user_input=message,
         mode="fast"
     )
 
-    return {"response": response}
+    return {"response": result}
