@@ -33,3 +33,4 @@ models = client.models.list()
 
 for model in models.data:
     print(model.id)
+print("FILE EXECUTED")
