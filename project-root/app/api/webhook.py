@@ -15,9 +15,9 @@ async def webhook(request: Request):
 
     orchestrator = Orchestrator()
 
-    result = await orchestrator.handle(
+    response = await orchestrator.handle(
         user_input=message,
         mode="fast"
     )
 
-    return {"response": result}
+    return {"response": response}
