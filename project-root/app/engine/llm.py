@@ -5,7 +5,7 @@ from groq import Groq
 class LLM:
     def __init__(self):
         self.client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-        self.model = "llama-3.1-8b-instant"
+        self.model = "llama-3.1-70b-instruct"
 
     async def __call__(self, prompt: str) -> str:
         try:
