@@ -8,6 +8,11 @@ class Orchestrator:
         self.llm = LLM()
 
     async def handle(self, text: str) -> str:
-        model = await self.router.select_model(text)
-        result = await self.llm.generate(model=model, prompt=text)
+        model = self.router.select("fast")
+
+        result = await self.llm(
+            prompt=text,
+            model=model
+        )
+
         return result
