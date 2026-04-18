@@ -6,14 +6,9 @@ app = FastAPI(
     version="1.0.0"
 )
 
-
-# Register routes
 app.include_router(webhook_router)
 
 
 @app.get("/")
 async def health():
-    return {
-        "status": "ok",
-        "system": "running"
-    }
+    return {"status": "ok"}
