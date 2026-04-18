@@ -6,10 +6,12 @@ class LLMError(Exception):
     pass
 
 
+class LLMResponse:
+    def __init__(self, content: str):
+        self.content = content
+
+
 async def fake_groq_call(model: str, prompt: str) -> str:
-    """
-    Заглушка под Groq API
-    """
     await asyncio.sleep(0.3)
     return f"[{model}] {prompt}"
 
@@ -19,43 +21,22 @@ async def run_llm(model: str, prompt: str, retries: int = 2):
 
     while attempt <= retries:
         try:
-            logger.log(
-                "INFO",
-                "llm_request",
-                model=model,
-                attempt=attempt
-            )
+            logger.log("INFO", "llm_request", model=model, attempt=attempt)
 
-            # timeout wrapper
             response = await asyncio.wait_for(
                 fake_groq_call(model, prompt),
                 timeout=5
             )
 
-            logger.log(
-                "INFO",
-                "llm_response",
-                model=model,
-                success=True
-            )
+            logger.log("INFO", "llm_response", model=model)
 
-            return type("LLMResponse", (), {"content": response})
+            return LLMResponse(content=response)
 
         except asyncio.TimeoutError:
-            logger.log(
-                "ERROR",
-                "llm_timeout",
-                model=model,
-                attempt=attempt
-            )
+            logger.log("ERROR", "llm_timeout", model=model)
 
         except Exception as e:
-            logger.log(
-                "ERROR",
-                "llm_error",
-                model=model,
-                error=str(e)
-            )
+            logger.log("ERROR", "llm_error", model=model, error=str(e))
 
         attempt += 1
 
