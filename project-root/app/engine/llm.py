@@ -9,7 +9,9 @@ def list_models():
 
     print("\n=== AVAILABLE GROQ MODELS ===\n")
 
-    for m in models.data:
+    data = getattr(models, "data", models)
+
+    for m in data:
         print(f"- {m.id}")
 
     print("\n=============================\n")
