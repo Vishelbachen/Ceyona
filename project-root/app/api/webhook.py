@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Request
-from app.core.orchestrator import Orchestrator
+from ..core.orchestrator import Orchestrator
 
 router = APIRouter()
 orchestrator = Orchestrator()
