@@ -59,11 +59,12 @@ Maximum active files in MVP stage: 7
 
 ---
 
-# 🧠 MODEL STRATEGY
+# 🧠 MODEL SYSTEM
 
-- model selection is runtime-based
-- llm layer does NOT decide model
-- model routing will be handled by engine/model_router
+- models are dynamically provided by Groq API at runtime
+- system does not rely on a static model registry
+- model_router is responsible for model selection and fallback logic
+- Groq API is the source of available model data
 
 ---
 
