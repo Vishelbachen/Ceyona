@@ -2,20 +2,25 @@ import os
 from groq import Groq
 
 
-def list_models():
-    client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+class LLM:
+    def __init__(self):
+        self.client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+        self.model = "llama-3.1-70b-versatile"
 
-    models = client.models.list()
+    async def __call__(self, prompt: str) -> str:
+        try:
+            response = self.client.chat.completions.create(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                model=self.model,
+                temperature=0.3
+            )
 
-    print("\n=== AVAILABLE GROQ MODELS ===\n")
+            return response.choices[0].message.content
 
-    data = getattr(models, "data", models)
-
-    for m in data:
-        print(f"- {m.id}")
-
-    print("\n=============================\n")
-
-
-if __name__ == "__main__":
-    list_models()
+        except Exception as e:
+            return f"LLM_ERROR: {str(e)}"
