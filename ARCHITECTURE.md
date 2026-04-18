@@ -1,20 +1,28 @@
 # 🧠 PROJECT ARCHITECTURE (v1 — STABLE CORE)
 
 ## 🎯 Goal
-Minimal stable AI system with controlled growth.
+Minimal stable AI system with controlled and incremental growth.
+
+System is designed as a modular backend with strict separation of concerns.
 
 ---
 
 # 🧱 ACTIVE FILES (current production stage)
 
 ## main.py
-FastAPI entry point
+FastAPI entry point.
+- starts application
+- mounts API routes
 
 ## app/api/webhook.py
-Telegram webhook handler
+Telegram webhook handler.
+- receives external messages
+- forwards them to application layer
 
 ## app/llm.py
-Direct LLM execution layer
+LLM execution layer.
+- executes model inference
+- does NOT contain model selection logic
 
 ---
 
@@ -24,15 +32,15 @@ Telegram → webhook → llm → response
 
 ---
 
-# 🚀 FUTURE FLOW (target architecture)
+# 🚀 TARGET ARCHITECTURE (future state)
 
 Telegram → webhook → core/orchestrator → engine → llm → tools/memory → response
 
 ---
 
-# 🧠 NOT ACTIVE (planned modules)
+# 🧠 NOT ACTIVE (reserved modules)
 
-These modules are not implemented yet but reserved:
+These modules are planned but not yet implemented:
 
 - app/core/orchestrator.py
 - app/engine/model_router.py
@@ -40,22 +48,25 @@ These modules are not implemented yet but reserved:
 - app/tools/tool_router.py
 - app/memory/
 
+These modules are part of the future scalable architecture.
+
 ---
 
-# 🔒 RULES
+# 🔒 ARCHITECTURAL RULES
 
 ## 1. File creation rule
-A new file is created only if:
-- existing module cannot be extended safely
+A new module is created only if:
+- existing module cannot be extended without violating responsibility boundaries
 
-## 2. Responsibility rule
-Each file must have a single responsibility
+## 2. Single Responsibility Principle
+Each module must have exactly one responsibility:
+- no mixing of routing, execution, and transport layers
 
 ## 3. Deletion rule
-Unused files must be removed
+Unused or unreferenced files must be removed to prevent architectural drift
 
-## 4. Scale rule
-Maximum active files in MVP stage: 7
+## 4. Scale rule (MVP constraint)
+Maximum active modules in MVP stage: 7
 
 ---
 
@@ -63,16 +74,17 @@ Maximum active files in MVP stage: 7
 
 - models are dynamically provided by Groq API at runtime
 - system does not rely on a static model registry
-- model_router is responsible for model selection and fallback logic
-- Groq API is the source of available model data
+- model selection is delegated to model_router (future module)
+- Groq API is the source of truth for available models
+- llm layer is execution-only and does not perform decision-making
 
 ---
 
 # 🔐 ENVIRONMENT VARIABLES
 
-All secrets are stored in environment variables only.
+All secrets must be stored in environment variables only.
 
-Never hardcoded.
+No hardcoded credentials are allowed.
 
 ---
 
@@ -81,18 +93,18 @@ Never hardcoded.
 
 ---
 
-## Telegram
+## Telegram Integration
 - BOT_TOKEN
 
 ---
 
-## Security
+## Security Layer
 - JWT_SECRET
 - ENCRYPTION_KEY
 
 ---
 
-## Backend / DB
+## Backend / Database
 - SUPABASE_URL
 - SUPABASE_ANON_KEY
 - SUPABASE_SERVICE_ROLE_KEY
@@ -120,5 +132,5 @@ Never hardcoded.
 # 🚫 SECURITY RULES
 
 - no secrets in repository
-- only environment variables
-- all new integrations must be declared here first
+- only environment variables via deployment platform (e.g. Railway)
+- all new integrations must be explicitly registered in this document before implementation
