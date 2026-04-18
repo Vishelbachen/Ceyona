@@ -7,7 +7,7 @@ System is designed as a modular backend with strict separation of concerns.
 
 ---
 
-# 🧱 ACTIVE FILES (current production stage)
+# 🧱 ACTIVE FILES (current production stage — 5 FILES)
 
 ## main.py
 FastAPI entry point.
@@ -17,38 +17,38 @@ Telegram webhook handler.
 - receives external messages
 - forwards them to orchestrator layer
 
+## app/core/orchestrator.py
+Application flow controller.
+- receives input from API layer
+- selects model via model_router
+- calls LLM
+
 ## app/llm.py
 LLM execution layer.
 - executes model inference
 - does NOT perform model selection
 
-## app/core/orchestrator.py
-Application flow controller.
-- receives input from API layer (webhook)
-- selects model via model_router
-- calls LLM
+## app/engine/model_router.py
+Model selection layer.
+- runtime model discovery via Groq API
+- fast/smart routing logic
+- fallback handling
 
 ---
 
 # ⚙️ CURRENT FLOW (MVP)
 
-Telegram → webhook → orchestrator → llm → response
+Telegram → webhook → orchestrator → model_router → llm → response
 
 ---
 
-# 🚀 TARGET ARCHITECTURE (future state)
+# 🚀 TARGET ARCHITECTURE (future expansion)
 
-Telegram → webhook → core/orchestrator → engine → llm → tools/memory → response
+Telegram → webhook → orchestrator → engine → tools/memory → response
 
 ---
 
 # 🚀 RESERVED (not implemented yet)
-
-## app/engine/model_router.py
-Planned model selection layer
-- dynamic model routing
-- fallback logic
-- runtime model discovery via Groq API
 
 ## app/engine/agent.py
 Planned reasoning / decision layer
@@ -68,11 +68,10 @@ A new module is created only if:
 - existing module cannot be extended without violating responsibility boundaries
 
 ## 2. Single Responsibility Principle
-Each module must have exactly one responsibility:
-- no mixing of routing, execution, and transport layers
+Each module must have exactly one responsibility
 
 ## 3. Deletion rule
-Unused or unreferenced files must be removed to prevent architectural drift
+Unused modules must be removed to prevent architectural drift
 
 ## 4. Scale rule (MVP constraint)
 Maximum active modules in MVP stage: 7
@@ -83,9 +82,9 @@ Maximum active modules in MVP stage: 7
 
 - models are dynamically provided by Groq API at runtime
 - system does not rely on a static model registry
-- model selection is delegated to model_router (future module)
+- model_router is active decision layer
 - Groq API is the source of truth for available models
-- llm layer is execution-only and does not perform decision-making
+- llm layer is execution-only and stateless
 
 ---
 
@@ -95,30 +94,20 @@ All secrets must be stored in environment variables only.
 
 No hardcoded credentials are allowed.
 
----
-
 ## AI / LLM
 - GROQ_API_KEY
 
----
-
 ## Telegram Integration
 - BOT_TOKEN
-
----
 
 ## Security Layer
 - JWT_SECRET
 - ENCRYPTION_KEY
 
----
-
 ## Backend / Database
 - SUPABASE_URL
 - SUPABASE_ANON_KEY
 - SUPABASE_SERVICE_ROLE_KEY
-
----
 
 ## External APIs
 - OPENWEATHER_API_KEY
@@ -126,12 +115,8 @@ No hardcoded credentials are allowed.
 - SERPAPI_KEY
 - BREVO_API_KEY
 
----
-
 ## Payments
 - TON_WALLET
-
----
 
 ## Deployment
 - WEBHOOK_URL
@@ -141,5 +126,5 @@ No hardcoded credentials are allowed.
 # 🚫 SECURITY RULES
 
 - no secrets in repository
-- only environment variables via deployment platform (e.g. Railway)
-- all new integrations must be explicitly registered in this document before implementation
+- only environment variables via deployment platform
+- all integrations must be declared before implementation
