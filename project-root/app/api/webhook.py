@@ -3,6 +3,7 @@ from uuid import uuid4
 
 from app.contracts.message import OrchestratorRequest, UserMessage
 from app.core.orchestrator import handle_request
+from app.engine.telegram import send_message
 
 router = APIRouter()
 
@@ -17,6 +18,9 @@ async def telegram_webhook(request: Request):
 
         user = message.get("from", {})
         user_id = str(user.get("id", "unknown"))
+
+        chat = message.get("chat", {})
+        chat_id = chat.get("id")
 
         if not text:
             return {"ok": True}
@@ -33,10 +37,12 @@ async def telegram_webhook(request: Request):
 
         result = await handle_request(req)
 
+        # 🔥 ВОТ ЭТОГО НЕ ХВАТАЛО
+        await send_message(chat_id=chat_id, text=result)
+
         return {
             "ok": True,
-            "trace_id": trace_id,
-            "result": result
+            "trace_id": trace_id
         }
 
     except Exception as e:
