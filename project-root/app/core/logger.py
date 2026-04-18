@@ -4,25 +4,24 @@ from datetime import datetime
 
 
 class StructuredLogger:
-    def __init__(self, name="app"):
-        self.logger = logging.getLogger(name)
+    def __init__(self):
+        self.logger = logging.getLogger("app")
         self.logger.setLevel(logging.INFO)
 
         handler = logging.StreamHandler()
-        formatter = logging.Formatter('%(message)s')
-        handler.setFormatter(formatter)
+        handler.setFormatter(logging.Formatter("%(message)s"))
 
         if not self.logger.handlers:
             self.logger.addHandler(handler)
 
-    def log(self, level: str, event: str, **kwargs):
-        log_entry = {
+    def log(self, level: str, event: str, **data):
+        payload = {
             "timestamp": datetime.utcnow().isoformat(),
             "level": level,
             "event": event,
-            "data": kwargs
+            "data": data
         }
-        self.logger.info(json.dumps(log_entry))
+        self.logger.info(json.dumps(payload))
 
 
 logger = StructuredLogger()
