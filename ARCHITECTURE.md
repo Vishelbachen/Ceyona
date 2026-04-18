@@ -12,12 +12,19 @@ System is designed as a modular backend with strict separation of concerns.
 ## main.py
 FastAPI entry point.
 
+## app/api/webhook.py
+Telegram webhook handler.
+- receives external messages
+- forwards them to orchestrator layer
+
 ## app/llm.py
 LLM execution layer.
+- executes model inference
+- does NOT perform model selection
 
 ## app/core/orchestrator.py
 Application flow controller.
-- receives input from API layer (future webhook)
+- receives input from API layer (webhook)
 - selects model via model_router
 - calls LLM
 
@@ -25,7 +32,7 @@ Application flow controller.
 
 # ⚙️ CURRENT FLOW (MVP)
 
-Telegram → webhook → llm → response
+Telegram → webhook → orchestrator → llm → response
 
 ---
 
@@ -37,24 +44,20 @@ Telegram → webhook → core/orchestrator → engine → llm → tools/memory �
 
 # 🚀 RESERVED (not implemented yet)
 
-## app/api/webhook.py
-Planned Telegram webhook handler
-- will receive external messages
-- will call core/orchestrator
-
 ## app/engine/model_router.py
 Planned model selection layer
 - dynamic model routing
 - fallback logic
+- runtime model discovery via Groq API
 
 ## app/engine/agent.py
-Planned reasoning + decision agent
+Planned reasoning / decision layer
 
 ## app/tools/tool_router.py
 Planned external tool execution layer
 
 ## app/memory/
-Planned persistence layer
+Planned persistence layer (sessions, history, state)
 
 ---
 
