@@ -11,18 +11,15 @@ System is designed as a modular backend with strict separation of concerns.
 
 ## main.py
 FastAPI entry point.
-- starts application
-- mounts API routes
-
-## app/api/webhook.py
-Telegram webhook handler.
-- receives external messages
-- forwards them to application layer
 
 ## app/llm.py
 LLM execution layer.
-- executes model inference
-- does NOT contain model selection logic
+
+## app/core/orchestrator.py
+Application flow controller.
+- receives input from API layer (future webhook)
+- selects model via model_router
+- calls LLM
 
 ---
 
