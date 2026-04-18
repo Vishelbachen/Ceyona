@@ -14,11 +14,12 @@ class StructuredLogger:
         if not self.logger.handlers:
             self.logger.addHandler(handler)
 
-    def log(self, level: str, event: str, **data):
+    def log(self, level: str, event: str, trace_id: str = None, **data):
         payload = {
             "timestamp": datetime.utcnow().isoformat(),
             "level": level,
             "event": event,
+            "trace_id": trace_id,
             "data": data
         }
         self.logger.info(json.dumps(payload))
