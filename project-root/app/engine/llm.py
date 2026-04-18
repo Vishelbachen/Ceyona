@@ -24,3 +24,12 @@ class LLM:
 
         except Exception as e:
             return f"LLM_ERROR: {str(e)}"
+
+from groq import Groq
+
+client = Groq()
+
+models = client.models.list()
+
+for model in models.data:
+    print(model.id)
