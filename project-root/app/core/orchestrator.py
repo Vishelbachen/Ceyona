@@ -1,6 +1,7 @@
 from app.contracts.message import OrchestratorRequest
 from app.engine.model_router import select_model
 from app.engine.llm import run_llm
+from app.core.logger import logger
 
 
 class OrchestratorError(Exception):
@@ -8,9 +9,14 @@ class OrchestratorError(Exception):
 
 
 async def handle_request(req: OrchestratorRequest) -> str:
+    trace_id = req.trace_id
+
     try:
-        if not req.user_message or not req.user_message.text:
-            raise OrchestratorError("Empty message")
+        logger.log(
+            "INFO",
+            "orchestrator_start",
+            trace_id=trace_id
+        )
 
         text = req.user_message.text
 
@@ -21,7 +27,19 @@ async def handle_request(req: OrchestratorRequest) -> str:
             prompt=text
         )
 
+        logger.log(
+            "INFO",
+            "orchestrator_done",
+            trace_id=trace_id
+        )
+
         return response.content
 
     except Exception as e:
+        logger.log(
+            "ERROR",
+            "orchestrator_error",
+            trace_id=trace_id,
+            error=str(e)
+        )
         return f"Error: {str(e)}"
