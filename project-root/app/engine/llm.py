@@ -5,18 +5,14 @@ from groq import Groq
 class LLM:
     def __init__(self):
         self.client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-        self.model = "llama-3.1-70b-versatile"
 
-    async def __call__(self, prompt: str) -> str:
+    async def __call__(self, prompt: str, model: str) -> str:
         try:
             response = self.client.chat.completions.create(
+                model=model,
                 messages=[
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
+                    {"role": "user", "content": prompt}
                 ],
-                model=self.model,
                 temperature=0.3
             )
 
