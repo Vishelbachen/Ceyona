@@ -16,9 +16,7 @@ class ModelRouter:
 
     def client(self):
         if self._client is None:
-            self._client = Groq(
-                api_key=os.getenv("GROQ_API_KEY")
-            )
+            self._client = Groq(api_key=os.getenv("GROQ_API_KEY"))
         return self._client
 
     def _refresh(self):
@@ -39,26 +37,22 @@ class ModelRouter:
         return model in self.models()
 
     def fast(self):
-        models = self.models()
-
         if self._available(self.fast_preferred):
             return self.fast_preferred
 
-        for m in models:
-            if "llama" in m and ("8b" in m or "instant" in m):
+        for m in self.models():
+            if "8b" in m or "instant" in m:
                 return m
 
-        return models[0] if models else self.fast_preferred
+        return self.models()[0] if self.models() else self.fast_preferred
 
     def smart(self):
-        models = self.models()
-
         if self._available(self.smart_preferred):
             return self.smart_preferred
 
         for priority in ["70b", "32b", "17b"]:
-            for m in models:
-                if priority in m and "llama" in m:
+            for m in self.models():
+                if priority in m:
                     return m
 
         return self.fast()
