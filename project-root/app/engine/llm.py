@@ -16,27 +16,49 @@ async def fake_groq_call(model: str, prompt: str) -> str:
     return f"[{model}] {prompt}"
 
 
-async def run_llm(model: str, prompt: str, retries: int = 2):
+async def run_llm(model: str, prompt: str, retries: int = 2, trace_id: str = None):
     attempt = 0
 
     while attempt <= retries:
         try:
-            logger.log("INFO", "llm_request", model=model, attempt=attempt)
+            logger.log(
+                "INFO",
+                "llm_request",
+                trace_id=trace_id,
+                model=model,
+                attempt=attempt
+            )
 
             response = await asyncio.wait_for(
                 fake_groq_call(model, prompt),
                 timeout=5
             )
 
-            logger.log("INFO", "llm_response", model=model)
+            logger.log(
+                "INFO",
+                "llm_response",
+                trace_id=trace_id,
+                model=model
+            )
 
             return LLMResponse(content=response)
 
         except asyncio.TimeoutError:
-            logger.log("ERROR", "llm_timeout", model=model)
+            logger.log(
+                "ERROR",
+                "llm_timeout",
+                trace_id=trace_id,
+                model=model
+            )
 
         except Exception as e:
-            logger.log("ERROR", "llm_error", model=model, error=str(e))
+            logger.log(
+                "ERROR",
+                "llm_error",
+                trace_id=trace_id,
+                model=model,
+                error=str(e)
+            )
 
         attempt += 1
 
