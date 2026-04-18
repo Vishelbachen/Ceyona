@@ -2,7 +2,15 @@ from fastapi import APIRouter, Request
 from ..core.orchestrator import Orchestrator
 
 router = APIRouter()
-orchestrator = Orchestrator()
+
+_orchestrator = None
+
+
+def get_orchestrator():
+    global _orchestrator
+    if _orchestrator is None:
+        _orchestrator = Orchestrator()
+    return _orchestrator
 
 
 @router.post("/webhook")
@@ -15,6 +23,6 @@ async def telegram_webhook(request: Request):
     if not text:
         return {"ok": True}
 
-    response = await orchestrator.handle(text)
+    response = await get_orchestrator().handle(text)
 
     return {"ok": True, "response": response}
