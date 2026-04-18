@@ -4,11 +4,18 @@ from groq import Groq
 
 class LLM:
     def __init__(self):
-        self.client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+        self._client = None
+
+    def client(self):
+        if self._client is None:
+            self._client = Groq(
+                api_key=os.getenv("GROQ_API_KEY")
+            )
+        return self._client
 
     async def __call__(self, prompt: str, model: str) -> str:
         try:
-            response = self.client.chat.completions.create(
+            response = self.client().chat.completions.create(
                 model=model,
                 messages=[
                     {"role": "user", "content": prompt}
