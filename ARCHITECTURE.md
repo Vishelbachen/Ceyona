@@ -3,7 +3,7 @@
 ## 🎯 Goal
 Minimal stable AI system with controlled and incremental growth.
 
-System is designed as a modular backend with strict separation of concerns.
+System is designed as a modular backend with strict separation of concerns and deterministic execution flow.
 
 ---
 
@@ -11,120 +11,137 @@ System is designed as a modular backend with strict separation of concerns.
 
 ## main.py
 FastAPI entry point.
+- application bootstrap
+- route registration
+- lifecycle management
+
+---
 
 ## app/api/webhook.py
 Telegram webhook handler.
 - receives external messages
-- forwards them to orchestrator layer
+- validates input
+- forwards request to orchestrator
+
+---
 
 ## app/core/orchestrator.py
 Application flow controller.
+- central coordination layer
 - receives input from API layer
-- selects model via model_router
-- calls LLM
+- invokes model_router
+- calls LLM layer
+- returns final response
+
+---
 
 ## app/llm.py
 LLM execution layer.
 - executes model inference
-- does NOT perform model selection
+- no decision-making
+- stateless
+- does NOT select models
+
+---
 
 ## app/engine/model_router.py
 Model selection layer.
-- runtime model discovery via Groq API
-- fast/smart routing logic
-- fallback handling
+- dynamic model discovery via Groq API
+- routing logic (fast / smart / fallback)
+- handles model availability
 
 ---
 
 # ⚙️ CURRENT FLOW (MVP)
 
-Telegram → webhook → orchestrator → model_router → llm → response
+Telegram  
+→ webhook  
+→ orchestrator  
+→ model_router  
+→ llm  
+→ response
 
 ---
 
 # 🚀 TARGET ARCHITECTURE (future expansion)
 
-Telegram → webhook → orchestrator → engine → tools/memory → response
+Telegram  
+→ webhook  
+→ orchestrator  
+→ engine (agent)  
+→ tools / memory  
+→ response
 
 ---
 
 # 🚀 RESERVED (not implemented yet)
 
 ## app/engine/agent.py
-Planned reasoning / decision layer
+Planned reasoning layer
+- decision making
+- multi-step execution
+
+---
 
 ## app/tools/tool_router.py
-Planned external tool execution layer
+Planned tool execution layer
+- external APIs
+- function calling
+
+---
 
 ## app/memory/
-Planned persistence layer (sessions, history, state)
+Planned persistence layer
+- sessions
+- chat history
+- state management
 
 ---
 
 # 🔒 ARCHITECTURAL RULES
 
 ## 1. File creation rule
-A new module is created only if:
-- existing module cannot be extended without violating responsibility boundaries
+A new module is created ONLY if:
+- extending existing module would violate responsibility boundaries
+
+---
 
 ## 2. Single Responsibility Principle
-Each module must have exactly one responsibility
+Each module must have exactly one responsibility.
+
+No mixed concerns allowed.
+
+---
 
 ## 3. Deletion rule
-Unused modules must be removed to prevent architectural drift
+Unused or abandoned modules must be removed immediately.
+
+No dead code.
+
+---
 
 ## 4. Scale rule (MVP constraint)
 Maximum active modules in MVP stage: 7
 
 ---
 
+## 5. Infrastructure separation rule
+- application logic must NOT depend on deployment details
+- no Railway / Procfile / environment logic inside code
+
+---
+
 # 🧠 MODEL SYSTEM
 
-- models are dynamically provided by Groq API at runtime
-- system does not rely on a static model registry
-- model_router is active decision layer
-- Groq API is the source of truth for available models
-- llm layer is execution-only and stateless
+- models are dynamically fetched via Groq API
+- no static model registry
+- model_router is the decision layer
+- llm is execution-only
+- system is model-agnostic by design
 
 ---
 
-# 🔐 ENVIRONMENT VARIABLES
+# ⚙️ DEPLOYMENT
 
-All secrets must be stored in environment variables only.
-
-No hardcoded credentials are allowed.
-
-## AI / LLM
-- GROQ_API_KEY
-
-## Telegram Integration
-- BOT_TOKEN
-
-## Security Layer
-- JWT_SECRET
-- ENCRYPTION_KEY
-
-## Backend / Database
-- SUPABASE_URL
-- SUPABASE_ANON_KEY
-- SUPABASE_SERVICE_ROLE_KEY
-
-## External APIs
-- OPENWEATHER_API_KEY
-- MAPBOX_TOKEN
-- SERPAPI_KEY
-- BREVO_API_KEY
-
-## Payments
-- TON_WALLET
-
-## Deployment
-- WEBHOOK_URL
-
----
-
-# 🚫 SECURITY RULES
-
-- no secrets in repository
-- only environment variables via deployment platform
-- all integrations must be declared before implementation
+## Runtime
+Application is started via Procfile:
