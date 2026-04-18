@@ -7,10 +7,7 @@ class Orchestrator:
         self.router = ModelRouter()
         self.llm = LLM()
 
-    async def handle(self, user_input: str, mode: str = "fast") -> str:
-        model = self.router.select(mode)
-
-        return await self.llm(
-            prompt=user_input,
-            model=model
-        )
+    async def handle(self, text: str) -> str:
+        model = await self.router.select_model(text)
+        result = await self.llm.generate(model=model, prompt=text)
+        return result
