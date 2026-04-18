@@ -7,7 +7,7 @@ System is designed as a modular backend with strict separation of concerns and d
 
 ---
 
-# 🧱 ACTIVE FILES (current production stage — 5 FILES)
+# 🧱 ACTIVE FILES (CURRENT PRODUCTION STAGE — STABLE CORE)
 
 ## main.py
 FastAPI entry point.
@@ -35,7 +35,7 @@ Application flow controller.
 
 ---
 
-## app/llm.py
+## app/engine/llm.py
 LLM execution layer.
 - executes model inference
 - no decision-making
@@ -46,13 +46,21 @@ LLM execution layer.
 
 ## app/engine/model_router.py
 Model selection layer.
-- dynamic model discovery via Groq API
 - routing logic (fast / smart / fallback)
-- handles model availability
+- selects from available model pool
+- keeps system model-agnostic
 
 ---
 
-# ⚙️ CURRENT FLOW (MVP)
+## app/contracts/message.py
+Data contract layer.
+- defines strict input/output schemas
+- ensures consistent data flow between layers
+- prevents implicit or unsafe data structures across system boundaries
+
+---
+
+# ⚙️ CURRENT FLOW (MVP — STABLE)
 
 Telegram  
 → webhook  
@@ -63,7 +71,7 @@ Telegram
 
 ---
 
-# 🚀 TARGET ARCHITECTURE (future expansion)
+# 🚀 TARGET ARCHITECTURE (FUTURE EXPANSION)
 
 Telegram  
 → webhook  
@@ -74,7 +82,7 @@ Telegram
 
 ---
 
-# 🚀 RESERVED (not implemented yet)
+# 🚀 RESERVED (NOT IMPLEMENTED YET)
 
 ## app/engine/agent.py
 Planned reasoning layer
@@ -101,22 +109,20 @@ Planned persistence layer
 # 🔒 ARCHITECTURAL RULES
 
 ## 1. File creation rule
-A new module is created ONLY if:
-- extending existing module would violate responsibility boundaries
+A module is created ONLY if:
+- extending existing module breaks responsibility boundaries
 
 ---
 
 ## 2. Single Responsibility Principle
-Each module must have exactly one responsibility.
+Each module has exactly one responsibility.
 
-No mixed concerns allowed.
+No mixed concerns.
 
 ---
 
 ## 3. Deletion rule
-Unused or abandoned modules must be removed immediately.
-
-No dead code.
+Unused modules must be removed immediately.
 
 ---
 
@@ -126,82 +132,110 @@ Maximum active modules in MVP stage: 7
 ---
 
 ## 5. Infrastructure separation rule
-- application logic must NOT depend on deployment details
-- no Railway / Procfile / environment logic inside code
+- no deployment logic inside application code
+- no Railway / Procfile coupling in business logic
 
 ---
 
 # 🧠 MODEL SYSTEM
 
-- models are dynamically fetched via Groq API
-- no static model registry
-- model_router is the decision layer
-- llm is execution-only
-- system is model-agnostic by design
+## ⚡ FAST MODELS (low latency, cheap)
+- groq/compound-mini  
+- llama-3.1-8b-instant  
+
+---
+
+## 🧠 GENERAL MODELS (balanced reasoning)
+- llama-3.3-70b-versatile  
+- qwen/qwen3-32b  
+- openai/gpt-oss-20b  
+
+---
+
+## 🧠 HEAVY / SMART MODELS (high reasoning)
+- openai/gpt-oss-120b  
+- meta-llama/llama-4-scout-17b-16e-instruct  
+
+---
+
+## 🛡 SAFETY / GUARD MODELS
+- openai/gpt-oss-safeguard-20b  
+- meta-llama/llama-prompt-guard-2-22m  
+- meta-llama/llama-prompt-guard-2-86m  
+
+---
+
+## 🎙 AUDIO MODELS
+- whisper-large-v3  
+- whisper-large-v3-turbo  
+
+---
+
+## 🎭 SPECIAL / EXPERIMENTAL
+- allam-2-7b  
+- groq/compound  
+- canopylabs/orpheus-v1-english  
+- canopylabs/orpheus-arabic-saudi  
 
 ---
 
 # ⚙️ DEPLOYMENT
 
 ## Runtime
-Application is started via Procfile:
+Application is started via Procfile.
 
 ## Notes
-- Procfile is the single source of truth for execution
-- UI-based start commands must not be relied upon
+- Procfile is single source of truth
 - system must remain portable across environments
 
 ---
 
 # 🔐 ENVIRONMENT VARIABLES
 
-All secrets must be stored in environment variables ONLY.
-
-No hardcoded values.
-
----
-
 ## AI / LLM
-- GROQ_API_KEY
+- GROQ_API_KEY  
 
 ## Telegram
-- BOT_TOKEN
+- BOT_TOKEN  
 
 ## Security
-- JWT_SECRET
-- ENCRYPTION_KEY
+- JWT_SECRET  
+- ENCRYPTION_KEY  
 
 ## Database
-- SUPABASE_URL
-- SUPABASE_ANON_KEY
-- SUPABASE_SERVICE_ROLE_KEY
+- SUPABASE_URL  
+- SUPABASE_ANON_KEY  
+- SUPABASE_SERVICE_ROLE_KEY  
 
 ## External APIs
-- OPENWEATHER_API_KEY
-- MAPBOX_TOKEN
-- SERPAPI_KEY
-- BREVO_API_KEY
+- OPENWEATHER_API_KEY  
+- MAPBOX_TOKEN  
+- SERPAPI_KEY  
+- BREVO_API_KEY  
 
 ## Payments
-- TON_WALLET
+- TON_WALLET  
 
 ## Deployment
-- WEBHOOK_URL
+- WEBHOOK_URL  
 
 ---
 
 # 🚫 SECURITY RULES
 
-- no secrets in repository
-- environment variables only
-- all integrations must be declared before implementation
-- no direct external calls outside tool layer (future rule)
+- no secrets in repository  
+- environment variables only  
+- no direct external calls outside engine layer (future rule)  
 
 ---
 
 # 💥 STATUS
 
-Architecture is stable and ready for:
-- webhook integration
-- Telegram connection
-- incremental feature expansion
+## 🟢 SYSTEM STATUS: STABLE CORE (v1)
+
+System is:
+- deployable  
+- modular  
+- deterministic  
+- ready for Telegram integration  
+- ready for incremental scaling
