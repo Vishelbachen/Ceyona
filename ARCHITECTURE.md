@@ -35,17 +35,26 @@ Telegram → webhook → core/orchestrator → engine → llm → tools/memory �
 
 ---
 
-# 🧠 NOT ACTIVE (reserved modules)
+# 🚀 RESERVED (not implemented yet)
 
-These modules are planned but not yet implemented:
+## app/api/webhook.py
+Planned Telegram webhook handler
+- will receive external messages
+- will call core/orchestrator
 
-- app/core/orchestrator.py
-- app/engine/model_router.py
-- app/engine/agent.py
-- app/tools/tool_router.py
-- app/memory/
+## app/engine/model_router.py
+Planned model selection layer
+- dynamic model routing
+- fallback logic
 
-These modules are part of the future scalable architecture.
+## app/engine/agent.py
+Planned reasoning + decision agent
+
+## app/tools/tool_router.py
+Planned external tool execution layer
+
+## app/memory/
+Planned persistence layer
 
 ---
 
