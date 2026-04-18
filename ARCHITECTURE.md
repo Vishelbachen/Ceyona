@@ -1,120 +1,104 @@
 # 🧠 PROJECT ARCHITECTURE (v1 — STABLE CORE)
 
-## 🎯 Цель
-Минимальный, стабильный AI-бот с возможностью роста.
+## 🎯 Goal
+Minimal stable AI system with controlled growth.
 
 ---
 
-# ✅ ACTIVE FILES (используются)
+# 🧱 ACTIVE FILES (current production stage)
 
-## 1. main.py
-Точка входа (FastAPI)
-- запускает сервер
-- подключает роуты
+## main.py
+FastAPI entry point
 
-## 2. app/api/webhook.py
-Webhook (Telegram → API)
-- принимает сообщения
-- передаёт их в систему
+## app/api/webhook.py
+Telegram webhook handler
 
-## 3. app/llm.py
-Работа с LLM (Groq)
-- отправка запроса
-- получение ответа
+## app/llm.py
+Direct LLM execution layer
 
 ---
 
-# ⚙️ CURRENT FLOW
+# ⚙️ CURRENT FLOW (MVP)
 
-Telegram → webhook.py → llm.py → ответ пользователю
-
----
-
-# 🚫 НЕ СУЩЕСТВУЕТ (пока запрещено)
-
-- agent.py
-- model_router.py
-- tool_router.py
-- memory.py
-- orchestrator.py
-
-❗ Эти файлы будут добавляться ТОЛЬКО при необходимости
+Telegram → webhook → llm → response
 
 ---
 
-# 🔒 RULES (обязательно)
+# 🚀 FUTURE FLOW (target architecture)
 
-## 1. Новый файл
-Создаётся только если:
-- невозможно расширить существующий
-
-## 2. Любой файл должен:
-- использоваться (import / вызов)
-- иметь чёткую роль
-
-## 3. Если файл не используется:
-→ он удаляется
-
-## 4. Максимум активных файлов:
-→ до 7 (на этом этапе)
+Telegram → webhook → core/orchestrator → engine → llm → tools/memory → response
 
 ---
 
-# 🚀 NEXT STEP (план развития)
+# 🧠 NOT ACTIVE (planned modules)
 
-1. Стабилизировать webhook + llm
-2. Добавить model_router (если появится 2+ модели)
-3. Добавить agent (логика)
-4. Добавить memory (история)
+These modules are not implemented yet but reserved:
 
----
-
-# 🧠 ИСТИНА ПРОЕКТА
-
-Этот файл — источник правды.
-Если файл не указан здесь — его не существует.
+- app/core/orchestrator.py
+- app/engine/model_router.py
+- app/engine/agent.py
+- app/tools/tool_router.py
+- app/memory/
 
 ---
 
-# 🔐 ENVIRONMENT VARIABLES (SECRETS LAYER)
+# 🔒 RULES
 
-Все ключи хранятся ТОЛЬКО в environment variables (Railway / .env).
-Никогда не хардкодятся в коде.
+## 1. File creation rule
+A new file is created only if:
+- existing module cannot be extended safely
 
----
+## 2. Responsibility rule
+Each file must have a single responsibility
 
-## 🤖 AI / LLM
-- GROQ_API_KEY
+## 3. Deletion rule
+Unused files must be removed
+
+## 4. Scale rule
+Maximum active files in MVP stage: 7
 
 ---
 
 # 🧠 MODEL STRATEGY
 
-- модели не фиксируются в архитектуре
-- выбор модели осуществляется через runtime (model_router)
-- система поддерживает динамический список моделей от провайдера
+- model selection is runtime-based
+- llm layer does NOT decide model
+- model routing will be handled by engine/model_router
 
 ---
 
-## 🤖 Telegram Bot
+# 🔐 ENVIRONMENT VARIABLES
+
+All secrets are stored in environment variables only.
+
+Never hardcoded.
+
+---
+
+## AI / LLM
+- GROQ_API_KEY
+
+---
+
+## Telegram
 - BOT_TOKEN
 
 ---
 
-## 🔐 Security
+## Security
 - JWT_SECRET
 - ENCRYPTION_KEY
 
 ---
 
-## 🧠 Backend / DB
+## Backend / DB
 - SUPABASE_URL
 - SUPABASE_ANON_KEY
 - SUPABASE_SERVICE_ROLE_KEY
 
 ---
 
-## 🌍 External APIs
+## External APIs
 - OPENWEATHER_API_KEY
 - MAPBOX_TOKEN
 - SERPAPI_KEY
@@ -122,18 +106,18 @@ Telegram → webhook.py → llm.py → ответ пользователю
 
 ---
 
-## 💳 Payments / Wallet
+## Payments
 - TON_WALLET
 
 ---
 
-## 🌐 Deployment
+## Deployment
 - WEBHOOK_URL
 
 ---
 
-# 🚫 RULES
+# 🚫 SECURITY RULES
 
-- Никогда не коммитить реальные ключи в GitHub
-- Все ключи только через Railway Variables
-- Любой новый API → добавляется сюда до использования
+- no secrets in repository
+- only environment variables
+- all new integrations must be declared here first
