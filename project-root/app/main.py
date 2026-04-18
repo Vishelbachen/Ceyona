@@ -1,8 +1,11 @@
 from fastapi import FastAPI
+from app.api.webhook import router as webhook_router
 from groq import Groq
 import os
 
 app = FastAPI()
+
+app.include_router(webhook_router)
 
 
 @app.get("/")
