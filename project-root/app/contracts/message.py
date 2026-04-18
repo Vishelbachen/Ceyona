@@ -9,9 +9,5 @@ class UserMessage(BaseModel):
 
 
 class OrchestratorRequest(BaseModel):
+    trace_id: str
     user_message: UserMessage
-
-
-class LLMRequest(BaseModel):
-    model: str
-    prompt: str
