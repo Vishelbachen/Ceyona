@@ -1,13 +1,13 @@
-# 🧠 PROJECT ARCHITECTURE (v1 — STABLE CORE)
+# 🧠 PROJECT ARCHITECTURE (v1.1 — STABLE CORE + TELEGRAM LOOP)
 
 ## 🎯 Goal
 Minimal stable AI system with controlled and incremental growth.
 
-System is designed as a modular backend with strict separation of concerns and deterministic execution flow.
+System is designed as a modular backend with strict separation of concerns, deterministic execution flow, and full request lifecycle visibility (traceable pipeline).
 
 ---
 
-# 🧱 ACTIVE FILES (CURRENT PRODUCTION STAGE — STABLE CORE)
+# 🧱 ACTIVE FILES (CURRENT PRODUCTION STAGE — STABLE CORE+)
 
 ## main.py
 FastAPI entry point.
@@ -18,147 +18,129 @@ FastAPI entry point.
 ---
 
 ## app/api/webhook.py
-Telegram webhook handler.
-- receives external messages
-- validates input
+Telegram webhook handler (INBOUND layer).
+- receives external messages from Telegram
+- validates and parses payload
+- generates `trace_id`
+- builds OrchestratorRequest
 - forwards request to orchestrator
+- sends response via Telegram API
 
 ---
 
 ## app/core/orchestrator.py
-Application flow controller.
-- central coordination layer
-- receives input from API layer
+Application flow controller (CORE layer).
+- central coordination point
+- receives structured request
+- logs lifecycle (start / end / error)
 - invokes model_router
 - calls LLM layer
 - returns final response
 
 ---
 
-## app/engine/llm.py
-LLM execution layer.
-- executes model inference
-- no decision-making
-- stateless
-- does NOT select models
-
----
-
 ## app/engine/model_router.py
 Model selection layer.
 - routing logic (fast / smart / fallback)
-- selects from available model pool
+- selects model from available pool
 - keeps system model-agnostic
+
+---
+
+## app/engine/llm.py
+LLM execution layer.
+- executes model inference
+- retry logic
+- timeout handling
+- structured logging
+- NO decision-making
+- stateless
+
+---
+
+## app/engine/telegram.py
+Telegram transport layer (OUTBOUND).
+- sends messages via Telegram Bot API
+- pure HTTP client
+- no business logic
+- no orchestration responsibility
 
 ---
 
 ## app/contracts/message.py
 Data contract layer.
-- defines strict input/output schemas
-- ensures consistent data flow between layers
-- prevents implicit or unsafe data structures across system boundaries
+- defines strict schemas
+- `UserMessage`
+- `OrchestratorRequest` (with trace_id)
+- ensures safe and consistent data flow
 
 ---
 
-# ⚙️ CURRENT FLOW (MVP — STABLE)
+## app/core/logger.py
+Structured logging system.
+- JSON logs
+- unified log format
+- supports `trace_id`
+- used across all layers
+
+---
+
+# ⚙️ CURRENT FLOW (MVP — FULL LOOP)
 
 Telegram  
-→ webhook  
+→ webhook (IN)  
 → orchestrator  
 → model_router  
 → llm  
-→ response
-
----
-
-# 🚀 TARGET ARCHITECTURE (FUTURE EXPANSION)
-
-Telegram  
-→ webhook  
 → orchestrator  
-→ engine (agent)  
-→ tools / memory  
-→ response
+→ telegram (OUT)  
+→ Telegram user  
 
 ---
 
-# 🚀 RESERVED (NOT IMPLEMENTED YET)
+# 🔁 REQUEST LIFECYCLE (TRACEABLE)
 
-## app/engine/agent.py
-Planned reasoning layer
-- decision making
-- multi-step execution
+Each request includes:
 
----
+- `trace_id` (UUID)
+- full pipeline visibility
+- structured logs per stage
 
-## app/tools/tool_router.py
-Planned tool execution layer
-- external APIs
-- function calling
+Example flow:
 
----
+```text
+trace_id: abc-123
 
-## app/memory/
-Planned persistence layer
-- sessions
-- chat history
-- state management
-
----
-
-# 🔒 ARCHITECTURAL RULES
-
-## 1. File creation rule
-A module is created ONLY if:
-- extending existing module breaks responsibility boundaries
-
----
-
-## 2. Single Responsibility Principle
-Each module has exactly one responsibility.
-
-No mixed concerns.
-
----
-
-## 3. Deletion rule
-Unused modules must be removed immediately.
-
----
-
-## 4. Scale rule (MVP constraint)
-Maximum active modules in MVP stage: 7
-
----
-
-## 5. Infrastructure separation rule
-- no deployment logic inside application code
-- no Railway / Procfile coupling in business logic
-
----
+webhook_received
+→ orchestrator_start
+→ model_selected
+→ llm_request
+→ llm_response
+→ orchestrator_done
+→ telegram_send
 
 # 🧠 MODEL SYSTEM
 
-## ⚡ FAST MODELS (low latency, cheap)
+## ⚡ FAST MODELS (low latency)
 - groq/compound-mini  
 - llama-3.1-8b-instant  
 
 ---
 
-## 🧠 GENERAL MODELS (balanced reasoning)
+## 🧠 GENERAL MODELS (balanced)
 - llama-3.3-70b-versatile  
 - qwen/qwen3-32b  
 - openai/gpt-oss-20b  
 
 ---
 
-## 🧠 HEAVY / SMART MODELS (high reasoning)
+## 🧠 HEAVY MODELS (reasoning)
 - openai/gpt-oss-120b  
 - meta-llama/llama-4-scout-17b-16e-instruct  
 
 ---
 
-## 🛡 SAFETY / GUARD MODELS
+## 🛡 SAFETY MODELS
 - openai/gpt-oss-safeguard-20b  
 - meta-llama/llama-prompt-guard-2-22m  
 - meta-llama/llama-prompt-guard-2-86m  
@@ -171,7 +153,7 @@ Maximum active modules in MVP stage: 7
 
 ---
 
-## 🎭 SPECIAL / EXPERIMENTAL
+## 🎭 EXPERIMENTAL
 - allam-2-7b  
 - groq/compound  
 - canopylabs/orpheus-v1-english  
@@ -179,14 +161,50 @@ Maximum active modules in MVP stage: 7
 
 ---
 
-# ⚙️ DEPLOYMENT
+# 🔒 ARCHITECTURAL RULES
 
-## Runtime
-Application is started via Procfile.
+## 1. Single Responsibility Principle
+Each module has exactly one responsibility.
 
-## Notes
-- Procfile is single source of truth
-- system must remain portable across environments
+---
+
+## 2. Layer Separation
+
+| Layer        | Responsibility               |
+|--------------|------------------------------|
+| API          | Input handling               |
+| Core         | Orchestration                |
+| Engine       | Execution (LLM / transport)  |
+| Contracts    | Data schemas                 |
+| Core/Logger  | Observability                |
+
+---
+
+## 3. Transport Isolation
+- Telegram is NOT part of business logic  
+- Telegram = external transport adapter  
+- inbound ≠ outbound  
+
+---
+
+## 4. Deterministic Flow
+No hidden logic, no side effects.
+
+---
+
+## 5. No Dead Code
+Unused modules are removed immediately.
+
+---
+
+## 6. MVP Scale Constraint
+Max active modules in MVP stage: 7–8 (current: 8)
+
+---
+
+## 7. Infrastructure Separation
+- no deployment logic in code  
+- environment-based configuration only  
 
 ---
 
@@ -195,26 +213,38 @@ Application is started via Procfile.
 ## AI / LLM
 - GROQ_API_KEY  
 
+---
+
 ## Telegram
 - BOT_TOKEN  
+
+---
 
 ## Security
 - JWT_SECRET  
 - ENCRYPTION_KEY  
 
-## Database
+---
+
+## Database (reserved)
 - SUPABASE_URL  
 - SUPABASE_ANON_KEY  
 - SUPABASE_SERVICE_ROLE_KEY  
 
-## External APIs
+---
+
+## External APIs (reserved)
 - OPENWEATHER_API_KEY  
 - MAPBOX_TOKEN  
 - SERPAPI_KEY  
 - BREVO_API_KEY  
 
-## Payments
+---
+
+## Payments (reserved)
 - TON_WALLET  
+
+---
 
 ## Deployment
 - WEBHOOK_URL  
@@ -224,18 +254,80 @@ Application is started via Procfile.
 # 🚫 SECURITY RULES
 
 - no secrets in repository  
-- environment variables only  
-- no direct external calls outside engine layer (future rule)  
+- env-only configuration  
+- no direct external calls outside engine layer (future enforcement)  
+
+---
+
+# 📊 OBSERVABILITY
+
+## Logging
+- JSON structured logs  
+- includes:
+  - timestamp  
+  - event  
+  - trace_id  
+  - payload  
+
+---
+
+## Debug capability
+- full request trace  
+- LLM visibility  
+- retry tracking  
+
+---
+
+# 💥 CURRENT LIMITATIONS
+
+- Telegram tightly coupled in webhook (no response abstraction yet)  
+- no response formatting layer  
+- no error standardization schema  
+- no memory / session layer  
+- no agent / reasoning layer  
+
+---
+
+# 🚀 NEXT EVOLUTION (PLANNED)
+
+## 1. Response Layer
+- decouple transport from API  
+- unified response handling  
+
+---
+
+## 2. Error Schema
+- consistent error structure across system  
+
+---
+
+## 3. Agent Layer
+- reasoning  
+- multi-step execution  
+
+---
+
+## 4. Memory Layer
+- persistence  
+- chat history  
 
 ---
 
 # 💥 STATUS
 
-## 🟢 SYSTEM STATUS: STABLE CORE (v1)
+## 🟢 SYSTEM STATUS: STABLE CORE v1.1
 
 System is:
-- deployable  
+- fully working (end-to-end)  
+- traceable  
 - modular  
-- deterministic  
-- ready for Telegram integration  
-- ready for incremental scaling
+- transport-enabled (Telegram IN/OUT)  
+- ready for controlled scaling  
+
+---
+
+# 🧱 SYSTEM CLASS
+
+Production-capable modular AI backend (MVP stage)
+
+---
