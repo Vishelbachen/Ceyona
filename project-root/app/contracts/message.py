@@ -15,10 +15,3 @@ class OrchestratorRequest(BaseModel):
 class LLMRequest(BaseModel):
     model: str
     prompt: str
-    system_prompt: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
-
-
-class LLMResponse(BaseModel):
-    content: str
-    raw: Optional[Dict[str, Any]] = None
