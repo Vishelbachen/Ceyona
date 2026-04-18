@@ -1,4 +1,6 @@
 from fastapi import APIRouter, Request
+from uuid import uuid4
+
 from app.contracts.message import OrchestratorRequest, UserMessage
 from app.core.orchestrator import handle_request
 
@@ -19,7 +21,10 @@ async def telegram_webhook(request: Request):
         if not text:
             return {"ok": True}
 
+        trace_id = str(uuid4())
+
         req = OrchestratorRequest(
+            trace_id=trace_id,
             user_message=UserMessage(
                 user_id=user_id,
                 text=text
@@ -30,6 +35,7 @@ async def telegram_webhook(request: Request):
 
         return {
             "ok": True,
+            "trace_id": trace_id,
             "result": result
         }
 
