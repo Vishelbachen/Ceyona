@@ -10,6 +10,11 @@ class LLMResponse:
 
 async def fake_groq_call(model: str, prompt: str) -> str:
     await asyncio.sleep(0.3)
+
+    # 🧠 SAFETY CHECK (prevents silent None bugs)
+    if prompt is None:
+        return "ERROR: empty prompt"
+
     return f"[{model}] {prompt}"
 
 
@@ -27,7 +32,7 @@ async def run_llm(model: str, prompt: str, retries: int = 2, trace_id: str = Non
             )
 
             response = await asyncio.wait_for(
-                fake_groq_call(model, prompt),
+                fake_groq_call(model, str(prompt)),
                 timeout=5
             )
 
