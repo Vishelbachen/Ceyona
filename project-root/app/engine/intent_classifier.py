@@ -1,52 +1,26 @@
-# app/engine/intent_classifier.py
-
-from dataclasses import dataclass
+from app.engine.types import IntentResult
 
 
-@dataclass
-class IntentResult:
-    intent: str        # chat | reasoning | fast | creative | safety
-    complexity: str    # low | medium | high
-    risk: str          # low | medium | high
+class IntentClassifier:
 
+    @staticmethod
+    def classify(text: str) -> IntentResult:
+        text_lower = text.lower()
 
-def classify_intent(text: str) -> IntentResult:
-    t = text.lower()
+        # SAFETY
+        if any(w in text_lower for w in ["kill", "suicide", "bomb"]):
+            return IntentResult("safety", 0.95)
 
-    # 🛡 safety layer
-    if any(word in t for word in ["bomb", "kill", "hack", "weapon"]):
-        return IntentResult(
-            intent="safety",
-            complexity="high",
-            risk="high"
-        )
+        # REASONING
+        if any(w in text_lower for w in ["why", "explain", "how does"]):
+            return IntentResult("reasoning", 0.7)
 
-    # 🧠 reasoning (math, physics, explanation)
-    if any(word in t for word in ["why", "how", "explain", "prove", "calculate"]):
-        return IntentResult(
-            intent="reasoning",
-            complexity="high",
-            risk="low"
-        )
+        # CREATIVE
+        if any(w in text_lower for w in ["story", "write", "imagine"]):
+            return IntentResult("creative", 0.7)
 
-    # 🎭 creative
-    if any(word in t for word in ["write", "story", "poem", "generate"]):
-        return IntentResult(
-            intent="creative",
-            complexity="medium",
-            risk="low"
-        )
+        # FAST
+        if len(text) < 40:
+            return IntentResult("fast", 0.6)
 
-    # ⚡ fast chat
-    if len(text) < 60:
-        return IntentResult(
-            intent="fast",
-            complexity="low",
-            risk="low"
-        )
-
-    return IntentResult(
-        intent="chat",
-        complexity="medium",
-        risk="low"
-    )
+        return IntentResult("general", 0.5)
