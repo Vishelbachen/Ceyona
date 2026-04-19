@@ -36,26 +36,23 @@ class ResponseHandler:
     @staticmethod
     async def handle(response, chat_id: str):
         try:
-            if response is None:
-                logger.log("ERROR", "null_response", trace_id="unknown")
+            if not response:
+                logger.log("ERROR", "null_response")
                 return
 
-            trace_id = getattr(response, "trace_id", "unknown")
+            trace_id = getattr(response, "trace_id", None) or "unknown"
 
-            # ✅ SAFE TYPE HANDLING (важный фикс)
             success = getattr(response, "success", False)
 
             if success:
-                text = getattr(response, "data", None)
-                if not text:
-                    text = "⚠️ Empty response"
+                text = getattr(response, "data", "") or "⚠️ Empty response"
             else:
-                error = getattr(response, "error", None)
+                error = getattr(response, "error", {}) or {}
 
                 if isinstance(error, dict):
                     message = error.get("message", "Unknown error")
                 else:
-                    message = str(error) if error else "Unknown error"
+                    message = str(error)
 
                 text = f"⚠️ Error: {message}"
 
