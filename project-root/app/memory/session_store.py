@@ -1,0 +1,9 @@
+class SessionStore:
+    def get_session(self, user_id: str) -> dict:
+        ...
+
+    def append_message(self, user_id: str, role: str, content: str):
+        ...
+
+    def get_context(self, user_id: str, limit: int = 10) -> list:
+        ...
