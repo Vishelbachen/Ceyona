@@ -16,7 +16,7 @@ async def telegram_webhook(request: Request):
     try:
         payload = await request.json()
 
-        # 📩 SAFE PARSING
+        # 📩 SAFE PARSING (NO CRASH MODE)
         message = payload.get("message") or {}
         text = message.get("text")
 
@@ -29,11 +29,18 @@ async def telegram_webhook(request: Request):
         # 🧯 SAFETY CHECKS
         if not text:
             logger.log("INFO", "empty_text_skipped", trace_id=trace_id)
-            return {"ok": True, "trace_id": trace_id}
+            return {
+                "ok": True,
+                "trace_id": trace_id
+            }
 
         if not chat_id:
             logger.log("ERROR", "missing_chat_id", trace_id=trace_id)
-            return {"ok": False, "error": "missing_chat_id", "trace_id": trace_id}
+            return {
+                "ok": False,
+                "error": "missing_chat_id",
+                "trace_id": trace_id
+            }
 
         logger.log("INFO", "webhook_received", trace_id=trace_id)
 
@@ -47,7 +54,7 @@ async def telegram_webhook(request: Request):
             )
         )
 
-        # 🔁 CORE EXECUTION
+        # 🔁 CORE EXECUTION (ORCHESTRATOR)
         result = await handle_request(req)
 
         logger.log(
@@ -57,7 +64,7 @@ async def telegram_webhook(request: Request):
             success=getattr(result, "success", None)
         )
 
-        # 📤 RESPONSE LAYER
+        # 📤 RESPONSE LAYER (SAFE ISOLATED)
         try:
             await ResponseHandler.handle(
                 response=result,
@@ -72,6 +79,7 @@ async def telegram_webhook(request: Request):
                 error=str(e)
             )
 
+            # ⚠️ we do NOT crash webhook pipeline
             return {
                 "ok": False,
                 "error": "response_handler_failed",
