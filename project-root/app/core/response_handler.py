@@ -1,5 +1,6 @@
 from app.engine.telegram import send_message
 from app.core.logger import logger
+from app.core.response_formatter import ResponseFormatter  # 👈 NEW LAYER
 
 
 class ResponseHandler:
@@ -38,7 +39,6 @@ class ResponseHandler:
             )
             raise
 
-
     @staticmethod
     async def handle(response, chat_id: str):
         try:
@@ -52,30 +52,14 @@ class ResponseHandler:
 
             trace_id = getattr(response, "trace_id", None) or "unknown"
 
-            success = getattr(response, "success", False)
-
-            if success:
-                text = getattr(response, "data", None)
-
-                if not text or not str(text).strip():
-                    text = "⚠️ Empty response"
-            else:
-                error = getattr(response, "error", None)
-
-                if isinstance(error, dict):
-                    message = error.get("message", "Unknown error")
-                elif error is None:
-                    message = "Unknown error"
-                else:
-                    message = str(error)
-
-                text = f"⚠️ Error: {message}"
-
             logger.log(
                 "INFO",
                 "response_handler_start",
                 trace_id=trace_id
             )
+
+            # 🧠 ALL LOGIC MOVED TO FORMATTER
+            text = ResponseFormatter.format(response)
 
             await ResponseHandler.send_text(
                 text=text,
