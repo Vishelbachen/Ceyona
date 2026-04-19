@@ -1,9 +1,19 @@
+from collections import defaultdict
+
+
 class SessionStore:
-    def get_session(self, user_id: str) -> dict:
-        ...
+    """
+    In-memory session storage (MVP safe).
+    """
 
-    def append_message(self, user_id: str, role: str, content: str):
-        ...
+    def __init__(self):
+        self._data = defaultdict(list)
 
-    def get_context(self, user_id: str, limit: int = 10) -> list:
-        ...
+    def append_message(self, user_id: str, role: str, text: str):
+        self._data[user_id].append({
+            "role": role,
+            "text": text
+        })
+
+    def get_history(self, user_id: str):
+        return self._data.get(user_id, [])
