@@ -18,13 +18,25 @@ class MemoryService:
         Converts raw memory into LLM-ready context.
         """
 
-        history = self.store.get_history(user_id)
+        try:
+            history = self.store.get_history(user_id)
 
-        if not history:
+            if not history:
+                return []
+
+            context = []
+
+            for msg in history:
+                role = msg.get("role", "unknown")
+                text = msg.get("text", "")
+
+                if not text:
+                    continue
+
+                context.append(f"{role}: {text}")
+
+            return context
+
+        except Exception:
+            # memory NEVER breaks system
             return []
-
-        # normalize format for prompt layer
-        return [
-            f"{msg['role']}: {msg['text']}"
-            for msg in history
-        ]
