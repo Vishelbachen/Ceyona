@@ -18,6 +18,7 @@ async def telegram_webhook(request: Request):
 
         # 📩 SAFE PARSING
         message = payload.get("message") or {}
+
         text = message.get("text")
 
         user = message.get("from") or {}
@@ -29,10 +30,7 @@ async def telegram_webhook(request: Request):
         # 🧯 SAFETY CHECKS
         if not text:
             logger.log("INFO", "empty_text_skipped", trace_id=trace_id)
-            return {
-                "ok": True,
-                "trace_id": trace_id
-            }
+            return {"ok": True, "trace_id": trace_id}
 
         if not chat_id:
             logger.log("ERROR", "missing_chat_id", trace_id=trace_id)
@@ -71,12 +69,6 @@ async def telegram_webhook(request: Request):
                 chat_id=chat_id
             )
 
-            logger.log(
-                "INFO",
-                "response_sent",
-                trace_id=trace_id
-            )
-
         except Exception as e:
             logger.log(
                 "ERROR",
@@ -87,12 +79,16 @@ async def telegram_webhook(request: Request):
 
             return {
                 "ok": False,
-                "error": "response_handler_failed"
+                "error": "response_handler_failed",
+                "trace_id": trace_id
             }
 
         logger.log("INFO", "webhook_success", trace_id=trace_id)
 
-        return {"ok": True}
+        return {
+            "ok": True,
+            "trace_id": trace_id
+        }
 
     except Exception as e:
         logger.log(
@@ -104,5 +100,6 @@ async def telegram_webhook(request: Request):
 
         return {
             "ok": False,
-            "error": str(e)
+            "error": str(e),
+            "trace_id": trace_id
         }
