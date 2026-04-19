@@ -3,7 +3,7 @@ from uuid import uuid4
 
 from app.contracts.message import OrchestratorRequest, UserMessage
 from app.core.orchestrator import handle_request
-from app.engine.telegram import send_message
+from app.core.response_handler import ResponseHandler  # ✅ новое
 
 router = APIRouter()
 
@@ -37,8 +37,12 @@ async def telegram_webhook(request: Request):
 
         result = await handle_request(req)
 
-        # 🔥 ВОТ ЭТОГО НЕ ХВАТАЛО
-        await send_message(chat_id=chat_id, text=result)
+        # ✅ теперь через response layer
+        await ResponseHandler.send_text(
+            text=result,
+            chat_id=chat_id,
+            trace_id=trace_id
+        )
 
         return {
             "ok": True,
