@@ -352,4 +352,3 @@ Telegram
 → response_handler (RESPONSE LAYER)
 → telegram.py (OUTBOUND)
 → Telegram user
-
