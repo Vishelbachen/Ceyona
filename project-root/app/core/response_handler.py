@@ -5,11 +5,7 @@ from app.core.logger import logger
 class ResponseHandler:
 
     @staticmethod
-    async def send_text(
-        text: str,
-        chat_id: str,
-        trace_id: str
-    ):
+    async def send_text(text: str, chat_id: str, trace_id: str):
         try:
             logger.log(
                 "INFO",
@@ -18,14 +14,13 @@ class ResponseHandler:
                 chat_id=chat_id
             )
 
-            result = await send_message(chat_id=chat_id, text=text)
+            await send_message(chat_id=chat_id, text=text)
 
             logger.log(
                 "INFO",
                 "response_sent",
                 trace_id=trace_id,
-                transport="telegram",
-                result=str(result)
+                transport="telegram"
             )
 
         except Exception as e:
@@ -36,32 +31,20 @@ class ResponseHandler:
                 error=str(e),
                 chat_id=chat_id
             )
-
-            # 🔥 ВАЖНО: НЕ ГЛОТАЕМ ТИХО
             raise
 
-
     @staticmethod
-    async def handle(
-        response,
-        chat_id: str
-    ):
+    async def handle(response, chat_id: str):
         try:
             trace_id = getattr(response, "trace_id", "unknown")
 
-            # 🧯 SAFE SUCCESS CHECK
             success = getattr(response, "success", False)
 
             if success:
-                text = getattr(response, "data", "")
-                if not text:
-                    text = "⚠️ Empty response"
-
+                text = getattr(response, "data", "") or "⚠️ Empty response"
             else:
                 error = getattr(response, "error", {}) or {}
-                message = error.get("message", "Unknown error")
-
-                text = f"⚠️ Error: {message}"
+                text = f"⚠️ Error: {error.get('message', 'Unknown error')}"
 
             logger.log(
                 "INFO",
@@ -82,6 +65,4 @@ class ResponseHandler:
                 trace_id=getattr(response, "trace_id", "unknown"),
                 error=str(e)
             )
-
-            # 🔥 КРИТИЧЕСКИ ВАЖНО: пробрасываем дальше (чтобы видеть в webhook)
             raise
