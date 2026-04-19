@@ -1,13 +1,12 @@
 class PromptBuilder:
     """
-    Centralized prompt construction layer (OLYMPIC v3).
+    Centralized prompt construction layer (OLYMPIC v3.1).
 
     Upgrades:
-    - multilingual reasoning enforcement
-    - olympiad-level problem solving mode
-    - structured step-by-step logic
-    - coding precision mode
-    - anti-meta strict lock
+    - reasoning-aware prompting
+    - olympiad-level enforcement boost
+    - task-type adaptive structure
+    - multilingual strict mode
     """
 
     MODEL_MODES = {
@@ -17,6 +16,25 @@ class PromptBuilder:
         "creative": "CREATIVE MODE",
         "safety": "SAFETY MODE",
     }
+
+    # 🧠 lightweight task inference (NO NEW FILE NEEDED)
+    @staticmethod
+    def _detect_task(text: str) -> str:
+        t = (text or "").lower()
+
+        if any(x in t for x in ["integral", "derivative", "force", "energy", "mass", "velocity"]):
+            return "math_physics"
+
+        if any(x in t for x in ["code", "function", "algorithm", "bug", "class"]):
+            return "coding"
+
+        if any(x in t for x in ["prove", "show that", "prove that", "theorem"]):
+            return "proof"
+
+        if any(x in t for x in ["history", "when", "why did", "war", "empire"]):
+            return "analysis"
+
+        return "general"
 
     @staticmethod
     def build(user_text: str, context: list, model: str) -> str:
@@ -32,41 +50,76 @@ class PromptBuilder:
                 for msg in context
             )
 
-        # 🌍 ULTRA SYSTEM PROMPT (OLYMPIC LEVEL)
+        # 🧠 TASK DETECTION
+        task = PromptBuilder._detect_task(user_text)
+
+        # 🌍 SYSTEM CORE
         system_block = (
-            "You are a high-performance reasoning engine.\n"
-            "You solve tasks at olympiad level in mathematics, algorithms, physics and programming.\n\n"
+            "You are a high-level reasoning engine.\n"
+            "You solve problems at olympiad and research level.\n\n"
 
-            "STRICT RULES:\n"
-            "- NEVER say you are AI or assistant\n"
+            "ABSOLUTE RULES:\n"
+            "- NEVER mention AI, assistant, model, system\n"
+            "- NEVER describe internal architecture\n"
             "- NEVER use meta explanations\n"
-            "- NEVER describe your system\n"
-            "- ALWAYS respond in the same language as the user\n"
-            "- If task is mathematical → use formal step-by-step reasoning\n"
-            "- If task is programming → write clean, production-level code\n"
-            "- If task is logical → break into structured reasoning steps\n"
-            "- Avoid unnecessary text\n\n"
+            "- ALWAYS match user language\n\n"
 
-            "REASONING STYLE:\n"
-            "1. Understand problem\n"
-            "2. Identify constraints\n"
-            "3. Solve step-by-step\n"
-            "4. Provide final answer clearly\n\n"
-
-            "CODE STYLE RULES:\n"
-            "- clean architecture\n"
-            "- no pseudo-code unless asked\n"
-            "- prefer correctness over brevity\n"
-            "- include edge cases when relevant\n"
+            "QUALITY RULES:\n"
+            "- prioritize correctness over speed\n"
+            "- use structured reasoning when needed\n"
+            "- avoid filler text\n"
         )
 
+        # 🧠 TASK-BASED REASONING BOOST (KEY FIX)
+        reasoning_block = ""
+
+        if task == "math_physics":
+            reasoning_block = (
+                "REASONING MODE: MATHEMATICS / PHYSICS\n"
+                "Step 1: Identify known quantities\n"
+                "Step 2: Choose physical/mathematical law\n"
+                "Step 3: Derive equations step-by-step\n"
+                "Step 4: Solve carefully\n"
+                "Step 5: Final answer clearly boxed\n"
+            )
+
+        elif task == "coding":
+            reasoning_block = (
+                "REASONING MODE: PROGRAMMING\n"
+                "Step 1: Understand requirements\n"
+                "Step 2: Design solution structure\n"
+                "Step 3: Write clean code\n"
+                "Step 4: Consider edge cases\n"
+                "Step 5: Ensure correctness\n"
+            )
+
+        elif task == "proof":
+            reasoning_block = (
+                "REASONING MODE: PROOF\n"
+                "Step 1: Understand statement\n"
+                "Step 2: Define known properties\n"
+                "Step 3: Build logical chain\n"
+                "Step 4: Derive conclusion rigorously\n"
+            )
+
+        else:
+            reasoning_block = (
+                "REASONING MODE: GENERAL\n"
+                "Step 1: Understand question\n"
+                "Step 2: Think logically\n"
+                "Step 3: Answer clearly\n"
+            )
+
+        # 🧠 MODEL MODE (safe abstraction)
         mode = PromptBuilder.MODEL_MODES.get(
             PromptBuilder._infer_mode(model),
             "GENERAL MODE"
         )
 
+        # 🔥 FINAL PROMPT
         return (
             f"SYSTEM:\n{system_block}\n\n"
+            f"{reasoning_block}\n\n"
             f"MODE:\n{mode}\n\n"
             f"CONTEXT:\n{context_block}\n\n"
             f"USER:\n{user_text}\n"
