@@ -1,7 +1,15 @@
 import asyncio
+from openai import AsyncOpenAI
+
 from app.core.logger import logger
 from app.core.errors import LLMError
 from app.config.settings import settings
+
+
+client = AsyncOpenAI(
+    api_key=settings.GROQ_API_KEY,
+    base_url="https://api.groq.com/openai/v1"
+)
 
 
 class LLMResponse:
@@ -10,44 +18,28 @@ class LLMResponse:
 
 
 def extract_user_input(prompt: str) -> str:
-    """
-    Extracts USER INPUT from PromptBuilder format
-    """
     if "USER INPUT:" in prompt:
         return prompt.split("USER INPUT:")[-1].strip()
     return prompt
 
 
-async def fake_groq_call(model: str, prompt: str) -> str:
+async def groq_call(model: str, prompt: str) -> str:
     """
-    Smart Mock LLM (simulates real model behavior)
+    Real Groq API call
     """
 
-    await asyncio.sleep(0.3)
+    user_input = extract_user_input(prompt)
 
-    if not prompt:
-        return "Ошибка: пустой запрос"
+    response = await client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": "You are a helpful AI assistant."},
+            {"role": "user", "content": user_input}
+        ],
+        temperature=0.7,
+    )
 
-    user_text = extract_user_input(prompt).lower()
-
-    # 🔥 Простая "интеллектуальная" логика
-    if any(word in user_text for word in ["привет", "здравствуйте", "хай"]):
-        return "Привет! 😊 Чем могу помочь?"
-
-    if "как дела" in user_text:
-        return "Всё отлично! Готов помочь тебе 🚀"
-
-    if "кто ты" in user_text:
-        return "Я ИИ-ассистент, который работает через модульную архитектуру 😎"
-
-    if "помоги" in user_text:
-        return "Конечно! Опиши задачу подробнее — разберёмся вместе."
-
-    if "код" in user_text or "программ" in user_text:
-        return "Давай разберём код. Пришли часть или опиши проблему."
-
-    # fallback (универсальный ответ)
-    return "Я понял твой запрос. Сейчас я бы подключил настоящую модель и дал точный ответ 😉"
+    return response.choices[0].message.content
 
 
 async def run_llm(
@@ -70,8 +62,8 @@ async def run_llm(
             )
 
             response = await asyncio.wait_for(
-                fake_groq_call(model, str(prompt)),
-                timeout=5
+                groq_call(model, prompt),
+                timeout=10
             )
 
             logger.log(
