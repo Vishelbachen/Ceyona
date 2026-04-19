@@ -1,5 +1,5 @@
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class SessionStore:
@@ -15,10 +15,13 @@ class SessionStore:
         Stores message with metadata (future-proof structure).
         """
 
+        if not user_id:
+            return
+
         self._data[user_id].append({
-            "role": role,
-            "text": text,
-            "timestamp": datetime.utcnow().isoformat()
+            "role": role or "unknown",
+            "text": text or "",
+            "timestamp": datetime.now(timezone.utc).isoformat()
         })
 
     def get_history(self, user_id: str, limit: int = 20):
@@ -26,7 +29,9 @@ class SessionStore:
         Returns last N messages (prevents memory growth explosion).
         """
 
+        if not user_id:
+            return []
+
         history = self._data.get(user_id, [])
 
-        # safety: limit memory growth
         return history[-limit:]
