@@ -3,7 +3,7 @@ from typing import Optional, Any
 
 
 @dataclass
-class AppError:
+class AppError(Exception):
     code: str
     message: str
     layer: str
@@ -20,3 +20,19 @@ class AppError:
                 "data": self.data,
             }
         }
+
+
+class OrchestratorError(AppError):
+    pass
+
+
+class LLMError(AppError):
+    pass
+
+
+class RouterError(AppError):
+    pass
+
+
+class APIError(AppError):
+    pass
