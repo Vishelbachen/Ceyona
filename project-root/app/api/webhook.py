@@ -25,7 +25,7 @@ async def telegram_webhook(request: Request):
         chat = message.get("chat", {})
         chat_id = chat.get("id")
 
-        # 🧯 SAFETY CHECKS (КРИТИЧНО)
+        # 🧯 SAFETY CHECKS
         if not text:
             logger.log("INFO", "empty_text_skipped", trace_id=trace_id)
             return {"ok": True}
@@ -36,16 +36,16 @@ async def telegram_webhook(request: Request):
 
         logger.log("INFO", "webhook_received", trace_id=trace_id)
 
-        # 🧠 BUILD REQUEST
+        # 🧠 BUILD REQUEST (🔥 ВАЖНО: user_id внутри)
         req = OrchestratorRequest(
             trace_id=trace_id,
+            user_id=user_id,  # ✅ ФИКС ТВОЕЙ ОШИБКИ
             user_message=UserMessage(
                 user_id=user_id,
                 text=text
             )
         )
 
-        # 🔁 ORCHESTRATOR CALL
         result = await handle_request(req)
 
         logger.log(
@@ -55,14 +55,12 @@ async def telegram_webhook(request: Request):
             success=getattr(result, "success", None)
         )
 
-        # ⚠️ SAFE RESPONSE HANDLER WRAP
         try:
             handler_result = ResponseHandler.handle(
                 response=result,
                 chat_id=chat_id
             )
 
-            # 🧯 если handle async — поддержка обоих случаев
             if handler_result is not None:
                 await handler_result
 
