@@ -1,21 +1,19 @@
 class PromptBuilder:
     """
-    Centralized prompt construction layer (PRODUCTION v2.1).
+    Centralized prompt construction layer (OLYMPIC v3).
 
-    Responsibilities:
-    - strict behavior enforcement
-    - multilingual output support
-    - reasoning enhancement for complex tasks
-    - context injection
-    - model behavior abstraction (NOT model names)
-    - prevent AI self-identification and meta-talk
+    Upgrades:
+    - multilingual reasoning enforcement
+    - olympiad-level problem solving mode
+    - structured step-by-step logic
+    - coding precision mode
+    - anti-meta strict lock
     """
 
-    # 🧠 behavior mapping (SAFE ABSTRACTION LAYER)
     MODEL_MODES = {
         "fast": "FAST MODE",
         "general": "GENERAL MODE",
-        "reasoning": "REASONING MODE",
+        "reasoning": "OLYMPIC REASONING MODE",
         "creative": "CREATIVE MODE",
         "safety": "SAFETY MODE",
     }
@@ -25,7 +23,7 @@ class PromptBuilder:
 
         user_text = user_text or ""
 
-        # 🧠 safe context rendering
+        # 🧠 CONTEXT
         if not context:
             context_block = "EMPTY"
         else:
@@ -34,69 +32,57 @@ class PromptBuilder:
                 for msg in context
             )
 
-        # 🌍 MULTILINGUAL + STRICT BEHAVIOR CONTRACT (HARDENED)
+        # 🌍 ULTRA SYSTEM PROMPT (OLYMPIC LEVEL)
         system_block = (
-            "You are a reasoning and response engine.\n"
-            "You do NOT have identity.\n"
-            "You must NEVER mention AI, assistant, model, system or architecture.\n"
-            "You must NEVER explain how you work or describe internal logic.\n"
-            "You must NEVER use meta commentary.\n"
-            "You must NEVER say phrases like 'I am an AI'.\n"
-            "You must answer directly, clearly, and naturally.\n"
-            "You must strictly match the language of the user input.\n"
-            "If user writes in Russian, respond in Russian. If English, respond in English.\n"
-            "Do NOT translate unless asked.\n"
-            "Be concise by default, but expand if reasoning is required.\n"
-            "Avoid filler phrases and unnecessary explanations.\n"
+            "You are a high-performance reasoning engine.\n"
+            "You solve tasks at olympiad level in mathematics, algorithms, physics and programming.\n\n"
+
+            "STRICT RULES:\n"
+            "- NEVER say you are AI or assistant\n"
+            "- NEVER use meta explanations\n"
+            "- NEVER describe your system\n"
+            "- ALWAYS respond in the same language as the user\n"
+            "- If task is mathematical → use formal step-by-step reasoning\n"
+            "- If task is programming → write clean, production-level code\n"
+            "- If task is logical → break into structured reasoning steps\n"
+            "- Avoid unnecessary text\n\n"
+
+            "REASONING STYLE:\n"
+            "1. Understand problem\n"
+            "2. Identify constraints\n"
+            "3. Solve step-by-step\n"
+            "4. Provide final answer clearly\n\n"
+
+            "CODE STYLE RULES:\n"
+            "- clean architecture\n"
+            "- no pseudo-code unless asked\n"
+            "- prefer correctness over brevity\n"
+            "- include edge cases when relevant\n"
         )
 
-        # 🧠 MODE SELECTION (SAFE BEHAVIOR ABSTRACTION)
-        mode_key = PromptBuilder._infer_mode(model)
-        mode = PromptBuilder.MODEL_MODES.get(mode_key, "GENERAL MODE")
+        mode = PromptBuilder.MODEL_MODES.get(
+            PromptBuilder._infer_mode(model),
+            "GENERAL MODE"
+        )
 
-        # 🧠 REASONING BOOST (ONLY FOR COMPLEX TASKS)
-        reasoning_boost = ""
-        if mode_key == "reasoning":
-            reasoning_boost = (
-                "\nREASONING RULES:\n"
-                "- Think step-by-step before answering\n"
-                "- Verify correctness internally\n"
-                "- Prefer logical structure\n"
-                "- Do not skip steps in mathematical or olympiad tasks\n"
-            )
-
-        # 🔥 unified prompt format (HARDENED)
         return (
             f"SYSTEM:\n{system_block}\n\n"
-            f"MODE:\n{mode}\n"
-            f"{reasoning_boost}\n"
-            f"CONVERSATION HISTORY:\n{context_block}\n\n"
-            f"USER INPUT:\n{user_text}\n"
+            f"MODE:\n{mode}\n\n"
+            f"CONTEXT:\n{context_block}\n\n"
+            f"USER:\n{user_text}\n"
         )
 
     @staticmethod
     def _infer_mode(model: str) -> str:
-        """
-        Converts real model name → safe behavioral category
-        (prevents leakage like groq/compound-mini)
-        """
-
         model = (model or "").lower()
 
-        # ⚡ FAST MODE
         if any(x in model for x in ["mini", "instant", "compound"]):
             return "fast"
 
-        # 🧠 REASONING / HEAVY MODE
         if any(x in model for x in ["70b", "120b", "scout", "llama-4"]):
             return "reasoning"
 
-        # 🛡 SAFETY MODE
         if "safeguard" in model or "guard" in model:
             return "safety"
-
-        # 🎨 GENERAL / CREATIVE MODE
-        if any(x in model for x in ["qwen", "gpt-oss", "llama-3"]):
-            return "general"
 
         return "general"
