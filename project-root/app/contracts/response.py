@@ -1,30 +1,69 @@
 from dataclasses import dataclass
-from typing import Optional, Any
+from typing import Any, Optional, Dict, Union
 
 
-@dataclass
-class SuccessResponse:
+# ----------------------------
+# BASE RESPONSE
+# ----------------------------
+
+@dataclass(frozen=True)
+class BaseResponse:
+    """
+    Immutable base response.
+    Ensures trace consistency and prevents runtime mutation bugs.
+    """
+    trace_id: str
+
+
+# ----------------------------
+# SUCCESS RESPONSE
+# ----------------------------
+
+@dataclass(frozen=True)
+class SuccessResponse(BaseResponse):
+    """
+    Strict success contract.
+
+    Guarantees:
+    - success is ALWAYS True
+    - data is always explicit (can be None, but explicit)
+    """
     success: bool = True
+    data: Optional[str] = None
+
+
+# ----------------------------
+# ERROR RESPONSE
+# ----------------------------
+
+@dataclass(frozen=True)
+class ErrorDetail:
+    """
+    Structured error payload.
+    """
+
+    code: str
+    message: str
+    layer: str
     data: Optional[Any] = None
-    trace_id: Optional[str] = None
-
-    def to_dict(self):
-        return {
-            "success": True,
-            "data": self.data,
-            "trace_id": self.trace_id
-        }
 
 
-@dataclass
-class ErrorResponse:
+@dataclass(frozen=True)
+class ErrorResponse(BaseResponse):
+    """
+    Strict error contract.
+
+    Guarantees:
+    - success is ALWAYS False
+    - error is structured, never raw string
+    """
+
     success: bool = False
-    error: Any = None
-    trace_id: Optional[str] = None
+    error: ErrorDetail = None
 
-    def to_dict(self):
-        return {
-            "success": False,
-            "error": self.error,
-            "trace_id": self.trace_id
-        }
+
+# ----------------------------
+# TYPE UNIFICATION
+# ----------------------------
+
+OrchestratorResponse = Union[SuccessResponse, ErrorResponse]
