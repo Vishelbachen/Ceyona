@@ -3,9 +3,9 @@ class PromptBuilder:
     Centralized prompt construction layer.
 
     Responsibilities:
-    - isolate prompt formatting from orchestrator
-    - unify input structure for all models
-    - prepare context-safe prompt
+    - isolate prompt formatting
+    - enforce strict model behavior contract
+    - prevent self-identification and meta-talk
     """
 
     @staticmethod
@@ -20,11 +20,17 @@ class PromptBuilder:
                 for msg in context
             )
 
-        # 🧠 system framing (VERY IMPORTANT FOR MODEL STABILITY)
+        # 🔥 STRICT SYSTEM CONTRACT (IMPORTANT FIX)
         system_block = (
-            "You are a helpful AI assistant.\n"
-            "Follow instructions precisely.\n"
-            "Be concise when possible.\n"
+            "You are a response engine.\n"
+            "You must NOT mention that you are an AI, model, assistant or system.\n"
+            "You must NOT explain your behavior or capabilities.\n"
+            "You must NOT use phrases like 'I am an AI'.\n"
+            "You must answer directly without meta commentary.\n"
+            "Follow user instructions precisely.\n"
+            "Keep responses natural and human-like.\n"
+            "Match the language of the user input.\n"
+            "Be concise unless detail is explicitly requested.\n"
         )
 
         # 🔥 unified prompt format
