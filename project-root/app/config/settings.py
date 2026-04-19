@@ -18,7 +18,7 @@ class Settings:
         self.JWT_SECRET: str | None = os.getenv("JWT_SECRET")
         self.ENCRYPTION_KEY: str | None = os.getenv("ENCRYPTION_KEY")
 
-        # 🗄 Database (reserved for future)
+        # 🗄 Database
         self.SUPABASE_URL: str | None = os.getenv("SUPABASE_URL")
         self.SUPABASE_ANON_KEY: str | None = os.getenv("SUPABASE_ANON_KEY")
         self.SUPABASE_SERVICE_ROLE_KEY: str | None = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
@@ -29,29 +29,19 @@ class Settings:
         self.SERPAPI_KEY: str | None = os.getenv("SERPAPI_KEY")
         self.BREVO_API_KEY: str | None = os.getenv("BREVO_API_KEY")
 
-        # 💳 Payments (future)
+        # 💳 Payments
         self.TON_WALLET: str | None = os.getenv("TON_WALLET")
 
         # 🚀 Deployment
         self.WEBHOOK_URL: str | None = os.getenv("WEBHOOK_URL")
 
-        # ✅ FAIL-FAST CHECK
         self._validate()
 
     def _validate(self):
-        """
-        Ensures critical variables exist.
-        Fails early instead of breaking at runtime.
-        """
-
         missing = []
 
         if not self.BOT_TOKEN:
             missing.append("BOT_TOKEN")
-
-        # 👉 пока GROQ optional (у тебя fake LLM)
-        # if not self.GROQ_API_KEY:
-        #     missing.append("GROQ_API_KEY")
 
         if missing:
             raise RuntimeError(
@@ -59,5 +49,4 @@ class Settings:
             )
 
 
-# Singleton instance (used across the app)
 settings = Settings()
