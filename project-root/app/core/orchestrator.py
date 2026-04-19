@@ -1,7 +1,8 @@
 from app.contracts.message import OrchestratorRequest
 from app.contracts.response import SuccessResponse, ErrorResponse
 from app.engine.model_router import select_model
-from app.engine.model_policy import select_model_by_intent  # 🆕 INTENT-BASED ROUTING (future-ready)
+from app.engine.model_policy import select_model_by_intent
+from app.engine.intent_classifier import IntentClassifier  # 🆕 CONNECT INTENT LAYER
 from app.engine.llm import run_llm
 from app.core.logger import logger
 from app.core.errors import OrchestratorError
@@ -24,7 +25,7 @@ async def handle_request(
         if not text:
             raise ValueError("Empty user message")
 
-        # 🧠 MEMORY LOAD (SAFE + CONTROLLED)
+        # 🧠 MEMORY LOAD
         context = []
         if memory:
             try:
@@ -36,7 +37,6 @@ async def handle_request(
                     trace_id=trace_id,
                     context_size=len(context)
                 )
-
             except Exception as e:
                 logger.log(
                     "ERROR",
@@ -46,9 +46,19 @@ async def handle_request(
                 )
                 context = []
 
-        # 🧠 MODEL SELECTION (CURRENT + READY FOR UPGRADE)
-        # NOTE: сейчас fallback = rule-based router
-        model = select_model(text)
+        # 🧠 INTENT DETECTION (NEW CONTROL POINT)
+        intent_result = IntentClassifier.classify(text)
+
+        logger.log(
+            "INFO",
+            "intent_classified",
+            trace_id=trace_id,
+            intent=intent_result.intent,
+            confidence=intent_result.confidence
+        )
+
+        # 🧠 MODEL SELECTION (SINGLE CONTROL FLOW)
+        model = select_model_by_intent(intent_result)
 
         logger.log(
             "INFO",
@@ -57,21 +67,21 @@ async def handle_request(
             model=model
         )
 
-        # 🧠 PROMPT BUILD (ISOLATED LAYER)
+        # 🧠 PROMPT BUILD
         enriched_prompt = PromptBuilder.build(
             user_text=text,
             context=context,
             model=model
         )
 
-        # 🧠 LLM EXECUTION
+        # 🧠 LLM CALL
         response = await run_llm(
             model=model,
             prompt=enriched_prompt,
             trace_id=trace_id
         )
 
-        # 🧠 MEMORY SAVE (SAFE + NON-BLOCKING)
+        # 🧠 MEMORY SAVE
         if memory and getattr(memory, "store", None):
             try:
                 memory.store.append_message(user_id, "user", text)
@@ -94,14 +104,12 @@ async def handle_request(
             trace_id=trace_id
         )
 
-    # ⚠️ DOMAIN ERRORS
     except OrchestratorError as e:
         return ErrorResponse(
             error=e.to_dict()["error"],
             trace_id=trace_id
         )
 
-    # ⚠️ SAFE FALLBACK FOR ANY UNEXPECTED FAILURE
     except Exception as e:
         logger.log(
             "ERROR",
