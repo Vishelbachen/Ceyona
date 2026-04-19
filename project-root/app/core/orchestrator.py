@@ -1,14 +1,11 @@
 from app.contracts.message import OrchestratorRequest
 from app.engine.model_router import select_model
-from app.engine.llm import run_llm as llm_run  # 🔥 важно: алиас
+from app.engine.llm import run_llm
 from app.core.logger import logger
+from app.core.errors import OrchestratorError
 
 
-class OrchestratorError(Exception):
-    pass
-
-
-async def handle_request(req: OrchestratorRequest) -> str:
+async def handle_request(req: OrchestratorRequest):
     trace_id = req.trace_id
 
     try:
@@ -18,10 +15,8 @@ async def handle_request(req: OrchestratorRequest) -> str:
             trace_id=trace_id
         )
 
-        # 📌 входной текст
         text = req.user_message.text
 
-        # 📌 выбор модели
         model = select_model(text)
 
         logger.log(
@@ -31,8 +26,7 @@ async def handle_request(req: OrchestratorRequest) -> str:
             model=model
         )
 
-        # 📌 вызов LLM (ВАЖНО: через алиас)
-        response = await llm_run(
+        response = await run_llm(
             model=model,
             prompt=text,
             trace_id=trace_id
@@ -46,6 +40,9 @@ async def handle_request(req: OrchestratorRequest) -> str:
 
         return response.content
 
+    except OrchestratorError:
+        raise
+
     except Exception as e:
         logger.log(
             "ERROR",
@@ -53,4 +50,10 @@ async def handle_request(req: OrchestratorRequest) -> str:
             trace_id=trace_id,
             error=str(e)
         )
-        return f"Error: {str(e)}"
+
+        raise OrchestratorError(
+            code="ORCH_001",
+            message=str(e),
+            layer="orchestrator",
+            trace_id=trace_id
+        )
