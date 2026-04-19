@@ -417,5 +417,3 @@ Telegram
 → ResponseHandler.handle() (RESPONSE LAYER)
 → telegram.py (OUTBOUND)
 → Telegram user
-
-
