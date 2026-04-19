@@ -4,12 +4,15 @@ from uuid import uuid4
 from app.contracts.message import OrchestratorRequest, UserMessage
 from app.core.orchestrator import handle_request
 from app.core.response_handler import ResponseHandler
+from app.core.logger import logger
 
 router = APIRouter()
 
 
 @router.post("/webhook")
 async def telegram_webhook(request: Request):
+    trace_id = str(uuid4())
+
     try:
         payload = await request.json()
 
@@ -22,11 +25,18 @@ async def telegram_webhook(request: Request):
         chat = message.get("chat", {})
         chat_id = chat.get("id")
 
+        # 🧯 SAFETY CHECKS (КРИТИЧНО)
         if not text:
+            logger.log("INFO", "empty_text_skipped", trace_id=trace_id)
             return {"ok": True}
 
-        trace_id = str(uuid4())
+        if not chat_id:
+            logger.log("ERROR", "missing_chat_id", trace_id=trace_id)
+            return {"ok": False, "error": "missing_chat_id"}
 
+        logger.log("INFO", "webhook_received", trace_id=trace_id)
+
+        # 🧠 BUILD REQUEST
         req = OrchestratorRequest(
             trace_id=trace_id,
             user_message=UserMessage(
@@ -35,13 +45,42 @@ async def telegram_webhook(request: Request):
             )
         )
 
+        # 🔁 ORCHESTRATOR CALL
         result = await handle_request(req)
 
-        # 🔥 ВАЖНО: теперь через handler
-        await ResponseHandler.handle(
-            response=result,
-            chat_id=chat_id
+        logger.log(
+            "INFO",
+            "orchestrator_result_received",
+            trace_id=trace_id,
+            success=getattr(result, "success", None)
         )
+
+        # ⚠️ SAFE RESPONSE HANDLER WRAP
+        try:
+            handler_result = ResponseHandler.handle(
+                response=result,
+                chat_id=chat_id
+            )
+
+            # 🧯 если handle async — поддержка обоих случаев
+            if handler_result is not None:
+                await handler_result
+
+        except Exception as e:
+            logger.log(
+                "ERROR",
+                "response_handler_failed",
+                trace_id=trace_id,
+                error=str(e)
+            )
+
+            return {
+                "ok": False,
+                "error": "response_handler_failed",
+                "trace_id": trace_id
+            }
+
+        logger.log("INFO", "webhook_success", trace_id=trace_id)
 
         return {
             "ok": True,
@@ -49,7 +88,15 @@ async def telegram_webhook(request: Request):
         }
 
     except Exception as e:
+        logger.log(
+            "ERROR",
+            "webhook_crash",
+            trace_id=trace_id,
+            error=str(e)
+        )
+
         return {
             "ok": False,
-            "error": str(e)
+            "error": str(e),
+            "trace_id": trace_id
         }
