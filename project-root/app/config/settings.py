@@ -8,7 +8,7 @@ class Settings:
     """
 
     def __init__(self):
-        # 🔐 AI / LLM
+        # 🔐 AI / LLM (CRITICAL)
         self.GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
         # 🤖 Telegram (CRITICAL)
@@ -76,9 +76,20 @@ class Settings:
     def _validate(self):
         missing = []
 
-        # only critical dependencies
+        # critical dependencies
         if not self.BOT_TOKEN:
             missing.append("BOT_TOKEN")
+
+        # 🔥 FIX: теперь LLM тоже fail-fast (важно для прода)
+        if not self.GROQ_API_KEY:
+            missing.append("GROQ_API_KEY")
+
+        # safety check for routing stability
+        if not self.FAST_MODELS:
+            missing.append("FAST_MODELS")
+
+        if not self.GENERAL_MODELS:
+            missing.append("GENERAL_MODELS")
 
         if missing:
             raise RuntimeError(
