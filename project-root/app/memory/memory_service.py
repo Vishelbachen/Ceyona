@@ -1,3 +1,6 @@
+from app.memory.session_store import SessionStore
+
+
 class MemoryService:
     def __init__(self, store: SessionStore):
         self.store = store
