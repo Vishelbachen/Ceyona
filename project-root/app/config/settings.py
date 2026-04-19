@@ -4,6 +4,7 @@ import os
 class Settings:
     """
     Production-safe configuration loader.
+    Single source of truth for all environment variables.
     """
 
     def __init__(self):
@@ -34,13 +35,48 @@ class Settings:
         # 🚀 deployment
         self.WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
+        # 🧠 MODEL GROUPS (centralized routing config)
+        self.FAST_MODELS = [
+            "groq/compound-mini",
+            "llama-3.1-8b-instant",
+        ]
+
+        self.GENERAL_MODELS = [
+            "llama-3.3-70b-versatile",
+            "qwen/qwen3-32b",
+            "openai/gpt-oss-20b",
+        ]
+
+        self.HEAVY_MODELS = [
+            "openai/gpt-oss-120b",
+            "meta-llama/llama-4-scout-17b-16e-instruct",
+        ]
+
+        self.SAFETY_MODELS = [
+            "openai/gpt-oss-safeguard-20b",
+            "meta-llama/llama-prompt-guard-2-22m",
+            "meta-llama/llama-prompt-guard-2-86m",
+        ]
+
+        self.AUDIO_MODELS = [
+            "whisper-large-v3",
+            "whisper-large-v3-turbo",
+        ]
+
+        self.EXPERIMENTAL_MODELS = [
+            "allam-2-7b",
+            "groq/compound",
+            "canopylabs/orpheus-v1-english",
+            "canopylabs/orpheus-arabic-saudi",
+        ]
+
         # 🧯 validate AFTER loading
         self._validate()
 
     def _validate(self):
         missing = []
 
-        # critical only (НЕ ломаем систему лишним)
+        # only critical dependencies
         if not self.BOT_TOKEN:
             missing.append("BOT_TOKEN")
 
@@ -50,5 +86,5 @@ class Settings:
             )
 
 
-# singleton
+# singleton (global access point)
 settings = Settings()
