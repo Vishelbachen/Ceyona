@@ -1,9 +1,9 @@
-fastapi
-uvicorn
-aiogram
-groq
+fastapi>=0.110
+uvicorn>=0.27
+aiogram>=3.0
+groq>=0.9.0
 supabase
-httpx
+httpx>=0.27.0
 requests
 python-dotenv
 openai>=1.0.0
