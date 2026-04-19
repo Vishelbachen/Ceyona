@@ -13,11 +13,12 @@ async def handle_request(
     memory: MemoryService | None = None
 ):
     trace_id = req.trace_id
-    user_id = req.user_id
 
     try:
         logger.log("INFO", "orchestrator_start", trace_id=trace_id)
 
+        # 🔥 FIX CRITICAL BUG (was req.user_id ❌)
+        user_id = req.user_message.user_id
         text = req.user_message.text
 
         # 🧠 MEMORY LOAD (SAFE)
@@ -25,6 +26,7 @@ async def handle_request(
         if memory:
             try:
                 context = memory.build_context(user_id)
+
                 logger.log(
                     "INFO",
                     "memory_loaded",
@@ -50,14 +52,11 @@ async def handle_request(
             model=model
         )
 
-        # 🔥 CRITICAL FIX: STRING PROMPT (NO DICT)
-        enriched_prompt = f"""
-USER MESSAGE:
-{text}
-
-CONTEXT:
-{context}
-"""
+        # 🔥 SAFE PROMPT (STRING ONLY - NO STRUCTURES)
+        enriched_prompt = (
+            f"USER MESSAGE:\n{text}\n\n"
+            f"CONTEXT:\n{context}"
+        )
 
         # 🧠 LLM CALL
         response = await run_llm(
@@ -87,8 +86,9 @@ CONTEXT:
 
         logger.log("INFO", "orchestrator_done", trace_id=trace_id)
 
+        # ✅ SAFE RETURN GUARANTEE
         return SuccessResponse(
-            data=response.content,
+            data=getattr(response, "content", ""),
             trace_id=trace_id
         )
 
