@@ -16,11 +16,10 @@ async def handle_request(
     try:
         logger.log("INFO", "orchestrator_start", trace_id=trace_id)
 
-        # ✅ FIX: единый источник истины
         user_id = req.user_message.user_id
         text = req.user_message.text
 
-        # 🧠 MEMORY LOAD
+        # 🧠 MEMORY LOAD (SAFE)
         context = []
         if memory:
             try:
@@ -41,7 +40,6 @@ async def handle_request(
                 )
                 context = []
 
-        # 🧠 MODEL
         model = select_model(text)
 
         logger.log(
@@ -51,24 +49,24 @@ async def handle_request(
             model=model
         )
 
-        # 🧠 PROMPT
         enriched_prompt = (
             f"USER MESSAGE:\n{text}\n\n"
             f"CONTEXT:\n{context}"
         )
 
-        # 🧠 LLM
         response = await run_llm(
             model=model,
             prompt=enriched_prompt,
             trace_id=trace_id
         )
 
-        # 🧠 MEMORY SAVE
-        if memory:
+        # 🧠 MEMORY SAVE (HARDENED)
+        if memory and getattr(memory, "store", None):
             try:
                 memory.store.append_message(user_id, "user", text)
-                memory.store.append_message(user_id, "assistant", response.content)
+
+                assistant_text = getattr(response, "content", "")
+                memory.store.append_message(user_id, "assistant", assistant_text)
 
                 logger.log("INFO", "memory_saved", trace_id=trace_id)
 
@@ -83,7 +81,7 @@ async def handle_request(
         logger.log("INFO", "orchestrator_done", trace_id=trace_id)
 
         return SuccessResponse(
-            data=response.content,
+            data=getattr(response, "content", ""),
             trace_id=trace_id
         )
 
