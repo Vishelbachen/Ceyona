@@ -1,16 +1,17 @@
 class PromptBuilder:
     """
-    Centralized prompt construction layer (PRODUCTION v2).
+    Centralized prompt construction layer (PRODUCTION v2.1).
 
     Responsibilities:
     - strict behavior enforcement
     - multilingual output support
+    - reasoning enhancement for complex tasks
     - context injection
     - model behavior abstraction (NOT model names)
     - prevent AI self-identification and meta-talk
     """
 
-    # 🧠 behavior mapping (IMPORTANT FIX)
+    # 🧠 behavior mapping (SAFE ABSTRACTION LAYER)
     MODEL_MODES = {
         "fast": "FAST MODE",
         "general": "GENERAL MODE",
@@ -33,30 +34,42 @@ class PromptBuilder:
                 for msg in context
             )
 
-        # 🌍 MULTILINGUAL + STRICT BEHAVIOR CONTRACT
+        # 🌍 MULTILINGUAL + STRICT BEHAVIOR CONTRACT (HARDENED)
         system_block = (
-            "You are a response system.\n"
+            "You are a reasoning and response engine.\n"
             "You do NOT have identity.\n"
             "You must NEVER mention AI, assistant, model, system or architecture.\n"
-            "You must NEVER explain how you work.\n"
+            "You must NEVER explain how you work or describe internal logic.\n"
             "You must NEVER use meta commentary.\n"
-            "You must answer directly and naturally.\n"
-            "You must strictly follow the language of the user input.\n"
-            "If user writes in Russian, answer in Russian. If English, answer in English.\n"
-            "Be concise unless detail is requested.\n"
-            "Do not add emotional symbols unless user explicitly uses them.\n"
+            "You must NEVER say phrases like 'I am an AI'.\n"
+            "You must answer directly, clearly, and naturally.\n"
+            "You must strictly match the language of the user input.\n"
+            "If user writes in Russian, respond in Russian. If English, respond in English.\n"
+            "Do NOT translate unless asked.\n"
+            "Be concise by default, but expand if reasoning is required.\n"
+            "Avoid filler phrases and unnecessary explanations.\n"
         )
 
-        # 🧠 derive safe mode instead of exposing model name
-        mode = PromptBuilder.MODEL_MODES.get(
-            PromptBuilder._infer_mode(model),
-            "GENERAL MODE"
-        )
+        # 🧠 MODE SELECTION (SAFE BEHAVIOR ABSTRACTION)
+        mode_key = PromptBuilder._infer_mode(model)
+        mode = PromptBuilder.MODEL_MODES.get(mode_key, "GENERAL MODE")
 
-        # 🔥 unified prompt format (SAFE VERSION)
+        # 🧠 REASONING BOOST (ONLY FOR COMPLEX TASKS)
+        reasoning_boost = ""
+        if mode_key == "reasoning":
+            reasoning_boost = (
+                "\nREASONING RULES:\n"
+                "- Think step-by-step before answering\n"
+                "- Verify correctness internally\n"
+                "- Prefer logical structure\n"
+                "- Do not skip steps in mathematical or olympiad tasks\n"
+            )
+
+        # 🔥 unified prompt format (HARDENED)
         return (
             f"SYSTEM:\n{system_block}\n\n"
-            f"MODE:\n{mode}\n\n"
+            f"MODE:\n{mode}\n"
+            f"{reasoning_boost}\n"
             f"CONVERSATION HISTORY:\n{context_block}\n\n"
             f"USER INPUT:\n{user_text}\n"
         )
@@ -70,19 +83,19 @@ class PromptBuilder:
 
         model = (model or "").lower()
 
-        # FAST MODELS
+        # ⚡ FAST MODE
         if any(x in model for x in ["mini", "instant", "compound"]):
             return "fast"
 
-        # HEAVY / REASONING MODELS
+        # 🧠 REASONING / HEAVY MODE
         if any(x in model for x in ["70b", "120b", "scout", "llama-4"]):
             return "reasoning"
 
-        # SAFETY MODELS
+        # 🛡 SAFETY MODE
         if "safeguard" in model or "guard" in model:
             return "safety"
 
-        # CREATIVE / GENERAL
+        # 🎨 GENERAL / CREATIVE MODE
         if any(x in model for x in ["qwen", "gpt-oss", "llama-3"]):
             return "general"
 
