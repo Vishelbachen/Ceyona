@@ -1,7 +1,5 @@
-# app/engine/model_policy.py
-
 from app.config.settings import settings
-from app.engine.intent_classifier import IntentResult
+from app.engine.types import IntentResult
 
 
 def select_model_by_intent(intent: IntentResult) -> str:
