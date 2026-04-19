@@ -146,18 +146,18 @@ Unified error schema layer.
   }
 }
 
-
+---
 
 ## app/core/logger.py
 Structured logging system.
-JSON logs
-unified format
-includes:
-timestamp
-event
-trace_id
-payload
-used across all layers
+- JSON logs
+- unified format
+- includes:
+- timestamp
+- event
+- trace_id
+- payload
+- used across all layers
 
 ---
 
