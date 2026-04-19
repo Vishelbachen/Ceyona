@@ -1,5 +1,5 @@
 import httpx
-from app.config import settings
+from app.config.settings import settings
 
 
 async def send_message(chat_id: str, text: str):
