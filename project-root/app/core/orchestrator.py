@@ -5,6 +5,7 @@ from app.engine.llm import run_llm
 from app.core.logger import logger
 from app.core.errors import OrchestratorError
 from app.memory.memory_service import MemoryService
+from app.core.prompt_builder import PromptBuilder  # ✅ NEW IMPORT
 
 
 async def handle_request(
@@ -20,13 +21,10 @@ async def handle_request(
         text = req.user_message.text
 
         # 🧠 MEMORY LOAD (SAFE + CLEAN)
-        context = ""
+        context = []
         if memory:
             try:
-                raw_context = memory.build_context(user_id)
-
-                # FIX: нормализация (list → string)
-                context = "\n".join(raw_context) if isinstance(raw_context, list) else str(raw_context)
+                context = memory.build_context(user_id)
 
                 logger.log(
                     "INFO",
@@ -42,8 +40,9 @@ async def handle_request(
                     trace_id=trace_id,
                     error=str(e)
                 )
-                context = ""
+                context = []
 
+        # 🧠 MODEL SELECTION
         model = select_model(text)
 
         logger.log(
@@ -53,21 +52,21 @@ async def handle_request(
             model=model
         )
 
-        # 🧠 PROMPT (CLEAN STRUCTURE)
-        enriched_prompt = f"""USER MESSAGE:
-{text}
+        # 🧠 PROMPT BUILDER (NEW CLEAN LAYER)
+        enriched_prompt = PromptBuilder.build(
+            user_text=text,
+            context=context,
+            model=model
+        )
 
-CONTEXT:
-{context}
-"""
-
+        # 🧠 LLM CALL
         response = await run_llm(
             model=model,
             prompt=enriched_prompt,
             trace_id=trace_id
         )
 
-        # 🧠 MEMORY SAVE (SAFE + HARDENED)
+        # 🧠 MEMORY SAVE (SAFE)
         if memory and getattr(memory, "store", None):
             try:
                 memory.store.append_message(user_id, "user", text)
