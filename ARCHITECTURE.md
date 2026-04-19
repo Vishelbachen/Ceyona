@@ -22,20 +22,25 @@ Telegram webhook handler (INBOUND layer).
 - receives external messages from Telegram
 - validates and parses payload
 - generates `trace_id`
-- builds OrchestratorRequest
-- forwards request to orchestrator
-- sends response via Telegram API
+- builds `OrchestratorRequest`
+- forwards request to orchestrator (`handle_request`)
+- sends response via Response Layer
 
 ---
 
 ## app/core/orchestrator.py
 Application flow controller (CORE layer).
 - central coordination point
-- receives structured request
-- logs lifecycle (start / end / error)
+- receives structured request (`OrchestratorRequest`)
+- logs lifecycle:
+  - start
+  - model selection
+  - LLM call
+  - completion
+  - error handling
 - invokes model_router
-- calls LLM layer
-- returns final response
+- calls LLM execution layer
+- returns raw response text
 
 ---
 
@@ -44,69 +49,70 @@ Model selection layer.
 - routing logic (fast / smart / fallback)
 - selects model from available pool
 - keeps system model-agnostic
+- no execution logic
 
 ---
 
 ## app/engine/llm.py
-LLM execution layer.
-- executes model inference
-- retry logic
+LLM execution layer (ENGINE).
+- executes model inference (stub / Groq-compatible abstraction)
+- retry logic (bounded)
 - timeout handling
-- structured logging
-- NO decision-making
-- stateless
+- structured logging with trace_id
+- stateless execution
+- NO decision-making responsibility
 
 ---
 
 ## app/engine/telegram.py
-Telegram transport layer (OUTBOUND).
+Telegram transport layer (OUTBOUND adapter).
 - sends messages via Telegram Bot API
 - pure HTTP client
 - no business logic
 - no orchestration responsibility
+- used ONLY by response layer
+
+---
+
+## app/core/response_handler.py
+Response abstraction layer.
+- unifies output delivery
+- decouples business logic from transport
+- formats response text
+- routes to Telegram transport
+- logs `response_sent`
+- ensures trace_id propagation
 
 ---
 
 ## app/contracts/message.py
 Data contract layer.
-- defines strict schemas
-- `UserMessage`
-- `OrchestratorRequest` (with trace_id)
-- ensures safe and consistent data flow
+- strict schemas:
+  - `UserMessage`
+  - `OrchestratorRequest`
+- enforces structured data flow
+- guarantees trace consistency across system
 
 ---
 
 ## app/core/logger.py
 Structured logging system.
 - JSON logs
-- unified log format
-- supports `trace_id`
+- unified format
+- includes:
+  - timestamp
+  - event
+  - trace_id
+  - payload
 - used across all layers
 
----
-
-# ⚙️ CURRENT FLOW (MVP — FULL LOOP)
-
-Telegram  
-→ webhook (IN)  
-→ orchestrator  
-→ model_router  
-→ llm  
-→ orchestrator  
-→ telegram (OUT)  
-→ Telegram user  
-
----
-
-# 🔁 REQUEST LIFECYCLE (TRACEABLE)
+# 🔁 REQUEST LIFECYCLE (TRACEABLE PIPELINE)
 
 Each request includes:
 
-- `trace_id` (UUID)
-- full pipeline visibility
+- trace_id (UUID)
+- full lifecycle tracking
 - structured logs per stage
-
-Example flow:
 
 ```text
 trace_id: abc-123
@@ -117,7 +123,7 @@ webhook_received
 → llm_request
 → llm_response
 → orchestrator_done
-→ telegram_send
+→ response_sent
 
 # 🧠 MODEL SYSTEM
 
@@ -127,7 +133,7 @@ webhook_received
 
 ---
 
-## 🧠 GENERAL MODELS (balanced)
+## 🧠 GENERAL MODELS (balanced reasoning)
 - llama-3.3-70b-versatile  
 - qwen/qwen3-32b  
 - openai/gpt-oss-20b  
@@ -170,13 +176,13 @@ Each module has exactly one responsibility.
 
 ## 2. Layer Separation
 
-| Layer        | Responsibility               |
-|--------------|------------------------------|
-| API          | Input handling               |
-| Core         | Orchestration                |
-| Engine       | Execution (LLM / transport)  |
-| Contracts    | Data schemas                 |
-| Core/Logger  | Observability                |
+| Layer     | Responsibility              |
+|----------|-----------------------------|
+| API       | Input handling              |
+| Core      | Orchestration               |
+| Engine    | Execution (LLM / transport) |
+| Contracts | Data schemas                |
+| Logger    | Observability              |
 
 ---
 
@@ -198,7 +204,7 @@ Unused modules are removed immediately.
 ---
 
 ## 6. MVP Scale Constraint
-Max active modules in MVP stage: 7–8 (current: 8)
+Max active modules in MVP stage: 8
 
 ---
 
@@ -255,19 +261,20 @@ Max active modules in MVP stage: 7–8 (current: 8)
 
 - no secrets in repository  
 - env-only configuration  
-- no direct external calls outside engine layer (future enforcement)  
+- no direct external calls outside engine layer  
+- strict separation of transport vs business logic  
 
 ---
 
 # 📊 OBSERVABILITY
 
 ## Logging
-- JSON structured logs  
-- includes:
-  - timestamp  
-  - event  
-  - trace_id  
-  - payload  
+
+JSON structured logs including:
+- timestamp  
+- event  
+- trace_id  
+- payload  
 
 ---
 
@@ -275,41 +282,42 @@ Max active modules in MVP stage: 7–8 (current: 8)
 - full request trace  
 - LLM visibility  
 - retry tracking  
+- response lifecycle tracking  
 
 ---
 
 # 💥 CURRENT LIMITATIONS
 
-- Telegram tightly coupled in webhook (no response abstraction yet)  
-- no response formatting layer  
-- no error standardization schema  
 - no memory / session layer  
 - no agent / reasoning layer  
+- no unified error schema yet  
+- response layer is minimal (no formatting policies yet)  
 
 ---
 
 # 🚀 NEXT EVOLUTION (PLANNED)
 
-## 1. Response Layer
-- decouple transport from API  
-- unified response handling  
+## 1. Error Schema Layer (NEXT PRIORITY)
+- standard error format  
+- remove raw string errors  
 
 ---
 
-## 2. Error Schema
-- consistent error structure across system  
+## 2. Memory Layer
+- session persistence  
+- chat history  
 
 ---
 
 ## 3. Agent Layer
-- reasoning  
+- reasoning engine  
 - multi-step execution  
 
 ---
 
-## 4. Memory Layer
-- persistence  
-- chat history  
+## 4. Response Formatting Policy
+- structured outputs  
+- templates per message type  
 
 ---
 
@@ -322,6 +330,7 @@ System is:
 - traceable  
 - modular  
 - transport-enabled (Telegram IN/OUT)  
+- response-layer separated  
 - ready for controlled scaling  
 
 ---
@@ -329,5 +338,18 @@ System is:
 # 🧱 SYSTEM CLASS
 
 Production-capable modular AI backend (MVP stage)
-
 ---
+
+# ⚙️ CURRENT FLOW (MVP — FULL LOOP)
+
+```text
+Telegram
+→ webhook (INBOUND)
+→ orchestrator (CORE)
+→ model_router (ENGINE)
+→ llm (ENGINE)
+→ orchestrator (CORE)
+→ response_handler (RESPONSE LAYER)
+→ telegram.py (OUTBOUND)
+→ Telegram user
+
