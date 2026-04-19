@@ -4,7 +4,6 @@ from app.engine.model_router import select_model
 from app.engine.llm import run_llm
 from app.core.logger import logger
 from app.core.errors import OrchestratorError
-
 from app.memory.memory_service import MemoryService
 
 
@@ -17,11 +16,11 @@ async def handle_request(
     try:
         logger.log("INFO", "orchestrator_start", trace_id=trace_id)
 
-        # 🔥 FIX CRITICAL BUG (was req.user_id ❌)
+        # ✅ FIX: единый источник истины
         user_id = req.user_message.user_id
         text = req.user_message.text
 
-        # 🧠 MEMORY LOAD (SAFE)
+        # 🧠 MEMORY LOAD
         context = []
         if memory:
             try:
@@ -42,7 +41,7 @@ async def handle_request(
                 )
                 context = []
 
-        # 🧠 MODEL SELECTION
+        # 🧠 MODEL
         model = select_model(text)
 
         logger.log(
@@ -52,30 +51,27 @@ async def handle_request(
             model=model
         )
 
-        # 🔥 SAFE PROMPT (STRING ONLY - NO STRUCTURES)
+        # 🧠 PROMPT
         enriched_prompt = (
             f"USER MESSAGE:\n{text}\n\n"
             f"CONTEXT:\n{context}"
         )
 
-        # 🧠 LLM CALL
+        # 🧠 LLM
         response = await run_llm(
             model=model,
             prompt=enriched_prompt,
             trace_id=trace_id
         )
 
-        # 🧠 MEMORY SAVE (SAFE)
+        # 🧠 MEMORY SAVE
         if memory:
             try:
                 memory.store.append_message(user_id, "user", text)
                 memory.store.append_message(user_id, "assistant", response.content)
 
-                logger.log(
-                    "INFO",
-                    "memory_saved",
-                    trace_id=trace_id
-                )
+                logger.log("INFO", "memory_saved", trace_id=trace_id)
+
             except Exception as e:
                 logger.log(
                     "ERROR",
@@ -86,20 +82,12 @@ async def handle_request(
 
         logger.log("INFO", "orchestrator_done", trace_id=trace_id)
 
-        # ✅ SAFE RETURN GUARANTEE
         return SuccessResponse(
-            data=getattr(response, "content", ""),
+            data=response.content,
             trace_id=trace_id
         )
 
     except OrchestratorError as e:
-        logger.log(
-            "ERROR",
-            "orchestrator_error",
-            trace_id=trace_id,
-            error=str(e)
-        )
-
         return ErrorResponse(
             error=e.to_dict()["error"],
             trace_id=trace_id
