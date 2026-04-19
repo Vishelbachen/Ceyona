@@ -6,3 +6,4 @@ supabase
 httpx
 requests
 python-dotenv
+openai
