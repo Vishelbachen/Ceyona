@@ -10,18 +10,29 @@ class LLMResponse:
 
 
 async def fake_groq_call(model: str, prompt: str) -> str:
+    """
+    Mock LLM (temporary layer before Groq integration)
+    """
+
     await asyncio.sleep(0.3)
 
     if not prompt:
         return "ERROR: empty prompt"
 
-    # будущая интеграция GROQ
+    # future:
     # if settings.GROQ_API_KEY:
+    #     call real Groq API here
 
     return f"[{model}] {prompt}"
 
 
-async def run_llm(model: str, prompt: str, retries: int = 2, trace_id: str = None):
+async def run_llm(
+    model: str,
+    prompt: str,
+    retries: int = 2,
+    trace_id: str | None = None
+) -> LLMResponse:
+
     attempt = 0
 
     while attempt <= retries:
