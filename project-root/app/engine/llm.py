@@ -1,6 +1,7 @@
 import asyncio
 from app.core.logger import logger
 from app.core.errors import LLMError
+from app.config import settings  # ✅ подключили
 
 
 class LLMResponse:
@@ -11,7 +12,6 @@ class LLMResponse:
 async def fake_groq_call(model: str, prompt: str) -> str:
     await asyncio.sleep(0.3)
 
-    # 🧠 SAFETY CHECK (prevents silent None bugs)
     if prompt is None:
         return "ERROR: empty prompt"
 
@@ -30,6 +30,9 @@ async def run_llm(model: str, prompt: str, retries: int = 2, trace_id: str = Non
                 model=model,
                 attempt=attempt
             )
+
+            # 🔥 В БУДУЩЕМ:
+            # settings.GROQ_API_KEY будет использоваться здесь
 
             response = await asyncio.wait_for(
                 fake_groq_call(model, str(prompt)),
