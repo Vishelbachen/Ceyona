@@ -106,6 +106,8 @@ Structured logging system.
   - payload
 - used across all layers
 
+---
+
 # 🔁 REQUEST LIFECYCLE (TRACEABLE PIPELINE)
 
 Each request includes:
@@ -338,6 +340,7 @@ System is:
 # 🧱 SYSTEM CLASS
 
 Production-capable modular AI backend (MVP stage)
+
 ---
 
 # ⚙️ CURRENT FLOW (MVP — FULL LOOP)
