@@ -1,9 +1,6 @@
 import asyncio
 from app.core.logger import logger
-
-
-class LLMError(Exception):
-    pass
+from app.core.errors import LLMError
 
 
 class LLMResponse:
@@ -62,4 +59,9 @@ async def run_llm(model: str, prompt: str, retries: int = 2, trace_id: str = Non
 
         attempt += 1
 
-    raise LLMError("All LLM retries failed")
+    raise LLMError(
+        code="LLM_001",
+        message="All LLM retries failed",
+        layer="llm",
+        trace_id=trace_id
+    )
