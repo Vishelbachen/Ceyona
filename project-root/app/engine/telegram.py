@@ -1,12 +1,9 @@
 import httpx
-import os
-
-
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+from app.config import settings
 
 
 async def send_message(chat_id: str, text: str):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    url = f"https://api.telegram.org/bot{settings.BOT_TOKEN}/sendMessage"
 
     async with httpx.AsyncClient() as client:
         await client.post(url, json={
