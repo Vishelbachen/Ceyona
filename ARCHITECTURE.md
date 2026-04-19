@@ -146,8 +146,6 @@ Unified error schema layer.
   }
 }
 
----
-
 ## app/core/logger.py
 Structured logging system.
 JSON logs
