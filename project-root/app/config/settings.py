@@ -36,6 +36,7 @@ class Settings:
         self.WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
         # 🧠 MODEL GROUPS (centralized routing config)
+
         self.FAST_MODELS = [
             "groq/compound-mini",
             "llama-3.1-8b-instant",
@@ -70,6 +71,20 @@ class Settings:
             "canopylabs/orpheus-arabic-saudi",
         ]
 
+        # 🧠 INTENT / ROUTING SYSTEM (NEW CORE LAYER SUPPORT)
+
+        self.DEFAULT_INTENT = "general"
+
+        self.INTENT_CONFIDENCE_THRESHOLD = 0.6
+
+        self.INTENT_MODEL_PRIORITY = {
+            "fast": self.FAST_MODELS,
+            "reasoning": self.HEAVY_MODELS,
+            "creative": self.GENERAL_MODELS,
+            "safety": self.SAFETY_MODELS,
+            "general": self.GENERAL_MODELS,
+        }
+
         # 🧯 validate AFTER loading
         self._validate()
 
@@ -80,7 +95,6 @@ class Settings:
         if not self.BOT_TOKEN:
             missing.append("BOT_TOKEN")
 
-        # 🔥 FIX: теперь LLM тоже fail-fast (важно для прода)
         if not self.GROQ_API_KEY:
             missing.append("GROQ_API_KEY")
 
@@ -90,6 +104,10 @@ class Settings:
 
         if not self.GENERAL_MODELS:
             missing.append("GENERAL_MODELS")
+
+        # NEW: ensure routing system integrity
+        if not self.INTENT_MODEL_PRIORITY:
+            missing.append("INTENT_MODEL_PRIORITY")
 
         if missing:
             raise RuntimeError(
