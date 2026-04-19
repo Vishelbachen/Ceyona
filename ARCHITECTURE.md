@@ -1,12 +1,12 @@
-# 🧠 PROJECT ARCHITECTURE (v1.3 — STABLE CORE SIMPLIFIED + MEMORY READY)
+# 🧠 PROJECT ARCHITECTURE (v1.3 — STABLE CORE SIMPLIFIED + MEMORY INTEGRATED)
 
 ## 🎯 GOAL
-Production-capable modular AI backend with:
-- strict separation of concerns (simplified)
+Minimal but production-capable AI backend with:
+- strict separation of concerns
 - deterministic execution flow
-- full traceable request lifecycle
+- full traceable request lifecycle (trace_id pipeline)
 - unified response + error handling
-- memory-ready architecture (prepared, not required)
+- memory system integrated (session-based, optional)
 - clean upgrade path to Agent Layer
 
 ---
@@ -15,108 +15,100 @@ Production-capable modular AI backend with:
 
 ## 🟢 ARCHITECTURE MODEL
 
-API LAYER ↓ CORE LAYER (ORCHESTRATION) ↓ ENGINE LAYER (EXECUTION) ↓ DOMAIN LAYER (CONTRACTS + RESPONSE + LOGGING) ↓ TRANSPORT (Telegram via Engine)
+API LAYER ↓ CORE LAYER (ORCHESTRATION) ↓ ENGINE LAYER (EXECUTION + TRANSPORT) ↓ DOMAIN LAYER (CONTRACTS + LOGGING + RESPONSE) ↓ MEMORY LAYER (SESSION STATE - OPTIONAL)
 
 ---
 
-# 🔁 FULL REQUEST FLOW (CURRENT)
-Telegram → webhook (API) → Orchestrator (CORE) → Model Router (ENGINE) → LLM (ENGINE) → Response Handler (DOMAIN) → Telegram Sender (ENGINE) → User
+# 🔁 FULL REQUEST FLOW (CURRENT PRODUCTION FLOW)
+Telegram → webhook (API) → Orchestrator (CORE) → MemoryService (optional context injection) → Model Router (ENGINE) → LLM (ENGINE) → Response Handler (DOMAIN) → Telegram Sender (ENGINE) → User
 
 ---
 
-# 📦 ACTIVE FILES (PRODUCTION STATE)
+# 📦 ACTIVE FILES (CURRENT PRODUCTION STAGE — STABLE CORE++)
 
 ---
 
-## 🚪 API LAYER
+# 🚪 API LAYER
 
-### main.py
+## main.py
 FastAPI entry point:
-- app bootstrap
-- lifecycle init
+- application bootstrap
 - route registration
+- lifecycle management
 
 ---
 
-### app/api/webhook.py
-Telegram INBOUND adapter:
-- receives Telegram updates
-- extracts payload
-- generates trace_id
-- builds OrchestratorRequest
-- calls orchestrator
-- passes result to ResponseHandler
+## app/api/webhook.py
+Telegram webhook handler (INBOUND layer)
 
 Responsibilities:
-- input validation
-- no business logic
-- no AI logic
-- no formatting
+- receives external Telegram updates
+- validates and parses payload
+- generates trace_id
+- builds OrchestratorRequest
+- calls orchestrator (handle_request)
+- forwards result to ResponseHandler
+- does NOT format responses
+- does NOT contain business logic
 
 ---
 
 # 🧠 CORE LAYER
 
----
-
-### app/core/orchestrator.py
-Central application controller:
+## app/core/orchestrator.py
+Application flow controller (CORE layer)
 
 Responsibilities:
-- request coordination
+- central coordination point
+- receives OrchestratorRequest
+- logs full lifecycle
 - model selection coordination
+- LLM execution orchestration
 - memory integration (optional)
-- LLM invocation orchestration
-- error normalization
-- trace lifecycle logging
+- returns structured responses:
+  - SuccessResponse
+  - ErrorResponse
 
-Flow:
-- receive OrchestratorRequest
-- load memory (optional)
-- select model
-- build prompt
-- call LLM
-- save memory (optional)
-- return SuccessResponse / ErrorResponse
+Lifecycle steps:
+- start
+- memory load (if enabled)
+- model selection
+- prompt building
+- LLM call
+- memory save (post-response)
+- return response
+
+No transport awareness.
 
 ---
 
 # ⚙️ ENGINE LAYER
 
----
-
-### app/engine/model_router.py
-Model selection system:
-
-Responsibilities:
-- choose best model based on input
+## app/engine/model_router.py
+Model selection layer:
 - routing logic (fast / general / heavy / safety)
+- selects model from available pool
 - no execution logic
 
 ---
 
-### app/engine/llm.py
+## app/engine/llm.py
 LLM execution layer:
-
-Responsibilities:
 - model inference execution
-- retry logic
+- retry logic (bounded)
 - timeout handling
-- structured logging
+- structured logging with trace_id
 - returns LLMResponse
-
-Stateless execution only.
+- stateless execution only
 
 ---
 
-### app/engine/telegram.py
-Transport adapter:
-
-Responsibilities:
-- send messages via Telegram Bot API
-- HTTP client only
+## app/engine/telegram.py
+Telegram transport adapter:
+- sends messages via Telegram Bot API
+- pure HTTP client
 - no business logic
-- used exclusively by Response Layer
+- used ONLY by response layer
 
 ---
 
@@ -124,21 +116,20 @@ Responsibilities:
 
 ---
 
-## 📜 app/contracts/message.py
-Data contracts:
-
+## app/contracts/message.py
+Data contract layer:
 - UserMessage
 - OrchestratorRequest
 
-Guarantees:
-- strict input schema
+Ensures:
+- strict schema enforcement
 - trace_id propagation
 - deterministic structure
 
 ---
 
-## 📜 app/contracts/response.py
-Unified response schema:
+## app/contracts/response.py
+Response contract layer:
 
 ### SuccessResponse
 ```json
@@ -147,7 +138,6 @@ Unified response schema:
   "data": "...",
   "trace_id": "..."
 }
-
 ErrorResponse
 JSON
 {
@@ -159,7 +149,13 @@ JSON
   },
   "trace_id": "..."
 }
-❌ app/core/errors.py (DOMAIN ERROR SYSTEM)
+app/contracts/context.py
+Context contract layer (NEW / RESERVED):
+defines shared context structure
+memory-ready schema for future agent expansion
+used for prompt enrichment
+app/core/errors.py
+Unified error schema layer:
 AppError base class
 OrchestratorError
 LLMError
@@ -173,87 +169,75 @@ JSON
     "trace_id": "..."
   }
 }
-📊 app/core/logger.py
+app/core/logger.py
 Structured logging system:
 JSON logs
 trace_id tracking
-event-based logs
+event-based lifecycle logging
 Events:
 webhook_received
 orchestrator_start
+memory_loaded
 model_selected
 llm_request
 llm_response
+memory_saved
 response_sent
 error events
-📤 app/domain/response_handler.py
-Unified output handler:
+app/core/response_handler.py
+Response abstraction + formatting layer (DOMAIN OUTPUT)
 Responsibilities:
-normalize Success/ErrorResponse
-format user-facing text
+normalize SuccessResponse / ErrorResponse
+convert system output → user text
 send via telegram engine
-guarantee delivery attempt logging
-Flow:
-receive response object
-extract text/error
-send via telegram adapter
-log success/failure
-🧠 MEMORY LAYER (READY BUT OPTIONAL)
+guarantee delivery logging
+preserve trace_id consistency
+Internal methods:
+handle(response, chat_id)
+send_text(text, chat_id, trace_id)
+🧠 MEMORY LAYER (NEWLY IMPLEMENTED)
 app/memory/session_store.py
-In-memory session storage:
-user message history
-assistant message history
-simple key-value structure
+Session storage layer:
+per-user message history
+append user/assistant messages
+lightweight in-memory state
+fast access
+no external DB dependency yet
 app/memory/memory_service.py
-Memory orchestration:
-build context for LLM
-append messages after response
-isolation from orchestrator logic
-IMPORTANT:
-optional dependency
-system works without it
-🧠 MODEL SYSTEM (IMPORTANT - DO NOT REMOVE)
+Memory orchestration layer:
+Responsibilities:
+build context from session history
+inject context into orchestrator flow
+store messages after LLM response
+isolates memory logic from CORE layer
+Integration:
+used inside orchestrator (optional dependency)
+system fully works without it
+safe fallback behavior enabled
+🧠 MODEL SYSTEM (DO NOT REMOVE)
 ⚡ FAST MODELS
 groq/compound-mini
 llama-3.1-8b-instant
-Use case:
-low latency responses
-simple queries
 🧠 GENERAL MODELS
 llama-3.3-70b-versatile
 qwen/qwen3-32b
 openai/gpt-oss-20b
-Use case:
-balanced reasoning
-standard chat
 🧠 HEAVY MODELS
 openai/gpt-oss-120b
 meta-llama/llama-4-scout-17b-16e-instruct
-Use case:
-deep reasoning
-complex tasks
 🛡 SAFETY MODELS
 openai/gpt-oss-safeguard-20b
 meta-llama/llama-prompt-guard-2-22m
 meta-llama/llama-prompt-guard-2-86m
-Use case:
-moderation
-safety filtering
 🎙 AUDIO MODELS
 whisper-large-v3
 whisper-large-v3-turbo
-Use case:
-speech-to-text
 🎭 EXPERIMENTAL MODELS
 allam-2-7b
 groq/compound
 canopylabs/orpheus-v1-english
 canopylabs/orpheus-arabic-saudi
-Use case:
-testing
-experimental pipelines
-future agent features
-🔐 ENVIRONMENT VARIABLES (CRITICAL)
+🔐 ENVIRONMENT VARIABLES (CRITICAL — DO NOT MODIFY STRUCTURE)
 AI / LLM
 GROQ_API_KEY
 Telegram
@@ -275,65 +259,85 @@ TON_WALLET
 Deployment
 WEBHOOK_URL
 🚫 SECURITY RULES
-no secrets in repo
+no secrets in repository
 env-only configuration
-no direct external calls outside engine layer
-strict transport isolation
-no business logic in API layer
+no external calls outside engine layer
+strict separation of transport vs business logic
 📊 OBSERVABILITY
-Logging includes:
-timestamp
-event
-trace_id
-payload
-model used
-execution stage
 Trace lifecycle:
 
 webhook_received
 → orchestrator_start
+→ memory_loaded
 → model_selected
 → llm_request
 → llm_response
+→ memory_saved
 → response_sent
-→ error (if any)
-💥 CURRENT STATUS (STABLE CORE v1.3)
+``` id="trace_1"
+
+---
+
+# 💥 CURRENT STATUS (STABLE CORE v1.3)
+
 System is:
-✅ fully working end-to-end
-✅ production-stable pipeline
-✅ traceable request lifecycle
-✅ modular but simplified architecture
-✅ memory-ready (optional)
-✅ safe response handling
-✅ multi-model routing enabled
-⚠️ CURRENT LIMITATIONS
-no persistent memory (only in-memory optional)
-no agent reasoning layer
-no streaming responses
-no structured UI responses (v2 planned)
-no tool-usage system yet
-🚀 ROADMAP (NEXT EVOLUTION)
-🔜 1. MEMORY LAYER (PRODUCTION)
-Redis-based storage
-TTL sessions
-context summarization
-🔜 2. PROMPT BUILDER LAYER
-structured prompt formatting
-context compression
-model-specific templates
-🤖 3. AGENT LAYER (MAJOR UPGRADE)
-multi-step reasoning
-tool usage
-planning loop
-autonomous decision flow
-🧾 4. RESPONSE FORMAT v2
-JSON / Markdown / UI formats
-structured output schemas
-channel-based formatting
-📡 5. STREAMING SUPPORT
-partial responses
-token streaming
-real-time UX
-🧱 SYSTEM CLASS
-Production-ready modular AI backend:
-MVP → STABLE CORE → PRE-AGENT ARCHITECTURE
+- fully working end-to-end
+- memory-enabled (optional)
+- fully traceable pipeline
+- modular but simplified architecture
+- production-safe
+- ready for agent evolution
+
+---
+
+# ⚠️ CURRENT LIMITATIONS
+
+- no persistent memory (session-only)
+- no agent reasoning layer
+- no streaming responses
+- no structured UI response system (v2 planned)
+- no tool execution layer
+
+---
+
+# 🚀 NEXT EVOLUTION ROADMAP
+
+## 🔜 1. MEMORY PERSISTENCE LAYER
+- Redis / DB storage
+- long-term memory
+- cross-session continuity
+
+---
+
+## 🔜 2. PROMPT BUILDER LAYER
+- structured prompt templates
+- context compression
+- model-specific formatting
+
+---
+
+## 🤖 3. AGENT LAYER
+- multi-step reasoning
+- tool usage
+- planning loop
+- autonomous execution flow
+
+---
+
+## 🧾 4. RESPONSE FORMAT v2
+- JSON / Markdown / UI outputs
+- multi-channel responses
+- structured templates
+
+---
+
+## 📡 5. STREAMING SUPPORT
+- token streaming
+- real-time UX layer
+
+---
+
+# 🧱 SYSTEM CLASS
+
+Production-capable modular AI backend:
+> MVP → STABLE CORE → PRE-AGENT FOUNDATION → AGENT READY ARCHITECTURE
