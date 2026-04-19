@@ -3,7 +3,8 @@ from uuid import uuid4
 
 from app.contracts.message import OrchestratorRequest, UserMessage
 from app.core.orchestrator import handle_request
-from app.core.response_handler import ResponseHandler  # ✅ новое
+from app.engine.telegram import send_message
+from app.core.errors import AppError
 
 router = APIRouter()
 
@@ -37,20 +38,22 @@ async def telegram_webhook(request: Request):
 
         result = await handle_request(req)
 
-        # ✅ теперь через response layer
-        await ResponseHandler.send_text(
-            text=result,
-            chat_id=chat_id,
-            trace_id=trace_id
-        )
+        await send_message(chat_id=chat_id, text=result)
 
+        return {"ok": True, "trace_id": trace_id}
+
+    except AppError as e:
         return {
-            "ok": True,
-            "trace_id": trace_id
+            "ok": False,
+            **e.to_dict()
         }
 
     except Exception as e:
         return {
             "ok": False,
-            "error": str(e)
+            "error": {
+                "code": "API_500",
+                "message": str(e),
+                "layer": "api"
+            }
         }
