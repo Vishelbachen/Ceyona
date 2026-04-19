@@ -3,7 +3,7 @@ from app.engine.model_policy import select_model_by_intent
 from app.config.settings import settings
 from app.engine.types import IntentResult
 
-# 🔥 thresholds
+# 🔥 thresholds (tuned for stability)
 LOW_CONFIDENCE = 0.55
 SHORT_TEXT = 50
 MID_TEXT = 300
@@ -11,13 +11,12 @@ MID_TEXT = 300
 
 def resolve_model(text: str) -> tuple[str, IntentResult]:
     """
-    🧠 SINGLE SOURCE OF TRUTH — MODEL DECISION ENGINE v3 (CLEAN)
+    🧠 SINGLE SOURCE OF TRUTH — MODEL DECISION ENGINE v3.1
 
-    Pipeline:
-    1. Intent classification
-    2. Confidence gate
-    3. Policy routing
-    4. Deterministic fallback (NO LEGACY ROUTER)
+    CORE IDEA:
+    - intent is helpful, but NEVER dominant over reasoning stability
+    - deterministic fallback always preserved
+    - reasoning-heavy queries get priority stability
     """
 
     text = text or ""
@@ -28,28 +27,58 @@ def resolve_model(text: str) -> tuple[str, IntentResult]:
     intent = intent_result.intent
     confidence = intent_result.confidence
 
-    # 🧠 2. LOW CONFIDENCE → SKIP INTENT LOGIC (BUT NOT LEGACY ROUTER)
-    if confidence < LOW_CONFIDENCE:
-        if text_len < SHORT_TEXT:
-            return settings.FAST_MODELS[0], intent_result
-
-        if text_len < MID_TEXT:
-            return settings.GENERAL_MODELS[0], intent_result
-
+    # 🧠 2. PRE-CHECK: REASONING OVERRIDE (IMPORTANT FIX FOR OLYMPIADS)
+    # если текст похож на задачу → всегда усиливаем модель
+    if _is_reasoning_heavy(text):
         return settings.HEAVY_MODELS[0], intent_result
 
-    # 🧠 3. POLICY ROUTING (PRIMARY SYSTEM)
+    # 🧠 3. LOW CONFIDENCE → PURE SIZE LOGIC (NO INTENT RELIANCE)
+    if confidence < LOW_CONFIDENCE:
+        return _size_based_model(text_len), intent_result
+
+    # 🧠 4. POLICY ROUTING (PRIMARY SYSTEM)
     try:
         model = select_model_by_intent(intent_result)
-        return model, intent_result
+        if model:
+            return model, intent_result
     except Exception:
         pass
 
-    # 🧠 4. SIZE-BASED FALLBACK (SAFE DETERMINISTIC LOGIC)
+    # 🧠 5. FALLBACK (SAFE DETERMINISTIC PATH)
+    return _size_based_model(text_len), intent_result
+
+
+# -------------------------
+# INTERNAL HELPERS
+# -------------------------
+
+def _size_based_model(text_len: int) -> str:
+    """Pure deterministic fallback (NO INTENT DEPENDENCY)"""
+
     if text_len < SHORT_TEXT:
-        return settings.FAST_MODELS[0], intent_result
+        return settings.FAST_MODELS[0]
 
     if text_len < MID_TEXT:
-        return settings.GENERAL_MODELS[0], intent_result
+        return settings.GENERAL_MODELS[0]
 
-    return settings.HEAVY_MODELS[0], intent_result
+    return settings.HEAVY_MODELS[0]
+
+
+def _is_reasoning_heavy(text: str) -> bool:
+    """
+    Detects olympiad / math / logic / reasoning tasks.
+
+    WHY:
+    prevents weak model selection even when intent classifier fails
+    """
+
+    text_lower = text.lower()
+
+    triggers = [
+        "докажи", "реши", "найди", "уравнение",
+        "integral", "derive", "prove", "calculate",
+        "матем", "логик", "алгеб", "геометр",
+        "equation", "proof", "solve", "theorem"
+    ]
+
+    return any(t in text_lower for t in triggers)
