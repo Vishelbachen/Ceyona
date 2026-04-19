@@ -7,6 +7,11 @@ class ResponseHandler:
     @staticmethod
     async def send_text(text: str, chat_id: str, trace_id: str):
         try:
+            safe_text = (text or "").strip()
+
+            if not safe_text:
+                safe_text = "⚠️ Empty response"
+
             logger.log(
                 "INFO",
                 "sending_telegram_message",
@@ -14,7 +19,7 @@ class ResponseHandler:
                 chat_id=chat_id
             )
 
-            await send_message(chat_id=chat_id, text=text)
+            await send_message(chat_id=chat_id, text=safe_text)
 
             logger.log(
                 "INFO",
@@ -33,11 +38,16 @@ class ResponseHandler:
             )
             raise
 
+
     @staticmethod
     async def handle(response, chat_id: str):
         try:
-            if not response:
-                logger.log("ERROR", "null_response")
+            if response is None:
+                logger.log(
+                    "ERROR",
+                    "null_response",
+                    trace_id="unknown"
+                )
                 return
 
             trace_id = getattr(response, "trace_id", None) or "unknown"
@@ -45,12 +55,17 @@ class ResponseHandler:
             success = getattr(response, "success", False)
 
             if success:
-                text = getattr(response, "data", "") or "⚠️ Empty response"
+                text = getattr(response, "data", None)
+
+                if not text or not str(text).strip():
+                    text = "⚠️ Empty response"
             else:
-                error = getattr(response, "error", {}) or {}
+                error = getattr(response, "error", None)
 
                 if isinstance(error, dict):
                     message = error.get("message", "Unknown error")
+                elif error is None:
+                    message = "Unknown error"
                 else:
                     message = str(error)
 
