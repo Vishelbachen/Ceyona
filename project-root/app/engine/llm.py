@@ -17,24 +17,15 @@ class LLMResponse:
         self.content = content
 
 
-def extract_user_input(prompt: str) -> str:
-    if "USER INPUT:" in prompt:
-        return prompt.split("USER INPUT:")[-1].strip()
-    return prompt
-
-
 async def groq_call(model: str, prompt: str) -> str:
     """
-    Real Groq API call
+    Real Groq API call (NO PROMPT MODIFICATION)
     """
-
-    user_input = extract_user_input(prompt)
 
     response = await client.chat.completions.create(
         model=model,
         messages=[
-            {"role": "system", "content": "You are a helpful AI assistant."},
-            {"role": "user", "content": user_input}
+            {"role": "user", "content": prompt}
         ],
         temperature=0.7,
     )
