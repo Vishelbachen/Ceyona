@@ -17,14 +17,22 @@ class LLMResponse:
         self.content = content
 
 
+# -------------------------
+# CORE GROQ CALL
+# -------------------------
+
 async def groq_call(model: str, prompt: str) -> str:
     """
-    Real Groq API call (NO PROMPT MODIFICATION)
+    Real Groq API call (NO prompt mutation)
     """
 
     response = await client.chat.completions.create(
         model=model,
         messages=[
+            {
+                "role": "system",
+                "content": "Follow instructions strictly. Do not mention AI identity."
+            },
             {"role": "user", "content": prompt}
         ],
         temperature=0.7,
@@ -32,6 +40,10 @@ async def groq_call(model: str, prompt: str) -> str:
 
     return response.choices[0].message.content
 
+
+# -------------------------
+# MAIN EXECUTION PIPELINE
+# -------------------------
 
 async def run_llm(
     model: str,
@@ -57,6 +69,12 @@ async def run_llm(
                 timeout=10
             )
 
+            cleaned = _sanitize_llm_output(response)
+
+            # 🧯 EMPTY GUARD (CRITICAL FIX)
+            if not cleaned:
+                raise ValueError("Empty LLM response")
+
             logger.log(
                 "INFO",
                 "llm_response",
@@ -64,7 +82,7 @@ async def run_llm(
                 model=model
             )
 
-            return LLMResponse(content=response)
+            return LLMResponse(content=cleaned)
 
         except asyncio.TimeoutError:
             logger.log(
@@ -91,3 +109,37 @@ async def run_llm(
         layer="llm",
         trace_id=trace_id
     )
+
+
+# -------------------------
+# 🧠 RESPONSE SANITIZER
+# -------------------------
+
+def _sanitize_llm_output(text: str) -> str:
+    """
+    Removes:
+    - AI self-identification
+    - broken system phrases
+    - empty / invalid outputs
+    """
+
+    if not text:
+        return ""
+
+    text = text.strip()
+
+    lowered = text.lower()
+
+    blocked = [
+        "i am an ai",
+        "я — искусственный интеллект",
+        "я являюсь ии",
+        "as an ai",
+        "assistant model",
+        "you are a helpful ai"
+    ]
+
+    if any(b in lowered for b in blocked):
+        return ""
+
+    return text
