@@ -7,9 +7,7 @@ from app.core.logger import logger
 class OrchestratorError(Exception):
     pass
 
-
-async def handle_request(req: OrchestratorRequest) -> str:
-    trace_id = req.trace_id
+async def run_llm(model: str, prompt: str, retries: int = 2, trace_id: str = None):
 
     try:
         logger.log(
