@@ -1,15 +1,28 @@
 class PromptBuilder:
     """
-    Centralized prompt construction layer.
+    Centralized prompt construction layer (PRODUCTION v2).
 
     Responsibilities:
-    - isolate prompt formatting
-    - enforce strict model behavior contract
-    - prevent self-identification and meta-talk
+    - strict behavior enforcement
+    - multilingual output support
+    - context injection
+    - model behavior abstraction (NOT model names)
+    - prevent AI self-identification and meta-talk
     """
+
+    # 🧠 behavior mapping (IMPORTANT FIX)
+    MODEL_MODES = {
+        "fast": "FAST MODE",
+        "general": "GENERAL MODE",
+        "reasoning": "REASONING MODE",
+        "creative": "CREATIVE MODE",
+        "safety": "SAFETY MODE",
+    }
 
     @staticmethod
     def build(user_text: str, context: list, model: str) -> str:
+
+        user_text = user_text or ""
 
         # 🧠 safe context rendering
         if not context:
@@ -20,23 +33,57 @@ class PromptBuilder:
                 for msg in context
             )
 
-        # 🔥 STRICT SYSTEM CONTRACT (IMPORTANT FIX)
+        # 🌍 MULTILINGUAL + STRICT BEHAVIOR CONTRACT
         system_block = (
-            "You are a response engine.\n"
-            "You must NOT mention that you are an AI, model, assistant or system.\n"
-            "You must NOT explain your behavior or capabilities.\n"
-            "You must NOT use phrases like 'I am an AI'.\n"
-            "You must answer directly without meta commentary.\n"
-            "Follow user instructions precisely.\n"
-            "Keep responses natural and human-like.\n"
-            "Match the language of the user input.\n"
-            "Be concise unless detail is explicitly requested.\n"
+            "You are a response system.\n"
+            "You do NOT have identity.\n"
+            "You must NEVER mention AI, assistant, model, system or architecture.\n"
+            "You must NEVER explain how you work.\n"
+            "You must NEVER use meta commentary.\n"
+            "You must answer directly and naturally.\n"
+            "You must strictly follow the language of the user input.\n"
+            "If user writes in Russian, answer in Russian. If English, answer in English.\n"
+            "Be concise unless detail is requested.\n"
+            "Do not add emotional symbols unless user explicitly uses them.\n"
         )
 
-        # 🔥 unified prompt format
+        # 🧠 derive safe mode instead of exposing model name
+        mode = PromptBuilder.MODEL_MODES.get(
+            PromptBuilder._infer_mode(model),
+            "GENERAL MODE"
+        )
+
+        # 🔥 unified prompt format (SAFE VERSION)
         return (
             f"SYSTEM:\n{system_block}\n\n"
+            f"MODE:\n{mode}\n\n"
             f"CONVERSATION HISTORY:\n{context_block}\n\n"
-            f"USER INPUT:\n{user_text}\n\n"
-            f"TARGET MODEL:\n{model}\n"
+            f"USER INPUT:\n{user_text}\n"
         )
+
+    @staticmethod
+    def _infer_mode(model: str) -> str:
+        """
+        Converts real model name → safe behavioral category
+        (prevents leakage like groq/compound-mini)
+        """
+
+        model = (model or "").lower()
+
+        # FAST MODELS
+        if any(x in model for x in ["mini", "instant", "compound"]):
+            return "fast"
+
+        # HEAVY / REASONING MODELS
+        if any(x in model for x in ["70b", "120b", "scout", "llama-4"]):
+            return "reasoning"
+
+        # SAFETY MODELS
+        if "safeguard" in model or "guard" in model:
+            return "safety"
+
+        # CREATIVE / GENERAL
+        if any(x in model for x in ["qwen", "gpt-oss", "llama-3"]):
+            return "general"
+
+        return "general"
