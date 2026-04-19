@@ -9,21 +9,45 @@ class LLMResponse:
         self.content = content
 
 
+def extract_user_input(prompt: str) -> str:
+    """
+    Extracts USER INPUT from PromptBuilder format
+    """
+    if "USER INPUT:" in prompt:
+        return prompt.split("USER INPUT:")[-1].strip()
+    return prompt
+
+
 async def fake_groq_call(model: str, prompt: str) -> str:
     """
-    Mock LLM (temporary layer before Groq integration)
+    Smart Mock LLM (simulates real model behavior)
     """
 
     await asyncio.sleep(0.3)
 
     if not prompt:
-        return "ERROR: empty prompt"
+        return "Ошибка: пустой запрос"
 
-    # future:
-    # if settings.GROQ_API_KEY:
-    #     call real Groq API here
+    user_text = extract_user_input(prompt).lower()
 
-    return f"[{model}] {prompt}"
+    # 🔥 Простая "интеллектуальная" логика
+    if any(word in user_text for word in ["привет", "здравствуйте", "хай"]):
+        return "Привет! 😊 Чем могу помочь?"
+
+    if "как дела" in user_text:
+        return "Всё отлично! Готов помочь тебе 🚀"
+
+    if "кто ты" in user_text:
+        return "Я ИИ-ассистент, который работает через модульную архитектуру 😎"
+
+    if "помоги" in user_text:
+        return "Конечно! Опиши задачу подробнее — разберёмся вместе."
+
+    if "код" in user_text or "программ" in user_text:
+        return "Давай разберём код. Пришли часть или опиши проблему."
+
+    # fallback (универсальный ответ)
+    return "Я понял твой запрос. Сейчас я бы подключил настоящую модель и дал точный ответ 😉"
 
 
 async def run_llm(
