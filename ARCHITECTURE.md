@@ -1,137 +1,138 @@
-🧠 FINAL ARCHITECTURE (v1.3.1 — STABLE CORE + RESPONSE REFACTOR + CONFIG INTEGRATED)
+🧠 FINAL ARCHITECTURE (v1.3.2 — MODEL DECISION UNIFIED + RESPONSE REFACTOR)
 🎯 GOAL
-Minimal production-ready AI backend with:
+Production-ready AI backend with:
 strict separation of concerns
+single model decision brain (model_decision.py)
 deterministic execution flow
-full traceable request lifecycle (trace_id)
-unified response + error handling
-optional memory layer (session-based)
-centralized configuration system (settings.py)
-integrated multi-model system (ALL models routed via engine layer)
+full traceable lifecycle (trace_id)
+unified response system (formatter + handler)
+optional memory layer (session-based MVP)
+centralized config (settings.py)
+multi-model ecosystem (FAST / GENERAL / HEAVY / SAFETY)
 prompt abstraction layer (PromptBuilder)
-split response system (formatter + handler)
-clean upgrade path to Agent Layer
-🧱 SYSTEM OVERVIEW (SIMPLIFIED)
+safe legacy fallback layer (controlled only inside decision system)
+🧱 SYSTEM OVERVIEW (FINAL CLEAN MODEL)
 🟢 ARCHITECTURE MODEL
 API LAYER
 ↓
 CORE LAYER (ORCHESTRATION)
 ↓
-ENGINE LAYER (EXECUTION + TRANSPORT)
+ENGINE LAYER (EXECUTION + MODEL + TRANSPORT)
 ↓
 DOMAIN LAYER (CONTRACTS + LOGGING + RESPONSE)
 ↓
 MEMORY LAYER (OPTIONAL STATE)
 ↓
-CONFIG LAYER (CENTRALIZED SETTINGS)
-🔁 FULL REQUEST FLOW (PRODUCTION FLOW)
+CONFIG LAYER (SINGLE SOURCE OF TRUTH)
+🔁 FULL REQUEST FLOW (PRODUCTION FLOW v1.3.2)
 Telegram
 → webhook (API)
 → Orchestrator (CORE)
 → MemoryService (optional context injection)
-→ Model Router (ENGINE)
-→ PromptBuilder (CORE UTILITY LAYER)
-→ LLM (ENGINE)
-→ Response Formatter (DOMAIN)
-→ Response Handler (DOMAIN)
-→ Telegram Sender (ENGINE)
+→ Model Decision Layer (model_decision.py)
+→ PromptBuilder
+→ LLM Engine
+→ Response Formatter
+→ Response Handler
+→ Telegram Transport
 → User
-📦 ACTIVE FILES (STABLE CORE++)
+📦 ACTIVE FILES (FINAL CORE)
 🚪 API LAYER
 app/api/webhook.py
-Telegram INBOUND layer:
-Responsibilities:
 receive Telegram updates
-validate payload safely
+validate payload
 generate trace_id
 build OrchestratorRequest
-call handle_request
+call orchestrator
 pass result to ResponseHandler
-no business logic
-no formatting logic
+❌ no business logic
+❌ no model logic
+❌ no formatting logic
 🧠 CORE LAYER
 app/core/orchestrator.py
-Responsibilities:
+RESPONSIBILITIES
 central execution coordinator
-receives OrchestratorRequest
-full lifecycle logging
-model selection coordination
+memory integration (optional)
+calls resolve_model() ONLY
 prompt building via PromptBuilder
-LLM execution orchestration
-optional memory integration
-Flow:
-start
-memory load (optional)
-model selection
-prompt building (PromptBuilder)
-LLM call
-memory save (optional)
-return response object
-❌ no transport logic
-❌ no formatting logic
-🧾 app/core/prompt_builder.py (NEW STABLE LAYER)
-Role:
-single source of prompt formatting logic
-removes prompt logic from orchestrator
-ensures consistent model input format
-Responsibility boundary:
-✔ input normalization
-✔ context formatting
-✔ prompt assembly
+LLM execution
+returns structured response
+FLOW
+✔ memory load
+✔ model decision (UNIFIED BRAIN)
+✔ prompt build
+✔ LLM call
+✔ memory save
+✔ return response
+❌ no legacy router usage
+❌ no policy usage directly
+❌ no classification logic
+🧠 MODEL DECISION SYSTEM (NEW CORE BRAIN)
+app/engine/model_decision.py ⭐ (SOURCE OF TRUTH)
+RESPONSIBILITIES
+Intent classification
+Policy routing
+Legacy fallback safety net
+confidence-aware routing
+final model resolution
+PIPELINE
+IntentClassifier
+ModelPolicy
+Legacy fallback (model_router)
+Safety net (settings default)
+RULE:
+👉 ONLY orchestrator uses this file
+🧠 INTENT SYSTEM
+app/engine/intent_classifier.py
+lightweight heuristic classifier
+returns:
+Python
+IntentResult(intent, confidence)
+app/engine/model_policy.py
+ROLE
+👉 PURE MAPPING ONLY:
+intent → model group
+NO LOGIC BEYOND:
+safety
+reasoning
+creative
+fast
+❗ IMPORTANT RULE
+✔ must NOT be used directly in orchestrator
+✔ only used inside model_decision
+🧯 LEGACY SAFETY SYSTEM
+app/engine/model_router.py
+ROLE
+👉 EMERGENCY FALLBACK ONLY
+RULES
+NEVER primary system
+ONLY used inside model_decision
+never imported in orchestrator
+Python
+# DO NOT IMPORT OUTSIDE model_decision.py
+# EMERGENCY FALLBACK ONLY
+🧾 PROMPT SYSTEM
+app/core/prompt_builder.py
+ROLE
+prompt formatting abstraction
+context normalization
+model input standardization
 ❌ no model logic
 ❌ no memory logic
 ⚙️ ENGINE LAYER
-app/engine/model_router.py
-Role:
-deterministic model selection
-Logic:
-small input → fast model
-medium → general model
-large → heavy model
-🧠 FULL MODEL SYSTEM (INTEGRATED)
-⚡ FAST MODELS
-groq/compound-mini
-llama-3.1-8b-instant
-🧠 GENERAL MODELS
-llama-3.3-70b-versatile
-qwen/qwen3-32b
-openai/gpt-oss-20b
-🧠 HEAVY MODELS
-openai/gpt-oss-120b
-meta-llama/llama-4-scout-17b-16e-instruct
-🛡 SAFETY MODELS
-openai/gpt-oss-safeguard-20b
-llama-prompt-guard-2-22m
-llama-prompt-guard-2-86m
-🎙 AUDIO MODELS
-whisper-large-v3
-whisper-large-v3-turbo
-🎭 EXPERIMENTAL MODELS
-allam-2-7b
-groq/compound
-orpheus models
-✔ All models are routed ONLY via engine layer
 app/engine/llm.py
-Responsibilities:
-model execution (stateless)
-retry logic
-timeout control
+stateless inference
+retry + timeout
 trace logging
-external API abstraction (future Groq/OpenAI via settings.py)
+future Groq/OpenAI integration via settings
 app/engine/telegram.py
-Role:
-pure transport adapter
-sends messages via Telegram API
+pure transport layer
+sends messages only
 no logic
-no formatting
-no decision making
-✔ uses settings.BOT_TOKEN
 🧩 DOMAIN LAYER
 app/contracts/message.py
 UserMessage
 OrchestratorRequest
-✔ strict schema
-✔ trace_id propagation
 app/contracts/response.py
 SuccessResponse
 JSON
@@ -141,7 +142,7 @@ JSON
   "trace_id": "..."
 }
 ErrorResponse
-json
+JSON
 {
   "success": false,
   "error": {
@@ -151,19 +152,8 @@ json
   },
   "trace_id": "..."
 }
-🧾 app/contracts/context.py
-future agent-ready context schema
-app/core/errors.py
-central error system:
-AppError
-OrchestratorError
-LLMError
-RouterError
-APIError
 app/core/logger.py
-structured logging system:
-trace_id lifecycle tracking
-events:
+TRACE EVENTS
 webhook_received
 orchestrator_start
 memory_loaded
@@ -171,106 +161,101 @@ model_selected
 llm_request
 llm_response
 memory_saved
+response_formatted
 response_sent
-🧠 RESPONSE SYSTEM (REFACTORED — IMPORTANT)
-🧾 app/core/response_formatter.py (NEW)
-PURPOSE:
-pure transformation layer
-
-Responsibilities:
-convert SuccessResponse/ErrorResponse → user-safe text
-normalize edge cases
-ensure safe output formatting
-NO sending
-NO Telegram logic
-NO business logic
-📤 app/core/response_handler.py (REFINED)
-PURPOSE:
-delivery orchestrator
-
-Responsibilities:
-call ResponseFormatter
-send via Telegram engine
-log delivery result
-ensure trace_id continuity
-
-❌ removed:
-formatting logic
-interpretation logic
-
-Now ONLY:
-format → send → log
-
+app/core/errors.py
+OrchestratorError
+LLMError
+RouterError
+APIError
+🧠 RESPONSE SYSTEM (FINAL SPLIT)
+🧾 response_formatter.py
+ROLE:
+pure transformation
+✔ Success/Error → user text
+✔ edge-case handling
+❌ no sending
+📤 response_handler.py
+ROLE:
+delivery controller
+✔ calls formatter
+✔ sends via Telegram
+✔ logs result
+❌ no formatting logic
 🧠 MEMORY LAYER (OPTIONAL)
-app/memory/session_store.py
-in-memory session storage
+session_store.py
+in-memory storage
 append messages
 limit history
-app/memory/memory_service.py
-context builder
+memory_service.py
+builds context
 orchestrator injection layer
-safe optional dependency
-⚙️ CONFIG LAYER (CRITICAL IMPROVEMENT)
-app/config/settings.py (SINGLE SOURCE OF TRUTH)
-Responsibilities:
-ALL env variables centralized
-replaces os.getenv everywhere
-includes:
-GROQ_API_KEY
-BOT_TOKEN
-JWT_SECRET
+safe fallback
+⚙️ CONFIG LAYER (CRITICAL)
+settings.py (SINGLE SOURCE OF TRUTH)
+CONTAINS:
+API keys
+Telegram token
+model groups:
+FAST
+GENERAL
+HEAVY
+SAFETY
 external APIs
-model groups (FAST / GENERAL / HEAVY / SAFETY)
-✔ now also controls model ecosystem centrally
-app/config/__init__.py
-python
-# empty file (required for package structure)
-✔ present in all modules
-❌ REMOVED ARCHITECTURE PART
-🔐 ENV VARIABLES SECTION
-fully removed from architecture doc because:
-✔ replaced by settings.py
-✔ single source of truth
-✔ scalable config system
-🚫 SECURITY RULES
-no secrets in repo
-all config via settings.py
-engine-only external API calls
-strict separation:
-transport ≠ logic ≠ formatting
-📊 OBSERVABILITY (TRACE PIPELINE)
+✔ replaces os.getenv everywhere
+✔ controls full model ecosystem
+📊 OBSERVABILITY (TRACE PIPELINE v1.3.2)
+Plain text
 webhook_received
 → orchestrator_start
 → memory_loaded
+→ model_decision_start
+→ intent_classified
 → model_selected
 → llm_request
 → llm_response
 → memory_saved
 → response_formatted
 → response_sent
-💥 CURRENT STATUS (FINAL STABLE CORE v1.3.1)
+🧠 CRITICAL ARCHITECTURE RULES (NEW)
+🚨 MODEL SYSTEM RULE
+❌ NO direct model_policy usage in orchestrator
+❌ NO model_router usage anywhere except model_decision
+✔ ONLY model_decision.resolve_model is valid entry point
+🚨 SEPARATION RULE
+Layer
+Responsibility
+model_decision
+brain
+model_policy
+mapping
+model_router
+fallback
+orchestrator
+coordinator
+💥 CURRENT STATUS (v1.3.2 STABLE CORE)
 🟢 SYSTEM IS:
 production-ready MVP
 fully modular
-clean layered architecture
-multi-model integrated
-prompt abstraction layer added
-response system properly split
-fully traceable
+single decision brain architecture
+safe fallback system
+clean layered separation
+multi-model routing ready
+prompt abstraction stable
+response system fully split
+traceable end-to-end
 config centralized
-safe for scaling
-⚠️ LIMITATIONS (INTENTIONAL)
-no persistent memory (Redis/DB next)
+⚠️ INTENTIONAL LIMITATIONS
+no persistent memory (Redis next)
 no agent reasoning layer
-no streaming responses
+no streaming
 no tool execution system
 🚀 NEXT EVOLUTION PATH
-🔜 1. MEMORY PERSISTENCE (Redis / DB)
-🔜 2. AGENT LAYER (multi-step reasoning)
-🔜 3. TOOL EXECUTION SYSTEM
-🔜 4. STREAMING RESPONSES
-🔜 5. RICH RESPONSE FORMAT v2 (UI / JSON / structured output)
+🔜 model scoring system (weighted routing)
+🔜 cost-aware model selection
+🔜 latency-aware routing
+🔜 user-tier model allocation
+🔜 agent reasoning layer (v2 architecture)
 🧱 SYSTEM CLASS
-Production AI backend:
-
-MVP → Stable Core → Agent-ready foundation → Full AI system
+Production AI backend evolving toward agentic architecture:
+MVP → Stable Core → Decision Brain System → Agent-ready AI Platform
