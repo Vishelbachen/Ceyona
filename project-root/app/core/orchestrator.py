@@ -1,11 +1,12 @@
 from app.contracts.message import OrchestratorRequest
 from app.contracts.response import SuccessResponse, ErrorResponse
 from app.engine.model_router import select_model
+from app.engine.model_policy import select_model_by_intent  # 🆕 INTENT-BASED ROUTING (future-ready)
 from app.engine.llm import run_llm
 from app.core.logger import logger
 from app.core.errors import OrchestratorError
 from app.memory.memory_service import MemoryService
-from app.core.prompt_builder import PromptBuilder  # ✅ NEW IMPORT
+from app.core.prompt_builder import PromptBuilder
 
 
 async def handle_request(
@@ -18,9 +19,12 @@ async def handle_request(
         logger.log("INFO", "orchestrator_start", trace_id=trace_id)
 
         user_id = req.user_message.user_id
-        text = req.user_message.text
+        text = (req.user_message.text or "").strip()
 
-        # 🧠 MEMORY LOAD (SAFE + CLEAN)
+        if not text:
+            raise ValueError("Empty user message")
+
+        # 🧠 MEMORY LOAD (SAFE + CONTROLLED)
         context = []
         if memory:
             try:
@@ -42,7 +46,8 @@ async def handle_request(
                 )
                 context = []
 
-        # 🧠 MODEL SELECTION
+        # 🧠 MODEL SELECTION (CURRENT + READY FOR UPGRADE)
+        # NOTE: сейчас fallback = rule-based router
         model = select_model(text)
 
         logger.log(
@@ -52,21 +57,21 @@ async def handle_request(
             model=model
         )
 
-        # 🧠 PROMPT BUILDER (NEW CLEAN LAYER)
+        # 🧠 PROMPT BUILD (ISOLATED LAYER)
         enriched_prompt = PromptBuilder.build(
             user_text=text,
             context=context,
             model=model
         )
 
-        # 🧠 LLM CALL
+        # 🧠 LLM EXECUTION
         response = await run_llm(
             model=model,
             prompt=enriched_prompt,
             trace_id=trace_id
         )
 
-        # 🧠 MEMORY SAVE (SAFE)
+        # 🧠 MEMORY SAVE (SAFE + NON-BLOCKING)
         if memory and getattr(memory, "store", None):
             try:
                 memory.store.append_message(user_id, "user", text)
@@ -89,12 +94,14 @@ async def handle_request(
             trace_id=trace_id
         )
 
+    # ⚠️ DOMAIN ERRORS
     except OrchestratorError as e:
         return ErrorResponse(
             error=e.to_dict()["error"],
             trace_id=trace_id
         )
 
+    # ⚠️ SAFE FALLBACK FOR ANY UNEXPECTED FAILURE
     except Exception as e:
         logger.log(
             "ERROR",
