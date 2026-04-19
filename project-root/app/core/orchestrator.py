@@ -1,8 +1,6 @@
 from app.contracts.message import OrchestratorRequest
 from app.contracts.response import SuccessResponse, ErrorResponse
-from app.engine.model_router import select_model
-from app.engine.model_policy import select_model_by_intent
-from app.engine.intent_classifier import IntentClassifier  # 🆕 CONNECT INTENT LAYER
+from app.engine.model_decision import resolve_model  # ✅ SINGLE ENTRY POINT
 from app.engine.llm import run_llm
 from app.core.logger import logger
 from app.core.errors import OrchestratorError
@@ -37,6 +35,7 @@ async def handle_request(
                     trace_id=trace_id,
                     context_size=len(context)
                 )
+
             except Exception as e:
                 logger.log(
                     "ERROR",
@@ -46,25 +45,16 @@ async def handle_request(
                 )
                 context = []
 
-        # 🧠 INTENT DETECTION (NEW CONTROL POINT)
-        intent_result = IntentClassifier.classify(text)
-
-        logger.log(
-            "INFO",
-            "intent_classified",
-            trace_id=trace_id,
-            intent=intent_result.intent,
-            confidence=intent_result.confidence
-        )
-
-        # 🧠 MODEL SELECTION (SINGLE CONTROL FLOW)
-        model = select_model_by_intent(intent_result)
+        # 🧠 MODEL DECISION (CLEAN SINGLE PIPELINE)
+        model, intent_result = resolve_model(text)
 
         logger.log(
             "INFO",
             "model_selected",
             trace_id=trace_id,
-            model=model
+            model=model,
+            intent=intent_result.intent,
+            confidence=intent_result.confidence
         )
 
         # 🧠 PROMPT BUILD
