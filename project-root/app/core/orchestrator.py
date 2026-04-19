@@ -19,11 +19,14 @@ async def handle_request(
         user_id = req.user_message.user_id
         text = req.user_message.text
 
-        # 🧠 MEMORY LOAD (SAFE)
-        context = []
+        # 🧠 MEMORY LOAD (SAFE + CLEAN)
+        context = ""
         if memory:
             try:
-                context = memory.build_context(user_id)
+                raw_context = memory.build_context(user_id)
+
+                # FIX: нормализация (list → string)
+                context = "\n".join(raw_context) if isinstance(raw_context, list) else str(raw_context)
 
                 logger.log(
                     "INFO",
@@ -31,6 +34,7 @@ async def handle_request(
                     trace_id=trace_id,
                     context_size=len(context)
                 )
+
             except Exception as e:
                 logger.log(
                     "ERROR",
@@ -38,7 +42,7 @@ async def handle_request(
                     trace_id=trace_id,
                     error=str(e)
                 )
-                context = []
+                context = ""
 
         model = select_model(text)
 
@@ -49,10 +53,13 @@ async def handle_request(
             model=model
         )
 
-        enriched_prompt = (
-            f"USER MESSAGE:\n{text}\n\n"
-            f"CONTEXT:\n{context}"
-        )
+        # 🧠 PROMPT (CLEAN STRUCTURE)
+        enriched_prompt = f"""USER MESSAGE:
+{text}
+
+CONTEXT:
+{context}
+"""
 
         response = await run_llm(
             model=model,
@@ -60,13 +67,11 @@ async def handle_request(
             trace_id=trace_id
         )
 
-        # 🧠 MEMORY SAVE (HARDENED)
+        # 🧠 MEMORY SAVE (SAFE + HARDENED)
         if memory and getattr(memory, "store", None):
             try:
                 memory.store.append_message(user_id, "user", text)
-
-                assistant_text = getattr(response, "content", "")
-                memory.store.append_message(user_id, "assistant", assistant_text)
+                memory.store.append_message(user_id, "assistant", response.content)
 
                 logger.log("INFO", "memory_saved", trace_id=trace_id)
 
@@ -81,7 +86,7 @@ async def handle_request(
         logger.log("INFO", "orchestrator_done", trace_id=trace_id)
 
         return SuccessResponse(
-            data=getattr(response, "content", ""),
+            data=response.content,
             trace_id=trace_id
         )
 
