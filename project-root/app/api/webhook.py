@@ -16,7 +16,7 @@ async def telegram_webhook(request: Request):
     try:
         payload = await request.json()
 
-        # 📩 SAFE PARSING (NO CRASH MODE)
+        # 📩 SAFE PARSING
         message = payload.get("message") or {}
         text = message.get("text")
 
@@ -44,7 +44,7 @@ async def telegram_webhook(request: Request):
 
         logger.log("INFO", "webhook_received", trace_id=trace_id)
 
-        # 🧠 BUILD ORCHESTRATOR REQUEST
+        # 🧠 BUILD REQUEST
         req = OrchestratorRequest(
             trace_id=trace_id,
             user_id=user_id,
@@ -54,7 +54,7 @@ async def telegram_webhook(request: Request):
             )
         )
 
-        # 🔁 CORE EXECUTION (ORCHESTRATOR)
+        # 🔁 CORE EXECUTION
         result = await handle_request(req)
 
         logger.log(
@@ -64,11 +64,17 @@ async def telegram_webhook(request: Request):
             success=getattr(result, "success", None)
         )
 
-        # 📤 RESPONSE LAYER (SAFE ISOLATED)
+        # 📤 RESPONSE LAYER
         try:
             await ResponseHandler.handle(
                 response=result,
                 chat_id=chat_id
+            )
+
+            logger.log(
+                "INFO",
+                "response_sent",
+                trace_id=trace_id
             )
 
         except Exception as e:
@@ -79,19 +85,14 @@ async def telegram_webhook(request: Request):
                 error=str(e)
             )
 
-            # ⚠️ we do NOT crash webhook pipeline
             return {
                 "ok": False,
-                "error": "response_handler_failed",
-                "trace_id": trace_id
+                "error": "response_handler_failed"
             }
 
         logger.log("INFO", "webhook_success", trace_id=trace_id)
 
-        return {
-            "ok": True,
-            "trace_id": trace_id
-        }
+        return {"ok": True}
 
     except Exception as e:
         logger.log(
@@ -103,6 +104,5 @@ async def telegram_webhook(request: Request):
 
         return {
             "ok": False,
-            "error": str(e),
-            "trace_id": trace_id
+            "error": str(e)
         }
