@@ -1,11 +1,12 @@
+from typing import List, Dict
+
 from app.config.settings import settings
-from app.engine.types import IntentResult
 
 
 # -------------------------
-# SIMPLE ROUND-ROBIN STATE (IN-MEMORY)
+# ROUND-ROBIN STATE
 # -------------------------
-_MODEL_INDEX = {
+_MODEL_INDEX: Dict[str, int] = {
     "fast": 0,
     "general": 0,
     "heavy": 0,
@@ -13,55 +14,53 @@ _MODEL_INDEX = {
 }
 
 
-def _pick_model(models: list[str], layer: str) -> str:
+# -------------------------
+# SAFE MODEL PICK
+# -------------------------
+def pick_model_from_layer(layer: str) -> str:
     """
-    Simple rotation (prevents always picking first model)
+    Select model from a given layer using round-robin strategy.
+    This is a POLICY layer — does NOT decide the layer.
     """
-    global _MODEL_INDEX
+
+    models = _get_models(layer)
 
     if not models:
         return ""
 
-    idx = _MODEL_INDEX[layer] % len(models)
-    _MODEL_INDEX[layer] += 1
-
+    idx = _next_index(layer, len(models))
     return models[idx]
 
 
 # -------------------------
-# MAIN ROUTER
+# INTERNAL: GET MODELS
 # -------------------------
-def select_model_by_intent(intent: IntentResult) -> str:
+def _get_models(layer: str) -> List[str]:
 
-    layer = "general"
+    models = settings.MODEL_LAYERS.get(layer)
 
-    # -------------------------
-    # MAP INTENT → LAYER
-    # -------------------------
-    if intent.intent == "safety":
-        layer = "safety"
+    if not models:
+        # fallback to general
+        models = settings.MODEL_LAYERS.get("general", [])
 
-    elif intent.intent == "reasoning":
-        layer = "heavy"
+    return models or []
 
-    elif intent.intent == "creative":
-        layer = "general"
 
-    elif intent.intent == "fast":
-        layer = "fast"
+# -------------------------
+# INTERNAL: SAFE ROTATION
+# -------------------------
+def _next_index(layer: str, size: int) -> int:
+    """
+    Safe rotation counter.
+    """
 
-    # -------------------------
-    # COMPLEXITY OVERRIDE (IMPORTANT)
-    # -------------------------
-    if intent.complexity == "high" and intent.intent != "safety":
-        layer = "heavy"
+    if size <= 0:
+        return 0
 
-    if intent.complexity == "low" and intent.intent == "fast":
-        layer = "fast"
+    current = _MODEL_INDEX.get(layer, 0)
 
-    # -------------------------
-    # GET MODELS FROM SETTINGS
-    # -------------------------
-    models = settings.MODEL_LAYERS.get(layer, settings.MODEL_LAYERS["general"])
+    idx = current % size
 
-    return _pick_model(models, layer)
+    _MODEL_INDEX[layer] = current + 1
+
+    return idx
