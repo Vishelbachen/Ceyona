@@ -8,6 +8,7 @@ class PromptBuilder:
     - task-type adaptive structure
     - multilingual strict mode
     - conversation anti-loop fix (IMPORTANT)
+    - context noise reduction
     """
 
     MODEL_MODES = {
@@ -38,32 +39,49 @@ class PromptBuilder:
         return "general"
 
     @staticmethod
+    def _clean_context(context: list, limit: int = 8) -> str:
+        """
+        Prevents prompt explosion + repetitive loops.
+        Keeps only last N meaningful messages.
+        """
+        if not context:
+            return "EMPTY"
+
+        trimmed = context[-limit:]
+
+        cleaned = []
+        for msg in trimmed:
+            role = msg.get("role", "unknown").upper()
+            text = (msg.get("text") or "").strip()
+
+            if not text:
+                continue
+
+            cleaned.append(f"[{role}] {text}")
+
+        return "\n".join(cleaned) if cleaned else "EMPTY"
+
+    @staticmethod
     def build(user_text: str, context: list, model: str) -> str:
 
-        user_text = user_text or ""
+        user_text = (user_text or "").strip()
 
-        # 🧠 CONTEXT SAFE BUILD
-        if not context:
-            context_block = "EMPTY"
-        else:
-            context_block = "\n".join(
-                f"[{msg.get('role', 'unknown').upper()}] {msg.get('text', '')}"
-                for msg in context
-            )
+        # 🧠 CONTEXT SAFE BUILD (ANTI LOOP FIX)
+        context_block = PromptBuilder._clean_context(context)
 
         # 🧠 TASK DETECTION
         task = PromptBuilder._detect_task(user_text)
 
-        # 🌍 SYSTEM CORE (FIXED: anti-loop + conversational stability)
+        # 🌍 SYSTEM CORE
         system_block = (
             "You are a high-level reasoning engine.\n"
             "You solve problems at olympiad and research level.\n\n"
 
-            "CONVERSATION RULES (IMPORTANT FIX):\n"
-            "- Do NOT repeat generic phrases like 'How can I help you?'\n"
+            "CONVERSATION RULES:\n"
+            "- Do NOT repeat generic phrases or templates\n"
             "- Respond naturally based on context\n"
-            "- If user is casual → be casual\n"
-            "- If user is confused → clarify instead of repeating templates\n\n"
+            "- Avoid repetitive assistant-like greetings\n"
+            "- Adapt tone to user style (formal / casual)\n\n"
 
             "ABSOLUTE RULES:\n"
             "- NEVER mention AI, assistant, model, system\n"
@@ -77,7 +95,7 @@ class PromptBuilder:
             "- avoid filler text\n"
         )
 
-        # 🧠 REASONING BLOCK (TASK-SPECIFIC)
+        # 🧠 REASONING BLOCK
         if task == "math_physics":
             reasoning_block = (
                 "REASONING MODE: MATHEMATICS / PHYSICS\n"
@@ -85,7 +103,7 @@ class PromptBuilder:
                 "2. Choose correct law/formula\n"
                 "3. Derive step-by-step\n"
                 "4. Compute carefully\n"
-                "5. Present final answer clearly\n"
+                "5. Final answer\n"
             )
 
         elif task == "coding":
@@ -95,7 +113,7 @@ class PromptBuilder:
                 "2. Design solution\n"
                 "3. Implement clean code\n"
                 "4. Handle edge cases\n"
-                "5. Ensure correctness\n"
+                "5. Verify correctness\n"
             )
 
         elif task == "proof":
@@ -105,6 +123,15 @@ class PromptBuilder:
                 "2. Define assumptions\n"
                 "3. Build logical steps\n"
                 "4. Conclude rigorously\n"
+            )
+
+        elif task == "analysis":
+            reasoning_block = (
+                "REASONING MODE: ANALYSIS\n"
+                "1. Identify key facts\n"
+                "2. Structure explanation\n"
+                "3. Support with evidence\n"
+                "4. Conclude clearly\n"
             )
 
         else:
