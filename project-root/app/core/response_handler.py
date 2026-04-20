@@ -4,6 +4,14 @@ from app.core.response_formatter import ResponseFormatter
 
 
 class ResponseHandler:
+    """
+    Production-safe response delivery layer.
+
+    Responsibilities:
+    - format response safely
+    - guarantee Telegram delivery attempt
+    - never crash orchestrator
+    """
 
     # -------------------------
     # SAFE SEND LAYER
@@ -24,7 +32,11 @@ class ResponseHandler:
                 chat_id=chat_id
             )
 
-            await send_message(chat_id=chat_id, text=safe_text)
+            await send_message(
+                chat_id=chat_id,
+                text=safe_text,
+                trace_id=trace_id
+            )
 
             logger.log(
                 "INFO",
@@ -40,10 +52,8 @@ class ResponseHandler:
                 error=str(e)
             )
 
-            # ❗ IMPORTANT:
-            # delivery failure must NOT crash pipeline
+            # IMPORTANT: do not propagate
             return
-
 
     # -------------------------
     # MAIN ENTRY POINT
@@ -69,7 +79,7 @@ class ResponseHandler:
 
         try:
             # -------------------------
-            # SAFE FORMATTER WRAP
+            # FORMATTER (SAFE WRAP)
             # -------------------------
             try:
                 formatted_text = ResponseFormatter.format(response)
@@ -88,7 +98,9 @@ class ResponseHandler:
             if not isinstance(formatted_text, str):
                 formatted_text = str(formatted_text)
 
-            if not formatted_text.strip():
+            formatted_text = formatted_text.strip()
+
+            if not formatted_text:
                 logger.log(
                     "WARN",
                     "empty_formatted_response",
@@ -119,5 +131,5 @@ class ResponseHandler:
                 error=str(e)
             )
 
-            # ❗ DO NOT RAISE (Railway webhook safety)
+            # NEVER crash webhook pipeline
             return
