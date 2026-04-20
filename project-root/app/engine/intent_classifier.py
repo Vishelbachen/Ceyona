@@ -1,71 +1,57 @@
-from app.engine.types import IntentResult
+from dataclasses import dataclass
+from typing import Literal
+
+
+IntentType = Literal[
+    "fast",
+    "reasoning",
+    "creative",
+    "safety",
+    "chat",
+]
+
+
+@dataclass
+class IntentResult:
+    intent: IntentType
+    complexity: str  # low | medium | high
+    risk: str        # low | medium | high
+    confidence: float
 
 
 def classify_intent(text: str) -> IntentResult:
-    """
-    Intent signal generator (NOT a router).
-
-    ONLY purpose:
-    - estimate handling style
-    - provide confidence signal
-
-    DO NOT:
-    - select models
-    - override task classifier
-    """
-
     t = (text or "").lower().strip()
 
     # -------------------------
-    # SAFETY SIGNAL
+    # SAFETY
     # -------------------------
     if any(w in t for w in ["bomb", "kill", "weapon", "hack", "attack"]):
+        return IntentResult("safety", "high", "high", 0.95)
+
+    # -------------------------
+    # REASONING
+    # -------------------------
+    if any(w in t for w in ["prove", "why", "derive", "solve", "calculate", "equation"]):
         return IntentResult(
-            intent="safety",
-            complexity="high",
-            risk="high",
-            confidence=0.9
+            "reasoning",
+            "high" if len(t) > 120 else "medium",
+            "low",
+            0.85
         )
 
     # -------------------------
-    # REASONING SIGNAL
-    # -------------------------
-    if any(w in t for w in ["prove", "why", "derive", "solve", "calculate"]):
-        return IntentResult(
-            intent="reasoning",
-            complexity="high",
-            risk="low",
-            confidence=0.8
-        )
-
-    # -------------------------
-    # CREATIVE SIGNAL
+    # CREATIVE
     # -------------------------
     if any(w in t for w in ["write", "story", "poem", "generate", "compose"]):
-        return IntentResult(
-            intent="creative",
-            complexity="medium",
-            risk="low",
-            confidence=0.75
-        )
+        return IntentResult("creative", "medium", "low", 0.8)
 
     # -------------------------
-    # FAST SIGNAL
+    # FAST
     # -------------------------
     if len(t) < 60:
-        return IntentResult(
-            intent="fast",
-            complexity="low",
-            risk="low",
-            confidence=0.6
-        )
+        return IntentResult("fast", "low", "low", 0.6)
 
     # -------------------------
-    # DEFAULT CHAT
+    # DEFAULT
     # -------------------------
-    return IntentResult(
-        intent="chat",
-        complexity="medium",
-        risk="low",
-        confidence=0.5
-    )
+    return IntentResult("chat", "medium", "low", 0.55)
