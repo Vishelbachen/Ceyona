@@ -1,11 +1,11 @@
-name: AI Backend CI
+name: AI-Level CI
 
 on:
   push:
   pull_request:
 
 jobs:
-  test:
+  ai-check:
     runs-on: ubuntu-latest
 
     steps:
@@ -23,18 +23,68 @@ jobs:
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
 
-      # 🧹 1. Проверка стиля и ошибок
-      - name: Lint (ruff)
+      # 🧹 1. Code quality
+      - name: Ruff (lint)
         run: ruff check .
 
-      # 🧠 2. Проверка типов
-      - name: Type check (mypy)
+      - name: MyPy (type check)
         run: mypy .
 
-      # 🔐 3. Проверка безопасности
-      - name: Security scan (bandit)
-        run: bandit -r .
-
-      # 🧪 4. Тесты
-      - name: Run tests
+      # 🧪 2. Tests
+      - name: Pytest
         run: pytest -q
+
+      # 🔐 3. Security
+      - name: Bandit security scan
+        run: bandit -r app/
+
+      # 🧠 4. Architecture check (ВАЖНО)
+      - name: Detect circular imports
+        run: |
+          python -c "
+import os, sys, ast
+
+def check_file(path):
+    with open(path, 'r', encoding='utf-8') as f:
+        try:
+            ast.parse(f.read())
+        except Exception as e:
+            print(f'❌ Syntax error in {path}: {e}')
+            sys.exit(1)
+
+for root, _, files in os.walk('app'):
+    for file in files:
+        if file.endswith('.py'):
+            check_file(os.path.join(root, file))
+
+print('✔ basic AST check passed')
+"
+
+      # 🧠 5. Simple architecture sanity check
+      - name: Layer check
+        run: |
+          python -c "
+import os
+
+violations = []
+
+for root, _, files in os.walk('app'):
+    for f in files:
+        if f.endswith('.py'):
+            path = os.path.join(root, f)
+
+            with open(path, encoding='utf-8') as file:
+                content = file.read()
+
+                # example rules
+                if 'app/api' in root and 'model_decision' in content:
+                    violations.append(path + ' should not import model_decision directly')
+
+if violations:
+    print('❌ Architecture violations:')
+    for v in violations:
+        print(v)
+    exit(1)
+
+print('✔ architecture OK')
+"
