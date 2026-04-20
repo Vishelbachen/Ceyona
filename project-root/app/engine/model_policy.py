@@ -1,5 +1,3 @@
-app/engine/model_policy.py
-
 from app.config.settings import settings
 from app.engine.intent_classifier import IntentResult
 
