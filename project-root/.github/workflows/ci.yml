@@ -11,18 +11,56 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 🧠 Python setup
       - uses: actions/setup-python@v5
         with:
           python-version: 3.11
 
+      # 📦 Install dependencies
       - name: Install dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
 
+      # 🧠 0. PROJECT HEALTH CHECK (NEW)
+      - name: Project import sanity check (AUTO DEBUG)
+        run: |
+          python -c "
+import sys, traceback
+
+print('🔍 Checking base imports...')
+
+try:
+    import app
+    print('✔ app imported')
+except Exception as e:
+    print('❌ app import failed')
+    traceback.print_exc()
+    sys.exit(1)
+
+try:
+    from app.core.orchestrator import orchestrate
+    print('✔ orchestrator imported')
+except Exception as e:
+    print('❌ orchestrator import failed')
+    traceback.print_exc()
+    sys.exit(1)
+
+try:
+    from app.core.model_decision import resolve_model
+    print('✔ model_decision imported')
+except Exception as e:
+    print('❌ model_decision import failed')
+    traceback.print_exc()
+    sys.exit(1)
+
+print('✔ core imports OK')
+"
+
       # 🧹 CODE QUALITY
       - name: Lint (ruff)
-        run: ruff check .
+        run: ruff check . --output-format=github
 
       - name: Type check (mypy)
         run: mypy .
