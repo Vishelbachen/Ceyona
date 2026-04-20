@@ -1,17 +1,8 @@
 class PromptBuilder:
     """
-    Centralized prompt construction layer (v3.5 stable).
-
-    Fixes:
-    - orchestrator compatibility
-    - context type safety
-    - reasoning engine integration
-    - task-aware prompting
+    Centralized prompt construction layer (v3.5 stable FIXED).
     """
 
-    # -------------------------
-    # MODEL MODES
-    # -------------------------
     MODEL_MODES = {
         "fast": "FAST MODE",
         "general": "GENERAL MODE",
@@ -21,7 +12,7 @@ class PromptBuilder:
     }
 
     # -------------------------
-    # LANGUAGE DETECTION
+    # LANGUAGE DETECTION (FIXED)
     # -------------------------
     @staticmethod
     def _detect_language(text: str) -> str:
@@ -33,34 +24,41 @@ class PromptBuilder:
         cyrillic = sum(1 for c in text if "а" <= c.lower() <= "я")
         latin = sum(1 for c in text if c.isascii() and c.isalpha())
 
-        if cyrillic > 0 and cyrillic >= latin:
+        total = cyrillic + latin
+
+        if total == 0:
+            return "en"
+
+        if cyrillic / total > 0.4:
             return "ru"
 
         return "en"
 
     # -------------------------
-    # CONTEXT NORMALIZATION (FIXED)
+    # CONTEXT NORMALIZATION (ROBUST)
     # -------------------------
     @staticmethod
     def _clean_context(context: list, limit: int = 10) -> str:
-
         if not context:
             return "EMPTY"
 
         trimmed = context[-limit:]
-
         lines = []
 
         for msg in trimmed:
 
-            # supports dict OR dataclass
-            role = getattr(msg, "role", None) or msg.get("role", "user")
-            text = getattr(msg, "text", None) or msg.get("text", "")
+            role = getattr(msg, "role", None)
+            text = getattr(msg, "text", None)
 
+            if isinstance(msg, dict):
+                role = role or msg.get("role")
+                text = text or msg.get("text")
+
+            role = (role or "user").upper()
             text = (text or "").strip()
 
             if text:
-                lines.append(f"{str(role).upper()}: {text}")
+                lines.append(f"{role}: {text}")
 
         return "\n".join(lines) if lines else "EMPTY"
 
@@ -69,11 +67,8 @@ class PromptBuilder:
     # -------------------------
     @staticmethod
     def _infer_mode(model: str, task: str = None) -> str:
-
         model = (model or "").lower()
         task = (task or "").lower()
-
-        # PRIORITY: task > model
 
         if task in ["math", "physics", "coding", "reasoning"]:
             return "reasoning"
@@ -93,7 +88,7 @@ class PromptBuilder:
         return "general"
 
     # -------------------------
-    # MAIN BUILD (FIXED)
+    # MAIN BUILD
     # -------------------------
     @staticmethod
     def build(
@@ -123,10 +118,11 @@ class PromptBuilder:
 
         reasoning_block = f"TASK: {task_type.upper()}"
 
-        protocol_block = (
-            f"REASONING PROTOCOL:\n{reasoning_protocol}\n"
-            if reasoning_protocol else ""
-        )
+        protocol_block = ""
+        if reasoning_protocol:
+            rp = reasoning_protocol.strip()
+            if rp:
+                protocol_block = f"REASONING PROTOCOL:\n{rp}\n"
 
         lang_block = (
             "RESPONSE LANGUAGE:\n"
