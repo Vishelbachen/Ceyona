@@ -74,9 +74,9 @@ class ConversationContext:
     # GET RECENT CONTEXT
     # -------------------------
     def get_recent(self, limit: int = 10) -> List[ContextMessage]:
-        if not self.messages:
-            return []
-        return self.messages[-limit:]
+    if not self.messages:
+        return []
+    return self.messages[-limit:]
 
     # -------------------------
     # FILTER BY IMPORTANCE
