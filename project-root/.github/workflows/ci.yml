@@ -1,90 +1,48 @@
-name: AI-Level CI
+name: AI Production CI
 
 on:
   push:
   pull_request:
 
 jobs:
-  ai-check:
+  pipeline:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: 3.11
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
 
-      # 🧹 1. Code quality
-      - name: Ruff (lint)
+      # 🧹 CODE QUALITY
+      - name: Lint (ruff)
         run: ruff check .
 
-      - name: MyPy (type check)
+      - name: Type check (mypy)
         run: mypy .
 
-      # 🧪 2. Tests
-      - name: Pytest
+      # 🧪 TESTS
+      - name: Run tests
         run: pytest -q
 
-      # 🔐 3. Security
-      - name: Bandit security scan
+      # 🔐 SECURITY
+      - name: Security scan
         run: bandit -r app/
 
-      # 🧠 4. Architecture check (ВАЖНО)
-      - name: Detect circular imports
-        run: |
-          python -c "
-import os, sys, ast
+      # 🧠 ARCHITECTURE GUARD
+      - name: Architecture validation
+        run: python scripts/arch_check.py
 
-def check_file(path):
-    with open(path, 'r', encoding='utf-8') as f:
-        try:
-            ast.parse(f.read())
-        except Exception as e:
-            print(f'❌ Syntax error in {path}: {e}')
-            sys.exit(1)
+      # 🤖 AI BEHAVIOR TESTS
+      - name: AI behavior tests
+        run: python scripts/ai_tests.py
 
-for root, _, files in os.walk('app'):
-    for file in files:
-        if file.endswith('.py'):
-            check_file(os.path.join(root, file))
-
-print('✔ basic AST check passed')
-"
-
-      # 🧠 5. Simple architecture sanity check
-      - name: Layer check
-        run: |
-          python -c "
-import os
-
-violations = []
-
-for root, _, files in os.walk('app'):
-    for f in files:
-        if f.endswith('.py'):
-            path = os.path.join(root, f)
-
-            with open(path, encoding='utf-8') as file:
-                content = file.read()
-
-                # example rules
-                if 'app/api' in root and 'model_decision' in content:
-                    violations.append(path + ' should not import model_decision directly')
-
-if violations:
-    print('❌ Architecture violations:')
-    for v in violations:
-        print(v)
-    exit(1)
-
-print('✔ architecture OK')
-"
+      # 🧠 MEMORY INTEGRITY
+      - name: Memory integrity check
+        run: python scripts/memory_tests.py
