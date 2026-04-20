@@ -9,24 +9,48 @@ LogLevel = Literal["DEBUG", "INFO", "WARN", "ERROR", "CRITICAL"]
 
 class StructuredLogger:
     """
-    Cognitive-grade structured logger.
-
-    Designed for:
-    - reasoning pipelines
-    - model routing systems
-    - self-healing loops
-    - observability + debugging + analytics
+    Production-grade structured logger for AI pipeline.
+    Safe for Railway, uvicorn workers, async systems.
     """
 
     def __init__(self):
         self.logger = logging.getLogger("app")
+
+        # IMPORTANT: avoid duplicate handlers in Railway / uvicorn reload
+        if not self.logger.handlers:
+            handler = logging.StreamHandler()
+            handler.setFormatter(logging.Formatter("%(message)s"))
+            self.logger.addHandler(handler)
+
         self.logger.setLevel(logging.INFO)
 
-        handler = logging.StreamHandler()
-        handler.setFormatter(logging.Formatter("%(message)s"))
+    # -------------------------
+    # LEVEL MAPPING (FIXED)
+    # -------------------------
+    def _log_by_level(self, level: LogLevel, message: str):
+        match level:
+            case "DEBUG":
+                self.logger.debug(message)
+            case "INFO":
+                self.logger.info(message)
+            case "WARN":
+                self.logger.warning(message)
+            case "ERROR":
+                self.logger.error(message)
+            case "CRITICAL":
+                self.logger.critical(message)
+            case _:
+                self.logger.info(message)
 
-        if not self.logger.handlers:
-            self.logger.addHandler(handler)
+    # -------------------------
+    # SAFE SERIALIZER
+    # -------------------------
+    def _safe_json(self, obj: Any) -> Any:
+        try:
+            json.dumps(obj)
+            return obj
+        except Exception:
+            return str(obj)
 
     # -------------------------
     # CORE LOG METHOD
@@ -47,14 +71,10 @@ class StructuredLogger:
             "trace_id": trace_id,
             "step": step,
             "model": model,
-            "data": data
+            "data": {
+                k: self._safe_json(v)
+                for k, v in (data or {}).items()
+            }
         }
 
-        # 🧠 normalize empty payloads
-        payload["data"] = payload["data"] or {}
-
-        self.logger.info(json.dumps(payload, ensure_ascii=False))
-
-
-# singleton
-logger = StructuredLogger()
+        self._log_by_level(level, json.dumps(payload, ensure_ascii=False))
