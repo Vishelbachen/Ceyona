@@ -6,19 +6,11 @@ from app.core.errors import LLMError
 from app.config.settings import settings
 
 
-# -------------------------
-# CLIENT INIT (GROQ COMPAT OPENAI SDK)
-# -------------------------
-
 client = AsyncOpenAI(
     api_key=settings.GROQ_API_KEY,
     base_url="https://api.groq.com/openai/v1"
 )
 
-
-# -------------------------
-# RESPONSE WRAPPER
-# -------------------------
 
 class LLMResponse:
     def __init__(self, content: str):
@@ -26,30 +18,18 @@ class LLMResponse:
 
 
 # -------------------------
-# CORE API CALL
+# CORE CALL
 # -------------------------
 
-async def _call_llm_api(model: str, prompt: str) -> str:
-    """
-    Single raw LLM call.
-    No mutation, no filtering, no business logic.
-    """
-
+async def groq_call(model: str, prompt: str) -> str:
     response = await client.chat.completions.create(
         model=model,
         messages=[
             {
                 "role": "system",
-                "content": (
-                    "Follow the instructions in the user message strictly. "
-                    "Respond in the same language as the user. "
-                    "Do not include unnecessary prefaces."
-                )
+                "content": "Follow instructions strictly. Respond in user language."
             },
-            {
-                "role": "user",
-                "content": prompt
-            }
+            {"role": "user", "content": prompt}
         ],
         temperature=0.7,
     )
@@ -65,63 +45,62 @@ async def run_llm(
     model: str,
     prompt: str,
     retries: int = 2,
-    timeout: int = 12,
     trace_id: str | None = None
 ) -> LLMResponse:
 
-    last_error = None
+    attempt = 0
 
-    for attempt in range(retries + 1):
+    while attempt <= retries:
         try:
-            logger.log(
-                "INFO",
-                "llm_request",
-                trace_id=trace_id,
-                model=model,
-                attempt=attempt
+            logger.log("INFO", "llm_request", trace_id=trace_id, model=model, attempt=attempt)
+
+            response = await asyncio.wait_for(
+                groq_call(model, prompt),
+                timeout=12
             )
 
-            response_text = await asyncio.wait_for(
-                _call_llm_api(model, prompt),
-                timeout=timeout
-            )
+            cleaned = _sanitize(response)
 
-            if not response_text or not response_text.strip():
-                raise ValueError("Empty LLM response")
+            if not cleaned:
+                raise ValueError("Empty response")
 
-            logger.log(
-                "INFO",
-                "llm_response",
-                trace_id=trace_id,
-                model=model
-            )
+            logger.log("INFO", "llm_response", trace_id=trace_id, model=model)
 
-            return LLMResponse(content=response_text.strip())
-
-        except asyncio.TimeoutError as e:
-            last_error = e
-            logger.log(
-                "ERROR",
-                "llm_timeout",
-                trace_id=trace_id,
-                model=model,
-                attempt=attempt
-            )
+            return LLMResponse(content=cleaned)
 
         except Exception as e:
-            last_error = e
-            logger.log(
-                "ERROR",
-                "llm_error",
-                trace_id=trace_id,
-                model=model,
-                error=str(e),
-                attempt=attempt
-            )
+            logger.log("ERROR", "llm_error", trace_id=trace_id, error=str(e))
+
+        attempt += 1
 
     raise LLMError(
         code="LLM_001",
-        message=f"LLM failed after retries: {str(last_error)}",
+        message="LLM failed after retries",
         layer="llm",
         trace_id=trace_id
     )
+
+
+# -------------------------
+# SANITIZER
+# -------------------------
+
+def _sanitize(text: str) -> str:
+    if not text:
+        return ""
+
+    text = text.strip()
+
+    blocked = (
+        "i am an ai",
+        "as an ai",
+        "я являюсь ии",
+        "assistant model"
+    )
+
+    lower = text.lower()
+
+    if any(b in lower for b in blocked):
+        return ""
+
+    return text
