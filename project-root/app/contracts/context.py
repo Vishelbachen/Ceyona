@@ -51,6 +51,15 @@ class ConversationContext:
         source: str = "chat",
         tags: Optional[List[str]] = None
     ):
+        # -------------------------
+        # SAFE NORMALIZATION
+        # -------------------------
+        role = (role or "user").lower()
+        text = (text or "").strip()
+
+        if not text:
+            return  # ignore empty messages safely
+
         self.messages.append(
             ContextMessage(
                 role=role,
@@ -65,12 +74,17 @@ class ConversationContext:
     # GET RECENT CONTEXT
     # -------------------------
     def get_recent(self, limit: int = 10) -> List[ContextMessage]:
-        return self.messages[-limit:] if self.messages else []
+        if not self.messages:
+            return []
+        return self.messages[-limit:]
 
     # -------------------------
     # FILTER BY IMPORTANCE
     # -------------------------
     def get_important(self, threshold: float = 0.7) -> List[ContextMessage]:
+        if not self.messages:
+            return []
+
         return [
             m for m in self.messages
             if m.importance >= threshold
@@ -88,8 +102,13 @@ class ConversationContext:
         if not chunk:
             return "EMPTY"
 
-        return "\n".join(
-            f"{m.role.upper()}: {m.text}"
-            for m in chunk
-            if m.text
-        ) or "EMPTY"
+        lines = []
+
+        for m in chunk:
+            if not m.text:
+                continue
+
+            role = (m.role or "USER").upper().strip()
+            lines.append(f"{role}: {m.text}")
+
+        return "\n".join(lines) if lines else "EMPTY"
