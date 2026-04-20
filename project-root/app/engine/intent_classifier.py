@@ -9,40 +9,41 @@ class IntentResult:
 
 
 def classify_intent(text: str) -> IntentResult:
-    t = text.lower()
+    t = text.lower().strip()
 
-    # 🛡 safety layer
-    if any(word in t for word in ["bomb", "kill", "hack", "weapon"]):
+    # 🛡 safety layer (strict priority)
+    if any(word in t for word in ["bomb", "kill", "weapon", "hack", "attack"]):
         return IntentResult(
             intent="safety",
             complexity="high",
             risk="high"
         )
 
-    # 🧠 reasoning (math, physics, explanation)
-    if any(word in t for word in ["why", "how", "explain", "prove", "calculate"]):
+    # 🧠 reasoning tasks
+    if any(word in t for word in ["why", "how", "explain", "prove", "calculate", "derive"]):
         return IntentResult(
             intent="reasoning",
             complexity="high",
             risk="low"
         )
 
-    # 🎭 creative
-    if any(word in t for word in ["write", "story", "poem", "generate"]):
+    # 🎭 creative tasks
+    if any(word in t for word in ["write", "story", "poem", "generate", "compose"]):
         return IntentResult(
             intent="creative",
             complexity="medium",
             risk="low"
         )
 
-    # ⚡ fast chat
-    if len(text) < 60:
+    # ⚡ fast queries
+    if len(t) < 60:
         return IntentResult(
             intent="fast",
             complexity="low",
             risk="low"
         )
 
+    # 💬 default chat
     return IntentResult(
         intent="chat",
         complexity="medium",
