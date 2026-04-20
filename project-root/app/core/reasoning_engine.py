@@ -1,11 +1,11 @@
 class ReasoningEngine:
     """
-    Unified reasoning strategy layer (v2.2 clean + scalable).
+    Unified reasoning strategy layer (v2.2 FIXED + production stable).
 
     Role:
-    - defines HOW to solve
-    - language-aware reasoning structure
-    - stable prompt injection layer
+    - defines HOW to solve (not what)
+    - generates structured reasoning protocol
+    - safe for prompt injection into LLM pipeline
     """
 
     # -------------------------
@@ -16,14 +16,14 @@ class ReasoningEngine:
         return (value or "").strip().lower()
 
     # -------------------------
-    # MAIN
+    # MAIN ENTRY
     # -------------------------
     @staticmethod
     def get_protocol(task_type: str, complexity: str = "medium", language: str = "en") -> str:
 
         task_type = ReasoningEngine._norm(task_type) or "general"
         complexity = ReasoningEngine._norm(complexity) or "medium"
-        language = ReasoningEngine._norm(language)
+        language = ReasoningEngine._norm(language) or "en"
 
         # -------------------------
         # SCIENCE / MATH DOMAIN
@@ -67,8 +67,8 @@ class ReasoningEngine:
                 steps = [
                     "Analyze requirements deeply",
                     "Design algorithm and data structures",
-                    "Consider time/space complexity",
-                    "Implement modular code",
+                    "Consider time and space complexity",
+                    "Implement clean modular code",
                     "Test edge cases",
                     "Validate correctness"
                 ]
@@ -83,7 +83,7 @@ class ReasoningEngine:
             return ReasoningEngine._format(steps)
 
         # -------------------------
-        # LOGIC / PROOF
+        # LOGIC / PROOF / REASONING
         # -------------------------
         if task_type in ["reasoning", "proof", "logic"]:
 
@@ -98,7 +98,7 @@ class ReasoningEngine:
             return ReasoningEngine._format(steps)
 
         # -------------------------
-        # ANALYSIS
+        # ANALYSIS DOMAIN
         # -------------------------
         if task_type in ["analysis", "history", "literature", "biology"]:
 
@@ -113,17 +113,24 @@ class ReasoningEngine:
             return ReasoningEngine._format(steps)
 
         # -------------------------
-        # GENERAL
+        # GENERAL FALLBACK
         # -------------------------
         return ReasoningEngine._format([
             "Understand question",
             "Think step-by-step",
-            "Provide clear answer"
+            "Provide clear and correct answer"
         ])
 
     # -------------------------
-    # FORMATTER (IMPORTANT FOR PROMPT LAYER)
+    # FORMATTER (PROMPT SAFE OUTPUT)
     # -------------------------
     @staticmethod
     def _format(steps: list[str]) -> str:
-        return "\n".join(f"{i+1}. {step}" for i, step in enumerate(steps))
+        if not steps:
+            return "1. Understand question"
+
+        return "\n".join(
+            f"{i + 1}. {step}"
+            for i, step in enumerate(steps)
+            if step
+        )
