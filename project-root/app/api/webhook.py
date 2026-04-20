@@ -55,21 +55,14 @@ async def telegram_webhook(request: Request):
         # 🔁 CORE EXECUTION
         result = await handle_request(req)
 
-        if result is None:
-            logger.log("ERROR", "orchestrator_returned_none", trace_id=trace_id)
-            return {
-                "ok": False,
-                "error": "orchestrator_returned_none",
-                "trace_id": trace_id
-            }
-
         logger.log(
             "INFO",
             "orchestrator_result_received",
-            trace_id=trace_id
+            trace_id=trace_id,
+            success=getattr(result, "success", None)
         )
 
-        # 📤 RESPONSE LAYER (SAFE WRAPPED)
+        # 📤 RESPONSE LAYER
         try:
             await ResponseHandler.handle(
                 response=result,
@@ -84,7 +77,6 @@ async def telegram_webhook(request: Request):
                 error=str(e)
             )
 
-            # fallback response (НЕ теряем сообщение)
             return {
                 "ok": False,
                 "error": "response_handler_failed",
