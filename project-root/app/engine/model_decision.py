@@ -1,66 +1,91 @@
 from app.engine.intent_classifier import classify_intent, IntentResult
 from app.config.settings import settings
 
+
 SHORT_TEXT = 50
 MID_TEXT = 300
 
 
+# -------------------------
+# MAIN BRAIN ROUTER
+# -------------------------
 def resolve_model(text: str) -> tuple[str, IntentResult]:
+
     text = text or ""
-    text_len = len(text)
 
     intent_result = classify_intent(text)
+    text_len = len(text)
 
-    # HARD OVERRIDE: reasoning
-    if _is_reasoning_heavy(text):
-        return settings.HEAVY_MODELS[0], intent_result
+    # -------------------------
+    # SAFETY OVERRIDE (highest priority)
+    # -------------------------
+    if intent_result.intent == "safety":
+        return _pick("safety"), intent_result
 
-    # LOW RELIABILITY
-    if _is_low_reliability(intent_result, text_len):
+    # -------------------------
+    # HIGH COMPLEXITY → HEAVY
+    # -------------------------
+    if intent_result.complexity == "high":
+        return _pick("heavy"), intent_result
+
+    # -------------------------
+    # LOW CONFIDENCE → CONSERVATIVE ROUTING
+    # -------------------------
+    if intent_result.confidence < 0.6:
         return _size_based_model(text_len), intent_result
 
-    # POLICY ROUTING
+    # -------------------------
+    # INTENT-BASED ROUTING
+    # -------------------------
     model = _select_by_intent(intent_result)
+
     if model:
         return model, intent_result
 
-    # FALLBACK
+    # -------------------------
+    # FINAL FALLBACK
+    # -------------------------
     return _size_based_model(text_len), intent_result
 
 
+# -------------------------
+# INTENT → LAYER
+# -------------------------
 def _select_by_intent(intent: IntentResult) -> str:
-    mapping = {
-        "fast": settings.FAST_MODELS,
-        "chat": settings.GENERAL_MODELS,
-        "reasoning": settings.HEAVY_MODELS,
-        "creative": settings.GENERAL_MODELS,
-        "safety": settings.SAFETY_MODELS,
+
+    layer_map = {
+        "fast": "fast",
+        "chat": "general",
+        "reasoning": "heavy",
+        "creative": "general",
+        "safety": "safety",
     }
-    return mapping.get(intent.intent, settings.GENERAL_MODELS)[0]
+
+    layer = layer_map.get(intent.intent, "general")
+
+    return _pick(layer)
 
 
+# -------------------------
+# MODEL PICKER (FIXED)
+# -------------------------
+def _pick(layer: str) -> str:
+
+    models = settings.MODEL_LAYERS.get(layer, settings.MODEL_LAYERS["general"])
+
+    # simple rotation-safe fallback
+    return models[0] if models else ""
+
+
+# -------------------------
+# SIZE FALLBACK (SAFE ONLY)
+# -------------------------
 def _size_based_model(n: int) -> str:
+
     if n < SHORT_TEXT:
-        return settings.FAST_MODELS[0]
+        return _pick("fast")
+
     if n < MID_TEXT:
-        return settings.GENERAL_MODELS[0]
-    return settings.HEAVY_MODELS[0]
+        return _pick("general")
 
-
-def _is_low_reliability(intent: IntentResult, n: int) -> bool:
-    if n < 20:
-        return True
-
-    if intent.intent not in {"fast", "chat", "reasoning", "creative", "safety"}:
-        return True
-
-    return False
-
-
-def _is_reasoning_heavy(text: str) -> bool:
-    t = text.lower()
-    return any(k in t for k in [
-        "prove", "derive", "solve", "equation",
-        "integral", "theorem", "calculate",
-        "докажи", "реши", "уравнение"
-    ])
+    return _pick("heavy")
