@@ -3,6 +3,7 @@ from app.contracts.response import SuccessResponse, ErrorResponse
 
 from app.engine.model_decision import resolve_model
 from app.engine.llm import run_llm
+from app.engine.intent_classifier import classify_intent  # ✅ FIXED
 
 from app.core.logger import logger
 from app.core.errors import OrchestratorError
@@ -11,10 +12,9 @@ from app.memory.memory_service import MemoryService
 from app.core.prompt_builder import PromptBuilder
 
 from app.core.reasoning_verifier import ReasoningVerifier
-from app.engine.task_classifier import classify
 from app.cognition.correction import Corrector
 
-# 🧠 COGNITION LAYER (NEW)
+# 🧠 COGNITION LAYER
 from app.cognition.evaluation import Evaluator
 from app.cognition.reflection import Reflection
 from app.memory.supabase_store import SupabaseStore
@@ -42,10 +42,15 @@ async def handle_request(req: OrchestratorRequest, memory: MemoryService | None 
         context = memory.build_context(user_id) if memory else []
 
         # -------------------------
-        # ROUTING
+        # INTENT CLASSIFICATION (NEW)
+        # -------------------------
+        intent_result = classify_intent(text)
+        task_type = intent_result.intent  # ✅ unified signal
+
+        # -------------------------
+        # MODEL ROUTING
         # -------------------------
         model, intent = resolve_model(text)
-        task_type = classify(text)
 
         # -------------------------
         # BASE PROMPT
@@ -110,13 +115,13 @@ async def handle_request(req: OrchestratorRequest, memory: MemoryService | None 
             )
 
         # -------------------------
-        # FINAL FALLBACK SAFETY
+        # FINAL FALLBACK
         # -------------------------
         if not final_answer:
             final_answer = last_response or "Unable to generate response."
 
         # -------------------------
-        # MEMORY WRITE (SHORT TERM)
+        # MEMORY WRITE
         # -------------------------
         if memory and getattr(memory, "store", None):
             try:
@@ -129,7 +134,7 @@ async def handle_request(req: OrchestratorRequest, memory: MemoryService | None 
                 logger.log("ERROR", "memory_save_failed", trace_id=trace_id, error=str(e))
 
         # -------------------------
-        # 🧠 COGNITION EVALUATION (NEW)
+        # 🧠 COGNITION EVALUATION
         # -------------------------
         evaluation = Evaluator.evaluate(
             task_type=task_type,
@@ -138,7 +143,7 @@ async def handle_request(req: OrchestratorRequest, memory: MemoryService | None 
         )
 
         # -------------------------
-        # 🧠 SUPABASE REFLECTION LOGGING (NEW)
+        # 🧠 SUPABASE REFLECTION LOGGING
         # -------------------------
         try:
             store = SupabaseStore()
