@@ -1,106 +1,109 @@
+# app/engine/reasoning_engine.py
+
 class ReasoningEngine:
     """
-    Unified reasoning strategy layer (v2).
+    Unified reasoning strategy layer (v2.1 CLEAN).
 
-    Improvements:
-    - aligned with intent system
-    - adaptive reasoning depth
-    - reduced duplication with prompt_builder
-    - scalable reasoning templates
+    Role:
+    - defines HOW to solve
+    - NOT what user wants
+    - NOT model selection
     """
 
-    # -------------------------
-    # MAIN ENTRY
-    # -------------------------
     @staticmethod
-    def get_protocol(task_type: str, complexity: str = "medium") -> str:
+    def get_protocol(task_type: str, complexity: str = "medium", language: str = "en") -> str:
 
         task_type = (task_type or "general").lower()
         complexity = (complexity or "medium").lower()
 
         # -------------------------
-        # MATH / PHYSICS / SCIENCE
+        # SCIENCE / MATH DOMAIN
         # -------------------------
-        if task_type in ["math_physics", "math", "physics", "chemistry"]:
+        if task_type in ["math", "physics", "chemistry"]:
 
             if complexity == "low":
-                return (
-                    "1. Identify known values\n"
-                    "2. Apply formula\n"
-                    "3. Compute result\n"
-                )
+                base = [
+                    "Identify known values",
+                    "Apply formula",
+                    "Compute result"
+                ]
+
+            elif complexity == "high":
+                base = [
+                    "Analyze problem carefully",
+                    "Define variables and assumptions",
+                    "Select correct laws/formulas",
+                    "Derive equations step-by-step",
+                    "Solve systematically",
+                    "Verify consistency",
+                    "Present final answer clearly"
+                ]
+
+            else:
+                base = [
+                    "Understand problem",
+                    "Identify relevant formulas",
+                    "Solve step-by-step",
+                    "Verify result"
+                ]
+
+            return "\n".join(f"{i+1}. {step}" for i, step in enumerate(base))
+
+        # -------------------------
+        # CODING
+        # -------------------------
+        if task_type == "coding":
 
             if complexity == "high":
-                return (
-                    "1. Carefully analyze problem statement\n"
-                    "2. Define variables and assumptions\n"
-                    "3. Select appropriate physical/mathematical laws\n"
-                    "4. Derive equations step-by-step\n"
-                    "5. Solve systematically\n"
-                    "6. Verify dimensional and logical consistency\n"
-                    "7. Present final result clearly\n"
-                )
+                base = [
+                    "Analyze requirements deeply",
+                    "Design algorithm and data structures",
+                    "Consider complexity (time/space)",
+                    "Implement clean modular code",
+                    "Test edge cases",
+                    "Validate correctness"
+                ]
+            else:
+                base = [
+                    "Understand problem",
+                    "Design solution",
+                    "Implement code",
+                    "Check correctness"
+                ]
 
-            return (
-                "1. Understand problem\n"
-                "2. Identify relevant formulas\n"
-                "3. Solve step-by-step\n"
-                "4. Check result\n"
-            )
-
-        # -------------------------
-        # CODING / ALGORITHMS
-        # -------------------------
-        if task_type in ["coding", "algorithm"]:
-
-            if complexity == "high":
-                return (
-                    "1. Analyze requirements deeply\n"
-                    "2. Design algorithm and data structures\n"
-                    "3. Consider time and space complexity\n"
-                    "4. Implement clean, modular code\n"
-                    "5. Test edge cases\n"
-                    "6. Validate correctness\n"
-                )
-
-            return (
-                "1. Understand problem\n"
-                "2. Design solution\n"
-                "3. Implement code\n"
-                "4. Check correctness\n"
-            )
+            return "\n".join(f"{i+1}. {step}" for i, step in enumerate(base))
 
         # -------------------------
-        # LOGICAL REASONING / PROOF
+        # REASONING / LOGIC
         # -------------------------
         if task_type in ["reasoning", "proof", "logic"]:
 
-            return (
-                "1. Understand statement\n"
-                "2. Break into logical components\n"
-                "3. Apply step-by-step reasoning\n"
-                "4. Avoid assumptions without justification\n"
-                "5. Conclude rigorously\n"
-            )
+            return "\n".join([
+                "1. Understand statement",
+                "2. Break into logical components",
+                "3. Apply step-by-step reasoning",
+                "4. Avoid unjustified assumptions",
+                "5. Conclude rigorously"
+            ])
 
         # -------------------------
-        # ANALYSIS / GENERAL EXPLANATION
+        # ANALYSIS
         # -------------------------
         if task_type in ["analysis", "history", "literature", "biology"]:
 
-            return (
-                "1. Identify key concepts\n"
-                "2. Organize structure logically\n"
-                "3. Explain relationships and causality\n"
-                "4. Support with relevant facts\n"
-                "5. Provide clear conclusion\n"
-            )
+            return "\n".join([
+                "1. Identify key concepts",
+                "2. Structure explanation logically",
+                "3. Explain relationships and causality",
+                "4. Support with facts",
+                "5. Conclude clearly"
+            ])
 
         # -------------------------
-        # GENERAL FALLBACK
+        # GENERAL
         # -------------------------
-        return (
-            "1. Understand question\n"
-            "2. Think step-by-step\n"
-            "3. Provide clear answer\n"
-        )
+        return "\n".join([
+            "1. Understand question",
+            "2. Think step-by-step",
+            "3. Provide clear answer"
+        ])
