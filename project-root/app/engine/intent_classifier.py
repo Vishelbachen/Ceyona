@@ -1,26 +1,50 @@
-from app.engine.types import IntentResult
+from dataclasses import dataclass
 
 
-class IntentClassifier:
+@dataclass
+class IntentResult:
+    intent: str        # chat | reasoning | fast | creative | safety
+    complexity: str    # low | medium | high
+    risk: str          # low | medium | high
 
-    @staticmethod
-    def classify(text: str) -> IntentResult:
-        text_lower = text.lower()
 
-        # SAFETY
-        if any(w in text_lower for w in ["kill", "suicide", "bomb"]):
-            return IntentResult("safety", 0.95)
+def classify_intent(text: str) -> IntentResult:
+    t = text.lower()
 
-        # REASONING
-        if any(w in text_lower for w in ["why", "explain", "how does"]):
-            return IntentResult("reasoning", 0.7)
+    # 🛡 safety layer
+    if any(word in t for word in ["bomb", "kill", "hack", "weapon"]):
+        return IntentResult(
+            intent="safety",
+            complexity="high",
+            risk="high"
+        )
 
-        # CREATIVE
-        if any(w in text_lower for w in ["story", "write", "imagine"]):
-            return IntentResult("creative", 0.7)
+    # 🧠 reasoning (math, physics, explanation)
+    if any(word in t for word in ["why", "how", "explain", "prove", "calculate"]):
+        return IntentResult(
+            intent="reasoning",
+            complexity="high",
+            risk="low"
+        )
 
-        # FAST
-        if len(text) < 40:
-            return IntentResult("fast", 0.6)
+    # 🎭 creative
+    if any(word in t for word in ["write", "story", "poem", "generate"]):
+        return IntentResult(
+            intent="creative",
+            complexity="medium",
+            risk="low"
+        )
 
-        return IntentResult("general", 0.5)
+    # ⚡ fast chat
+    if len(text) < 60:
+        return IntentResult(
+            intent="fast",
+            complexity="low",
+            risk="low"
+        )
+
+    return IntentResult(
+        intent="chat",
+        complexity="medium",
+        risk="low"
+    )
