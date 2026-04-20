@@ -3,7 +3,7 @@ from typing import Literal, Optional, Dict, Any
 
 
 # -------------------------
-# INTENT TYPES
+# CORE ROUTING TYPES
 # -------------------------
 IntentType = Literal[
     "fast",
@@ -13,10 +13,6 @@ IntentType = Literal[
     "chat"
 ]
 
-
-# -------------------------
-# TASK TYPES (COGNITIVE ROUTING)
-# -------------------------
 TaskType = Literal[
     "general",
     "math_physics",
@@ -25,31 +21,23 @@ TaskType = Literal[
     "analysis"
 ]
 
-
-# -------------------------
-# COMPLEXITY LEVEL
-# -------------------------
 ComplexityLevel = Literal["low", "medium", "high"]
-
-
-# -------------------------
-# RISK LEVEL
-# -------------------------
 RiskLevel = Literal["low", "medium", "high"]
 
 
 # -------------------------
-# INTENT RESULT (COGNITION SIGNAL)
+# INTENT RESULT (SINGLE SOURCE OF TRUTH)
 # -------------------------
 @dataclass
 class IntentResult:
     """
-    Cognitive routing signal.
+    Unified cognitive routing signal.
 
-    Used by:
+    This is the CENTRAL object used across:
+    - intent_classifier
     - model_decision
     - prompt_builder
-    - reasoning_engine
+    - orchestrator
     - verifier
     """
 
@@ -57,10 +45,21 @@ class IntentResult:
     complexity: ComplexityLevel = "medium"
     risk: RiskLevel = "low"
 
-    # 🧠 new cognitive fields
     confidence: float = 0.7
 
     task_type: TaskType = "general"
 
-    # optional reasoning hints
+    # optional debugging / future cognition
     metadata: Optional[Dict[str, Any]] = None
+
+    # -------------------------
+    # HELPERS (IMPORTANT FOR SCALE)
+    # -------------------------
+    def is_high_risk(self) -> bool:
+        return self.risk == "high"
+
+    def is_reasoning_task(self) -> bool:
+        return self.intent == "reasoning"
+
+    def is_fast_path(self) -> bool:
+        return self.intent == "fast"
