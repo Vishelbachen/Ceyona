@@ -1,8 +1,18 @@
 class PromptBuilder:
     """
-    Centralized prompt construction layer (v3.5 stable FIXED).
+    Centralized prompt construction layer (v3.5 FINAL FIXED).
+
+    Features:
+    - safe hybrid context handling (dict + dataclass)
+    - stable language detection
+    - task-aware reasoning mode
+    - safe optional reasoning protocol injection
+    - production-safe LLM prompt builder
     """
 
+    # -------------------------
+    # MODEL MODES
+    # -------------------------
     MODEL_MODES = {
         "fast": "FAST MODE",
         "general": "GENERAL MODE",
@@ -12,7 +22,7 @@ class PromptBuilder:
     }
 
     # -------------------------
-    # LANGUAGE DETECTION (FIXED)
+    # LANGUAGE DETECTION (ROBUST)
     # -------------------------
     @staticmethod
     def _detect_language(text: str) -> str:
@@ -35,7 +45,7 @@ class PromptBuilder:
         return "en"
 
     # -------------------------
-    # CONTEXT NORMALIZATION (ROBUST)
+    # CONTEXT NORMALIZATION (SAFE HYBRID)
     # -------------------------
     @staticmethod
     def _clean_context(context: list, limit: int = 10) -> str:
@@ -47,12 +57,18 @@ class PromptBuilder:
 
         for msg in trimmed:
 
-            role = getattr(msg, "role", None)
-            text = getattr(msg, "text", None)
+            role = None
+            text = None
 
+            # dict support
             if isinstance(msg, dict):
-                role = role or msg.get("role")
-                text = text or msg.get("text")
+                role = msg.get("role", "user")
+                text = msg.get("text", "")
+
+            # dataclass / object support
+            else:
+                role = getattr(msg, "role", "user")
+                text = getattr(msg, "text", "")
 
             role = (role or "user").upper()
             text = (text or "").strip()
@@ -63,13 +79,14 @@ class PromptBuilder:
         return "\n".join(lines) if lines else "EMPTY"
 
     # -------------------------
-    # MODE INFERENCE
+    # MODE INFERENCE (TASK PRIORITY)
     # -------------------------
     @staticmethod
     def _infer_mode(model: str, task: str = None) -> str:
         model = (model or "").lower()
         task = (task or "").lower()
 
+        # task overrides model
         if task in ["math", "physics", "coding", "reasoning"]:
             return "reasoning"
 
@@ -88,7 +105,7 @@ class PromptBuilder:
         return "general"
 
     # -------------------------
-    # MAIN BUILD
+    # MAIN BUILD FUNCTION
     # -------------------------
     @staticmethod
     def build(
@@ -109,6 +126,9 @@ class PromptBuilder:
             "GENERAL MODE"
         )
 
+        # -------------------------
+        # SYSTEM BLOCK
+        # -------------------------
         system_block = (
             "You are a high-level reasoning system.\n"
             "You produce accurate, structured answers.\n"
@@ -116,25 +136,37 @@ class PromptBuilder:
             "Be concise and logically consistent.\n"
         )
 
+        # -------------------------
+        # TASK BLOCK
+        # -------------------------
         reasoning_block = f"TASK: {task_type.upper()}"
 
+        # -------------------------
+        # OPTIONAL REASONING PROTOCOL
+        # -------------------------
         protocol_block = ""
         if reasoning_protocol:
             rp = reasoning_protocol.strip()
             if rp:
                 protocol_block = f"REASONING PROTOCOL:\n{rp}\n"
 
+        # -------------------------
+        # LANGUAGE BLOCK
+        # -------------------------
         lang_block = (
             "RESPONSE LANGUAGE:\n"
             f"- primary language: {lang}\n"
             "- natural adaptation\n"
-            "- no mention of language detection\n"
+            "- do not mention language detection\n"
         )
 
+        # -------------------------
+        # FINAL PROMPT
+        # -------------------------
         return (
             f"SYSTEM:\n{system_block}\n\n"
             f"{reasoning_block}\n\n"
-            f"{protocol_block}\n"
+            f"{protocol_block}"
             f"{lang_block}\n\n"
             f"MODE:\n{mode}\n\n"
             f"CONTEXT:\n{context_block}\n\n"
