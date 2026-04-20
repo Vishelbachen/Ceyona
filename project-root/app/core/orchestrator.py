@@ -1,15 +1,11 @@
 from app.contracts.message import OrchestratorRequest
 from app.contracts.response import SuccessResponse, ErrorResponse
-
 from app.engine.model_decision import resolve_model
 from app.engine.llm import run_llm
-
 from app.core.logger import logger
 from app.core.errors import OrchestratorError
-from app.core.prompt_builder import PromptBuilder
-from app.core.reasoning_verifier import ReasoningVerifier  # ✔ FIXED PATH
-
 from app.memory.memory_service import MemoryService
+from app.core.prompt_builder import PromptBuilder
 
 
 async def handle_request(
@@ -75,40 +71,19 @@ async def handle_request(
             trace_id=trace_id
         )
 
-        raw_text = (response.content or "").strip()
+        raw_text = _safe_response(response.content)
 
-        # 🧠 VERIFIER (SAFE GATE)
-        verification = ReasoningVerifier.verify(
-            task_type=intent_result.intent,
-            response=raw_text
-        )
-
-        logger.log(
-            "INFO",
-            "reasoning_verified",
-            trace_id=trace_id,
-            valid=verification["valid"],
-            issues=verification["issues"]
-        )
-
-        # ⚠️ SAFETY HANDLING (non-blocking)
+        # 🧯 FINAL GUARD
         if not raw_text:
-            raw_text = "No valid response generated."
-
-        elif not verification["valid"]:
             logger.log(
-                "WARNING",
-                "low_quality_response_detected",
+                "ERROR",
+                "empty_llm_response",
                 trace_id=trace_id,
-                issues=verification["issues"]
+                model=model
             )
+            raw_text = "I couldn't generate a proper response. Please try again."
 
-            raw_text = (
-                "I couldn't generate a fully reliable solution for this request. "
-                "Try rephrasing or adding more details."
-            )
-
-        # 🧠 MEMORY SAVE
+        # 🧠 MEMORY SAVE (SAFE)
         if memory and getattr(memory, "store", None):
             try:
                 memory.store.append_message(user_id, "user", text)
@@ -156,3 +131,25 @@ async def handle_request(
             error=err.to_dict()["error"],
             trace_id=trace_id
         )
+
+
+# -------------------------
+# 🧠 RESPONSE SAFETY LAYER (LIGHTWEIGHT)
+# -------------------------
+
+def _safe_response(text: str) -> str:
+    """
+    Only protects against:
+    - empty output
+    - broken None responses
+    """
+
+    if text is None:
+        return ""
+
+    text = text.strip()
+
+    if len(text) == 0:
+        return ""
+
+    return text
