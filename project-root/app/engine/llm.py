@@ -1,18 +1,9 @@
 import asyncio
-from openai import AsyncOpenAI
+import httpx
 
 from app.core.logger import logger
 from app.core.errors import LLMError
 from app.config.settings import settings
-
-
-# -------------------------
-# CLIENT
-# -------------------------
-client = AsyncOpenAI(
-    api_key=settings.GROQ_API_KEY,
-    base_url="https://api.groq.com/openai/v1"
-)
 
 
 # -------------------------
@@ -24,13 +15,20 @@ class LLMResponse:
 
 
 # -------------------------
-# CORE CALL
+# CORE HTTP CALL (NO SDK)
 # -------------------------
 async def groq_call(model: str, prompt: str, temperature: float = 0.5) -> str:
 
-    response = await client.chat.completions.create(
-        model=model,
-        messages=[
+    url = "https://api.groq.com/openai/v1/chat/completions"
+
+    headers = {
+        "Authorization": f"Bearer {settings.GROQ_API_KEY}",
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "model": model,
+        "messages": [
             {
                 "role": "system",
                 "content": (
@@ -40,10 +38,15 @@ async def groq_call(model: str, prompt: str, temperature: float = 0.5) -> str:
             },
             {"role": "user", "content": prompt}
         ],
-        temperature=temperature
-    )
+        "temperature": temperature
+    }
 
-    return response.choices[0].message.content
+    async with httpx.AsyncClient(timeout=12.0) as client:
+        resp = await client.post(url, headers=headers, json=payload)
+        resp.raise_for_status()
+
+        data = resp.json()
+        return data["choices"][0]["message"]["content"]
 
 
 # -------------------------
@@ -69,9 +72,6 @@ async def run_llm(
                 attempt=attempt
             )
 
-            # -------------------------
-            # ADAPTIVE TEMPERATURE STRATEGY
-            # -------------------------
             temp = 0.5 if attempt == 0 else 0.7
 
             response = await asyncio.wait_for(
@@ -82,22 +82,7 @@ async def run_llm(
             cleaned = _sanitize(response)
 
             if cleaned:
-                logger.log(
-                    "INFO",
-                    "llm_success",
-                    trace_id=trace_id,
-                    model=model,
-                    attempt=attempt
-                )
-
                 return LLMResponse(content=cleaned)
-
-            logger.log(
-                "WARN",
-                "empty_or_invalid_response",
-                trace_id=trace_id,
-                attempt=attempt
-            )
 
         except Exception as e:
             last_error = e
@@ -111,7 +96,7 @@ async def run_llm(
                 error=str(e)
             )
 
-            await asyncio.sleep(0.3 * (attempt + 1))  # backoff
+            await asyncio.sleep(0.3 * (attempt + 1))
 
     raise LLMError(
         code="LLM_001",
@@ -122,7 +107,7 @@ async def run_llm(
 
 
 # -------------------------
-# SANITIZER (IMPROVED)
+# SANITIZER
 # -------------------------
 def _sanitize(text: str) -> str:
 
@@ -145,7 +130,6 @@ def _sanitize(text: str) -> str:
         "language model"
     )
 
-    # soft filtering (don’t overkill response)
     if any(b in low for b in blacklist_phrases):
         return ""
 
