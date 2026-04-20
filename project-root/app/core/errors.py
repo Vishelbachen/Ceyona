@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Any, Dict, Literal
 
 
@@ -11,34 +11,44 @@ Severity = Literal["low", "medium", "high", "critical"]
 # -------------------------
 # BASE ERROR (COGNITIVE)
 # -------------------------
-@dataclass
 class AppError(Exception):
     """
     Cognitive-aware system error.
 
-    This is not just a failure signal —
-    it is a reasoning input for self-healing systems.
+    Used both as:
+    - runtime exception
+    - structured reasoning signal
     """
 
-    code: str
-    message: str
-    layer: str
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        layer: str,
+        trace_id: Optional[str] = None,
+        severity: Severity = "medium",
+        context: Optional[Dict[str, Any]] = None,
+        recoverable: bool = True,
+        suggestion: Optional[str] = None,
+    ):
+        super().__init__(message)
 
-    trace_id: Optional[str] = None
+        self.code = code
+        self.message = message
+        self.layer = layer
+        self.trace_id = trace_id
+        self.severity = severity
 
-    # 🧠 new cognitive fields
-    severity: Severity = "medium"
+        # safe default (CRITICAL FIX)
+        self.context = context or {}
 
-    # 🧠 machine-readable context (structured, not free-form chaos)
-    context: Optional[Dict[str, Any]] = None
+        self.recoverable = recoverable
+        self.suggestion = suggestion
 
-    # 🧠 recovery hint for orchestrator
-    recoverable: bool = True
-
-    # 🧠 suggested action for orchestrator
-    suggestion: Optional[str] = None
-
-    def to_dict(self):
+    # -------------------------
+    # SERIALIZATION SAFE OUTPUT
+    # -------------------------
+    def to_dict(self) -> Dict[str, Any]:
         return {
             "error": {
                 "code": self.code,
@@ -51,6 +61,12 @@ class AppError(Exception):
                 "context": self.context,
             }
         }
+
+    # -------------------------
+    # DEBUG REPRESENTATION
+    # -------------------------
+    def __str__(self) -> str:
+        return f"[{self.layer}] {self.code}: {self.message}"
 
 
 # -------------------------
