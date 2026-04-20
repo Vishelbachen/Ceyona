@@ -1,4 +1,5 @@
 import os
+import logging
 
 
 class Settings:
@@ -44,6 +45,13 @@ class Settings:
         # -------------------------
         # MODEL SYSTEM
         # -------------------------
+        self.DEFAULT_MODEL_LAYERS = {
+            "fast": ["groq/compound-mini"],
+            "general": ["llama-3.3-70b-versatile"],
+            "heavy": ["meta-llama/llama-4-scout-17b-16e-instruct"],
+            "safety": ["openai/gpt-oss-safeguard-20b"],
+        }
+
         self.MODEL_LAYERS = {
             "fast": [
                 "groq/compound-mini",
@@ -114,12 +122,12 @@ class Settings:
         }
 
         # -------------------------
-        # SAFE VALIDATION (NON-BLOCKING)
+        # SAFE VALIDATION
         # -------------------------
         self._validate_soft()
 
     # -------------------------
-    # SAFE VALIDATION (NO CRASH)
+    # SAFE VALIDATION
     # -------------------------
     def _validate_soft(self):
         missing = []
@@ -134,7 +142,7 @@ class Settings:
                 missing.append(name)
 
         if missing:
-            print(
+            logging.warning(
                 f"[CONFIG WARNING] Missing env vars: {', '.join(missing)}"
             )
 
@@ -142,7 +150,10 @@ class Settings:
     # HELPERS
     # -------------------------
     def get_models(self, layer: str):
-        return self.MODEL_LAYERS.get(layer, self.MODEL_LAYERS[self.DEFAULT_LAYER])
+        return self.MODEL_LAYERS.get(
+            layer,
+            self.DEFAULT_MODEL_LAYERS.get(layer, [])
+        )
 
     def get_layer_by_intent(self, intent: str) -> str:
         return self.INTENT_TO_LAYER.get(intent, self.DEFAULT_LAYER)
