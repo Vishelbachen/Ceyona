@@ -1,10 +1,12 @@
 from fastapi import APIRouter, Request
 from uuid import uuid4
+from typing import Optional, Dict, Any
 
 from app.core.logger import logger
 from app.core.orchestrator import handle_request
 from app.contracts.message import OrchestratorRequest, UserMessage
 from app.core.response_handler import ResponseHandler
+
 
 router = APIRouter()
 
@@ -18,11 +20,11 @@ async def telegram_webhook(request: Request):
     trace_id = str(uuid4())
 
     try:
-        payload = await request.json()
+        payload: Dict[str, Any] = await request.json()
 
         parsed = _parse_telegram(payload, trace_id)
 
-        if not parsed:
+        if parsed is None:
             return {"ok": True, "trace_id": trace_id}
 
         logger.log("INFO", "webhook_received", trace_id=trace_id)
@@ -47,7 +49,12 @@ async def telegram_webhook(request: Request):
         return {"ok": True, "trace_id": trace_id}
 
     except Exception as e:
-        logger.log("ERROR", "webhook_crash", trace_id=trace_id, error=str(e))
+        logger.log(
+            "ERROR",
+            "webhook_crash",
+            trace_id=trace_id,
+            error=str(e)
+        )
 
         return {"ok": False, "trace_id": trace_id}
 
@@ -55,12 +62,19 @@ async def telegram_webhook(request: Request):
 # -------------------------
 # PARSER LAYER
 # -------------------------
-def _parse_telegram(payload: dict, trace_id: str) -> dict | None:
+def _parse_telegram(payload: Dict[str, Any], trace_id: str) -> Optional[Dict[str, Any]]:
     """
-    Isolated parsing layer (no business logic)
+    Pure parsing layer (no business logic)
     """
 
-    message = payload.get("message") or {}
+    if not payload:
+        logger.log("ERROR", "empty_payload", trace_id=trace_id)
+        return None
+
+    message = payload.get("message")
+    if not isinstance(message, dict):
+        logger.log("INFO", "no_message_block", trace_id=trace_id)
+        return None
 
     text = message.get("text")
     if not text:
@@ -73,7 +87,7 @@ def _parse_telegram(payload: dict, trace_id: str) -> dict | None:
     user_id = str(user.get("id") or "unknown")
     chat_id = chat.get("id")
 
-    if not chat_id:
+    if chat_id is None:
         logger.log("ERROR", "missing_chat_id", trace_id=trace_id)
         return None
 
