@@ -1,7 +1,7 @@
-""
+"""
 Legacy fallback router.
-# DO NOT IMPORT OUTSIDE model_decision.py
-# EMERGENCY FALLBACK ONLY
+DO NOT IMPORT OUTSIDE model_decision.py
+EMERGENCY FALLBACK ONLY
 
 Primary system:
 IntentClassifier → ModelPolicy → Settings
