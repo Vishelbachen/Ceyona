@@ -1,14 +1,15 @@
-🧠 FINAL ARCHITECTURE (v1.3.4 — REASONING + VERIFICATION LAYER + MODEL BRAIN STABLE)
+🧠 FINAL ARCHITECTURE (v1.3.4 — REASONING + VERIFICATION + CLEAN DECISION BRAIN)
 🎯 GOAL
 Production-ready AI backend with:
 single decision brain (model_decision.py)
 olympiad-level reasoning system
 verification layer (anti-error guard)
 deterministic execution pipeline
-Groq/OpenAI LLM integration
+Groq / OpenAI LLM integration
 multilingual behavior enforcement
 fully traceable lifecycle (trace_id)
 modular reasoning + task classification system
+clean legacy-free routing (model_router REMOVED)
 🧱 SYSTEM OVERVIEW
 🟢 ARCHITECTURE MODEL
 
@@ -53,7 +54,6 @@ Telegram
 
 project-root/app/main.py
 🚪 API LAYER
-
 app/api/webhook.py
 Responsibilities:
 receive Telegram updates
@@ -62,7 +62,6 @@ create trace_id
 call orchestrator
 send response
 🧠 CORE LAYER
-
 app/core/orchestrator.py
 Responsibilities:
 central execution controller
@@ -73,111 +72,91 @@ calls LLM
 runs verifier
 returns response
 🧠 MODEL DECISION BRAIN
-
 app/engine/model_decision.py
 Responsibilities:
 intent classification
-confidence handling
-policy routing
+routing policy
 fallback logic
 deterministic model selection
+✔ ONLY decision system in production
 🧠 INTENT SYSTEM
-
 app/engine/intent_classifier.py
 ✔ lightweight intent detection
 ✔ returns:
 
 IntentResult(intent, confidence)
-🧠 TASK CLASSIFICATION SYSTEM (NEW)
-
+🧠 TASK CLASSIFICATION SYSTEM
 app/engine/task_classifier.py
-Responsibilities:
-detect task type:
+Detects:
 math
 physics
 coding
 history
 general
 ✔ used by reasoning_engine + PromptBuilder
-🧠 REASONING ENGINE (NEW)
-
-app/engine/reasoning_engine.py
-Responsibilities:
-defines solution protocol per task type
-guides structured reasoning flow
-used before LLM prompt construction
-🧠 VERIFIER ENGINE (NEW — CRITICAL)
-
-app/engine/reasoning_verifier.py
-Responsibilities:
-validate LLM output
-detect logical/math/code errors
-mark invalid answers
-optionally trigger regeneration (future v1.5)
-🧠 MODEL POLICY
-
+🧠 REASONING ENGINE
+app/core/reasoning_engine.py
+defines solving protocol per task type
+enforces structured reasoning flow
+prepares LLM instruction layer
+🧠 VERIFIER ENGINE (CRITICAL)
+app/core/reasoning_verifier.py
+validates LLM output
+detects logical / math / code errors
+marks invalid responses
+future: auto-regeneration loop (v1.5)
+🧾 MODEL POLICY
 app/engine/model_policy.py
 ✔ intent → model mapping ONLY
 ❌ no logic
 ❌ no heuristics
-🧯 LEGACY ROUTER
+🧾 LEGACY STATUS
+❌ REMOVED:
 
-app/engine/model_router.py
-⚠️ EMERGENCY ONLY
-✔ used ONLY inside model_decision
-❌ never used elsewhere
+app/engine/model_router.py  ← DELETED
+✔ RESULT:
+single routing brain remains
+no duplicate decision logic
+no hidden fallback path
 🧾 PROMPT SYSTEM
-
 app/core/prompt_builder.py
-Responsibilities:
 multilingual enforcement
 reasoning boost injection
 task-aware formatting
-model abstraction (NO model names exposed)
+no model names leakage
 ⚙️ LLM ENGINE
-
 app/engine/llm.py
-Responsibilities:
-Groq/OpenAI API calls
+Groq / OpenAI calls
 retry logic
-timeout control
+timeout handling
 stateless execution
 📡 TRANSPORT
-
 app/engine/telegram.py
 ✔ send_message only
-✔ no logic
+✔ no business logic
 🧩 DOMAIN LAYER
-
 app/contracts/
-message.py
-UserMessage
-OrchestratorRequest
-response.py
-SuccessResponse
-ErrorResponse
+message.py → UserMessage
+response.py → SuccessResponse / ErrorResponse
+context.py → runtime context
 🧠 RESPONSE SYSTEM
 Formatter
-
 app/core/response_formatter.py
-✔ cleans output
-✔ removes artifacts
-✔ ensures language consistency
+cleans output
+removes artifacts
+ensures language consistency
 Handler
-
 app/core/response_handler.py
-✔ sends to Telegram
-✔ logs delivery
-✔ calls formatter
-🧠 MEMORY LAYER
-
+sends Telegram response
+logs delivery
+calls formatter
+🧠 MEMORY LAYER (OPTIONAL)
 app/memory/
 session_store.py
 memory_service.py
 ✔ optional context injection
 ✔ not required for core flow
 ⚙️ CONFIG LAYER
-
 app/config/settings.py
 Contains:
 API keys
@@ -188,9 +167,10 @@ GENERAL
 HEAVY
 SAFETY
 behavior modes
-meta rules
+global system flags
 ✔ SINGLE SOURCE OF TRUTH
 📊 OBSERVABILITY PIPELINE
+PRODUCTION FLOW TRACE
 
 webhook_received
 → orchestrator_start
@@ -203,17 +183,36 @@ webhook_received
 → verification_passed
 → response_formatted
 → response_sent
+🧠 DEBUGGING STRATEGY (IMPORTANT UPDATE)
+You now use 2-layer debugging:
+🟢 1. Termux (local system check)
+Used for:
+syntax validation
+import graph testing
+structural debugging
+🟢 2. Railway Logs (production truth source)
+Used for:
+runtime errors
+dependency failures
+webhook issues
+API crashes
+real latency & behavior
+🔥 RULE:
+Termux = structure validation
+Railway = truth of production system
 🧠 CRITICAL ARCHITECTURE RULES
 🚨 MODEL RULE
-❌ no direct model_policy in orchestrator
-❌ no model_router outside decision brain
-✔ only resolve_model()
+❌ no model_policy in orchestrator
+❌ no legacy router (DELETED)
+✔ ONLY model_decision.resolve_model()
 🚨 REASONING RULE
 reasoning_engine = logic structure
 verifier = correctness layer
 prompt_builder = instruction layer
+🚨 LEGACY CLEANUP STATUS
+
+model_router → ❌ REMOVED (clean architecture achieved)
 📦 DEPENDENCIES (CURRENT STATE)
-pinned minimal:
 
 fastapi>=0.110
 uvicorn>=0.27
@@ -234,25 +233,27 @@ unified decision brain
 multilingual prompt system
 hardened response pipeline
 traceable execution graph
-modular AI reasoning architecture
+fully cleaned architecture (no legacy router)
 ⚠️ INTENTIONAL LIMITATIONS
 no agent system yet
 no tool execution
 no streaming
-no memory reasoning loops
+no autonomous planning
 no cost-aware routing
 🚀 NEXT EVOLUTION PATH
-🔜 v1.4 (NEXT BIG STEP)
-LLM self-verifier (AI checks AI)
-confidence scoring per answer
+🔜 v1.4
+LLM self-verifier
+confidence scoring (reintroduced properly)
 model ensemble voting
-dynamic routing based on difficulty
+dynamic routing by difficulty
 🔜 v2.0
 agentic planning system
 tool execution layer
 multi-step autonomous reasoning
 🧱 FINAL SYSTEM CLASS
-Production AI Backend →
-Reasoning Engine System →
-Verification-Grounded AI →
-Future Agentic Architecture
+
+Production AI Backend
+→ Reasoning Engine System
+→ Verification-Grounded AI
+→ Clean Deterministic Brain Architecture
+→ Future Agentic System
