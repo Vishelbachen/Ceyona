@@ -1,155 +1,48 @@
-from app.contracts.message import OrchestratorRequest
-from app.contracts.response import SuccessResponse, ErrorResponse
-from app.engine.model_decision import resolve_model
-from app.engine.llm import run_llm
-from app.core.logger import logger
-from app.core.errors import OrchestratorError
-from app.memory.memory_service import MemoryService
-from app.core.prompt_builder import PromptBuilder
+class ReasoningEngine:
+    """
+    Unified reasoning strategy layer.
+    Not model-specific.
+    """
 
+    # 🧠 COMPATIBILITY MAP (fix taxonomy mismatch)
+    ALIASES = {
+        "math_physics": "math",
+        "coding": "algorithm",
+        "analysis": "history"
+    }
 
-async def handle_request(
-    req: OrchestratorRequest,
-    memory: MemoryService | None = None
-):
-    trace_id = req.trace_id
+    @staticmethod
+    def get_protocol(task_type: str) -> str:
 
-    try:
-        logger.log("INFO", "orchestrator_start", trace_id=trace_id)
+        task_type = ReasoningEngine.ALIASES.get(task_type, task_type)
 
-        user_id = req.user_message.user_id
-        text = (req.user_message.text or "").strip()
-
-        if not text:
-            raise ValueError("Empty user message")
-
-        # 🧠 MEMORY LOAD (SAFE)
-        context = []
-        if memory:
-            try:
-                context = memory.build_context(user_id) or []
-
-                logger.log(
-                    "INFO",
-                    "memory_loaded",
-                    trace_id=trace_id,
-                    context_size=len(context)
-                )
-
-            except Exception as e:
-                logger.log(
-                    "ERROR",
-                    "memory_load_failed",
-                    trace_id=trace_id,
-                    error=str(e)
-                )
-                context = []
-
-        # 🧠 MODEL DECISION
-        model, intent_result = resolve_model(text)
-
-        logger.log(
-            "INFO",
-            "model_selected",
-            trace_id=trace_id,
-            model=model,
-            intent=intent_result.intent,
-            confidence=intent_result.confidence
-        )
-
-        # 🧠 PROMPT BUILD
-        prompt = PromptBuilder.build(
-            user_text=text,
-            context=context,
-            model=model
-        )
-
-        # 🧠 LLM CALL
-        response = await run_llm(
-            model=model,
-            prompt=prompt,
-            trace_id=trace_id
-        )
-
-        raw_text = _safe_response(response.content)
-
-        # 🧯 FINAL GUARD
-        if not raw_text:
-            logger.log(
-                "ERROR",
-                "empty_llm_response",
-                trace_id=trace_id,
-                model=model
+        if task_type in ["math", "physics", "chemistry"]:
+            return (
+                "Step 1: Understand the problem\n"
+                "Step 2: Identify known laws and formulas\n"
+                "Step 3: Build equations step-by-step\n"
+                "Step 4: Solve logically\n"
+                "Step 5: Final answer clearly stated\n"
             )
-            raw_text = "I couldn't generate a proper response. Please try again."
 
-        # 🧠 MEMORY SAVE (SAFE)
-        if memory and getattr(memory, "store", None):
-            try:
-                memory.store.append_message(user_id, "user", text)
-                memory.store.append_message(user_id, "assistant", raw_text)
+        if task_type in ["history", "literature", "biology", "geography"]:
+            return (
+                "Step 1: Identify key concepts\n"
+                "Step 2: Provide structured explanation\n"
+                "Step 3: Add supporting facts\n"
+                "Step 4: Conclude clearly\n"
+            )
 
-                logger.log("INFO", "memory_saved", trace_id=trace_id)
+        if task_type in ["coding", "algorithm"]:
+            return (
+                "Step 1: Understand requirements\n"
+                "Step 2: Design solution\n"
+                "Step 3: Write structured code\n"
+                "Step 4: Explain complexity if needed\n"
+            )
 
-            except Exception as e:
-                logger.log(
-                    "ERROR",
-                    "memory_save_failed",
-                    trace_id=trace_id,
-                    error=str(e)
-                )
-
-        logger.log("INFO", "orchestrator_done", trace_id=trace_id)
-
-        return SuccessResponse(
-            data=raw_text,
-            trace_id=trace_id
+        return (
+            "Step 1: Understand question\n"
+            "Step 2: Reason logically\n"
+            "Step 3: Answer clearly\n"
         )
-
-    except OrchestratorError as e:
-        return ErrorResponse(
-            error=e.to_dict()["error"],
-            trace_id=trace_id
-        )
-
-    except Exception as e:
-        logger.log(
-            "ERROR",
-            "orchestrator_crash",
-            trace_id=trace_id,
-            error=str(e)
-        )
-
-        err = OrchestratorError(
-            code="ORCH_001",
-            message=str(e),
-            layer="orchestrator",
-            trace_id=trace_id
-        )
-
-        return ErrorResponse(
-            error=err.to_dict()["error"],
-            trace_id=trace_id
-        )
-
-
-# -------------------------
-# 🧠 RESPONSE SAFETY LAYER (LIGHTWEIGHT)
-# -------------------------
-
-def _safe_response(text: str) -> str:
-    """
-    Only protects against:
-    - empty output
-    - broken None responses
-    """
-
-    if text is None:
-        return ""
-
-    text = text.strip()
-
-    if len(text) == 0:
-        return ""
-
-    return text
