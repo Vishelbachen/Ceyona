@@ -1,15 +1,24 @@
+from typing import List
+
 from app.memory.session_store import SessionStore
+from app.core.logger import logger
 
 
 class MemoryService:
     """
-    Cognitive memory layer (v2-ready)
+    Cognitive memory layer (v3)
 
-    Supports:
-    - short-term chat history
-    - structured context building
-    - future long-term memory extension
+    Features:
+    - safe context building
+    - prompt size control
+    - text normalization
+    - future-ready for long-term memory
     """
+
+    # 🔒 limits (important for LLM stability)
+    MAX_MESSAGES = 12
+    MAX_TOTAL_CHARS = 6000
+    MAX_MESSAGE_CHARS = 800
 
     def __init__(self, store: SessionStore):
         self.store = store
@@ -17,9 +26,10 @@ class MemoryService:
     # -------------------------
     # MAIN CONTEXT BUILDER
     # -------------------------
-    def build_context(self, user_id: str) -> list[str]:
+    def build_context(self, user_id: str) -> List[str]:
         """
         Returns LLM-ready context.
+        Safe, trimmed, normalized.
         """
 
         try:
@@ -29,49 +39,70 @@ class MemoryService:
                 return []
 
             context = []
+            total_chars = 0
 
-            # 🧠 last messages window (important fix)
-            recent = history[-12:]  # prevents prompt bloat
+            # 🧠 last N messages
+            recent = history[-self.MAX_MESSAGES:]
 
             for msg in recent:
-                role = msg.get("role", "unknown")
-                text = (msg.get("text") or "").strip()
+                role = msg.get("role", "user")
+                text = self._clean_text(msg.get("text"))
 
                 if not text:
                     continue
 
-                # clean formatting
-                context.append(f"{role.upper()}: {text}")
+                # 🔒 limit per message
+                text = text[:self.MAX_MESSAGE_CHARS]
+
+                formatted = f"{role.upper()}: {text}"
+
+                total_chars += len(formatted)
+
+                # 🔒 global limit
+                if total_chars > self.MAX_TOTAL_CHARS:
+                    break
+
+                context.append(formatted)
 
             return context
 
-        except Exception:
-            # memory must NEVER break pipeline
+        except Exception as e:
+            logger.log(
+                "ERROR",
+                "memory_build_failed",
+                error=str(e)
+            )
             return []
 
+    # -------------------------
+    # CLEAN TEXT
+    # -------------------------
+    def _clean_text(self, text: str | None) -> str:
+        if not text:
+            return ""
+
+        return (
+            text.strip()
+            .replace("\n\n", "\n")
+            .replace("\r", "")
+        )
 
     # -------------------------
-    # FUTURE: STRUCTURED MEMORY HOOK
+    # FUTURE: FACT EXTRACTION
     # -------------------------
-    def extract_facts(self, user_id: str) -> list[str]:
+    def extract_facts(self, user_id: str) -> List[str]:
         """
-        Placeholder for cognition layer.
-
-        Will later store:
+        Future:
         - user preferences
-        - stable facts
-        - long-term memory
+        - stable knowledge
         """
-
         return []
 
-
     # -------------------------
-    # FUTURE: MEMORY SUMMARY HOOK
+    # FUTURE: SUMMARY
     # -------------------------
     def build_summary(self, user_id: str) -> str:
         """
-        Placeholder for summarization layer.
+        Future summarization layer.
         """
-
         return ""
