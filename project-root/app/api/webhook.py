@@ -7,20 +7,16 @@ from app.core.orchestrator import handle_request
 from app.contracts.message import OrchestratorRequest, UserMessage
 from app.core.response_handler import ResponseHandler
 
-
 router = APIRouter()
 
 
-# -------------------------
-# TELEGRAM WEBHOOK
-# -------------------------
 @router.post("/webhook")
 async def telegram_webhook(request: Request):
 
     trace_id = str(uuid4())
 
     try:
-        payload: Dict[str, Any] = await request.json()
+        payload: Dict[str, Any] = await request.json() or {}
 
         parsed = _parse_telegram(payload, trace_id)
 
@@ -41,7 +37,7 @@ async def telegram_webhook(request: Request):
 
         await ResponseHandler.handle(
             response=result,
-            chat_id=str(parsed["chat_id"])
+            chat_id=parsed["chat_id"]
         )
 
         logger.log("INFO", "webhook_success", trace_id=trace_id)
@@ -49,44 +45,19 @@ async def telegram_webhook(request: Request):
         return {"ok": True, "trace_id": trace_id}
 
     except Exception as e:
-        logger.log(
-            "ERROR",
-            "webhook_crash",
-            trace_id=trace_id,
-            error=str(e)
-        )
-
+        logger.log("ERROR", "webhook_crash", trace_id=trace_id, error=str(e))
         return {"ok": False, "trace_id": trace_id}
 
 
-# -------------------------
-# PARSER LAYER
-# -------------------------
 def _parse_telegram(payload: Dict[str, Any], trace_id: str) -> Optional[Dict[str, Any]]:
-    """
-    Pure parsing layer (no business logic)
-    """
 
-    if not isinstance(payload, dict):
-        logger.log("ERROR", "invalid_payload_type", trace_id=trace_id)
-        return None
-
-    message = payload.get("message")
-
+    message = payload.get("message") or {}
     if not isinstance(message, dict):
-        logger.log("INFO", "no_message_block", trace_id=trace_id)
         return None
 
     text = message.get("text")
-
-    if not isinstance(text, str) or not text.strip():
-        logger.log("INFO", "empty_text_skipped", trace_id=trace_id)
+    if not text:
         return None
-
-    # -------------------------
-    # Telegram safety: max message length guard
-    # -------------------------
-    text = text.strip()[:4000]
 
     user = message.get("from") or {}
     chat = message.get("chat") or {}
@@ -95,7 +66,6 @@ def _parse_telegram(payload: Dict[str, Any], trace_id: str) -> Optional[Dict[str
     chat_id = chat.get("id")
 
     if chat_id is None:
-        logger.log("ERROR", "missing_chat_id", trace_id=trace_id)
         return None
 
     return {
