@@ -7,11 +7,12 @@ IntentType = Literal[
     "reasoning",
     "creative",
     "safety",
-    "general"
+    "chat"
 ]
 
 
 @dataclass
 class IntentResult:
     intent: IntentType
-    confidence: float
+    complexity: str  # low | medium | high
+    risk: str        # low | medium | high
