@@ -2,54 +2,59 @@ class ReasoningVerifier:
     """
     Post-processing reasoning verification layer.
 
-    Purpose:
-    - detect logical/mathematical inconsistencies
-    - improve final answer quality
-    - enforce correctness over confidence
+    PURPOSE:
+    - validate logical correctness
+    - detect structural issues
+    - enforce answer quality gate
+    - support optional regeneration (future)
     """
 
     @staticmethod
     def verify(task_type: str, question: str, answer: str) -> dict:
         """
-        Returns:
-        {
-            "is_valid": bool,
-            "corrected_answer": str | None,
-            "issues": list[str]
-        }
+        Returns structured validation result
         """
+
+        if not answer or not answer.strip():
+            return {
+                "is_valid": False,
+                "issues": ["empty_answer"],
+                "severity": "critical",
+                "suggested_action": "regenerate"
+            }
 
         issues = []
 
-        if not answer or len(answer.strip()) == 0:
-            return {
-                "is_valid": False,
-                "corrected_answer": None,
-                "issues": ["empty_answer"]
-            }
-
-        # 🧠 MATH / PHYSICS CHECK
+        # -------------------------
+        # MATH / PHYSICS DOMAIN
+        # -------------------------
         if task_type in ["math", "physics", "chemistry"]:
-            if "=" not in answer and "≈" not in answer:
-                issues.append("missing_equation_or_result")
+
+            if not any(op in answer for op in ["=", "≈", "<", ">"]):
+                issues.append("missing_formal_result")
 
             if "error" in answer.lower():
                 issues.append("contains_error_marker")
 
-        # 🧠 CODING CHECK
+        # -------------------------
+        # CODING DOMAIN
+        # -------------------------
         if task_type in ["coding", "algorithm"]:
+
             if "def " not in answer and "class " not in answer:
-                issues.append("no_structured_code_detected")
+                issues.append("no_code_structure")
 
-        # 🧠 GENERAL QUALITY CHECK
+        # -------------------------
+        # GENERAL QUALITY
+        # -------------------------
         if len(answer) < 20:
-            issues.append("too_short_response")
+            issues.append("too_short")
 
-        # 🔥 FINAL DECISION
         is_valid = len(issues) == 0
 
         return {
             "is_valid": is_valid,
-            "corrected_answer": answer if is_valid else None,
-            "issues": issues
+            "issues": issues,
+            "severity": "low" if is_valid else "medium",
+            "suggested_action": None if is_valid else "review"
         }
