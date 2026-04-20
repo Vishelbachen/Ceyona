@@ -23,8 +23,29 @@ class UserMessage(BaseModel):
 
     session_id: Optional[str] = None
 
-    # 🧠 structured metadata (never None → safer pipelines)
+    # 🧠 structured metadata (always safe dict)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    # -------------------------
+    # SAFE NORMALIZATION HOOK
+    # -------------------------
+    def normalize(self) -> "UserMessage":
+        """
+        Ensures pipeline-safe input for:
+        - intent_classifier
+        - prompt_builder
+        - reasoning_engine
+        """
+
+        self.text = (self.text or "").strip()
+
+        if not self.task_type:
+            self.task_type = "general"
+
+        if not self.metadata:
+            self.metadata = {}
+
+        return self
 
 
 # -------------------------
