@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Any
-from datetime import datetime
+from typing import List, Optional
+from datetime import datetime, timezone
 
 
 # -------------------------
@@ -11,9 +11,10 @@ class ContextMessage:
     role: str  # "user" | "assistant" | "system"
     text: str
 
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    # timezone-safe timestamp (IMPORTANT for scaling/logging)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
-    # 🧠 cognitive metadata (важно для future cognition layer)
+    # 🧠 cognitive metadata
     importance: float = 0.5  # 0..1
     source: str = "chat"     # chat | memory | retrieval | tool
     tags: List[str] = field(default_factory=list)
@@ -32,11 +33,11 @@ class ConversationContext:
     summary: Optional[str] = None
     language: str = "auto"
 
-    # 🧠 memory intelligence layer hooks (будет использовать cognition)
+    # 🧠 memory intelligence hooks
     emotional_state: Optional[str] = None
     topic: Optional[str] = None
 
-    # 🧠 scoring (для future memory weighting)
+    # 🧠 scoring
     relevance_score: float = 1.0
 
     # -------------------------
@@ -64,7 +65,7 @@ class ConversationContext:
     # GET RECENT CONTEXT
     # -------------------------
     def get_recent(self, limit: int = 10) -> List[ContextMessage]:
-        return self.messages[-limit:]
+        return self.messages[-limit:] if self.messages else []
 
     # -------------------------
     # FILTER BY IMPORTANCE
@@ -76,12 +77,19 @@ class ConversationContext:
         ]
 
     # -------------------------
-    # SIMPLE CONTEXT EXPORT (for prompt builder)
+    # SAFE PROMPT EXPORT
     # -------------------------
     def to_prompt_text(self, limit: int = 10) -> str:
+        if not self.messages:
+            return "EMPTY"
+
         chunk = self.get_recent(limit)
+
+        if not chunk:
+            return "EMPTY"
 
         return "\n".join(
             f"{m.role.upper()}: {m.text}"
             for m in chunk
+            if m.text
         ) or "EMPTY"
