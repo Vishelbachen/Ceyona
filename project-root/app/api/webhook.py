@@ -24,7 +24,7 @@ async def telegram_webhook(request: Request):
 
         parsed = _parse_telegram(payload, trace_id)
 
-        if parsed is None:
+        if not parsed:
             return {"ok": True, "trace_id": trace_id}
 
         logger.log("INFO", "webhook_received", trace_id=trace_id)
@@ -41,7 +41,7 @@ async def telegram_webhook(request: Request):
 
         await ResponseHandler.handle(
             response=result,
-            chat_id=parsed["chat_id"]
+            chat_id=str(parsed["chat_id"])
         )
 
         logger.log("INFO", "webhook_success", trace_id=trace_id)
@@ -67,19 +67,26 @@ def _parse_telegram(payload: Dict[str, Any], trace_id: str) -> Optional[Dict[str
     Pure parsing layer (no business logic)
     """
 
-    if not payload:
-        logger.log("ERROR", "empty_payload", trace_id=trace_id)
+    if not isinstance(payload, dict):
+        logger.log("ERROR", "invalid_payload_type", trace_id=trace_id)
         return None
 
     message = payload.get("message")
+
     if not isinstance(message, dict):
         logger.log("INFO", "no_message_block", trace_id=trace_id)
         return None
 
     text = message.get("text")
-    if not text:
+
+    if not isinstance(text, str) or not text.strip():
         logger.log("INFO", "empty_text_skipped", trace_id=trace_id)
         return None
+
+    # -------------------------
+    # Telegram safety: max message length guard
+    # -------------------------
+    text = text.strip()[:4000]
 
     user = message.get("from") or {}
     chat = message.get("chat") or {}
