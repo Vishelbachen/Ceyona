@@ -24,15 +24,29 @@ async def handle_request(
         if not text:
             raise ValueError("Empty user message")
 
-        # 🧠 MEMORY
+        # 🧠 MEMORY LOAD (SAFE)
         context = []
         if memory:
             try:
                 context = memory.build_context(user_id) or []
-            except Exception:
+
+                logger.log(
+                    "INFO",
+                    "memory_loaded",
+                    trace_id=trace_id,
+                    context_size=len(context)
+                )
+
+            except Exception as e:
+                logger.log(
+                    "ERROR",
+                    "memory_load_failed",
+                    trace_id=trace_id,
+                    error=str(e)
+                )
                 context = []
 
-        # 🧠 MODEL DECISION
+        # 🧠 MODEL DECISION (single source of truth)
         model, intent_result = resolve_model(text)
 
         logger.log(
@@ -40,10 +54,11 @@ async def handle_request(
             "model_selected",
             trace_id=trace_id,
             model=model,
-            intent=intent_result.intent
+            intent=intent_result.intent,
+            confidence=intent_result.confidence
         )
 
-        # 🧠 PROMPT
+        # 🧠 PROMPT BUILD
         prompt = PromptBuilder.build(
             user_text=text,
             context=context,
@@ -57,9 +72,9 @@ async def handle_request(
             trace_id=trace_id
         )
 
-        raw_text = response.content or ""
+        raw_text = (response.content or "").strip()
 
-        # 🧠 VERIFIER (NEW CORE LAYER)
+        # 🧠 VERIFIER LAYER (NON-BLOCKING QUALITY GATE)
         verification = ReasoningVerifier.verify(
             task_type=intent_result.intent,
             response=raw_text
@@ -73,23 +88,40 @@ async def handle_request(
             issues=verification["issues"]
         )
 
-        # 🧯 SAFETY DECISION
-        if not verification["valid"]:
-            raw_text = (
-                "I couldn't generate a reliable solution for this task. "
-                "Please rephrase or provide more details."
-            )
-
-        if not raw_text.strip():
+        # ⚠️ SOFT SAFETY HANDLING (NO HARD FAILURE)
+        # We DO NOT block pipeline unless response is totally broken
+        if not raw_text:
             raw_text = "No valid response generated."
 
-        # 🧠 MEMORY SAVE
+        elif not verification["valid"]:
+            # fallback only (do not fail request)
+            logger.log(
+                "WARNING",
+                "low_quality_response_detected",
+                trace_id=trace_id,
+                issues=verification["issues"]
+            )
+
+            raw_text = (
+                "I couldn't generate a fully reliable solution for this request. "
+                "Try rephrasing or adding more details."
+            )
+
+        # 🧠 MEMORY SAVE (SAFE)
         if memory and getattr(memory, "store", None):
             try:
                 memory.store.append_message(user_id, "user", text)
                 memory.store.append_message(user_id, "assistant", raw_text)
-            except Exception:
-                pass
+
+                logger.log("INFO", "memory_saved", trace_id=trace_id)
+
+            except Exception as e:
+                logger.log(
+                    "ERROR",
+                    "memory_save_failed",
+                    trace_id=trace_id,
+                    error=str(e)
+                )
 
         logger.log("INFO", "orchestrator_done", trace_id=trace_id)
 
@@ -105,7 +137,12 @@ async def handle_request(
         )
 
     except Exception as e:
-        logger.log("ERROR", "orchestrator_crash", trace_id=trace_id, error=str(e))
+        logger.log(
+            "ERROR",
+            "orchestrator_crash",
+            trace_id=trace_id,
+            error=str(e)
+        )
 
         err = OrchestratorError(
             code="ORCH_001",
