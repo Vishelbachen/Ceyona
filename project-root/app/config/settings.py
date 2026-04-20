@@ -1,5 +1,4 @@
 import os
-import logging
 
 
 class Settings:
@@ -43,38 +42,29 @@ class Settings:
         self.WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
         # -------------------------
-        # MODEL SYSTEM
+        # MODEL SYSTEM (FIXED COMPAT LAYER)
         # -------------------------
-        self.DEFAULT_MODEL_LAYERS = {
-            "fast": ["groq/compound-mini"],
-            "general": ["llama-3.3-70b-versatile"],
-            "heavy": ["meta-llama/llama-4-scout-17b-16e-instruct"],
-            "safety": ["openai/gpt-oss-safeguard-20b"],
-        }
+        self.FAST_MODELS = [
+            "groq/compound-mini",
+            "llama-3.1-8b-instant",
+        ]
 
-        self.MODEL_LAYERS = {
-            "fast": [
-                "groq/compound-mini",
-                "llama-3.1-8b-instant",
-            ],
+        self.GENERAL_MODELS = [
+            "llama-3.3-70b-versatile",
+            "qwen/qwen3-32b",
+            "openai/gpt-oss-20b",
+        ]
 
-            "general": [
-                "llama-3.3-70b-versatile",
-                "qwen/qwen3-32b",
-                "openai/gpt-oss-20b",
-            ],
+        self.HEAVY_MODELS = [
+            "openai/gpt-oss-120b",
+            "meta-llama/llama-4-scout-17b-16e-instruct",
+        ]
 
-            "heavy": [
-                "openai/gpt-oss-120b",
-                "meta-llama/llama-4-scout-17b-16e-instruct",
-            ],
-
-            "safety": [
-                "openai/gpt-oss-safeguard-20b",
-                "meta-llama/llama-prompt-guard-2-22m",
-                "meta-llama/llama-prompt-guard-2-86m",
-            ]
-        }
+        self.SAFETY_MODELS = [
+            "openai/gpt-oss-safeguard-20b",
+            "meta-llama/llama-prompt-guard-2-22m",
+            "meta-llama/llama-prompt-guard-2-86m",
+        ]
 
         # -------------------------
         # INTENT MAPPING
@@ -84,7 +74,8 @@ class Settings:
             "reasoning": "heavy",
             "creative": "general",
             "general": "general",
-            "safety": "safety"
+            "safety": "safety",
+            "chat": "general",
         }
 
         self.DEFAULT_LAYER = "general"
@@ -100,7 +91,7 @@ class Settings:
         }
 
         # -------------------------
-        # SYSTEM CAPABILITIES
+        # SYSTEM CONFIG
         # -------------------------
         self.SYSTEM_CONFIG = {
             "multilingual": True,
@@ -121,43 +112,24 @@ class Settings:
             "avoid_fluff": True
         }
 
-        # -------------------------
-        # SAFE VALIDATION
-        # -------------------------
         self._validate_soft()
 
-    # -------------------------
-    # SAFE VALIDATION
-    # -------------------------
     def _validate_soft(self):
         missing = []
 
-        required = [
-            ("GROQ_API_KEY", self.GROQ_API_KEY),
-            ("BOT_TOKEN", self.BOT_TOKEN)
-        ]
-
-        for name, value in required:
-            if not value:
-                missing.append(name)
+        if not self.GROQ_API_KEY:
+            missing.append("GROQ_API_KEY")
+        if not self.BOT_TOKEN:
+            missing.append("BOT_TOKEN")
 
         if missing:
-            logging.warning(
-                f"[CONFIG WARNING] Missing env vars: {', '.join(missing)}"
-            )
+            print(f"[CONFIG WARNING] Missing env vars: {', '.join(missing)}")
 
-    # -------------------------
-    # HELPERS
-    # -------------------------
     def get_models(self, layer: str):
-        return self.MODEL_LAYERS.get(
-            layer,
-            self.DEFAULT_MODEL_LAYERS.get(layer, [])
-        )
+        return getattr(self, f"{layer.upper()}_MODELS", self.GENERAL_MODELS)
 
     def get_layer_by_intent(self, intent: str) -> str:
         return self.INTENT_TO_LAYER.get(intent, self.DEFAULT_LAYER)
 
 
-# singleton
 settings = Settings()
