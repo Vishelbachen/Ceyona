@@ -3,153 +3,148 @@ import os
 
 class Settings:
     """
-    Production-safe configuration loader.
-    Single source of truth for all environment variables.
+    Production-safe + cognition-aware configuration layer.
     """
 
     def __init__(self):
-        # 🔐 CORE
-        self.GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-        self.BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-        # 🔐 SECURITY
-        self.JWT_SECRET = os.getenv("JWT_SECRET")
-        self.ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
+        # -------------------------
+        # CORE KEYS
+        # -------------------------
+        self.GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+        self.BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 
-        # 🗄 DB (future)
-        self.SUPABASE_URL = os.getenv("SUPABASE_URL")
-        self.SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
-        self.SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+        # -------------------------
+        # SECURITY
+        # -------------------------
+        self.JWT_SECRET = os.getenv("JWT_SECRET", "")
+        self.ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "")
 
-        # 🌐 EXTERNAL APIs
-        self.OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
-        self.MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN")
-        self.SERPAPI_KEY = os.getenv("SERPAPI_KEY")
-        self.BREVO_API_KEY = os.getenv("BREVO_API_KEY")
+        # -------------------------
+        # DATABASE
+        # -------------------------
+        self.SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+        self.SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
+        self.SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 
-        # 🚀 DEPLOYMENT
-        self.WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+        # -------------------------
+        # EXTERNAL APIs
+        # -------------------------
+        self.OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "")
+        self.MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN", "")
+        self.SERPAPI_KEY = os.getenv("SERPAPI_KEY", "")
+        self.BREVO_API_KEY = os.getenv("BREVO_API_KEY", "")
 
-        # 🧠 MODEL LAYERS (ROUTING SYSTEM)
+        # -------------------------
+        # DEPLOYMENT
+        # -------------------------
+        self.WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
 
-        self.FAST_MODELS = [
-            "groq/compound-mini",
-            "llama-3.1-8b-instant",
-        ]
+        # -------------------------
+        # MODEL SYSTEM (HIERARCHICAL ROUTING)
+        # -------------------------
+        self.MODEL_LAYERS = {
+            "fast": [
+                "groq/compound-mini",
+                "llama-3.1-8b-instant",
+            ],
 
-        self.GENERAL_MODELS = [
-            "llama-3.3-70b-versatile",
-            "qwen/qwen3-32b",
-            "openai/gpt-oss-20b",
-        ]
+            "general": [
+                "llama-3.3-70b-versatile",
+                "qwen/qwen3-32b",
+                "openai/gpt-oss-20b",
+            ],
 
-        self.HEAVY_MODELS = [
-            "openai/gpt-oss-120b",
-            "meta-llama/llama-4-scout-17b-16e-instruct",
-        ]
+            "heavy": [
+                "openai/gpt-oss-120b",
+                "meta-llama/llama-4-scout-17b-16e-instruct",
+            ],
 
-        self.SAFETY_MODELS = [
-            "openai/gpt-oss-safeguard-20b",
-            "meta-llama/llama-prompt-guard-2-22m",
-            "meta-llama/llama-prompt-guard-2-86m",
-        ]
-
-        # 🧠 INTENT SYSTEM
-
-        self.DEFAULT_INTENT = "general"
-        self.INTENT_CONFIDENCE_THRESHOLD = 0.6
-
-        self.INTENT_MODEL_PRIORITY = {
-            "fast": self.FAST_MODELS,
-            "reasoning": self.HEAVY_MODELS,
-            "creative": self.GENERAL_MODELS,
-            "safety": self.SAFETY_MODELS,
-            "general": self.GENERAL_MODELS,
+            "safety": [
+                "openai/gpt-oss-safeguard-20b",
+                "meta-llama/llama-prompt-guard-2-22m",
+                "meta-llama/llama-prompt-guard-2-86m",
+            ]
         }
 
-        # 🧠 BEHAVIOR MODES (NOW PURE PROMPT SIGNALS)
+        # -------------------------
+        # INTENT MAPPING (SIMPLIFIED)
+        # -------------------------
+        self.INTENT_TO_LAYER = {
+            "fast": "fast",
+            "reasoning": "heavy",
+            "creative": "general",
+            "general": "general",
+            "safety": "safety"
+        }
 
+        self.DEFAULT_LAYER = "general"
+
+        # -------------------------
+        # BEHAVIOR MODES (PROMPT SIGNALS)
+        # -------------------------
         self.BEHAVIOR_MODES = {
-            "FAST": {
-                "instruction": (
-                    "Fast reasoning mode.\n"
-                    "Be concise, direct, minimal wording.\n"
-                    "Optimize for speed and clarity."
-                )
-            },
-
-            "GENERAL": {
-                "instruction": (
-                    "Balanced assistant mode.\n"
-                    "Respond clearly and naturally.\n"
-                    "Adapt language to the user automatically.\n"
-                )
-            },
-
-            "HEAVY": {
-                "instruction": (
-                    "Deep reasoning mode.\n"
-                    "Solve problems step-by-step with full rigor.\n"
-                    "Required for olympiad-level math, physics, CS, algorithms.\n"
-                    "Prioritize correctness, structure, and completeness over speed."
-                )
-            },
-
-            "SAFETY": {
-                "instruction": (
-                    "Safety reasoning mode.\n"
-                    "Provide neutral, factual, non-harmful responses.\n"
-                )
-            }
+            "FAST": "Be concise and direct.",
+            "GENERAL": "Be balanced, clear and natural.",
+            "HEAVY": "Use step-by-step deep reasoning.",
+            "SAFETY": "Be neutral and factual."
         }
 
-        # 🧠 GLOBAL SYSTEM CONFIG (NO MORE ANTI-IDENTITY RULES HERE)
-
+        # -------------------------
+        # SYSTEM CAPABILITIES
+        # -------------------------
         self.SYSTEM_CONFIG = {
             "multilingual": True,
             "olympiad_mode": True,
-            "code_quality_priority": True,
             "step_by_step_reasoning": True,
+            "adaptive_routing": True,
+            "cognition_loop": True
         }
 
-        # 🧠 RESPONSE BEHAVIOR TUNING (NEW IMPORTANT ADDITION)
-
+        # -------------------------
+        # RESPONSE TUNING
+        # -------------------------
         self.RESPONSE_TUNING = {
+            "max_retries_llm": 2,
+            "max_retries_verifier": 2,
             "allow_long_reasoning": True,
-            "prefer_structured_output_for_math": True,
-            "prefer_clean_code": True,
+            "prefer_structured_output": True,
             "avoid_fluff": True
         }
 
-        # 🧯 VALIDATION
-
+        # -------------------------
+        # VALIDATION
+        # -------------------------
         self._validate()
 
+    # -------------------------
+    # VALIDATION
+    # -------------------------
     def _validate(self):
         missing = []
 
-        if not self.BOT_TOKEN:
-            missing.append("BOT_TOKEN")
+        required = [
+            ("GROQ_API_KEY", self.GROQ_API_KEY),
+            ("BOT_TOKEN", self.BOT_TOKEN)
+        ]
 
-        if not self.GROQ_API_KEY:
-            missing.append("GROQ_API_KEY")
-
-        if not self.FAST_MODELS:
-            missing.append("FAST_MODELS")
-
-        if not self.GENERAL_MODELS:
-            missing.append("GENERAL_MODELS")
-
-        if not self.INTENT_MODEL_PRIORITY:
-            missing.append("INTENT_MODEL_PRIORITY")
-
-        if not self.BEHAVIOR_MODES:
-            missing.append("BEHAVIOR_MODES")
+        for name, value in required:
+            if not value:
+                missing.append(name)
 
         if missing:
             raise RuntimeError(
                 f"[CONFIG ERROR] Missing env vars: {', '.join(missing)}"
             )
+
+    # -------------------------
+    # HELPERS (IMPORTANT ADDITION)
+    # -------------------------
+    def get_models(self, layer: str):
+        return self.MODEL_LAYERS.get(layer, self.MODEL_LAYERS[self.DEFAULT_LAYER])
+
+    def get_layer_by_intent(self, intent: str) -> str:
+        return self.INTENT_TO_LAYER.get(intent, self.DEFAULT_LAYER)
 
 
 # singleton
