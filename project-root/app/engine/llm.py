@@ -3,6 +3,8 @@ import json
 import time
 import httpx
 
+from typing import Optional
+
 from app.core.logger import logger
 from app.core.errors import LLMError
 from app.config.settings import settings
@@ -11,7 +13,7 @@ from app.config.settings import settings
 # -------------------------
 # CLIENT (REUSED)
 # -------------------------
-_client: httpx.AsyncClient | None = None
+_client: Optional[httpx.AsyncClient] = None
 
 
 def get_client() -> httpx.AsyncClient:
@@ -19,11 +21,21 @@ def get_client() -> httpx.AsyncClient:
 
     if _client is None:
         _client = httpx.AsyncClient(
-            timeout=httpx.Timeout(12.0),
-            limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)
+            timeout=httpx.Timeout(10.0, read=12.0),
+            limits=httpx.Limits(
+                max_connections=100,
+                max_keepalive_connections=20
+            )
         )
 
     return _client
+
+
+async def close_client():
+    global _client
+    if _client:
+        await _client.aclose()
+        _client = None
 
 
 # -------------------------
@@ -38,7 +50,11 @@ class LLMResponse:
 # -------------------------
 # GROQ CALL (TRANSPORT)
 # -------------------------
-async def groq_call(model: str, prompt: str, temperature: float) -> dict:
+async def groq_call(
+    model: str,
+    prompt: str,
+    temperature: float
+) -> dict:
 
     url = "https://api.groq.com/openai/v1/chat/completions"
 
@@ -50,8 +66,14 @@ async def groq_call(model: str, prompt: str, temperature: float) -> dict:
     payload = {
         "model": model,
         "messages": [
-            {"role": "system", "content": "Be precise, structured, and logically consistent."},
-            {"role": "user", "content": prompt}
+            {
+                "role": "system",
+                "content": "Be precise, structured, and logically consistent."
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
         ],
         "temperature": temperature
     }
@@ -60,10 +82,17 @@ async def groq_call(model: str, prompt: str, temperature: float) -> dict:
 
     resp = await client.post(url, headers=headers, json=payload)
 
+    # retryable errors
+    if resp.status_code in (429, 500, 502, 503):
+        raise RuntimeError(f"Retryable HTTP {resp.status_code}")
+
     if resp.status_code != 200:
         raise RuntimeError(f"HTTP {resp.status_code}: {resp.text}")
 
-    return resp.json()
+    try:
+        return resp.json()
+    except Exception:
+        raise RuntimeError("Invalid JSON response from LLM")
 
 
 # -------------------------
@@ -73,7 +102,7 @@ async def run_llm(
     model: str,
     prompt: str,
     retries: int = 2,
-    trace_id: str | None = None
+    trace_id: Optional[str] = None
 ) -> LLMResponse:
 
     last_error = None
@@ -93,7 +122,7 @@ async def run_llm(
 
             data = await asyncio.wait_for(
                 groq_call(model, prompt, temperature=0.4),
-                timeout=12
+                timeout=15
             )
 
             content = _extract_content(data)
@@ -110,7 +139,8 @@ async def run_llm(
                 "llm_success",
                 trace_id=trace_id,
                 model=model,
-                latency=latency
+                latency=latency,
+                response_size=len(cleaned)
             )
 
             return LLMResponse(content=cleaned, raw=data)
@@ -126,6 +156,10 @@ async def run_llm(
                 attempt=attempt,
                 error=str(e)
             )
+
+            # retry only if safe
+            if "Retryable" not in str(e) and attempt >= retries:
+                break
 
             await asyncio.sleep(0.4 * (attempt + 1))
 
@@ -171,11 +205,7 @@ def _sanitize(text: str) -> str:
         "я — искусственный интеллект"
     ]
 
-    low = text.lower()
-
     for f in forbidden:
-        if f in low:
-            # ❗ FIX: НЕ УБИВАЕМ ОТВЕТ, А ЧИСТИМ
-            text = text.replace(f, "").strip()
+        text = text.replace(f, "").replace(f.capitalize(), "")
 
-    return text
+    return text.strip()
