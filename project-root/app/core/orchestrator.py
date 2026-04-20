@@ -1,48 +1,120 @@
-class ReasoningEngine:
-    """
-    Unified reasoning strategy layer.
-    Not model-specific.
-    """
+from app.contracts.message import OrchestratorRequest
+from app.contracts.response import SuccessResponse, ErrorResponse
+from app.engine.model_decision import resolve_model
+from app.engine.llm import run_llm
+from app.core.logger import logger
+from app.core.errors import OrchestratorError
+from app.memory.memory_service import MemoryService
+from app.core.prompt_builder import PromptBuilder
+from app.engine.reasoning_verifier import ReasoningVerifier
 
-    # 🧠 COMPATIBILITY MAP (fix taxonomy mismatch)
-    ALIASES = {
-        "math_physics": "math",
-        "coding": "algorithm",
-        "analysis": "history"
-    }
 
-    @staticmethod
-    def get_protocol(task_type: str) -> str:
+async def handle_request(
+    req: OrchestratorRequest,
+    memory: MemoryService | None = None
+):
+    trace_id = req.trace_id
 
-        task_type = ReasoningEngine.ALIASES.get(task_type, task_type)
+    try:
+        logger.log("INFO", "orchestrator_start", trace_id=trace_id)
 
-        if task_type in ["math", "physics", "chemistry"]:
-            return (
-                "Step 1: Understand the problem\n"
-                "Step 2: Identify known laws and formulas\n"
-                "Step 3: Build equations step-by-step\n"
-                "Step 4: Solve logically\n"
-                "Step 5: Final answer clearly stated\n"
+        user_id = req.user_message.user_id
+        text = (req.user_message.text or "").strip()
+
+        if not text:
+            raise ValueError("Empty user message")
+
+        # 🧠 MEMORY
+        context = []
+        if memory:
+            try:
+                context = memory.build_context(user_id) or []
+            except Exception:
+                context = []
+
+        # 🧠 MODEL DECISION
+        model, intent_result = resolve_model(text)
+
+        logger.log(
+            "INFO",
+            "model_selected",
+            trace_id=trace_id,
+            model=model,
+            intent=intent_result.intent
+        )
+
+        # 🧠 PROMPT
+        prompt = PromptBuilder.build(
+            user_text=text,
+            context=context,
+            model=model
+        )
+
+        # 🧠 LLM CALL
+        response = await run_llm(
+            model=model,
+            prompt=prompt,
+            trace_id=trace_id
+        )
+
+        raw_text = response.content or ""
+
+        # 🧠 VERIFIER (NEW CORE LAYER)
+        verification = ReasoningVerifier.verify(
+            task_type=intent_result.intent,
+            response=raw_text
+        )
+
+        logger.log(
+            "INFO",
+            "reasoning_verified",
+            trace_id=trace_id,
+            valid=verification["valid"],
+            issues=verification["issues"]
+        )
+
+        # 🧯 SAFETY DECISION
+        if not verification["valid"]:
+            raw_text = (
+                "I couldn't generate a reliable solution for this task. "
+                "Please rephrase or provide more details."
             )
 
-        if task_type in ["history", "literature", "biology", "geography"]:
-            return (
-                "Step 1: Identify key concepts\n"
-                "Step 2: Provide structured explanation\n"
-                "Step 3: Add supporting facts\n"
-                "Step 4: Conclude clearly\n"
-            )
+        if not raw_text.strip():
+            raw_text = "No valid response generated."
 
-        if task_type in ["coding", "algorithm"]:
-            return (
-                "Step 1: Understand requirements\n"
-                "Step 2: Design solution\n"
-                "Step 3: Write structured code\n"
-                "Step 4: Explain complexity if needed\n"
-            )
+        # 🧠 MEMORY SAVE
+        if memory and getattr(memory, "store", None):
+            try:
+                memory.store.append_message(user_id, "user", text)
+                memory.store.append_message(user_id, "assistant", raw_text)
+            except Exception:
+                pass
 
-        return (
-            "Step 1: Understand question\n"
-            "Step 2: Reason logically\n"
-            "Step 3: Answer clearly\n"
+        logger.log("INFO", "orchestrator_done", trace_id=trace_id)
+
+        return SuccessResponse(
+            data=raw_text,
+            trace_id=trace_id
+        )
+
+    except OrchestratorError as e:
+        return ErrorResponse(
+            error=e.to_dict()["error"],
+            trace_id=trace_id
+        )
+
+    except Exception as e:
+        logger.log("ERROR", "orchestrator_crash", trace_id=trace_id, error=str(e))
+
+        err = OrchestratorError(
+            code="ORCH_001",
+            message=str(e),
+            layer="orchestrator",
+            trace_id=trace_id
+        )
+
+        return ErrorResponse(
+            error=err.to_dict()["error"],
+            trace_id=trace_id
         )
