@@ -38,7 +38,7 @@ def select_model(text: str, intent_fallback: str | None = None) -> str:
 
         return settings.GENERAL_MODELS[0]
 
-    # ⚠️ LEGACY MODE (only if no intent system used)
+    
     if text_len < 50:
         return settings.FAST_MODELS[0]
 
