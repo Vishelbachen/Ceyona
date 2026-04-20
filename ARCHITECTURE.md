@@ -217,12 +217,16 @@ model_router → ❌ REMOVED (clean architecture achieved)
 fastapi>=0.110
 uvicorn>=0.27
 aiogram>=3.0
-groq>=0.9.0
-supabase
-httpx>=0.27.0
+groq>=0.9.0,<1.0.0
+openai>=1.0.0
+httpx[http2]>=0.27.0
+supabase>=2.0.0
 requests
 python-dotenv
-openai>=1.0.0
+pydantic>=2.6,<3.0
+loguru>=0.7.2
+tenacity>=8.2.3
+typing-extensions>=4.9.0
 💥 CURRENT STATUS (v1.3.4 STABLE CORE)
 🟢 SYSTEM NOW INCLUDES:
 reasoning engine (structured solving)
