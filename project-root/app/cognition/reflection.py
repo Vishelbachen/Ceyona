@@ -1,31 +1,35 @@
-import json
 from datetime import datetime
+from typing import Dict, Any
 
 
 class Reflection:
     """
-    Logs system behavior for future learning (Supabase-ready).
+    Stores inference experience for future learning.
+    Ready for Supabase / DB integration.
     """
 
     @staticmethod
-    def build_log(
+    def build_event(
         user_id: str,
         question: str,
         answer: str,
         model: str,
-        evaluation
-    ) -> dict:
+        task_type: str,
+        evaluation: Any,
+        trace_id: str | None = None
+    ) -> Dict[str, Any]:
 
         return {
             "user_id": user_id,
-            "timestamp": datetime.utcnow().isoformat(),
             "question": question,
             "answer": answer,
             "model": model,
-            "score": evaluation.score,
-            "issues": evaluation.issues,
-        }
+            "task_type": task_type,
 
-    @staticmethod
-    def serialize(log: dict) -> str:
-        return json.dumps(log, ensure_ascii=False)
+            "score": getattr(evaluation, "score", 0.0),
+            "is_valid": getattr(evaluation, "is_valid", False),
+            "issues": getattr(evaluation, "issues", []),
+
+            "trace_id": trace_id,
+            "created_at": datetime.utcnow().isoformat()
+        }
