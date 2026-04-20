@@ -1,135 +1,111 @@
-import os
+erros.py
 
+from dataclasses import dataclass, field
+from typing import Optional, Any, Dict, Literal
 
-class Settings:
-    """
-    Production-safe + cognition-aware configuration layer.
-    Railway-safe version (no hard crash on missing env).
-    """
+-------------------------
 
-    def __init__(self):
+ERROR SEVERITY LEVELS
 
-        # -------------------------
-        # CORE KEYS
-        # -------------------------
-        self.GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-        self.BOT_TOKEN = os.getenv("BOT_TOKEN")
+-------------------------
 
-        # -------------------------
-        # SECURITY
-        # -------------------------
-        self.JWT_SECRET = os.getenv("JWT_SECRET")
-        self.ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
+Severity = Literal["low", "medium", "high", "critical"]
 
-        # -------------------------
-        # DATABASE
-        # -------------------------
-        self.SUPABASE_URL = os.getenv("SUPABASE_URL")
-        self.SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
-        self.SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+-------------------------
 
-        # -------------------------
-        # EXTERNAL APIs
-        # -------------------------
-        self.OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
-        self.MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN")
-        self.SERPAPI_KEY = os.getenv("SERPAPI_KEY")
-        self.BREVO_API_KEY = os.getenv("BREVO_API_KEY")
+BASE ERROR (COGNITIVE)
 
-        # -------------------------
-        # DEPLOYMENT
-        # -------------------------
-        self.WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+-------------------------
 
-        # -------------------------
-        # MODEL SYSTEM (FIXED COMPAT LAYER)
-        # -------------------------
-        self.FAST_MODELS = [
-            "groq/compound-mini",
-            "llama-3.1-8b-instant",
-        ]
+class AppError(Exception):
+"""
+Cognitive-aware system error.
 
-        self.GENERAL_MODELS = [
-            "llama-3.3-70b-versatile",
-            "qwen/qwen3-32b",
-            "openai/gpt-oss-20b",
-        ]
+Used both as:  
+- runtime exception  
+- structured reasoning signal  
+"""  
 
-        self.HEAVY_MODELS = [
-            "openai/gpt-oss-120b",
-            "meta-llama/llama-4-scout-17b-16e-instruct",
-        ]
+def __init__(  
+    self,  
+    code: str,  
+    message: str,  
+    layer: str,  
+    trace_id: Optional[str] = None,  
+    severity: Severity = "medium",  
+    context: Optional[Dict[str, Any]] = None,  
+    recoverable: bool = True,  
+    suggestion: Optional[str] = None,  
+):  
+    super().__init__(message)  
 
-        self.SAFETY_MODELS = [
-            "openai/gpt-oss-safeguard-20b",
-            "meta-llama/llama-prompt-guard-2-22m",
-            "meta-llama/llama-prompt-guard-2-86m",
-        ]
+    self.code = code  
+    self.message = message  
+    self.layer = layer  
+    self.trace_id = trace_id  
+    self.severity = severity  
 
-        # -------------------------
-        # INTENT MAPPING
-        # -------------------------
-        self.INTENT_TO_LAYER = {
-            "fast": "fast",
-            "reasoning": "heavy",
-            "creative": "general",
-            "general": "general",
-            "safety": "safety",
-            "chat": "general",
-        }
+    # safe default (CRITICAL FIX)  
+    self.context = context or {}  
 
-        self.DEFAULT_LAYER = "general"
+    self.recoverable = recoverable  
+    self.suggestion = suggestion  
 
-        # -------------------------
-        # BEHAVIOR MODES
-        # -------------------------
-        self.BEHAVIOR_MODES = {
-            "FAST": "Be concise and direct.",
-            "GENERAL": "Be balanced, clear and natural.",
-            "HEAVY": "Use step-by-step deep reasoning.",
-            "SAFETY": "Be neutral and factual."
-        }
+# -------------------------  
+# SERIALIZATION SAFE OUTPUT  
+# -------------------------  
+def to_dict(self) -> Dict[str, Any]:  
+    return {  
+        "error": {  
+            "code": self.code,  
+            "message": self.message,  
+            "layer": self.layer,  
+            "trace_id": self.trace_id,  
+            "severity": self.severity,  
+            "recoverable": self.recoverable,  
+            "suggestion": self.suggestion,  
+            "context": self.context,  
+        }  
+    }  
 
-        # -------------------------
-        # SYSTEM CONFIG
-        # -------------------------
-        self.SYSTEM_CONFIG = {
-            "multilingual": True,
-            "olympiad_mode": True,
-            "step_by_step_reasoning": True,
-            "adaptive_routing": True,
-            "cognition_loop": True
-        }
+# -------------------------  
+# DEBUG REPRESENTATION  
+# -------------------------  
+def __str__(self) -> str:  
+    return f"[{self.layer}] {self.code}: {self.message}"
 
-        # -------------------------
-        # RESPONSE TUNING
-        # -------------------------
-        self.RESPONSE_TUNING = {
-            "max_retries_llm": 2,
-            "max_retries_verifier": 2,
-            "allow_long_reasoning": True,
-            "prefer_structured_output": True,
-            "avoid_fluff": True
-        }
+-------------------------
 
-        self._validate_soft()
+ORCHESTRATOR ERRORS
 
-    def _validate_soft(self):
-        missing = []
+-------------------------
 
-        if not self.GROQ_API_KEY:
-            missing.append("GROQ_API_KEY")
-        if not self.BOT_TOKEN:
-            missing.append("BOT_TOKEN")
+class OrchestratorError(AppError):
+pass
 
-        if missing:
-            print(f"[CONFIG WARNING] Missing env vars: {', '.join(missing)}")
+-------------------------
 
-    def get_models(self, layer: str):
-        return getattr(self, f"{layer.upper()}_MODELS", self.GENERAL_MODELS)
+LLM ERRORS
 
-    def get_layer_by_intent(self, intent: str) -> str:
-        return self.INTENT_TO_LAYER.get(intent, self.DEFAULT_LAYER)
+-------------------------
 
+class LLMError(AppError):
+pass
 
-settings = Settings()
+-------------------------
+
+ROUTER / MODEL ERRORS
+
+-------------------------
+
+class RouterError(AppError):
+pass
+
+-------------------------
+
+API / EXTERNAL ERRORS
+
+-------------------------
+
+class APIError(AppError):
+pass
