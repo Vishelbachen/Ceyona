@@ -1,14 +1,16 @@
 import httpx
 import asyncio
 
+from typing import Optional, List
+
 from app.config.settings import settings
 from app.core.logger import logger
 
 
 # -------------------------
-# HTTP CLIENT (REUSED)
+# CLIENT (REUSED)
 # -------------------------
-_client: httpx.AsyncClient | None = None
+_client: Optional[httpx.AsyncClient] = None
 
 
 def get_client() -> httpx.AsyncClient:
@@ -23,24 +25,63 @@ def get_client() -> httpx.AsyncClient:
     return _client
 
 
+async def close_client():
+    global _client
+    if _client:
+        await _client.aclose()
+        _client = None
+
+
 # -------------------------
-# CORE SENDER
+# PUBLIC API
 # -------------------------
-async def send_message(chat_id: str | int, text: str, trace_id: str | None = None):
+async def send_message(
+    chat_id: str | int,
+    text: str,
+    trace_id: Optional[str] = None,
+    parse_mode: str = "Markdown"
+):
+    """
+    Safe message sender with:
+    - retry
+    - rate limit handling
+    - message splitting
+    """
 
     if not settings.BOT_TOKEN:
         raise RuntimeError("BOT_TOKEN missing")
+
+    parts = _split_message(text)
+
+    for part in parts:
+        await _send_single(
+            chat_id=chat_id,
+            text=part,
+            trace_id=trace_id,
+            parse_mode=parse_mode
+        )
+
+
+# -------------------------
+# INTERNAL: SINGLE SEND
+# -------------------------
+async def _send_single(
+    chat_id: str | int,
+    text: str,
+    trace_id: Optional[str],
+    parse_mode: str
+):
 
     url = f"https://api.telegram.org/bot{settings.BOT_TOKEN}/sendMessage"
 
     payload = {
         "chat_id": chat_id,
-        "text": text
+        "text": text,
+        "parse_mode": parse_mode
     }
 
     client = get_client()
-
-    max_retries = 2
+    max_retries = 3
 
     for attempt in range(max_retries + 1):
 
@@ -55,13 +96,31 @@ async def send_message(chat_id: str | int, text: str, trace_id: str | None = Non
             response = await client.post(url, json=payload)
 
             # -------------------------
-            # HTTP ERROR CLASSIFICATION
+            # RATE LIMIT (CRITICAL)
+            # -------------------------
+            if response.status_code == 429:
+                retry_after = _extract_retry_after(response)
+
+                logger.log(
+                    "WARNING",
+                    "telegram_rate_limited",
+                    trace_id=trace_id,
+                    retry_after=retry_after
+                )
+
+                await asyncio.sleep(retry_after or 1.5)
+                continue
+
+            # -------------------------
+            # SERVER ERROR
             # -------------------------
             if response.status_code >= 500:
                 raise RuntimeError("Telegram server error")
 
+            # -------------------------
+            # BAD REQUEST (NO RETRY)
+            # -------------------------
             if response.status_code == 400:
-                # ❌ do NOT retry bad request
                 logger.log(
                     "ERROR",
                     "telegram_bad_request",
@@ -73,7 +132,7 @@ async def send_message(chat_id: str | int, text: str, trace_id: str | None = Non
             if response.status_code != 200:
                 raise RuntimeError(f"HTTP {response.status_code}")
 
-            data = response.json()
+            data = _safe_json(response)
 
             if not data.get("ok"):
                 logger.log(
@@ -103,7 +162,7 @@ async def send_message(chat_id: str | int, text: str, trace_id: str | None = Non
             )
 
             if attempt < max_retries:
-                await asyncio.sleep(0.4 * (attempt + 1))
+                await asyncio.sleep(0.5 * (attempt + 1))
             else:
                 logger.log(
                     "CRITICAL",
@@ -111,3 +170,47 @@ async def send_message(chat_id: str | int, text: str, trace_id: str | None = Non
                     trace_id=trace_id
                 )
                 return
+
+
+# -------------------------
+# UTIL: SAFE JSON
+# -------------------------
+def _safe_json(response: httpx.Response) -> dict:
+    try:
+        return response.json()
+    except Exception:
+        return {}
+
+
+# -------------------------
+# UTIL: RETRY AFTER
+# -------------------------
+def _extract_retry_after(response: httpx.Response) -> float:
+    try:
+        data = response.json()
+        return float(data.get("parameters", {}).get("retry_after", 1))
+    except Exception:
+        return 1.0
+
+
+# -------------------------
+# UTIL: MESSAGE SPLIT
+# -------------------------
+def _split_message(text: str, limit: int = 4096) -> List[str]:
+    """
+    Telegram message limit = 4096 chars
+    """
+    if not text:
+        return [""]
+
+    if len(text) <= limit:
+        return [text]
+
+    parts = []
+
+    while text:
+        part = text[:limit]
+        parts.append(part)
+        text = text[limit:]
+
+    return parts
