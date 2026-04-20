@@ -3,7 +3,6 @@ from app.contracts.response import SuccessResponse, ErrorResponse
 
 from app.engine.model_decision import resolve_model
 from app.engine.llm import run_llm
-from app.engine.intent_classifier import classify_intent
 
 from app.core.logger import logger
 from app.core.errors import OrchestratorError
@@ -22,12 +21,14 @@ from app.memory.supabase_store import SupabaseStore
 # -------------------------
 # MAIN ORCHESTRATOR
 # -------------------------
-async def handle_request(req: OrchestratorRequest, memory: MemoryService | None = None):
+async def handle_request(
+    req: OrchestratorRequest,
+    memory: MemoryService | None = None
+):
 
     trace_id = req.trace_id
 
     try:
-        # 🧠 normalize input (important fix)
         req.user_message.normalize()
 
         text = (req.user_message.text or "").strip()
@@ -39,7 +40,7 @@ async def handle_request(req: OrchestratorRequest, memory: MemoryService | None 
             raise ValueError("Empty input")
 
         # -------------------------
-        # MEMORY LOAD (SAFE)
+        # MEMORY LOAD
         # -------------------------
         context = []
         if memory and getattr(memory, "build_context", None):
@@ -49,17 +50,19 @@ async def handle_request(req: OrchestratorRequest, memory: MemoryService | None 
                 logger.log("WARN", "memory_load_failed", trace_id=trace_id, error=str(e))
 
         # -------------------------
-        # INTENT CLASSIFICATION
+        # MODEL DECISION (SINGLE SOURCE OF TRUTH)
         # -------------------------
-        intent_result = classify_intent(text)
+        model, intent_result, decision_meta = resolve_model(text)
 
-        # FIX: task_type must come from structured field (not intent name)
-        task_type = getattr(intent_result, "task_type", None) or "general"
+        task_type = intent_result.task_type or "general"
 
-        # -------------------------
-        # MODEL DECISION
-        # -------------------------
-        model, intent_result = resolve_model(text)
+        logger.log(
+            "INFO",
+            "model_selected",
+            trace_id=trace_id,
+            model=model,
+            decision=decision_meta
+        )
 
         # -------------------------
         # PROMPT BUILD
@@ -72,11 +75,12 @@ async def handle_request(req: OrchestratorRequest, memory: MemoryService | None 
         )
 
         # -------------------------
-        # CORE LOOP
+        # CORE LOOP (INTELLIGENT)
         # -------------------------
-        max_attempts = 2
+        max_attempts = 3
         final_answer = None
         last_response = ""
+        current_model = model
 
         for attempt in range(max_attempts):
 
@@ -84,11 +88,12 @@ async def handle_request(req: OrchestratorRequest, memory: MemoryService | None 
                 "INFO",
                 "llm_attempt",
                 trace_id=trace_id,
-                attempt=attempt
+                attempt=attempt,
+                model=current_model
             )
 
             response = await run_llm(
-                model=model,
+                model=current_model,
                 prompt=prompt,
                 trace_id=trace_id
             )
@@ -96,34 +101,57 @@ async def handle_request(req: OrchestratorRequest, memory: MemoryService | None 
             last_response = (response.content or "").strip()
 
             # -------------------------
-            # VERIFIER
+            # EVALUATION (PRIMARY GATE)
             # -------------------------
-            check = ReasoningVerifier.verify(
+            evaluation = Evaluator.evaluate(
                 task_type=task_type,
                 question=text,
                 answer=last_response
             )
 
-            if check["is_valid"]:
+            if evaluation.is_valid:
                 final_answer = last_response
                 break
 
             logger.log(
                 "WARN",
-                "verifier_failed",
+                "evaluation_failed",
                 trace_id=trace_id,
-                issues=check["issues"]
+                score=evaluation.score,
+                issues=evaluation.issues
             )
 
             # -------------------------
-            # CORRECTOR (SAFE REPAIR LOOP)
+            # VERIFIER (SECONDARY CHECK)
             # -------------------------
-            prompt = Corrector.build_repair_prompt(
+            verifier = ReasoningVerifier.verify(
+                task_type=task_type,
                 question=text,
-                answer=last_response,
-                issues=check["issues"],
-                context=context
+                answer=last_response
             )
+
+            # -------------------------
+            # ESCALATION LOGIC
+            # -------------------------
+            if attempt == 0:
+                # try repair first
+                prompt = Corrector.build_repair_prompt(
+                    question=text,
+                    answer=last_response,
+                    issues=evaluation.issues
+                )
+                continue
+
+            if attempt == 1:
+                # upgrade model (🔥 ключевой момент)
+                current_model = _upgrade_model(current_model)
+                logger.log(
+                    "INFO",
+                    "model_upgraded",
+                    trace_id=trace_id,
+                    new_model=current_model
+                )
+                continue
 
         # -------------------------
         # FINAL FALLBACK
@@ -131,7 +159,7 @@ async def handle_request(req: OrchestratorRequest, memory: MemoryService | None 
         final_answer = final_answer or last_response or "Unable to generate response."
 
         # -------------------------
-        # MEMORY WRITE (SAFE)
+        # MEMORY WRITE
         # -------------------------
         if memory and getattr(memory, "store", None):
             try:
@@ -146,7 +174,7 @@ async def handle_request(req: OrchestratorRequest, memory: MemoryService | None 
                 )
 
         # -------------------------
-        # EVALUATION
+        # FINAL EVALUATION (LOGGING)
         # -------------------------
         evaluation = Evaluator.evaluate(
             task_type=task_type,
@@ -155,7 +183,7 @@ async def handle_request(req: OrchestratorRequest, memory: MemoryService | None 
         )
 
         # -------------------------
-        # SUPABASE REFLECTION LOG
+        # REFLECTION LOG
         # -------------------------
         try:
             store = SupabaseStore()
@@ -164,7 +192,7 @@ async def handle_request(req: OrchestratorRequest, memory: MemoryService | None 
                 user_id=user_id,
                 question=text,
                 answer=final_answer,
-                model=model,
+                model=current_model,
                 task_type=task_type,
                 evaluation=evaluation,
                 trace_id=trace_id
@@ -182,17 +210,14 @@ async def handle_request(req: OrchestratorRequest, memory: MemoryService | None 
 
         logger.log("INFO", "orchestrator_done", trace_id=trace_id)
 
-        # -------------------------
-        # FINAL RESPONSE (FIXED + COMPLETE METADATA)
-        # -------------------------
         return SuccessResponse(
             data=final_answer,
             trace_id=trace_id,
-            model=model,
+            model=current_model,
             intent=intent_result.intent,
             task_type=task_type,
-            reasoning_valid=getattr(evaluation, "is_valid", None),
-            confidence=getattr(evaluation, "score", None)
+            reasoning_valid=evaluation.is_valid,
+            confidence=evaluation.score
         )
 
     except Exception as e:
@@ -208,3 +233,23 @@ async def handle_request(req: OrchestratorRequest, memory: MemoryService | None 
             error={"message": str(e)},
             trace_id=trace_id
         )
+
+
+# -------------------------
+# MODEL ESCALATION
+# -------------------------
+def _upgrade_model(current: str) -> str:
+    """
+    Simple upgrade strategy:
+    fast → general → heavy
+    """
+
+    layers = ["fast", "general", "heavy"]
+
+    for i, layer in enumerate(layers):
+        models = getattr(__import__("app.config.settings", fromlist=["settings"]).settings, "MODEL_LAYERS")[layer]
+        if current in models and i < len(layers) - 1:
+            next_layer = layers[i + 1]
+            return getattr(__import__("app.config.settings", fromlist=["settings"]).settings, "MODEL_LAYERS")[next_layer][0]
+
+    return current
