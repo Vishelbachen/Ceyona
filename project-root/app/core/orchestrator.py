@@ -71,9 +71,9 @@ async def handle_request(
             trace_id=trace_id
         )
 
-        raw_text = _sanitize_response(response.content)
+        raw_text = _safe_response(response.content)
 
-        # 🧯 GUARD: EMPTY / INVALID RESPONSE FIX
+        # 🧯 FINAL GUARD
         if not raw_text:
             logger.log(
                 "ERROR",
@@ -81,7 +81,7 @@ async def handle_request(
                 trace_id=trace_id,
                 model=model
             )
-            raw_text = "I cannot generate a response right now."
+            raw_text = "I couldn't generate a proper response. Please try again."
 
         # 🧠 MEMORY SAVE (SAFE)
         if memory and getattr(memory, "store", None):
@@ -134,33 +134,22 @@ async def handle_request(
 
 
 # -------------------------
-# 🧠 RESPONSE SANITIZER (CRITICAL FIX)
+# 🧠 RESPONSE SAFETY LAYER (LIGHTWEIGHT)
 # -------------------------
 
-def _sanitize_response(text: str) -> str:
+def _safe_response(text: str) -> str:
     """
-    Removes:
-    - empty responses
-    - AI self-identification leaks
-    - broken formatting
+    Only protects against:
+    - empty output
+    - broken None responses
     """
 
-    if not text:
+    if text is None:
         return ""
 
     text = text.strip()
 
-    blocked_phrases = [
-        "i am an ai",
-        "я — искусственный интеллект",
-        "я являюсь ии",
-        "as an ai",
-        "assistant model"
-    ]
-
-    lowered = text.lower()
-
-    if any(p in lowered for p in blocked_phrases):
+    if len(text) == 0:
         return ""
 
     return text
