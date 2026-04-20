@@ -3,6 +3,7 @@ from app.contracts.response import SuccessResponse, ErrorResponse
 
 from app.engine.model_decision import resolve_model
 from app.engine.llm import run_llm
+from app.engine.reasoning_verifier import ReasoningVerifier
 
 from app.core.logger import logger
 from app.core.errors import OrchestratorError
@@ -14,10 +15,7 @@ from app.core.prompt_builder import PromptBuilder
 # MAIN FLOW
 # -------------------------
 
-async def handle_request(
-    req: OrchestratorRequest,
-    memory: MemoryService | None = None
-):
+async def handle_request(req: OrchestratorRequest, memory: MemoryService | None = None):
 
     trace_id = req.trace_id
 
@@ -31,25 +29,22 @@ async def handle_request(
             raise ValueError("Empty user message")
 
         # -------------------------
-        # MEMORY LOAD (ISOLATED)
+        # MEMORY
         # -------------------------
         context = _load_memory(memory, user_id, trace_id)
 
         # -------------------------
-        # MODEL DECISION (BRAIN)
+        # MODEL DECISION
         # -------------------------
         model, intent_result = resolve_model(text)
 
-        logger.log(
-            "INFO",
-            "model_selected",
-            trace_id=trace_id,
-            model=model,
-            intent=intent_result.intent
-        )
+        logger.log("INFO", "model_selected",
+                   trace_id=trace_id,
+                   model=model,
+                   intent=intent_result.intent)
 
         # -------------------------
-        # PROMPT BUILD
+        # PROMPT
         # -------------------------
         prompt = PromptBuilder.build(
             user_text=text,
@@ -58,7 +53,7 @@ async def handle_request(
         )
 
         # -------------------------
-        # LLM EXECUTION
+        # LLM CALL
         # -------------------------
         response = await run_llm(
             model=model,
@@ -69,14 +64,39 @@ async def handle_request(
         raw_text = (response.content or "").strip()
 
         # -------------------------
-        # FINAL VALIDATION GATE
+        # 🧠 VERIFIER (NEW CRITICAL STEP)
         # -------------------------
-        if not raw_text:
-            logger.log("ERROR", "empty_llm_response", trace_id=trace_id, model=model)
-            raw_text = "Unable to generate response. Please try again."
+
+        task = _infer_task(text)
+
+        verification = ReasoningVerifier.verify(
+            task_type=task,
+            question=text,
+            answer=raw_text
+        )
+
+        logger.log(
+            "INFO",
+            "verification_done",
+            trace_id=trace_id,
+            is_valid=verification["is_valid"],
+            issues=verification["issues"]
+        )
 
         # -------------------------
-        # MEMORY SAVE (ISOLATED)
+        # OPTIONAL FIX (future retry system)
+        # -------------------------
+        if not verification["is_valid"]:
+            raw_text = verification.get("corrected_answer") or raw_text
+
+        # -------------------------
+        # FINAL GUARD
+        # -------------------------
+        if not raw_text:
+            raw_text = "Unable to generate response."
+
+        # -------------------------
+        # MEMORY SAVE
         # -------------------------
         _save_memory(memory, user_id, text, raw_text, trace_id)
 
@@ -87,19 +107,8 @@ async def handle_request(
             trace_id=trace_id
         )
 
-    except OrchestratorError as e:
-        return ErrorResponse(
-            error=e.to_dict().get("error", str(e)),
-            trace_id=trace_id
-        )
-
     except Exception as e:
-        logger.log(
-            "ERROR",
-            "orchestrator_crash",
-            trace_id=trace_id,
-            error=str(e)
-        )
+        logger.log("ERROR", "orchestrator_crash", trace_id=trace_id, error=str(e))
 
         err = OrchestratorError(
             code="ORCH_001",
@@ -115,7 +124,26 @@ async def handle_request(
 
 
 # -------------------------
-# MEMORY ISOLATION LAYER
+# TASK INFERENCE (lightweight, temporary)
+# -------------------------
+
+def _infer_task(text: str) -> str:
+    t = text.lower()
+
+    if any(x in t for x in ["prove", "solve", "equation", "math", "integral", "derivative"]):
+        return "math"
+
+    if any(x in t for x in ["code", "function", "class", "algorithm"]):
+        return "coding"
+
+    if any(x in t for x in ["physics", "chemistry"]):
+        return "physics"
+
+    return "general"
+
+
+# -------------------------
+# MEMORY HELPERS
 # -------------------------
 
 def _load_memory(memory, user_id, trace_id):
@@ -123,24 +151,8 @@ def _load_memory(memory, user_id, trace_id):
         return []
 
     try:
-        context = memory.build_context(user_id) or []
-
-        logger.log(
-            "INFO",
-            "memory_loaded",
-            trace_id=trace_id,
-            context_size=len(context)
-        )
-
-        return context
-
-    except Exception as e:
-        logger.log(
-            "ERROR",
-            "memory_load_failed",
-            trace_id=trace_id,
-            error=str(e)
-        )
+        return memory.build_context(user_id) or []
+    except Exception:
         return []
 
 
@@ -149,16 +161,8 @@ def _save_memory(memory, user_id, user_text, response_text, trace_id):
         return
 
     try:
-        if hasattr(memory, "store") and memory.store:
+        if getattr(memory, "store", None):
             memory.store.append_message(user_id, "user", user_text)
             memory.store.append_message(user_id, "assistant", response_text)
-
-            logger.log("INFO", "memory_saved", trace_id=trace_id)
-
-    except Exception as e:
-        logger.log(
-            "ERROR",
-            "memory_save_failed",
-            trace_id=trace_id,
-            error=str(e)
-        )
+    except Exception:
+        pass
