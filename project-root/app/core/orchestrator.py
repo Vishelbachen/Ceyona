@@ -1,6 +1,6 @@
 from app.engine.model_decision import resolve_model
 from app.engine.llm import run_llm
-from app.engine.reasoning_verifier import ReasoningVerifier
+from app.core.reasoning_verifier import ReasoningVerifier
 
 from app.core.prompt_builder import PromptBuilder
 from app.core.logger import logger
