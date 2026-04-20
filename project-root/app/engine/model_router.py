@@ -3,7 +3,6 @@ Legacy fallback router.
 # DO NOT IMPORT OUTSIDE model_decision.py
 # EMERGENCY FALLBACK ONLY
 
-# ⚠️ DO NOT USE as primary routing logic.
 Primary system:
 IntentClassifier → ModelPolicy → Settings
 """
