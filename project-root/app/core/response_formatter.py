@@ -4,20 +4,26 @@ from typing import Any
 
 class ResponseFormatter:
     """
-    Production-grade response formatter (v3 hardened).
+    Production-grade response formatter (v3 HARDENED FINAL).
 
     Goals:
     - deterministic output
-    - LLM-safe parsing
+    - safe LLM parsing
     - zero crash guarantee
-    - clean Telegram-ready text
+    - Telegram-ready clean text
+    - removes AI self-identification noise
     """
 
+    # -------------------------
+    # AI SELF PATTERNS (CLEANUP)
+    # -------------------------
     AI_SELF_PATTERNS = [
         r"я\s*[-–—]\s*искусственн(ый|ого)\s*интеллект",
-        r"i\s*am\s*an\s*ai",
-        r"i\s*am\s*a\s*helpful\s*ai",
+        r"i\s*am\s+an\s+ai",
+        r"i\s*am\s+a\s+helpful\s+ai",
         r"as\s+an\s+ai\s+assistant",
+        r"language\s+model",
+        r"assistant\s+model",
     ]
 
     EMPTY_FALLBACK = "Empty response"
@@ -27,6 +33,7 @@ class ResponseFormatter:
     # -------------------------
     @staticmethod
     def format(response: Any) -> str:
+
         if response is None:
             return ResponseFormatter.EMPTY_FALLBACK
 
@@ -34,46 +41,68 @@ class ResponseFormatter:
         data = getattr(response, "data", None)
         error = getattr(response, "error", None)
 
+        # -------------------------
+        # SUCCESS PATH
+        # -------------------------
         if success is True:
-            return ResponseFormatter._clean(ResponseFormatter._format_success(data))
+            return ResponseFormatter._clean(
+                ResponseFormatter._format_success(data)
+            )
 
+        # -------------------------
+        # ERROR PATH
+        # -------------------------
         if success is False:
-            return ResponseFormatter._clean(ResponseFormatter._format_error(error))
+            return ResponseFormatter._clean(
+                ResponseFormatter._format_error(error)
+            )
 
-        return ResponseFormatter._clean(ResponseFormatter._format_unknown(response))
+        # -------------------------
+        # UNKNOWN STRUCTURE
+        # -------------------------
+        return ResponseFormatter._clean(
+            ResponseFormatter._format_unknown(response)
+        )
 
     # -------------------------
-    # SUCCESS
+    # SUCCESS FORMAT
     # -------------------------
     @staticmethod
     def _format_success(data: Any) -> str:
+
         if data is None:
             return ResponseFormatter.EMPTY_FALLBACK
 
         if isinstance(data, dict):
-            # common LLM pattern
-            return str(data.get("text") or data.get("message") or data)
+            return str(
+                data.get("text")
+                or data.get("message")
+                or data.get("data")
+                or data
+            )
 
         if isinstance(data, list):
-            return "\n".join(str(x) for x in data)
+            return "\n".join(str(x) for x in data if x is not None)
 
         text = str(data).strip()
         return text or ResponseFormatter.EMPTY_FALLBACK
 
     # -------------------------
-    # ERROR
+    # ERROR FORMAT
     # -------------------------
     @staticmethod
     def _format_error(error: Any) -> str:
+
         if error is None:
             return "Unknown error"
 
         if isinstance(error, dict):
-            message = error.get("message")
             code = error.get("code")
+            message = error.get("message")
 
-            if message and code:
+            if code and message:
                 return f"[{code}] {message}"
+
             if message:
                 return f"Error: {message}"
 
@@ -89,6 +118,7 @@ class ResponseFormatter:
     # -------------------------
     @staticmethod
     def _format_unknown(response: Any) -> str:
+
         data = getattr(response, "data", None)
         error = getattr(response, "error", None)
 
@@ -101,25 +131,27 @@ class ResponseFormatter:
         return str(response)
 
     # -------------------------
-    # CLEANING LAYER
+    # CLEANING LAYER (SAFE PIPELINE OUTPUT)
     # -------------------------
     @staticmethod
     def _clean(text: str) -> str:
+
         if not text:
             return ResponseFormatter.EMPTY_FALLBACK
 
         cleaned = str(text)
 
-        # normalize whitespace FIRST
+        # normalize whitespace
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
 
-        # remove AI self-identification
+        # remove AI self-identification patterns
         for pattern in ResponseFormatter.AI_SELF_PATTERNS:
             cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
 
-        # re-clean after removals
+        # final cleanup pass
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
 
+        # safety fallback
         if not cleaned:
             return ResponseFormatter.EMPTY_FALLBACK
 
