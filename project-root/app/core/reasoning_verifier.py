@@ -1,12 +1,12 @@
 class ReasoningVerifier:
     """
-    Output validation layer (v2.0 stable).
+    Output validation layer (v2.0 FIXED).
 
     Goals:
     - reduce false positives
-    - context-aware validation
-    - safe for production pipeline
-    - extensible for self-healing loop (v1.4+)
+    - safe heuristic validation (non-strict)
+    - stable for self-healing loop
+    - compatible with Evaluator + Corrector
     """
 
     # -------------------------
@@ -29,7 +29,7 @@ class ReasoningVerifier:
         answer_clean = answer_raw.strip()
 
         # -------------------------
-        # EMPTY CHECK
+        # EMPTY CHECK (HARD FAIL)
         # -------------------------
         if not answer_clean:
             return {
@@ -39,24 +39,26 @@ class ReasoningVerifier:
             }
 
         # -------------------------
-        # LENGTH CHECK (soft signal)
+        # LENGTH CHECK (SOFT SIGNAL)
         # -------------------------
         if len(answer_clean) < 20:
             issues.append("too_short")
 
         # -------------------------
-        # MATH / SCIENCE
+        # MATH / SCIENCE DOMAIN
         # -------------------------
         if task_type in ["math", "physics", "chemistry"]:
 
-            # soft heuristic only (NOT strict)
-            has_math_signal = any(sym in answer_clean for sym in ["=", "≈", "+", "-", "∫", "√"])
+            # soft heuristic (avoid over-restricting LLM output)
+            math_signals = ["=", "≈", "+", "-", "*", "/", "∫", "√"]
 
-            if not has_math_signal and len(answer_clean) > 50:
+            has_signal = any(sym in answer_clean for sym in math_signals)
+
+            if not has_signal and len(answer_clean) > 50:
                 issues.append("missing_math_signal")
 
         # -------------------------
-        # CODING
+        # CODING / ALGORITHM
         # -------------------------
         if task_type in ["coding", "algorithm"]:
 
@@ -66,10 +68,16 @@ class ReasoningVerifier:
                 issues.append("no_code_signal")
 
         # -------------------------
-        # LOGIC / REASONING (light check only)
+        # REASONING / LOGIC
         # -------------------------
         if task_type in ["reasoning", "proof", "logic"]:
-            if len(answer_clean) > 200 and "because" not in answer_clean.lower():
+
+            lower = answer_clean.lower()
+
+            # soft heuristic only (avoid false negatives)
+            if len(answer_clean) > 200 and not any(
+                w in lower for w in ["because", "therefore", "thus", "hence"]
+            ):
                 issues.append("weak_reasoning_signal")
 
         # -------------------------
