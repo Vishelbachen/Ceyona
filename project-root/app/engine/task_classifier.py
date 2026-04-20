@@ -1,19 +1,40 @@
-class TaskClassifier:
+from dataclasses import dataclass
+from typing import Literal
 
-    @staticmethod
-    def classify(text: str) -> str:
-        t = text.lower()
 
-        if any(x in t for x in ["integral", "derivative", "force", "energy"]):
-            return "physics"
+IntentType = Literal[
+    "fast",
+    "reasoning",
+    "creative",
+    "safety",
+    "chat",
+]
 
-        if any(x in t for x in ["code", "function", "bug", "algorithm"]):
-            return "coding"
 
-        if any(x in t for x in ["who", "when", "where", "history"]):
-            return "history"
+@dataclass
+class IntentResult:
+    intent: IntentType
+    complexity: str
+    risk: str
 
-        if any(x in t for x in ["dna", "cell", "biology"]):
-            return "biology"
 
-        return "general"
+def classify_intent(text: str) -> IntentResult:
+    t = (text or "").lower().strip()
+
+    # SAFETY
+    if any(w in t for w in ["bomb", "kill", "weapon", "hack", "attack"]):
+        return IntentResult("safety", "high", "high")
+
+    # REASONING
+    if any(w in t for w in ["prove", "why", "how", "derive", "solve", "calculate"]):
+        return IntentResult("reasoning", "high", "low")
+
+    # CREATIVE
+    if any(w in t for w in ["write", "story", "poem", "generate", "compose"]):
+        return IntentResult("creative", "medium", "low")
+
+    # FAST
+    if len(t) < 60:
+        return IntentResult("fast", "low", "low")
+
+    return IntentResult("chat", "medium", "low")
