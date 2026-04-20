@@ -1,9 +1,8 @@
 import asyncio
 from openai import AsyncOpenAI
-
+from app.config.settings import settings
 from app.core.logger import logger
 from app.core.errors import LLMError
-from app.config.settings import settings
 
 
 client = AsyncOpenAI(
@@ -17,90 +16,42 @@ class LLMResponse:
         self.content = content
 
 
-# -------------------------
-# CORE CALL
-# -------------------------
-
 async def groq_call(model: str, prompt: str) -> str:
-    response = await client.chat.completions.create(
+    res = await client.chat.completions.create(
         model=model,
         messages=[
-            {
-                "role": "system",
-                "content": "Follow instructions strictly. Respond in user language."
-            },
-            {"role": "user", "content": prompt}
+            {"role": "system", "content": "Follow instructions strictly."},
+            {"role": "user", "content": prompt},
         ],
-        temperature=0.7,
+        temperature=0.6,
     )
+    return res.choices[0].message.content
 
-    return response.choices[0].message.content
 
-
-# -------------------------
-# MAIN PIPELINE
-# -------------------------
-
-async def run_llm(
-    model: str,
-    prompt: str,
-    retries: int = 2,
-    trace_id: str | None = None
-) -> LLMResponse:
-
-    attempt = 0
-
-    while attempt <= retries:
+async def run_llm(model: str, prompt: str, trace_id: str | None = None, retries: int = 2):
+    for attempt in range(retries + 1):
         try:
-            logger.log("INFO", "llm_request", trace_id=trace_id, model=model, attempt=attempt)
+            logger.log("INFO", "llm_request", trace_id=trace_id, model=model)
 
-            response = await asyncio.wait_for(
+            raw = await asyncio.wait_for(
                 groq_call(model, prompt),
                 timeout=12
             )
 
-            cleaned = _sanitize(response)
+            raw = _clean(raw)
 
-            if not cleaned:
-                raise ValueError("Empty response")
+            if not raw:
+                raise ValueError("empty response")
 
-            logger.log("INFO", "llm_response", trace_id=trace_id, model=model)
-
-            return LLMResponse(content=cleaned)
+            return LLMResponse(raw)
 
         except Exception as e:
             logger.log("ERROR", "llm_error", trace_id=trace_id, error=str(e))
 
-        attempt += 1
-
-    raise LLMError(
-        code="LLM_001",
-        message="LLM failed after retries",
-        layer="llm",
-        trace_id=trace_id
-    )
+    raise LLMError("LLM failed")
 
 
-# -------------------------
-# SANITIZER
-# -------------------------
-
-def _sanitize(text: str) -> str:
+def _clean(text: str) -> str:
     if not text:
         return ""
-
-    text = text.strip()
-
-    blocked = (
-        "i am an ai",
-        "as an ai",
-        "я являюсь ии",
-        "assistant model"
-    )
-
-    lower = text.lower()
-
-    if any(b in lower for b in blocked):
-        return ""
-
-    return text
+    return text.strip()
