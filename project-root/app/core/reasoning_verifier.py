@@ -1,55 +1,92 @@
 class ReasoningVerifier:
     """
-    Post-processing reasoning verification layer.
-
-    Purpose:
-    - detect logical/mathematical inconsistencies
-    - improve final answer quality
-    - enforce correctness over confidence
+    Verification layer for reasoning outputs.
+    
+    Role:
+    - validate logical structure
+    - detect missing steps
+    - ensure task compliance
+    - flag low-quality reasoning
     """
 
     @staticmethod
-    def verify(task_type: str, question: str, answer: str) -> dict:
+    def verify(task_type: str, response_text: str) -> dict:
         """
         Returns:
         {
-            "is_valid": bool,
-            "corrected_answer": str | None,
-            "issues": list[str]
+            "valid": bool,
+            "score": float (0-1),
+            "issues": list[str],
+            "retry_recommended": bool
         }
         """
 
+        text = (response_text or "").lower()
         issues = []
+        score = 1.0
 
-        if not answer or len(answer.strip()) == 0:
+        # -------------------------
+        # BASIC QUALITY CHECK
+        # -------------------------
+        if len(text.strip()) < 20:
             return {
-                "is_valid": False,
-                "corrected_answer": None,
-                "issues": ["empty_answer"]
+                "valid": False,
+                "score": 0.0,
+                "issues": ["response_too_short"],
+                "retry_recommended": True
             }
 
-        # 🧠 MATH / PHYSICS CHECK
-        if task_type in ["math", "physics", "chemistry"]:
-            if "=" not in answer and "≈" not in answer:
-                issues.append("missing_equation_or_result")
+        # -------------------------
+        # TASK-SPECIFIC CHECKS
+        # -------------------------
 
-            if "error" in answer.lower():
-                issues.append("contains_error_marker")
+        if task_type == "math_physics":
+            if not any(x in text for x in ["=", "+", "-", "*", "/", "step", "law"]):
+                issues.append("missing_math_structure")
+                score -= 0.3
 
-        # 🧠 CODING CHECK
-        if task_type in ["coding", "algorithm"]:
-            if "def " not in answer and "class " not in answer:
-                issues.append("no_structured_code_detected")
+            if "final" not in text and "answer" not in text:
+                issues.append("missing_final_answer")
+                score -= 0.2
 
-        # 🧠 GENERAL QUALITY CHECK
-        if len(answer) < 20:
-            issues.append("too_short_response")
+        elif task_type == "coding":
+            if "def" not in text and "function" not in text and "class" not in text:
+                issues.append("missing_code_structure")
+                score -= 0.3
 
-        # 🔥 FINAL DECISION
-        is_valid = len(issues) == 0
+            if "edge" not in text:
+                issues.append("no_edge_case_check")
+                score -= 0.1
+
+        elif task_type == "proof":
+            if not any(x in text for x in ["therefore", "thus", "hence", "proves"]):
+                issues.append("weak_logical_chain")
+                score -= 0.3
+
+        # -------------------------
+        # GENERAL QUALITY CHECK
+        # -------------------------
+        filler_phrases = [
+            "i think",
+            "maybe",
+            "not sure",
+            "i guess"
+        ]
+
+        if any(p in text for p in filler_phrases):
+            issues.append("uncertain_language_detected")
+            score -= 0.1
+
+        # -------------------------
+        # FINAL SCORE NORMALIZATION
+        # -------------------------
+        score = max(0.0, min(1.0, score))
+
+        retry_recommended = score < 0.6
 
         return {
-            "is_valid": is_valid,
-            "corrected_answer": answer if is_valid else None,
-            "issues": issues
+            "valid": score >= 0.6,
+            "score": score,
+            "issues": issues,
+            "retry_recommended": retry_recommended
         }
