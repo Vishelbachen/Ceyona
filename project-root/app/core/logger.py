@@ -10,22 +10,33 @@ LogLevel = Literal["DEBUG", "INFO", "WARN", "ERROR", "CRITICAL"]
 class StructuredLogger:
     """
     Production-grade structured logger for AI pipeline.
-    Safe for async + Railway + multiprocessing.
+
+    Features:
+    - Railway-safe
+    - async-safe
+    - structured JSON logs
+    - exception-aware logging
+    - zero circular import risk
     """
 
     def __init__(self):
         self.logger = logging.getLogger("app")
 
+        # -------------------------
+        # CRITICAL FIX: prevent duplicate logs in uvicorn workers
+        # -------------------------
+        if self.logger.hasHandlers():
+            self.logger.handlers.clear()
+
         self.logger.setLevel(logging.INFO)
         self.logger.propagate = False
 
-        if not self.logger.handlers:
-            handler = logging.StreamHandler()
-            handler.setFormatter(logging.Formatter("%(message)s"))
-            self.logger.addHandler(handler)
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        self.logger.addHandler(handler)
 
     # -------------------------
-    # LEVEL MAPPING
+    # LEVEL MAPPER
     # -------------------------
     def _log_by_level(self, level: LogLevel, message: str):
         match level:
@@ -43,14 +54,14 @@ class StructuredLogger:
                 self.logger.info(message)
 
     # -------------------------
-    # SAFE SERIALIZER (recursive-safe-ish)
+    # SAFE SERIALIZER (hardened)
     # -------------------------
     def _safe_json(self, obj: Any) -> Any:
         try:
             json.dumps(obj)
             return obj
         except Exception:
-            return str(obj)
+            return repr(obj)
 
     # -------------------------
     # CORE LOG METHOD
@@ -80,7 +91,7 @@ class StructuredLogger:
         self._log_by_level(level, json.dumps(payload, ensure_ascii=False))
 
     # -------------------------
-    # EXCEPTION LOGGER (IMPORTANT ADDITION)
+    # EXCEPTION LOGGER (ENHANCED)
     # -------------------------
     def exception(
         self,
@@ -99,5 +110,7 @@ class StructuredLogger:
         )
 
 
-# singleton
+# -------------------------
+# SINGLETON (SAFE FOR IMPORT GRAPH)
+# -------------------------
 logger = StructuredLogger()
