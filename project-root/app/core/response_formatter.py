@@ -4,26 +4,31 @@ from typing import Any
 
 class ResponseFormatter:
     """
-    Production-grade response formatter (FIXED v2).
+    Production-grade response formatter (v3 hardened).
 
-    Fixes:
-    - removes AI self-introductions
-    - enforces language consistency (light heuristic)
-    - removes emotional clutter
-    - strict deterministic output
+    Goals:
+    - deterministic output
+    - LLM-safe parsing
+    - zero crash guarantee
+    - clean Telegram-ready text
     """
 
     AI_SELF_PATTERNS = [
-        r"я\s*—\s*искусственный интеллект",
-        r"i am an ai",
-        r"i am a helpful ai",
-        r"as an ai assistant",
+        r"я\s*[-–—]\s*искусственн(ый|ого)\s*интеллект",
+        r"i\s*am\s*an\s*ai",
+        r"i\s*am\s*a\s*helpful\s*ai",
+        r"as\s+an\s+ai\s+assistant",
     ]
 
+    EMPTY_FALLBACK = "Empty response"
+
+    # -------------------------
+    # PUBLIC ENTRY
+    # -------------------------
     @staticmethod
     def format(response: Any) -> str:
         if response is None:
-            return "Empty response"
+            return ResponseFormatter.EMPTY_FALLBACK
 
         success = getattr(response, "success", None)
         data = getattr(response, "data", None)
@@ -40,19 +45,24 @@ class ResponseFormatter:
     # -------------------------
     # SUCCESS
     # -------------------------
-
     @staticmethod
     def _format_success(data: Any) -> str:
         if data is None:
-            return "Empty response"
+            return ResponseFormatter.EMPTY_FALLBACK
+
+        if isinstance(data, dict):
+            # common LLM pattern
+            return str(data.get("text") or data.get("message") or data)
+
+        if isinstance(data, list):
+            return "\n".join(str(x) for x in data)
 
         text = str(data).strip()
-        return text or "Empty response"
+        return text or ResponseFormatter.EMPTY_FALLBACK
 
     # -------------------------
     # ERROR
     # -------------------------
-
     @staticmethod
     def _format_error(error: Any) -> str:
         if error is None:
@@ -63,54 +73,54 @@ class ResponseFormatter:
             code = error.get("code")
 
             if message and code:
-                return f"Error [{code}]: {message}"
+                return f"[{code}] {message}"
             if message:
                 return f"Error: {message}"
-            return "Unknown error"
+
+            return str(error)
 
         if isinstance(error, str):
-            return f"Error: {error.strip() or 'Unknown error'}"
+            return error.strip() or "Unknown error"
 
-        return f"Error: {str(error)}"
+        return str(error)
 
     # -------------------------
-    # UNKNOWN
+    # UNKNOWN STRUCTURE
     # -------------------------
-
     @staticmethod
     def _format_unknown(response: Any) -> str:
         data = getattr(response, "data", None)
         error = getattr(response, "error", None)
 
-        if data:
-            return str(data).strip() or "Empty response"
+        if data is not None:
+            return ResponseFormatter._format_success(data)
 
-        if error:
+        if error is not None:
             return ResponseFormatter._format_error(error)
 
-        return "Invalid response format"
+        return str(response)
 
     # -------------------------
-    # CLEANING LAYER (CRITICAL FIX)
+    # CLEANING LAYER
     # -------------------------
-
     @staticmethod
     def _clean(text: str) -> str:
         if not text:
-            return "Empty response"
+            return ResponseFormatter.EMPTY_FALLBACK
 
-        cleaned = text.strip()
+        cleaned = str(text)
 
-        # remove AI self-intro phrases
-        lowered = cleaned.lower()
+        # normalize whitespace FIRST
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+
+        # remove AI self-identification
         for pattern in ResponseFormatter.AI_SELF_PATTERNS:
             cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
 
-        # normalize whitespace
-        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+        # re-clean after removals
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
 
-        # avoid empty after cleanup
         if not cleaned:
-            return "Empty response"
+            return ResponseFormatter.EMPTY_FALLBACK
 
         return cleaned
