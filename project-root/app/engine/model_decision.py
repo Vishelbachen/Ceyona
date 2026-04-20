@@ -1,4 +1,7 @@
-from app.engine.intent_classifier import classify_intent, IntentResult
+from typing import Tuple, Dict, Any
+
+from app.engine.intent_classifier import classify_intent
+from app.core.types import IntentResult
 from app.config.settings import settings
 
 
@@ -9,43 +12,75 @@ MID_TEXT = 300
 # -------------------------
 # MAIN BRAIN ROUTER
 # -------------------------
-def resolve_model(text: str) -> tuple[str, IntentResult]:
+def resolve_model(text: str) -> Tuple[str, IntentResult, Dict[str, Any]]:
 
     text = text or ""
-
-    intent_result = classify_intent(text)
     text_len = len(text)
 
-    # -------------------------
-    # SAFETY OVERRIDE (highest priority)
-    # -------------------------
-    if intent_result.intent == "safety":
-        return _pick("safety"), intent_result
+    intent_result = classify_intent(text)
+
+    decision_meta = {
+        "text_length": text_len,
+        "intent": intent_result.intent,
+        "task_type": intent_result.task_type,
+        "complexity": intent_result.complexity,
+        "confidence": intent_result.confidence,
+        "route": None,
+    }
 
     # -------------------------
-    # HIGH COMPLEXITY → HEAVY
+    # SAFETY OVERRIDE
+    # -------------------------
+    if intent_result.is_high_risk():
+        model = _pick("safety")
+        decision_meta["route"] = "safety_override"
+        return model, intent_result, decision_meta
+
+    # -------------------------
+    # TASK-BASED OVERRIDE (NEW)
+    # -------------------------
+    if intent_result.task_type == "coding":
+        model = _pick("heavy")
+        decision_meta["route"] = "task_coding"
+        return model, intent_result, decision_meta
+
+    if intent_result.task_type == "math_physics":
+        model = _pick("heavy")
+        decision_meta["route"] = "task_math"
+        return model, intent_result, decision_meta
+
+    # -------------------------
+    # HIGH COMPLEXITY
     # -------------------------
     if intent_result.complexity == "high":
-        return _pick("heavy"), intent_result
+        model = _pick("heavy")
+        decision_meta["route"] = "complexity_high"
+        return model, intent_result, decision_meta
 
     # -------------------------
-    # LOW CONFIDENCE → CONSERVATIVE ROUTING
+    # LOW CONFIDENCE
     # -------------------------
     if intent_result.confidence < 0.6:
-        return _size_based_model(text_len), intent_result
+        model = _size_based_model(text_len)
+        decision_meta["route"] = "low_confidence_fallback"
+        return model, intent_result, decision_meta
 
     # -------------------------
-    # INTENT-BASED ROUTING
+    # INTENT-BASED
     # -------------------------
     model = _select_by_intent(intent_result)
 
     if model:
-        return model, intent_result
+        decision_meta["route"] = "intent_routing"
+        return model, intent_result, decision_meta
 
     # -------------------------
     # FINAL FALLBACK
     # -------------------------
-    return _size_based_model(text_len), intent_result
+    model = _size_based_model(text_len)
+    decision_meta["route"] = "final_fallback"
+
+    return model, intent_result, decision_meta
 
 
 # -------------------------
@@ -67,18 +102,21 @@ def _select_by_intent(intent: IntentResult) -> str:
 
 
 # -------------------------
-# MODEL PICKER (FIXED)
+# MODEL PICKER (SAFE)
 # -------------------------
 def _pick(layer: str) -> str:
 
-    models = settings.MODEL_LAYERS.get(layer, settings.MODEL_LAYERS["general"])
+    models = settings.MODEL_LAYERS.get(layer)
 
-    # simple rotation-safe fallback
+    if not models:
+        # fallback to general layer
+        models = settings.MODEL_LAYERS.get("general", [])
+
     return models[0] if models else ""
 
 
 # -------------------------
-# SIZE FALLBACK (SAFE ONLY)
+# SIZE FALLBACK
 # -------------------------
 def _size_based_model(n: int) -> str:
 
