@@ -1,60 +1,49 @@
 class ReasoningVerifier:
     """
-    Post-processing reasoning verification layer.
+    Post-processing reasoning verification layer (v2).
 
-    PURPOSE:
-    - validate logical correctness
-    - detect structural issues
-    - enforce answer quality gate
-    - support optional regeneration (future)
+    Purpose:
+    - detect logical/mathematical inconsistencies
+    - validate minimal structural correctness
+    - support retry pipeline (future v1.4)
     """
 
     @staticmethod
     def verify(task_type: str, question: str, answer: str) -> dict:
-        """
-        Returns structured validation result
-        """
+        issues = []
 
         if not answer or not answer.strip():
             return {
                 "is_valid": False,
-                "issues": ["empty_answer"],
-                "severity": "critical",
-                "suggested_action": "regenerate"
+                "corrected_answer": None,
+                "issues": ["empty_answer"]
             }
 
-        issues = []
+        text = answer.strip().lower()
 
-        # -------------------------
-        # MATH / PHYSICS DOMAIN
-        # -------------------------
+        # 🧠 MATH / PHYSICS
         if task_type in ["math", "physics", "chemistry"]:
+            has_result = any(x in answer for x in ["=", "≈", "answer", "result"])
+            if not has_result:
+                issues.append("missing_result_expression")
 
-            if not any(op in answer for op in ["=", "≈", "<", ">"]):
-                issues.append("missing_formal_result")
-
-            if "error" in answer.lower():
-                issues.append("contains_error_marker")
-
-        # -------------------------
-        # CODING DOMAIN
-        # -------------------------
+        # 🧠 CODING
         if task_type in ["coding", "algorithm"]:
+            if "def " not in text and "class " not in text and "return" not in text:
+                issues.append("no_code_structure_detected")
 
-            if "def " not in answer and "class " not in answer:
-                issues.append("no_code_structure")
-
-        # -------------------------
-        # GENERAL QUALITY
-        # -------------------------
+        # 🧠 GENERAL QUALITY
         if len(answer) < 20:
-            issues.append("too_short")
+            issues.append("too_short_response")
+
+        # 🧠 BASIC CONSISTENCY CHECK
+        if "error" in text or "cannot" in text:
+            issues.append("failure_indicator_detected")
 
         is_valid = len(issues) == 0
 
         return {
             "is_valid": is_valid,
-            "issues": issues,
-            "severity": "low" if is_valid else "medium",
-            "suggested_action": None if is_valid else "review"
+            "corrected_answer": answer if is_valid else None,
+            "issues": issues
         }
