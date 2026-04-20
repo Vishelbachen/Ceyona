@@ -18,41 +18,43 @@ class LLMResponse:
 
 
 # -------------------------
-# CORE CALL
+# CORE GROQ CALL
 # -------------------------
 
 async def groq_call(model: str, prompt: str) -> str:
     """
-    Clean Groq execution layer.
-    No prompt logic here.
+    Real Groq API call (NO prompt mutation)
     """
 
     response = await client.chat.completions.create(
         model=model,
         messages=[
+            {
+                "role": "system",
+                "content": "Follow instructions strictly. Do not mention AI identity."
+            },
             {"role": "user", "content": prompt}
         ],
-        temperature=0.6,  # чуть стабильнее (важно для reasoning)
+        temperature=0.7,
     )
 
-    return response.choices[0].message.content or ""
+    return response.choices[0].message.content
 
 
 # -------------------------
-# MAIN PIPELINE
+# MAIN EXECUTION PIPELINE
 # -------------------------
 
 async def run_llm(
     model: str,
     prompt: str,
     retries: int = 2,
-    timeout: int = 12,
     trace_id: str | None = None
 ) -> LLMResponse:
 
-    last_error = None
+    attempt = 0
 
-    for attempt in range(retries + 1):
+    while attempt <= retries:
         try:
             logger.log(
                 "INFO",
@@ -64,11 +66,12 @@ async def run_llm(
 
             response = await asyncio.wait_for(
                 groq_call(model, prompt),
-                timeout=timeout
+                timeout=10
             )
 
             cleaned = _sanitize_llm_output(response)
 
+            # 🧯 EMPTY GUARD (CRITICAL FIX)
             if not cleaned:
                 raise ValueError("Empty LLM response")
 
@@ -81,48 +84,43 @@ async def run_llm(
 
             return LLMResponse(content=cleaned)
 
-        except asyncio.TimeoutError as e:
-            last_error = e
+        except asyncio.TimeoutError:
             logger.log(
                 "ERROR",
                 "llm_timeout",
                 trace_id=trace_id,
-                model=model,
-                attempt=attempt
+                model=model
             )
 
-            await asyncio.sleep(0.2 * (attempt + 1))  # backoff
-
         except Exception as e:
-            last_error = e
             logger.log(
                 "ERROR",
                 "llm_error",
                 trace_id=trace_id,
                 model=model,
-                error=str(e),
-                attempt=attempt
+                error=str(e)
             )
 
-            await asyncio.sleep(0.1)
+        attempt += 1
 
     raise LLMError(
         code="LLM_001",
-        message=f"All LLM retries failed: {last_error}",
+        message="All LLM retries failed",
         layer="llm",
         trace_id=trace_id
     )
 
 
 # -------------------------
-# 🧠 SANITIZER (SAFE + NON-BREAKING)
+# 🧠 RESPONSE SANITIZER
 # -------------------------
 
 def _sanitize_llm_output(text: str) -> str:
     """
-    Safety layer:
-    - prevents broken outputs
-    - does NOT over-filter reasoning content
+    Removes:
+    - AI self-identification
+    - broken system phrases
+    - empty / invalid outputs
     """
 
     if not text:
@@ -130,20 +128,18 @@ def _sanitize_llm_output(text: str) -> str:
 
     text = text.strip()
 
-    if len(text) < 2:
-        return ""
-
-    # мягкая защита (НЕ ломает reasoning)
-    dangerous_fragments = [
-        "assistant model",
-        "system prompt",
-        "openai policy"
-    ]
-
     lowered = text.lower()
 
-    for frag in dangerous_fragments:
-        if frag in lowered:
-            text = lowered.replace(frag, "").strip()
+    blocked = [
+        "i am an ai",
+        "я — искусственный интеллект",
+        "я являюсь ии",
+        "as an ai",
+        "assistant model",
+        "you are a helpful ai"
+    ]
+
+    if any(b in lowered for b in blocked):
+        return ""
 
     return text
