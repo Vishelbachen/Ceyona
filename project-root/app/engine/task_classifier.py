@@ -1,40 +1,74 @@
-from dataclasses import dataclass
-from typing import Literal
-
-
-IntentType = Literal[
-    "fast",
-    "reasoning",
-    "creative",
-    "safety",
-    "chat",
-]
-
-
-@dataclass
-class IntentResult:
-    intent: IntentType
-    complexity: str
-    risk: str
+from app.engine.types import IntentResult
 
 
 def classify_intent(text: str) -> IntentResult:
+    """
+    Task-level heuristic classifier.
+
+    IMPORTANT:
+    This is NOT final routing logic.
+    Only early signal extraction.
+    """
+
     t = (text or "").lower().strip()
 
-    # SAFETY
-    if any(w in t for w in ["bomb", "kill", "weapon", "hack", "attack"]):
-        return IntentResult("safety", "high", "high")
+    # -------------------------
+    # SAFETY / HIGH RISK
+    # -------------------------
+    if any(w in t for w in [
+        "bomb", "kill", "weapon", "hack", "attack", "explosive"
+    ]):
+        return IntentResult(
+            intent="safety",
+            complexity="high",
+            risk="high",
+            confidence=0.9
+        )
 
-    # REASONING
-    if any(w in t for w in ["prove", "why", "how", "derive", "solve", "calculate"]):
-        return IntentResult("reasoning", "high", "low")
+    # -------------------------
+    # REASONING / MATH / SCIENCE
+    # -------------------------
+    if any(w in t for w in [
+        "prove", "why", "how", "derive",
+        "solve", "calculate", "equation", "integral"
+    ]):
+        return IntentResult(
+            intent="reasoning",
+            complexity="high" if len(t) > 100 else "medium",
+            risk="low",
+            confidence=0.8
+        )
 
-    # CREATIVE
-    if any(w in t for w in ["write", "story", "poem", "generate", "compose"]):
-        return IntentResult("creative", "medium", "low")
+    # -------------------------
+    # CREATIVE TASKS
+    # -------------------------
+    if any(w in t for w in [
+        "write", "story", "poem", "generate", "compose"
+    ]):
+        return IntentResult(
+            intent="creative",
+            complexity="medium",
+            risk="low",
+            confidence=0.75
+        )
 
-    # FAST
+    # -------------------------
+    # FAST / SIMPLE
+    # -------------------------
     if len(t) < 60:
-        return IntentResult("fast", "low", "low")
+        return IntentResult(
+            intent="fast",
+            complexity="low",
+            risk="low",
+            confidence=0.6
+        )
 
-    return IntentResult("chat", "medium", "low")
+    # -------------------------
+    # DEFAULT CHAT
+    # -------------------------
+    return IntentResult(
+        intent="chat",
+        complexity="medium",
+        risk="low",
+        confidence=0.5
+    )
