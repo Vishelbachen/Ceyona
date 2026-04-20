@@ -1,12 +1,13 @@
 class PromptBuilder:
     """
-    Centralized prompt construction layer (OLYMPIC v3.1).
+    Centralized prompt construction layer (OLYMPIC v3.2).
 
     Upgrades:
     - reasoning-aware prompting
     - olympiad-level enforcement boost
     - task-type adaptive structure
     - multilingual strict mode
+    - conversation anti-loop fix (IMPORTANT)
     """
 
     MODEL_MODES = {
@@ -17,7 +18,7 @@ class PromptBuilder:
         "safety": "SAFETY MODE",
     }
 
-    # 🧠 lightweight task inference (NO NEW FILE NEEDED)
+    # 🧠 TASK DETECTION
     @staticmethod
     def _detect_task(text: str) -> str:
         t = (text or "").lower()
@@ -28,10 +29,10 @@ class PromptBuilder:
         if any(x in t for x in ["code", "function", "algorithm", "bug", "class"]):
             return "coding"
 
-        if any(x in t for x in ["prove", "show that", "prove that", "theorem"]):
+        if any(x in t for x in ["prove", "show that", "theorem"]):
             return "proof"
 
-        if any(x in t for x in ["history", "when", "why did", "war", "empire"]):
+        if any(x in t for x in ["history", "war", "empire", "why did", "when"]):
             return "analysis"
 
         return "general"
@@ -41,7 +42,7 @@ class PromptBuilder:
 
         user_text = user_text or ""
 
-        # 🧠 CONTEXT
+        # 🧠 CONTEXT SAFE BUILD
         if not context:
             context_block = "EMPTY"
         else:
@@ -53,10 +54,16 @@ class PromptBuilder:
         # 🧠 TASK DETECTION
         task = PromptBuilder._detect_task(user_text)
 
-        # 🌍 SYSTEM CORE
+        # 🌍 SYSTEM CORE (FIXED: anti-loop + conversational stability)
         system_block = (
             "You are a high-level reasoning engine.\n"
             "You solve problems at olympiad and research level.\n\n"
+
+            "CONVERSATION RULES (IMPORTANT FIX):\n"
+            "- Do NOT repeat generic phrases like 'How can I help you?'\n"
+            "- Respond naturally based on context\n"
+            "- If user is casual → be casual\n"
+            "- If user is confused → clarify instead of repeating templates\n\n"
 
             "ABSOLUTE RULES:\n"
             "- NEVER mention AI, assistant, model, system\n"
@@ -70,47 +77,45 @@ class PromptBuilder:
             "- avoid filler text\n"
         )
 
-        # 🧠 TASK-BASED REASONING BOOST (KEY FIX)
-        reasoning_block = ""
-
+        # 🧠 REASONING BLOCK (TASK-SPECIFIC)
         if task == "math_physics":
             reasoning_block = (
                 "REASONING MODE: MATHEMATICS / PHYSICS\n"
-                "Step 1: Identify known quantities\n"
-                "Step 2: Choose physical/mathematical law\n"
-                "Step 3: Derive equations step-by-step\n"
-                "Step 4: Solve carefully\n"
-                "Step 5: Final answer clearly boxed\n"
+                "1. Identify known quantities\n"
+                "2. Choose correct law/formula\n"
+                "3. Derive step-by-step\n"
+                "4. Compute carefully\n"
+                "5. Present final answer clearly\n"
             )
 
         elif task == "coding":
             reasoning_block = (
                 "REASONING MODE: PROGRAMMING\n"
-                "Step 1: Understand requirements\n"
-                "Step 2: Design solution structure\n"
-                "Step 3: Write clean code\n"
-                "Step 4: Consider edge cases\n"
-                "Step 5: Ensure correctness\n"
+                "1. Understand requirements\n"
+                "2. Design solution\n"
+                "3. Implement clean code\n"
+                "4. Handle edge cases\n"
+                "5. Ensure correctness\n"
             )
 
         elif task == "proof":
             reasoning_block = (
                 "REASONING MODE: PROOF\n"
-                "Step 1: Understand statement\n"
-                "Step 2: Define known properties\n"
-                "Step 3: Build logical chain\n"
-                "Step 4: Derive conclusion rigorously\n"
+                "1. Understand statement\n"
+                "2. Define assumptions\n"
+                "3. Build logical steps\n"
+                "4. Conclude rigorously\n"
             )
 
         else:
             reasoning_block = (
                 "REASONING MODE: GENERAL\n"
-                "Step 1: Understand question\n"
-                "Step 2: Think logically\n"
-                "Step 3: Answer clearly\n"
+                "1. Understand question\n"
+                "2. Think logically\n"
+                "3. Answer clearly\n"
             )
 
-        # 🧠 MODEL MODE (safe abstraction)
+        # 🧠 MODEL MODE
         mode = PromptBuilder.MODEL_MODES.get(
             PromptBuilder._infer_mode(model),
             "GENERAL MODE"
