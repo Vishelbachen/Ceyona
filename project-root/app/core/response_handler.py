@@ -6,7 +6,7 @@ from app.core.response_formatter import ResponseFormatter
 class ResponseHandler:
 
     # -------------------------
-    # SEND LAYER (SAFE DELIVERY)
+    # SAFE SEND LAYER
     # -------------------------
     @staticmethod
     async def send_text(text: str, chat_id: str, trace_id: str):
@@ -40,13 +40,13 @@ class ResponseHandler:
                 error=str(e)
             )
 
-            # 🧠 IMPORTANT: do not crash whole pipeline
-            # (delivery failure ≠ reasoning failure)
+            # ❗ IMPORTANT:
+            # delivery failure must NOT crash pipeline
             return
 
 
     # -------------------------
-    # MAIN HANDLER (COGNITIVE ENTRY POINT)
+    # MAIN ENTRY POINT
     # -------------------------
     @staticmethod
     async def handle(response, chat_id: str):
@@ -55,11 +55,11 @@ class ResponseHandler:
             logger.log(
                 "ERROR",
                 "null_response",
-                trace_id="unknown"
+                trace_id="missing_trace"
             )
             return
 
-        trace_id = getattr(response, "trace_id", "unknown")
+        trace_id = getattr(response, "trace_id", None) or "missing_trace"
 
         logger.log(
             "INFO",
@@ -69,14 +69,26 @@ class ResponseHandler:
 
         try:
             # -------------------------
-            # 🧠 STRUCTURED RESPONSE PATH
+            # SAFE FORMATTER WRAP
             # -------------------------
-            formatted_text = ResponseFormatter.format(response)
+            try:
+                formatted_text = ResponseFormatter.format(response)
+            except Exception as e:
+                logger.log(
+                    "ERROR",
+                    "formatter_failed",
+                    trace_id=trace_id,
+                    error=str(e)
+                )
+                formatted_text = "⚠️ Formatter error"
 
             # -------------------------
-            # 🧠 OPTIONAL SAFETY CHECK
+            # TYPE SAFETY
             # -------------------------
-            if not formatted_text or len(formatted_text.strip()) == 0:
+            if not isinstance(formatted_text, str):
+                formatted_text = str(formatted_text)
+
+            if not formatted_text.strip():
                 logger.log(
                     "WARN",
                     "empty_formatted_response",
@@ -106,4 +118,6 @@ class ResponseHandler:
                 trace_id=trace_id,
                 error=str(e)
             )
-            raise
+
+            # ❗ DO NOT RAISE (Railway webhook safety)
+            return
