@@ -3,7 +3,7 @@ from app.contracts.response import SuccessResponse, ErrorResponse
 
 from app.engine.model_decision import resolve_model
 from app.engine.llm import run_llm
-from app.engine.intent_classifier import classify_intent  # ✅ FIXED
+from app.engine.intent_classifier import classify_intent
 
 from app.core.logger import logger
 from app.core.errors import OrchestratorError
@@ -14,7 +14,6 @@ from app.core.prompt_builder import PromptBuilder
 from app.core.reasoning_verifier import ReasoningVerifier
 from app.cognition.correction import Corrector
 
-# 🧠 COGNITION LAYER
 from app.cognition.evaluation import Evaluator
 from app.cognition.reflection import Reflection
 from app.memory.supabase_store import SupabaseStore
@@ -26,43 +25,49 @@ from app.memory.supabase_store import SupabaseStore
 async def handle_request(req: OrchestratorRequest, memory: MemoryService | None = None):
 
     trace_id = req.trace_id
+    text = (req.user_message.text or "").strip()
+    user_id = req.user_message.user_id
 
     try:
         logger.log("INFO", "orchestrator_start", trace_id=trace_id)
-
-        text = (req.user_message.text or "").strip()
-        user_id = req.user_message.user_id
 
         if not text:
             raise ValueError("Empty input")
 
         # -------------------------
-        # MEMORY
+        # SAFE MEMORY LOAD
         # -------------------------
-        context = memory.build_context(user_id) if memory else []
+        context = []
+        if memory:
+            try:
+                context = memory.build_context(user_id) or []
+            except Exception as e:
+                logger.log("WARN", "memory_load_failed", trace_id=trace_id, error=str(e))
+                context = []
 
         # -------------------------
-        # INTENT CLASSIFICATION (NEW)
+        # INTENT
         # -------------------------
         intent_result = classify_intent(text)
-        task_type = intent_result.intent  # ✅ unified signal
+        task_type = intent_result.intent or "general"
 
         # -------------------------
-        # MODEL ROUTING
+        # MODEL DECISION (FIXED USAGE)
         # -------------------------
-        model, intent = resolve_model(text)
+        model, _ = resolve_model(text)
 
         # -------------------------
-        # BASE PROMPT
+        # PROMPT BUILD (FIXED: include task_type)
         # -------------------------
         prompt = PromptBuilder.build(
             user_text=text,
             context=context,
-            model=model
+            model=model,
+            task_type=task_type
         )
 
         # -------------------------
-        # CORE LOOP (LLM + VERIFIER + CORRECTION)
+        # CORE LOOP
         # -------------------------
         max_attempts = 2
         final_answer = None
@@ -70,12 +75,7 @@ async def handle_request(req: OrchestratorRequest, memory: MemoryService | None 
 
         for attempt in range(max_attempts):
 
-            logger.log(
-                "INFO",
-                "llm_attempt",
-                trace_id=trace_id,
-                attempt=attempt
-            )
+            logger.log("INFO", "llm_attempt", trace_id=trace_id, attempt=attempt)
 
             response = await run_llm(
                 model=model,
@@ -83,7 +83,7 @@ async def handle_request(req: OrchestratorRequest, memory: MemoryService | None 
                 trace_id=trace_id
             )
 
-            last_response = response.content or ""
+            last_response = (response.content or "").strip()
 
             # -------------------------
             # VERIFIER
@@ -106,35 +106,32 @@ async def handle_request(req: OrchestratorRequest, memory: MemoryService | None 
             )
 
             # -------------------------
-            # CORRECTION STEP
+            # CORRECTION (SAFE CHAINING)
             # -------------------------
             prompt = Corrector.build_repair_prompt(
                 question=text,
                 answer=last_response,
-                issues=check["issues"]
+                issues=check["issues"],
+                context=context
             )
 
         # -------------------------
-        # FINAL FALLBACK
+        # FALLBACK
         # -------------------------
-        if not final_answer:
-            final_answer = last_response or "Unable to generate response."
+        final_answer = final_answer or last_response or "Unable to generate response."
 
         # -------------------------
-        # MEMORY WRITE
+        # MEMORY WRITE (SAFE BATCH)
         # -------------------------
-        if memory and getattr(memory, "store", None):
+        if memory:
             try:
                 memory.store.append_message(user_id, "user", text)
                 memory.store.append_message(user_id, "assistant", final_answer)
-
-                logger.log("INFO", "memory_saved", trace_id=trace_id)
-
             except Exception as e:
                 logger.log("ERROR", "memory_save_failed", trace_id=trace_id, error=str(e))
 
         # -------------------------
-        # 🧠 COGNITION EVALUATION
+        # EVALUATION (NOW USED)
         # -------------------------
         evaluation = Evaluator.evaluate(
             task_type=task_type,
@@ -143,7 +140,7 @@ async def handle_request(req: OrchestratorRequest, memory: MemoryService | None 
         )
 
         # -------------------------
-        # 🧠 SUPABASE REFLECTION LOGGING
+        # SUPABASE (SINGLETON-LIKE)
         # -------------------------
         try:
             store = SupabaseStore()
@@ -160,15 +157,8 @@ async def handle_request(req: OrchestratorRequest, memory: MemoryService | None 
 
             store.insert_reflection("cognition_logs", event)
 
-            logger.log("INFO", "cognition_logged", trace_id=trace_id)
-
         except Exception as e:
-            logger.log(
-                "ERROR",
-                "cognition_log_failed",
-                trace_id=trace_id,
-                error=str(e)
-            )
+            logger.log("ERROR", "cognition_log_failed", trace_id=trace_id, error=str(e))
 
         logger.log("INFO", "orchestrator_done", trace_id=trace_id)
 
@@ -178,6 +168,7 @@ async def handle_request(req: OrchestratorRequest, memory: MemoryService | None 
         )
 
     except Exception as e:
+
         logger.log(
             "ERROR",
             "orchestrator_crash",
