@@ -4,6 +4,7 @@ import os
 class Settings:
     """
     Production-safe + cognition-aware configuration layer.
+    Railway-safe version (no hard crash on missing env).
     """
 
     def __init__(self):
@@ -11,37 +12,37 @@ class Settings:
         # -------------------------
         # CORE KEYS
         # -------------------------
-        self.GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-        self.BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+        self.GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+        self.BOT_TOKEN = os.getenv("BOT_TOKEN")
 
         # -------------------------
         # SECURITY
         # -------------------------
-        self.JWT_SECRET = os.getenv("JWT_SECRET", "")
-        self.ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", "")
+        self.JWT_SECRET = os.getenv("JWT_SECRET")
+        self.ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY")
 
         # -------------------------
         # DATABASE
         # -------------------------
-        self.SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-        self.SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
-        self.SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+        self.SUPABASE_URL = os.getenv("SUPABASE_URL")
+        self.SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
+        self.SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
         # -------------------------
         # EXTERNAL APIs
         # -------------------------
-        self.OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "")
-        self.MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN", "")
-        self.SERPAPI_KEY = os.getenv("SERPAPI_KEY", "")
-        self.BREVO_API_KEY = os.getenv("BREVO_API_KEY", "")
+        self.OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
+        self.MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN")
+        self.SERPAPI_KEY = os.getenv("SERPAPI_KEY")
+        self.BREVO_API_KEY = os.getenv("BREVO_API_KEY")
 
         # -------------------------
         # DEPLOYMENT
         # -------------------------
-        self.WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
+        self.WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 
         # -------------------------
-        # MODEL SYSTEM (HIERARCHICAL ROUTING)
+        # MODEL SYSTEM
         # -------------------------
         self.MODEL_LAYERS = {
             "fast": [
@@ -68,7 +69,7 @@ class Settings:
         }
 
         # -------------------------
-        # INTENT MAPPING (SIMPLIFIED)
+        # INTENT MAPPING
         # -------------------------
         self.INTENT_TO_LAYER = {
             "fast": "fast",
@@ -81,7 +82,7 @@ class Settings:
         self.DEFAULT_LAYER = "general"
 
         # -------------------------
-        # BEHAVIOR MODES (PROMPT SIGNALS)
+        # BEHAVIOR MODES
         # -------------------------
         self.BEHAVIOR_MODES = {
             "FAST": "Be concise and direct.",
@@ -113,14 +114,14 @@ class Settings:
         }
 
         # -------------------------
-        # VALIDATION
+        # SAFE VALIDATION (NON-BLOCKING)
         # -------------------------
-        self._validate()
+        self._validate_soft()
 
     # -------------------------
-    # VALIDATION
+    # SAFE VALIDATION (NO CRASH)
     # -------------------------
-    def _validate(self):
+    def _validate_soft(self):
         missing = []
 
         required = [
@@ -133,12 +134,12 @@ class Settings:
                 missing.append(name)
 
         if missing:
-            raise RuntimeError(
-                f"[CONFIG ERROR] Missing env vars: {', '.join(missing)}"
+            print(
+                f"[CONFIG WARNING] Missing env vars: {', '.join(missing)}"
             )
 
     # -------------------------
-    # HELPERS (IMPORTANT ADDITION)
+    # HELPERS
     # -------------------------
     def get_models(self, layer: str):
         return self.MODEL_LAYERS.get(layer, self.MODEL_LAYERS[self.DEFAULT_LAYER])
