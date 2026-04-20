@@ -7,10 +7,6 @@ from typing import Any, Optional, Dict, Union, Tuple
 # ----------------------------
 @dataclass(frozen=True)
 class BaseResponse:
-    """
-    Immutable base response.
-    Core trace identity for full pipeline observability.
-    """
     trace_id: str
 
 
@@ -19,23 +15,18 @@ class BaseResponse:
 # ----------------------------
 @dataclass(frozen=True)
 class SuccessResponse(BaseResponse):
-    success: bool = True
 
-    # 🧠 main output
     data: Optional[str] = None
 
-    # 🧠 cognitive metadata
     model: Optional[str] = None
     intent: Optional[str] = None
     task_type: Optional[str] = None
 
-    # 🧠 reasoning verification layer
     reasoning_valid: Optional[bool] = None
 
-    # safe immutable structure
-    reasoning_issues: Optional[Tuple[str, ...]] = None
+    # ALWAYS IMMUTABLE TUPLE
+    reasoning_issues: Tuple[str, ...] = ()
 
-    # 🧠 future quality scoring
     confidence: Optional[float] = None
 
 
@@ -56,7 +47,6 @@ class ErrorDetail:
 # ----------------------------
 @dataclass(frozen=True)
 class ErrorResponse(BaseResponse):
-    success: bool = False
 
     error: Optional[ErrorDetail] = None
 
