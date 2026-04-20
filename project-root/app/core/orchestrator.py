@@ -12,6 +12,7 @@ async def handle_request(
     req: OrchestratorRequest,
     memory: MemoryService | None = None
 ):
+
     trace_id = req.trace_id
 
     try:
@@ -23,29 +24,21 @@ async def handle_request(
         if not text:
             raise ValueError("Empty user message")
 
-        # 🧠 MEMORY LOAD (SAFE)
+        # -------------------------
+        # MEMORY LOAD (SAFE + ISOLATED)
+        # -------------------------
         context = []
+
         if memory:
             try:
                 context = memory.build_context(user_id) or []
-
-                logger.log(
-                    "INFO",
-                    "memory_loaded",
-                    trace_id=trace_id,
-                    context_size=len(context)
-                )
-
+                logger.log("INFO", "memory_loaded", trace_id=trace_id, context_size=len(context))
             except Exception as e:
-                logger.log(
-                    "ERROR",
-                    "memory_load_failed",
-                    trace_id=trace_id,
-                    error=str(e)
-                )
-                context = []
+                logger.log("ERROR", "memory_load_failed", trace_id=trace_id, error=str(e))
 
-        # 🧠 MODEL DECISION
+        # -------------------------
+        # MODEL DECISION
+        # -------------------------
         model, intent_result = resolve_model(text)
 
         logger.log(
@@ -53,51 +46,50 @@ async def handle_request(
             "model_selected",
             trace_id=trace_id,
             model=model,
-            intent=intent_result.intent,
-            confidence=intent_result.confidence
+            intent=intent_result.intent
         )
 
-        # 🧠 PROMPT BUILD
+        # -------------------------
+        # PROMPT BUILD
+        # (future: intent-aware injection possible)
+        # -------------------------
         prompt = PromptBuilder.build(
             user_text=text,
             context=context,
             model=model
         )
 
-        # 🧠 LLM CALL
+        # -------------------------
+        # LLM CALL
+        # -------------------------
         response = await run_llm(
             model=model,
             prompt=prompt,
             trace_id=trace_id
         )
 
-        raw_text = _safe_response(response.content)
+        raw_text = _safe_response(getattr(response, "content", None))
 
-        # 🧯 FINAL GUARD
+        # -------------------------
+        # FINAL GUARD
+        # -------------------------
         if not raw_text:
-            logger.log(
-                "ERROR",
-                "empty_llm_response",
-                trace_id=trace_id,
-                model=model
-            )
-            raw_text = "I couldn't generate a proper response. Please try again."
+            logger.log("ERROR", "empty_llm_response", trace_id=trace_id, model=model)
+            raw_text = "Unable to generate response. Please try again."
 
-        # 🧠 MEMORY SAVE (SAFE)
-        if memory and getattr(memory, "store", None):
+        # -------------------------
+        # MEMORY SAVE (SAFE)
+        # -------------------------
+        if memory:
             try:
-                memory.store.append_message(user_id, "user", text)
-                memory.store.append_message(user_id, "assistant", raw_text)
+                if hasattr(memory, "store") and memory.store:
+                    memory.store.append_message(user_id, "user", text)
+                    memory.store.append_message(user_id, "assistant", raw_text)
 
-                logger.log("INFO", "memory_saved", trace_id=trace_id)
+                    logger.log("INFO", "memory_saved", trace_id=trace_id)
 
             except Exception as e:
-                logger.log(
-                    "ERROR",
-                    "memory_save_failed",
-                    trace_id=trace_id,
-                    error=str(e)
-                )
+                logger.log("ERROR", "memory_save_failed", trace_id=trace_id, error=str(e))
 
         logger.log("INFO", "orchestrator_done", trace_id=trace_id)
 
@@ -108,17 +100,12 @@ async def handle_request(
 
     except OrchestratorError as e:
         return ErrorResponse(
-            error=e.to_dict()["error"],
+            error=e.to_dict().get("error", str(e)),
             trace_id=trace_id
         )
 
     except Exception as e:
-        logger.log(
-            "ERROR",
-            "orchestrator_crash",
-            trace_id=trace_id,
-            error=str(e)
-        )
+        logger.log("ERROR", "orchestrator_crash", trace_id=trace_id, error=str(e))
 
         err = OrchestratorError(
             code="ORCH_001",
@@ -128,28 +115,16 @@ async def handle_request(
         )
 
         return ErrorResponse(
-            error=err.to_dict()["error"],
+            error=err.to_dict().get("error", str(e)),
             trace_id=trace_id
         )
 
 
 # -------------------------
-# 🧠 RESPONSE SAFETY LAYER (LIGHTWEIGHT)
+# SAFETY LAYER
 # -------------------------
-
-def _safe_response(text: str) -> str:
-    """
-    Only protects against:
-    - empty output
-    - broken None responses
-    """
-
-    if text is None:
+def _safe_response(text: str | None) -> str:
+    if not text:
         return ""
 
-    text = text.strip()
-
-    if len(text) == 0:
-        return ""
-
-    return text
+    return text.strip()
