@@ -1,14 +1,28 @@
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Literal
+
+
+RecoveryStrategy = Literal[
+    "none",
+    "retry",
+    "escalate_model",
+    "regenerate_prompt",
+    "fallback_answer"
+]
 
 
 class Recovery:
     """
-    Future layer: advanced multi-step self-healing system.
+    Self-healing orchestration layer (future-ready).
 
     Current role:
-    - feature flag gate
-    - placeholder for adaptive retry / self-repair engine
-    - integration point for DecisionEngine v2+
+    - feature gate
+    - recovery planning interface
+    - execution placeholder
+
+    Future role:
+    - DecisionEngine integration point
+    - adaptive retry control
+    - model escalation system
     """
 
     # -------------------------
@@ -19,7 +33,7 @@ class Recovery:
         return False
 
     # -------------------------
-    # FUTURE HOOK (RESERVED)
+    # PLAN RECOVERY (FUTURE BRAIN HOOK)
     # -------------------------
     @staticmethod
     def plan_recovery(
@@ -27,22 +41,34 @@ class Recovery:
         context: Optional[Dict[str, Any]] = None
     ) -> Optional[Dict[str, Any]]:
         """
-        Reserved for future v1.5+:
-        - multi-step retry strategy
-        - model escalation
-        - prompt regeneration strategy
-        - context repair
+        Future v1.5+ logic:
 
-        Currently disabled by design.
+        Expected output schema:
+        {
+            "strategy": RecoveryStrategy,
+            "reason": str,
+            "model_hint": Optional[str],
+            "retry_count": int,
+            "modified_prompt": Optional[str]
+        }
         """
+
         return None
 
     # -------------------------
-    # FUTURE EXECUTION HOOK
+    # EXECUTE RECOVERY (FUTURE ENGINE)
     # -------------------------
     @staticmethod
-    def execute_recovery(plan: Optional[Dict[str, Any]]) -> Optional[str]:
+    def execute_recovery(
+        plan: Optional[Dict[str, Any]]
+    ) -> Optional[str]:
         """
-        Reserved execution layer for future self-healing pipeline.
+        Future execution layer:
+
+        - rerun LLM
+        - adjust prompt
+        - escalate model
+        - fallback answer generation
         """
+
         return None
