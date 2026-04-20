@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Any, Optional, Dict, Union, List
+from typing import Any, Optional, Dict, Union, Tuple
 
 
 # ----------------------------
@@ -32,8 +32,8 @@ class SuccessResponse(BaseResponse):
     # 🧠 reasoning verification layer
     reasoning_valid: Optional[bool] = None
 
-    # safer than mutable list in frozen dataclass
-    reasoning_issues: Optional[tuple[str, ...]] = None
+    # safe immutable structure
+    reasoning_issues: Optional[Tuple[str, ...]] = None
 
     # 🧠 future quality scoring
     confidence: Optional[float] = None
