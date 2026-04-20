@@ -1,12 +1,15 @@
 from app.contracts.message import OrchestratorRequest
 from app.contracts.response import SuccessResponse, ErrorResponse
+
 from app.engine.model_decision import resolve_model
 from app.engine.llm import run_llm
+
 from app.core.logger import logger
 from app.core.errors import OrchestratorError
-from app.memory.memory_service import MemoryService
 from app.core.prompt_builder import PromptBuilder
-from app.engine.reasoning_verifier import ReasoningVerifier
+from app.core.reasoning_verifier import ReasoningVerifier  # ✔ FIXED PATH
+
+from app.memory.memory_service import MemoryService
 
 
 async def handle_request(
@@ -46,7 +49,7 @@ async def handle_request(
                 )
                 context = []
 
-        # 🧠 MODEL DECISION (single source of truth)
+        # 🧠 MODEL DECISION
         model, intent_result = resolve_model(text)
 
         logger.log(
@@ -74,7 +77,7 @@ async def handle_request(
 
         raw_text = (response.content or "").strip()
 
-        # 🧠 VERIFIER LAYER (NON-BLOCKING QUALITY GATE)
+        # 🧠 VERIFIER (SAFE GATE)
         verification = ReasoningVerifier.verify(
             task_type=intent_result.intent,
             response=raw_text
@@ -88,13 +91,11 @@ async def handle_request(
             issues=verification["issues"]
         )
 
-        # ⚠️ SOFT SAFETY HANDLING (NO HARD FAILURE)
-        # We DO NOT block pipeline unless response is totally broken
+        # ⚠️ SAFETY HANDLING (non-blocking)
         if not raw_text:
             raw_text = "No valid response generated."
 
         elif not verification["valid"]:
-            # fallback only (do not fail request)
             logger.log(
                 "WARNING",
                 "low_quality_response_detected",
@@ -107,7 +108,7 @@ async def handle_request(
                 "Try rephrasing or adding more details."
             )
 
-        # 🧠 MEMORY SAVE (SAFE)
+        # 🧠 MEMORY SAVE
         if memory and getattr(memory, "store", None):
             try:
                 memory.store.append_message(user_id, "user", text)
