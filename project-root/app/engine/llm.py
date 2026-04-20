@@ -18,21 +18,18 @@ class LLMResponse:
 
 
 # -------------------------
-# CORE GROQ CALL
+# CORE CALL
 # -------------------------
 
 async def groq_call(model: str, prompt: str) -> str:
     """
-    Real Groq API call (NO prompt mutation)
+    Groq API call (clean architecture)
+    PromptBuilder handles system logic
     """
 
     response = await client.chat.completions.create(
         model=model,
         messages=[
-            {
-                "role": "system",
-                "content": "Follow instructions strictly. Do not mention AI identity."
-            },
             {"role": "user", "content": prompt}
         ],
         temperature=0.7,
@@ -42,7 +39,7 @@ async def groq_call(model: str, prompt: str) -> str:
 
 
 # -------------------------
-# MAIN EXECUTION PIPELINE
+# MAIN PIPELINE
 # -------------------------
 
 async def run_llm(
@@ -71,7 +68,6 @@ async def run_llm(
 
             cleaned = _sanitize_llm_output(response)
 
-            # 🧯 EMPTY GUARD (CRITICAL FIX)
             if not cleaned:
                 raise ValueError("Empty LLM response")
 
@@ -112,15 +108,14 @@ async def run_llm(
 
 
 # -------------------------
-# 🧠 RESPONSE SANITIZER
+# 🧠 SANITIZER (SAFE VERSION)
 # -------------------------
 
 def _sanitize_llm_output(text: str) -> str:
     """
-    Removes:
-    - AI self-identification
-    - broken system phrases
-    - empty / invalid outputs
+    Only cleans:
+    - broken outputs
+    - obvious identity leaks (soft, not destructive)
     """
 
     if not text:
@@ -130,16 +125,13 @@ def _sanitize_llm_output(text: str) -> str:
 
     lowered = text.lower()
 
-    blocked = [
-        "i am an ai",
-        "я — искусственный интеллект",
-        "я являюсь ии",
-        "as an ai",
+    soft_blocks = [
         "assistant model",
-        "you are a helpful ai"
+        "system prompt"
     ]
 
-    if any(b in lowered for b in blocked):
-        return ""
+    # ⚠️ soft filter (NOT destructive)
+    if any(b in lowered for b in soft_blocks):
+        text = text.replace("assistant model", "").strip()
 
     return text
