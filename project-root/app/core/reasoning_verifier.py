@@ -1,72 +1,92 @@
 class ReasoningVerifier:
     """
-    Post-generation reasoning validation layer.
-    Lightweight quality gate for LLM outputs.
-
-    Goals:
-    - detect empty / broken outputs
-    - check structural integrity
-    - avoid false positives
-    - remain non-blocking for production flow
+    Verification layer for reasoning outputs.
+    
+    Role:
+    - validate logical structure
+    - detect missing steps
+    - ensure task compliance
+    - flag low-quality reasoning
     """
 
     @staticmethod
-    def verify(task_type: str, response: str) -> dict:
-        issues = []
+    def verify(task_type: str, response_text: str) -> dict:
+        """
+        Returns:
+        {
+            "valid": bool,
+            "score": float (0-1),
+            "issues": list[str],
+            "retry_recommended": bool
+        }
+        """
 
-        # 🧯 EMPTY CHECK (CRITICAL)
-        if not response or not response.strip():
+        text = (response_text or "").lower()
+        issues = []
+        score = 1.0
+
+        # -------------------------
+        # BASIC QUALITY CHECK
+        # -------------------------
+        if len(text.strip()) < 20:
             return {
                 "valid": False,
-                "issues": ["empty_response"]
+                "score": 0.0,
+                "issues": ["response_too_short"],
+                "retry_recommended": True
             }
 
-        text = response.strip()
-        lowered = text.lower()
+        # -------------------------
+        # TASK-SPECIFIC CHECKS
+        # -------------------------
 
-        # 📏 BASIC QUALITY GATES
-        if len(text) < 15:
-            issues.append("too_short")
+        if task_type == "math_physics":
+            if not any(x in text for x in ["=", "+", "-", "*", "/", "step", "law"]):
+                issues.append("missing_math_structure")
+                score -= 0.3
 
-        if len(text) > 20000:
-            issues.append("too_long")
+            if "final" not in text and "answer" not in text:
+                issues.append("missing_final_answer")
+                score -= 0.2
 
-        # 🧠 MATHEMATICS / PHYSICS CHECK
-        if task_type in ["math", "physics", "chemistry", "math_physics"]:
-            has_structure = any(
-                marker in lowered for marker in [
-                    "step", "solution", "answer", "=", "given", "we have"
-                ]
-            )
+        elif task_type == "coding":
+            if "def" not in text and "function" not in text and "class" not in text:
+                issues.append("missing_code_structure")
+                score -= 0.3
 
-            if not has_structure:
-                issues.append("missing_reasoning_structure")
+            if "edge" not in text:
+                issues.append("no_edge_case_check")
+                score -= 0.1
 
-        # 💻 CODING CHECK
-        if task_type in ["coding", "algorithm"]:
-            has_code = any(
-                marker in text for marker in [
-                    "def ", "class ", "return", "import", "{", "}"
-                ]
-            )
+        elif task_type == "proof":
+            if not any(x in text for x in ["therefore", "thus", "hence", "proves"]):
+                issues.append("weak_logical_chain")
+                score -= 0.3
 
-            if not has_code:
-                issues.append("no_code_detected")
-
-        # 📚 GENERAL QUALITY CHECK
-        # avoids garbage / meaningless outputs
-        low_quality_signals = [
-            "???",
-            "....",
-            "i don't know",
-            "no idea"
+        # -------------------------
+        # GENERAL QUALITY CHECK
+        # -------------------------
+        filler_phrases = [
+            "i think",
+            "maybe",
+            "not sure",
+            "i guess"
         ]
 
-        if any(sig in lowered for sig in low_quality_signals):
-            issues.append("low_quality_signal_detected")
+        if any(p in text for p in filler_phrases):
+            issues.append("uncertain_language_detected")
+            score -= 0.1
 
-        # 🧠 FINAL DECISION
+        # -------------------------
+        # FINAL SCORE NORMALIZATION
+        # -------------------------
+        score = max(0.0, min(1.0, score))
+
+        retry_recommended = score < 0.6
+
         return {
-            "valid": len(issues) == 0,
-            "issues": issues
+            "valid": score >= 0.6,
+            "score": score,
+            "issues": issues,
+            "retry_recommended": retry_recommended
         }
