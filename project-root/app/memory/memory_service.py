@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Dict, Any
 
 from app.memory.session_store import SessionStore
 from app.core.logger import logger
@@ -6,16 +6,15 @@ from app.core.logger import logger
 
 class MemoryService:
     """
-    Cognitive memory layer (v3)
+    Cognitive memory layer (v4 PRODUCTION)
 
     Features:
-    - safe context building
-    - prompt size control
-    - text normalization
-    - future-ready for long-term memory
+    - structured context (no formatting leakage)
+    - safe history validation
+    - stable trimming strategy
+    - LLM-safe size control
     """
 
-    # 🔒 limits (important for LLM stability)
     MAX_MESSAGES = 12
     MAX_TOTAL_CHARS = 6000
     MAX_MESSAGE_CHARS = 800
@@ -26,50 +25,56 @@ class MemoryService:
     # -------------------------
     # MAIN CONTEXT BUILDER
     # -------------------------
-    def build_context(self, user_id: str) -> List[str]:
-        """
-        Returns LLM-ready context.
-        Safe, trimmed, normalized.
-        """
-
+    def build_context(self, user_id: str) -> List[Dict[str, str]]:
         try:
             history = self.store.get_history(user_id)
 
-            if not history:
+            if not isinstance(history, list):
                 return []
 
-            context = []
-            total_chars = 0
+            cleaned = []
 
-            # 🧠 last N messages
-            recent = history[-self.MAX_MESSAGES:]
+            # 🧠 берем только последние сообщения
+            for msg in history[-self.MAX_MESSAGES:]:
 
-            for msg in recent:
+                if not isinstance(msg, dict):
+                    continue
+
                 role = msg.get("role", "user")
                 text = self._clean_text(msg.get("text"))
 
                 if not text:
                     continue
 
-                # 🔒 limit per message
                 text = text[:self.MAX_MESSAGE_CHARS]
 
-                formatted = f"{role.upper()}: {text}"
+                cleaned.append({
+                    "role": role,
+                    "text": text
+                })
 
-                total_chars += len(formatted)
+            # -------------------------
+            # SAFE TRIM BY TOTAL SIZE
+            # -------------------------
+            result = []
+            total_chars = 0
 
-                # 🔒 global limit
-                if total_chars > self.MAX_TOTAL_CHARS:
+            for msg in reversed(cleaned):
+                size = len(msg["text"]) + len(msg["role"])
+
+                if total_chars + size > self.MAX_TOTAL_CHARS:
                     break
 
-                context.append(formatted)
+                result.append(msg)
+                total_chars += size
 
-            return context
+            return list(reversed(result))
 
         except Exception as e:
             logger.log(
                 "ERROR",
                 "memory_build_failed",
+                user_id=user_id,
                 error=str(e)
             )
             return []
@@ -83,26 +88,18 @@ class MemoryService:
 
         return (
             text.strip()
-            .replace("\n\n", "\n")
             .replace("\r", "")
+            .replace("\n\n", "\n")
         )
 
     # -------------------------
     # FUTURE: FACT EXTRACTION
     # -------------------------
     def extract_facts(self, user_id: str) -> List[str]:
-        """
-        Future:
-        - user preferences
-        - stable knowledge
-        """
         return []
 
     # -------------------------
     # FUTURE: SUMMARY
     # -------------------------
     def build_summary(self, user_id: str) -> str:
-        """
-        Future summarization layer.
-        """
         return ""
