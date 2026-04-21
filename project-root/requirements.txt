@@ -2,15 +2,15 @@
 # 🌐 CORE API LAYER
 # =========================
 fastapi>=0.130,<0.136
-uvicorn[standard]>=0.30,<0.36
-starlette>=0.37,<1.0
+uvicorn[standard]>=0.43,<0.45
+starlette>=1.0,<2.0
 
 
 # =========================
 # 🤖 LLM PROVIDERS
 # =========================
 openai>=1.90,<2.0
-groq>=0.15,<1.0
+groq>=1.1,<2.0
 
 
 # =========================
@@ -35,7 +35,7 @@ supabase>=2.8,<3.0
 # =========================
 # 🧠 DATA VALIDATION
 # =========================
-pydantic>=2.11,<3.0
+pydantic>=2.13,<3.0
 typing-extensions>=4.14,<5.0
 
 
