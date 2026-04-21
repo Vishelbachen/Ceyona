@@ -1,19 +1,20 @@
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from threading import Lock
+import logging
 
-from app.core.logger import logger
+logger = logging.getLogger("session_store")
 
 
 class SessionStore:
     """
-    In-memory session storage (production-ready v3)
+    In-memory session storage (production-ready v3.1)
 
     Features:
     - thread-safe
     - bounded memory
     - safe input handling
-    - structured context support
+    - zero dependency on app.core (cycle-safe)
     """
 
     MAX_TEXT_LENGTH = 2000
@@ -33,15 +34,10 @@ class SessionStore:
         text: str,
         meta: dict | None = None
     ):
-        """
-        Safe message append.
-        """
-
         if not user_id:
             return
 
         text = self._clean_text(text)
-
         if not text:
             return
 
@@ -57,21 +53,12 @@ class SessionStore:
                 self._data[user_id].append(entry)
 
         except Exception as e:
-            logger.log(
-                "ERROR",
-                "session_append_failed",
-                user_id=user_id,
-                error=str(e)
-            )
+            logger.exception(f"session_append_failed: {e}")
 
     # -------------------------
     # READ
     # -------------------------
     def get_history(self, user_id: str, limit: int = 20):
-        """
-        Returns last N messages safely.
-        """
-
         if not user_id:
             return []
 
@@ -82,22 +69,13 @@ class SessionStore:
             return history[-limit:]
 
         except Exception as e:
-            logger.log(
-                "ERROR",
-                "session_read_failed",
-                user_id=user_id,
-                error=str(e)
-            )
+            logger.exception(f"session_read_failed: {e}")
             return []
 
     # -------------------------
     # STRUCTURED CONTEXT
     # -------------------------
     def build_structured_context(self, user_id: str, limit: int = 20):
-        """
-        Cognitive-ready structured context.
-        """
-
         history = self.get_history(user_id, limit)
 
         if not history:
@@ -108,6 +86,9 @@ class SessionStore:
         max_total = 6000
 
         for msg in history:
+            if not isinstance(msg, dict):
+                continue
+
             role = msg.get("role", "unknown")
             text = self._clean_text(msg.get("text"))
 
@@ -134,22 +115,12 @@ class SessionStore:
     # CLEAR SESSION
     # -------------------------
     def clear_session(self, user_id: str):
-        """
-        Removes user session from memory.
-        """
-
         try:
             with self._lock:
-                if user_id in self._data:
-                    del self._data[user_id]
+                self._data.pop(user_id, None)
 
         except Exception as e:
-            logger.log(
-                "ERROR",
-                "session_clear_failed",
-                user_id=user_id,
-                error=str(e)
-            )
+            logger.exception(f"session_clear_failed: {e}")
 
     # -------------------------
     # CLEAN TEXT
