@@ -1,17 +1,19 @@
 from typing import List, Dict, Any
+import logging
 
 from app.memory.session_store import SessionStore
-from app.core.logger import logger
+
+logger = logging.getLogger("memory_service")
 
 
 class MemoryService:
     """
-    Cognitive memory layer (v4 PRODUCTION)
+    Cognitive memory layer (v4.1 production safe)
 
     Features:
-    - structured context (no formatting leakage)
-    - safe history validation
-    - stable trimming strategy
+    - cycle-safe (no core dependency)
+    - structured context
+    - stable trimming
     - LLM-safe size control
     """
 
@@ -32,11 +34,12 @@ class MemoryService:
             if not isinstance(history, list):
                 return []
 
-            cleaned = []
+            trimmed = history[-self.MAX_MESSAGES:]
 
-            # 🧠 берем только последние сообщения
-            for msg in history[-self.MAX_MESSAGES:]:
+            result = []
+            total_chars = 0
 
+            for msg in trimmed:
                 if not isinstance(msg, dict):
                     continue
 
@@ -48,35 +51,22 @@ class MemoryService:
 
                 text = text[:self.MAX_MESSAGE_CHARS]
 
-                cleaned.append({
-                    "role": role,
-                    "text": text
-                })
-
-            # -------------------------
-            # SAFE TRIM BY TOTAL SIZE
-            # -------------------------
-            result = []
-            total_chars = 0
-
-            for msg in reversed(cleaned):
-                size = len(msg["text"]) + len(msg["role"])
+                size = len(text) + len(role)
 
                 if total_chars + size > self.MAX_TOTAL_CHARS:
                     break
 
-                result.append(msg)
+                result.append({
+                    "role": role,
+                    "text": text
+                })
+
                 total_chars += size
 
-            return list(reversed(result))
+            return result
 
         except Exception as e:
-            logger.log(
-                "ERROR",
-                "memory_build_failed",
-                user_id=user_id,
-                error=str(e)
-            )
+            logger.exception(f"memory_build_failed: {e}")
             return []
 
     # -------------------------
@@ -93,13 +83,10 @@ class MemoryService:
         )
 
     # -------------------------
-    # FUTURE: FACT EXTRACTION
+    # FUTURE HOOKS
     # -------------------------
     def extract_facts(self, user_id: str) -> List[str]:
         return []
 
-    # -------------------------
-    # FUTURE: SUMMARY
-    # -------------------------
     def build_summary(self, user_id: str) -> str:
         return ""
