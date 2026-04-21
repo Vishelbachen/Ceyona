@@ -8,13 +8,12 @@ from app.core.logger import logger
 
 class SupabaseStore:
     """
-    Cognition DB bridge (production-safe v3)
+    Cognition DB bridge (production-safe v3.1)
 
-    Features:
-    - retry logic
-    - timeout protection
-    - safe failure mode
-    - structured logging
+    FIXES:
+    - fully async-safe execution
+    - no event loop blocking
+    - retry via async sleep
     """
 
     def __init__(self):
@@ -37,20 +36,17 @@ class SupabaseStore:
         return self.client is not None
 
     # -------------------------
-    # MAIN INSERT
+    # MAIN INSERT (ASYNC SAFE)
     # -------------------------
-    def insert_reflection(self, table: str, payload: dict, trace_id: Optional[str] = None):
-        """
-        Safe DB insert with retry + timeout.
-        """
-
+    async def insert_reflection(
+        self,
+        table: str,
+        payload: dict,
+        trace_id: Optional[str] = None
+    ):
         if not self.client:
-            logger.log(
-                "WARN",
-                "supabase_disabled",
-                trace_id=trace_id
-            )
-            return
+            logger.log("WARN", "supabase_disabled", trace_id=trace_id)
+            return None
 
         max_retries = 3
 
@@ -65,8 +61,7 @@ class SupabaseStore:
                     attempt=attempt
                 )
 
-                # timeout wrapper (prevents hanging requests)
-                result = asyncio.wait_for(
+                result = await asyncio.wait_for(
                     self._insert(table, payload),
                     timeout=5
                 )
@@ -100,17 +95,11 @@ class SupabaseStore:
                     )
                     return None
 
-                await_sleep = 0.3 * (attempt + 1)
-                asyncio.get_event_loop().run_until_complete(
-                    asyncio.sleep(await_sleep)
-                )
+                # async safe retry delay
+                await asyncio.sleep(0.3 * (attempt + 1))
 
     # -------------------------
     # INTERNAL INSERT
     # -------------------------
     async def _insert(self, table: str, payload: dict):
-        """
-        Actual Supabase call wrapper.
-        """
-
         return self.client.table(table).insert(payload).execute()
