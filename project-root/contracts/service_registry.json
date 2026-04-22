@@ -1,0 +1,14 @@
+{
+  "chat_service": {
+    "layer": "application",
+    "depends_on": ["core.orchestrator"]
+  },
+  "orchestrator": {
+    "layer": "core",
+    "depends_on": ["ai", "policies"]
+  },
+  "ai_engine": {
+    "layer": "ai",
+    "depends_on": []
+  }
+}
