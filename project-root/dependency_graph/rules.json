@@ -1,0 +1,11 @@
+{
+  "forbidden_edges": [
+    "ai -> infrastructure",
+    "domain -> any",
+    "application -> db",
+    "tools -> core"
+  ],
+  "allowed_flow": [
+    "api -> application -> core -> ai -> infrastructure"
+  ]
+}
