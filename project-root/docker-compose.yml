@@ -2,6 +2,9 @@ version: "3.9"
 
 services:
 
+  # =========================
+  # 🧠 AI CORE (MAIN SERVICE)
+  # =========================
   app:
     build:
       context: .
@@ -19,15 +22,12 @@ services:
 
     environment:
       PYTHONUNBUFFERED: 1
-      WEB_CONCURRENCY: 2
+      WEB_CONCURRENCY: 1
       OTEL_SERVICE_NAME: ai-core
 
     depends_on:
       redis:
         condition: service_healthy
-
-    networks:
-      - ai-network
 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -36,12 +36,12 @@ services:
       retries: 5
       start_period: 30s
 
-    deploy:
-      resources:
-        limits:
-          cpus: "1.5"
-          memory: 1G
+    networks:
+      - ai-network
 
+  # =========================
+  # ⚡ REDIS (CACHE + QUEUE)
+  # =========================
   redis:
     image: redis:7-alpine
 
@@ -70,9 +70,15 @@ services:
       timeout: 3s
       retries: 5
 
+# =========================
+# 🌐 NETWORK (ISOLATION)
+# =========================
 networks:
   ai-network:
     driver: bridge
 
+# =========================
+# 💾 PERSISTENCE
+# =========================
 volumes:
   redis_data:
