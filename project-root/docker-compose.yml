@@ -25,11 +25,14 @@ services:
         condition: service_healthy
 
     environment:
-      - PYTHONUNBUFFERED=1
+      PYTHONUNBUFFERED: 1
 
     networks:
       - ai-network
 
+    # =========================
+    # ❤️ HEALTH SIGNAL
+    # =========================
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 20s
@@ -37,8 +40,17 @@ services:
       retries: 5
       start_period: 30s
 
+    # =========================
+    # 🧠 RESOURCE LIMITS (IMPORTANT)
+    # =========================
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: 1G
+
   # =========================
-  # ⚡ REDIS CACHE + QUEUE
+  # ⚡ REDIS (CACHE + QUEUE CORE)
   # =========================
   redis:
     image: redis:7-alpine
@@ -50,7 +62,11 @@ services:
     ports:
       - "6379:6379"
 
-    command: ["redis-server", "--appendonly", "yes"]
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
 
     volumes:
       - redis_data:/data
@@ -64,9 +80,15 @@ services:
       timeout: 3s
       retries: 5
 
+# =========================
+# 🌐 NETWORK ISOLATION
+# =========================
 networks:
   ai-network:
     driver: bridge
 
+# =========================
+# 💾 PERSISTENCE
+# =========================
 volumes:
   redis_data:
