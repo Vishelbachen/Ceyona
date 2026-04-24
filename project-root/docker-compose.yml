@@ -1,18 +1,64 @@
 version: "3.9"
 
 services:
+
+  # =========================
+  # 🧠 MAIN AI CORE
+  # =========================
   app:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+
     container_name: ai-core
+
+    restart: unless-stopped
+
     ports:
       - "8000:8000"
+
     env_file:
       - .env
+
     depends_on:
       - redis
 
+    environment:
+      - PYTHONUNBUFFERED=1
+
+    networks:
+      - ai-network
+
+  # =========================
+  # ⚡ REDIS (CACHE + QUEUE)
+  # =========================
   redis:
-    image: redis:7
+    image: redis:7-alpine
+
     container_name: redis
+
+    restart: unless-stopped
+
     ports:
       - "6379:6379"
+
+    command: ["redis-server", "--appendonly", "yes"]
+
+    volumes:
+      - redis_data:/data
+
+    networks:
+      - ai-network
+
+# =========================
+# 🌐 NETWORK LAYER
+# =========================
+networks:
+  ai-network:
+    driver: bridge
+
+# =========================
+# 💾 PERSISTENCE
+# =========================
+volumes:
+  redis_data:
