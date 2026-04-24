@@ -1,7 +1,7 @@
 from core.cognition.intent_engine import build_intent
 from core.kernel.execution_policy_kernel import evaluate
-from payments.access import check_access
-from agents.consensus import run_agents
+from payments.access_controller import check_access
+from agents.consensus_engine import run_agents
 from llm.router import route_llm
 
 async def handle_update(update: dict):
@@ -10,9 +10,9 @@ async def handle_update(update: dict):
 
     intent = build_intent(message)
 
-    allowed = evaluate(intent)
+    decision = evaluate(intent)
 
-    if not allowed:
+    if decision == "DENY":
         return {"status": "denied"}
 
     if not check_access(update["message"]["from"]["id"], intent):
