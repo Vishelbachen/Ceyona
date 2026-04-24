@@ -17,8 +17,7 @@ dependencies = [
     "tenacity>=9.1,<10.0",
     "anyio>=4.4,<5.0",
 
-    # ✔ FIXED VERSION CONSTRAINT
-    "pydantic>=2.8,<2.11",
+    "pydantic>=2.6,<2.13",
     "pydantic-settings>=2.3,<3.0",
 
     "typing-extensions>=4.14,<5.0",
