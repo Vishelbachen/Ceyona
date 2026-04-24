@@ -8,7 +8,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONFAULTHANDLER=1 \
     PYTHONHASHSEED=random \
     PYTHONPATH=/app \
-    PORT=8000
+    PORT=8000 \
+    UVICORN_LOOP=uvloop \
+    UVICORN_HTTP=httptools
 
 WORKDIR /app
 
@@ -26,7 +28,7 @@ RUN apt-get update && apt-get install -y \
 RUN useradd -m -u 10001 appuser
 
 # =========================
-# 📦 DEPENDENCY LAYER
+# 📦 DEPENDENCY LAYER (CACHE OPTIMIZED)
 # =========================
 COPY pyproject.toml ./
 
@@ -41,10 +43,12 @@ COPY --chown=appuser:appuser . .
 USER appuser
 
 # =========================
-# 🚀 PRODUCTION SERVER (RAILWAY SAFE)
+# 🚀 RAILWAY PRODUCTION SERVER
 # =========================
-CMD ["uvicorn", "app.main:app",
-     "--host", "0.0.0.0",
-     "--port", "8000",
-     "--workers", "1",
-     "--timeout-keep-alive", "30"]
+CMD ["sh", "-c", "uvicorn app.main:app \
+    --host 0.0.0.0 \
+    --port ${PORT:-8000} \
+    --workers 1 \
+    --timeout-keep-alive 30 \
+    --loop uvloop \
+    --http httptools"]
