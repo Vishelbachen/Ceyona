@@ -34,8 +34,3 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     OTEL_SERVICE_NAME=ai-platform \
     OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
-
-# =========================
-# START
-# =========================
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
