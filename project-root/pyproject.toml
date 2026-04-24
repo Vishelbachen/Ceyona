@@ -11,7 +11,6 @@ dependencies = [
     # =========================
     "fastapi>=0.130,<0.136",
     "uvicorn[standard]>=0.43,<0.45",
-    "starlette>=1.0,<2.0",
 
     # =========================
     # 🤖 LLM LAYER
@@ -56,11 +55,12 @@ dependencies = [
     "aiogram>=3.6,<4.0",
 
     # =========================
-    # 🌐 TOOLS (HTTP fallback only via httpx)
+    # 🧪 ENV LOADING
     # =========================
+    "python-dotenv>=1.1,<2.0",
 
     # =========================
-    # 🧪 DEV
+    # 🧪 DEV TOOLS
     # =========================
     "pytest>=8.4,<9.0",
     "pytest-asyncio>=0.24,<1.0",
