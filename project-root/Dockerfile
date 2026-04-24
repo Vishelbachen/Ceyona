@@ -8,7 +8,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONFAULTHANDLER=1 \
     PYTHONHASHSEED=random \
     PYTHONPATH=/app \
-    PORT=8000
+    PORT=8000 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONNOUSERSITE=1
 
 WORKDIR /app
 
@@ -26,21 +29,36 @@ RUN apt-get update && apt-get install -y \
 RUN useradd -m -u 10001 appuser
 
 # =========================
-# 📦 DEPENDENCY LAYER (CACHE OPTIMIZED)
+# 📁 SOURCE CODE FIRST (FIXED BUILD ORDER)
 # =========================
 COPY pyproject.toml ./
 
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir .
+COPY app ./app
+COPY core ./core
+COPY transport ./transport
+COPY cognition ./cognition
+COPY agents ./agents
+COPY memory ./memory
+COPY llm ./llm
+COPY payments ./payments
+COPY external ./external
+COPY security ./security
+COPY observability ./observability
+COPY notifications ./notifications
+COPY infra ./infra
 
 # =========================
-# 📁 SOURCE CODE
+# 📦 INSTALL (DETERMINISTIC BUILD)
 # =========================
-COPY --chown=appuser:appuser . .
+RUN pip install --upgrade pip setuptools wheel && \
+    pip install .
 
+# =========================
+# 🔐 SWITCH USER
+# =========================
 USER appuser
 
 # =========================
-# 🚀 RAILWAY PRODUCTION SERVER
+# 🚀 START
 # =========================
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--timeout-keep-alive", "30"]
