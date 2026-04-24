@@ -17,8 +17,8 @@ dependencies = [
     "tenacity>=9.1,<10.0",
     "anyio>=4.4,<5.0",
 
-    "pydantic>=2.13,<3.0",
-    "pydantic-settings>=2.3,<3.0",
+    "pydantic>=2.7,<2.11",
+    "pydantic-settings>=2.7,<2.11",
     "typing-extensions>=4.14,<5.0",
 
     "structlog>=25.0,<26.0",
