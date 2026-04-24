@@ -1,10 +1,7 @@
-# =========================
-# 🧠 BASE IMAGE (stable)
-# =========================
 FROM python:3.11-slim
 
 # =========================
-# 🔐 SECURITY
+# 🔐 ENV
 # =========================
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -21,15 +18,14 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # =========================
-# 👤 CREATE NON-ROOT USER (CRITICAL)
+# 👤 USER (SECURITY ISOLATION)
 # =========================
-RUN useradd -m appuser
-USER appuser
+RUN useradd -m -u 10001 appuser
 
 # =========================
-# 📦 INSTALL DEPENDENCIES (CACHE OPTIMIZED)
+# 📦 DEPENDENCIES (CACHE LAYER)
 # =========================
-COPY --chown=appuser:appuser pyproject.toml ./
+COPY pyproject.toml ./
 
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir .
@@ -39,12 +35,13 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # =========================
 COPY --chown=appuser:appuser . .
 
+USER appuser
+
 # =========================
-# 🚀 PRODUCTION SERVER
+# 🚀 STARTUP (SAFE + STABLE)
 # =========================
 CMD ["uvicorn", "app.main:app", \
      "--host", "0.0.0.0", \
      "--port", "8000", \
      "--workers", "2", \
-     "--loop", "uvloop", \
      "--timeout-keep-alive", "30"]
