@@ -8,6 +8,7 @@ setup_tracing()
 
 app = create_app()
 
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
