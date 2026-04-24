@@ -2,9 +2,13 @@ version: "3.9"
 
 services:
 
+  # =========================
+  # 🧠 AI CORE
+  # =========================
   app:
     build:
       context: .
+      dockerfile: Dockerfile
 
     restart: unless-stopped
 
@@ -19,6 +23,13 @@ services:
       WEB_CONCURRENCY: 1
       OTEL_SERVICE_NAME: ai-core
 
+    depends_on:
+      redis:
+        condition: service_healthy
+
+    networks:
+      - ai-network
+
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 20s
@@ -26,6 +37,9 @@ services:
       retries: 5
       start_period: 30s
 
+  # =========================
+  # ⚡ REDIS CACHE / QUEUE
+  # =========================
   redis:
     image: redis:7-alpine
 
@@ -43,11 +57,24 @@ services:
     volumes:
       - redis_data:/data
 
+    networks:
+      - ai-network
+
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 3s
       retries: 5
 
+# =========================
+# 🌐 NETWORK ISOLATION
+# =========================
+networks:
+  ai-network:
+    driver: bridge
+
+# =========================
+# 💾 PERSISTENCE
+# =========================
 volumes:
   redis_data:
