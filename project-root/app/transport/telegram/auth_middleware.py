@@ -1,6 +1,6 @@
 from security.auth import verify_telegram_signature
 
-async def telegram_security_middleware(update: dict, signature: str):
+async def auth_middleware(update: dict, signature: str):
 
     raw = str(update)
 
