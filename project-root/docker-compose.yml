@@ -18,7 +18,8 @@ services:
     environment:
       PYTHONUNBUFFERED: 1
       WEB_CONCURRENCY: 1
-      OTEL_SERVICE_NAME: ai-core
+      OTEL_SERVICE_NAME: ai-platform
+      REDIS_URL: redis://redis:6379
 
     depends_on:
       redis:
@@ -45,7 +46,7 @@ services:
     command: >
       redis-server
       --appendonly yes
-      --maxmemory 256mb
+      --maxmemory 512mb
       --maxmemory-policy allkeys-lru
 
     volumes:
@@ -57,6 +58,16 @@ services:
       timeout: 3s
       retries: 5
 
+    networks:
+      - ai-network
+
+  # OPTIONAL: OpenTelemetry collector (production observability)
+  otel-collector:
+    image: otel/opentelemetry-collector:latest
+    restart: unless-stopped
+    ports:
+      - "4317:4317"
+      - "4318:4318"
     networks:
       - ai-network
 
