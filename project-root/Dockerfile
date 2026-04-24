@@ -2,26 +2,40 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# system deps (важно для cryptography, orjson, etc.)
+# =========================
+# SYSTEM DEPENDENCIES
+# =========================
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
+    gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# dependency tooling
+# =========================
+# PYTHON TOOLING
+# =========================
 RUN pip install --upgrade pip setuptools wheel
 
-# copy only dependency metadata first (cache layer optimization)
+# =========================
+# DEPENDENCY LAYER (CACHED)
+# =========================
 COPY pyproject.toml ./
-
-# install project dependencies from pyproject
 RUN pip install .
 
-# copy source
+# =========================
+# SOURCE CODE
+# =========================
 COPY . .
 
-# runtime config
+# =========================
+# RUNTIME CONFIG
+# =========================
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    OTEL_SERVICE_NAME=ai-platform \
+    OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
 
+# =========================
+# START
+# =========================
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
