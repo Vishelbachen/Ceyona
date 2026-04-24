@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "ai-core"
+version = "0.1.0"
+description = ""
+authors = ["you"]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+fastapi = "*"
+uvicorn = "*"
+pydantic = "*"
+redis = "*"
+httpx = "*"
+
+[tool.poetry.dev-dependencies]
+pytest = "*"
+black = "*"
+ruff = "*"
