@@ -1,18 +1,72 @@
-[tool.poetry]
-name = "ai-core"
-version = "0.1.0"
-description = ""
-authors = ["you"]
+[project]
+name = "ai-platform"
+version = "1.0.0"
+description = "Modular AI orchestration platform"
+requires-python = ">=3.11"
 
-[tool.poetry.dependencies]
-python = "^3.11"
-fastapi = "*"
-uvicorn = "*"
-pydantic = "*"
-redis = "*"
-httpx = "*"
+dependencies = [
 
-[tool.poetry.dev-dependencies]
-pytest = "*"
-black = "*"
-ruff = "*"
+    # =========================
+    # 🌐 RUNTIME
+    # =========================
+    "fastapi>=0.130,<0.136",
+    "uvicorn[standard]>=0.43,<0.45",
+    "starlette>=1.0,<2.0",
+
+    # =========================
+    # 🤖 LLM LAYER
+    # =========================
+    "groq>=1.1,<2.0",
+    "supabase>=2.8,<3.0",
+
+    # =========================
+    # 🧠 INFRA / NETWORK
+    # =========================
+    "httpx[http2]>=0.28,<0.30",
+    "tenacity>=9.1,<10.0",
+    "redis>=5.0,<6.0",
+    "anyio>=4.4,<5.0",
+
+    # =========================
+    # 🧠 CORE
+    # =========================
+    "pydantic>=2.13,<3.0",
+    "pydantic-settings>=2.3,<3.0",
+    "typing-extensions>=4.14,<5.0",
+
+    # =========================
+    # 📊 OBSERVABILITY
+    # =========================
+    "structlog>=25.0,<26.0",
+    "python-json-logger>=2.0,<3.0",
+
+    # =========================
+    # 🔐 SECURITY
+    # =========================
+    "cryptography>=45.0,<47.0",
+
+    # =========================
+    # ⚡ PERFORMANCE
+    # =========================
+    "orjson>=3.10,<4.0",
+
+    # =========================
+    # 🤖 TELEGRAM / TRANSPORT
+    # =========================
+    "aiogram>=3.6,<4.0",
+
+    # =========================
+    # 🌐 TOOLS (HTTP fallback only via httpx)
+    # =========================
+
+    # =========================
+    # 🧪 DEV
+    # =========================
+    "pytest>=8.4,<9.0",
+    "pytest-asyncio>=0.24,<1.0",
+    "ruff>=0.9,<1.0"
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
