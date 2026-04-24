@@ -45,7 +45,6 @@ COPY external ./external
 COPY security ./security
 COPY observability ./observability
 COPY notifications ./notifications
-COPY infra ./infra
 
 # =========================
 # 📦 INSTALL (DETERMINISTIC BUILD)
