@@ -5,67 +5,35 @@ description = "Modular AI orchestration platform"
 requires-python = ">=3.11,<3.12"
 
 dependencies = [
-
-    # =========================
-    # 🌐 RUNTIME
-    # =========================
     "fastapi>=0.130,<0.136",
     "uvicorn[standard]>=0.43,<0.45",
-
-    # =========================
-    # 🤖 LLM LAYER
-    # =========================
     "groq>=1.1,<2.0",
     "supabase>=2.8,<3.0",
-
-    # =========================
-    # 🧠 INFRA / NETWORK
-    # =========================
     "httpx[http2]>=0.28,<0.30",
     "tenacity>=9.1,<10.0",
     "redis>=5.0,<6.0",
     "anyio>=4.4,<5.0",
-
-    # =========================
-    # 🧠 CORE
-    # =========================
     "pydantic>=2.13,<3.0",
     "pydantic-settings>=2.3,<3.0",
     "typing-extensions>=4.14,<5.0",
-
-    # =========================
-    # 📊 OBSERVABILITY
-    # =========================
     "structlog>=25.0,<26.0",
     "python-json-logger>=2.0,<3.0",
-
-    # =========================
-    # 🔐 SECURITY
-    # =========================
     "cryptography>=45.0,<47.0",
-
-    # =========================
-    # ⚡ PERFORMANCE
-    # =========================
     "orjson>=3.10,<4.0",
-
-    # =========================
-    # 🤖 TELEGRAM / TRANSPORT
-    # =========================
     "aiogram>=3.6,<4.0",
+    "python-dotenv>=1.1,<2.0"
+]
 
-    # =========================
-    # 🧪 ENV LOADING
-    # =========================
-    "python-dotenv>=1.1,<2.0",
-
-    # =========================
-    # 🧪 DEV TOOLS
-    # =========================
+[project.optional-dependencies]
+dev = [
     "pytest>=8.4,<9.0",
     "pytest-asyncio>=0.24,<1.0",
     "ruff>=0.9,<1.0"
 ]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [tool.ruff]
 line-length = 100
