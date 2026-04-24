@@ -26,7 +26,7 @@ RUN apt-get update && apt-get install -y \
 RUN useradd -m -u 10001 appuser
 
 # =========================
-# 📦 DEPENDENCY LAYER (CACHE OPTIMIZED)
+# 📦 DEPENDENCY LAYER
 # =========================
 COPY pyproject.toml ./
 
@@ -38,18 +38,13 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
 # =========================
 COPY --chown=appuser:appuser . .
 
-# =========================
-# 🔐 SECURITY ISOLATION
-# =========================
 USER appuser
 
 # =========================
 # 🚀 PRODUCTION SERVER (RAILWAY SAFE)
 # =========================
-CMD ["sh", "-c", "uvicorn app.main:app \
-    --host 0.0.0.0 \
-    --port ${PORT:-8000} \
-    --workers 1 \
-    --timeout-keep-alive 30 \
-    --loop uvloop \
-    --http httptools"]
+CMD ["uvicorn", "app.main:app",
+     "--host", "0.0.0.0",
+     "--port", "8000",
+     "--workers", "1",
+     "--timeout-keep-alive", "30"]
