@@ -19,8 +19,11 @@ jobs:
       - name: Upgrade pip
         run: pip install --upgrade pip
 
-      - name: Install project (pyproject.toml)
+      - name: Install project (pyproject)
         run: pip install .
 
-      - name: Run import test
+      - name: Import sanity check
         run: python -c "import app.main"
+
+      - name: Run ruff (lint check)
+        run: pip install ruff && ruff check .
