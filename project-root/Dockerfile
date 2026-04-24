@@ -44,7 +44,6 @@ COPY payments ./payments
 COPY external ./external
 COPY security ./security
 COPY observability ./observability
-COPY notifications ./notifications
 
 # =========================
 # 📦 INSTALL (DETERMINISTIC BUILD)
