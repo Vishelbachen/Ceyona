@@ -16,10 +16,8 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install dependencies (production parity)
-        run: |
-          pip install --upgrade pip setuptools wheel
-          pip install .
+      - name: Install deps
+        run: pip install -r requirements.txt
 
-      - name: Run import test
+      - name: Run basic import test
         run: python -c "import app.main"
