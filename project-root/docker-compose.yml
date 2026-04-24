@@ -2,6 +2,9 @@ version: "3.9"
 
 services:
 
+  # =========================
+  # 🧠 AI CORE
+  # =========================
   app:
     build:
       context: .
@@ -19,7 +22,7 @@ services:
 
     depends_on:
       redis:
-        condition: service_started
+        condition: service_healthy
 
     environment:
       - PYTHONUNBUFFERED=1
@@ -29,10 +32,14 @@ services:
 
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
+  # =========================
+  # ⚡ REDIS CACHE + QUEUE
+  # =========================
   redis:
     image: redis:7-alpine
 
@@ -54,7 +61,7 @@ services:
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
-      timeout: 5s
+      timeout: 3s
       retries: 5
 
 networks:
