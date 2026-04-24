@@ -17,8 +17,10 @@ dependencies = [
     "tenacity>=9.1,<10.0",
     "anyio>=4.4,<5.0",
 
-    "pydantic>=2.7,<2.11",
-    "pydantic-settings>=2.7,<2.11",
+    # ✔ FIXED VERSION CONSTRAINT
+    "pydantic>=2.8,<2.11",
+    "pydantic-settings>=2.3,<3.0",
+
     "typing-extensions>=4.14,<5.0",
 
     "structlog>=25.0,<26.0",
@@ -27,11 +29,10 @@ dependencies = [
     "cryptography>=45.0,<47.0",
     "orjson>=3.10,<4.0",
 
-    "aiogram>=3.6,<4.0",
+    "aiogram>=3.6,<3.13",
 
     "python-dotenv>=1.1,<2.0",
 
-    # OBSERVABILITY (added for production correctness)
     "opentelemetry-api>=1.26,<2.0",
     "opentelemetry-sdk>=1.26,<2.0",
     "opentelemetry-exporter-otlp>=1.26,<2.0"
