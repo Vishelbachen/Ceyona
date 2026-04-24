@@ -1,12 +1,14 @@
 def estimate_cost(intent: dict) -> float:
 
-    if intent["type"] == "simple":
+    intent_type = intent.get("type", "default")
+
+    if intent_type == "simple":
         return 0.0
 
-    if intent["type"] == "reasoning":
+    if intent_type == "reasoning":
         return 0.001
 
-    if intent["type"] == "multi_agent":
+    if intent_type == "multi_agent":
         return 0.005
 
     return 0.01
