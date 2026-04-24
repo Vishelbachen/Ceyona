@@ -8,9 +8,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONFAULTHANDLER=1 \
     PYTHONHASHSEED=random \
     PYTHONPATH=/app \
-    PORT=8000 \
-    UVICORN_LOOP=uvloop \
-    UVICORN_HTTP=httptools
+    PORT=8000
 
 WORKDIR /app
 
@@ -45,10 +43,8 @@ USER appuser
 # =========================
 # 🚀 RAILWAY PRODUCTION SERVER
 # =========================
-CMD ["sh", "-c", "uvicorn app.main:app \
-    --host 0.0.0.0 \
-    --port ${PORT:-8000} \
-    --workers 1 \
-    --timeout-keep-alive 30 \
-    --loop uvloop \
-    --http httptools"]
+CMD ["uvicorn", "app.main:app",
+     "--host", "0.0.0.0",
+     "--port", "8000",
+     "--workers", "1",
+     "--timeout-keep-alive", "30"]
