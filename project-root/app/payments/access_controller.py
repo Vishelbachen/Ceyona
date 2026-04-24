@@ -1,9 +1,9 @@
 from payments.ton_client import get_balance
-from payments.pricing import estimate_cost
+from payments.pricing_engine import estimate_cost
 
-def check_access(user_id: str, intent: dict) -> bool:
+async def check_access(user_wallet: str, intent: dict):
 
-    balance = get_balance(user_id)
+    balance = await get_balance(user_wallet)
     cost = estimate_cost(intent)
 
     return balance >= cost
