@@ -6,32 +6,22 @@ async def handle_update(update: dict):
     from agents.consensus import run_agents
     from llm.router import route_llm
 
-    # 🔥 SAFE EXTRACT (CRITICAL FIX)
-    message_obj = update.get("message") or update.get("edited_message")
-
-    if not message_obj:
-        return None
-
-    message = message_obj.get("text")
-    if not message:
-        return None
-
-    chat_id = message_obj["chat"]["id"]
+    message = update["message"]["text"]
 
     intent = build_intent(message)
 
     decision = evaluate(intent)
 
     if decision == "DENY":
-        return {"chat_id": chat_id, "text": "⛔ denied"}
+        return {"status": "denied"}
 
-    wallet = message_obj["from"]["id"]
+    wallet = update["message"]["from"]["id"]
 
     if not await check_access(wallet, intent):
-        return {"chat_id": chat_id, "text": "💳 payment required"}
+        return {"status": "payment_required"}
 
     agent_output = await run_agents(intent)
 
     response = await route_llm(agent_output)
 
-    return {"chat_id": chat_id, "text": str(response)}
+    return {"response": response}
