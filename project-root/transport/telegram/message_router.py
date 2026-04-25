@@ -1,27 +1,38 @@
 async def handle_update(update: dict):
 
-    from core.cognition.intent_engine import build_intent
-    from core.kernel.execution_policy_kernel import evaluate
-    from payments.access_controller import check_access
-    from agents.consensus import run_agents
-    from llm.router import route_llm
+    try:
+        from core.cognition.intent_engine import build_intent
+        from core.kernel.execution_policy_kernel import evaluate
+        from payments.access_controller import check_access
+        from agents.consensus import run_agents
+        from llm.router import route_llm
 
-    message = update["message"]["text"]
+        message = (
+            update.get("message", {}).get("text")
+            or update.get("edited_message", {}).get("text")
+        )
 
-    intent = build_intent(message)
+        if not message:
+            return {"response": "ignored"}
 
-    decision = evaluate(intent)
+        intent = build_intent(message)
 
-    if decision == "DENY":
-        return {"status": "denied"}
+        decision = evaluate(intent)
 
-    wallet = update["message"]["from"]["id"]
+        if decision == "DENY":
+            return {"response": "denied"}
 
-    if not await check_access(wallet, intent):
-        return {"status": "payment_required"}
+        wallet = update.get("message", {}).get("from", {}).get("id", "unknown")
 
-    agent_output = await run_agents(intent)
+        if not await check_access(wallet, intent):
+            return {"response": "payment_required"}
 
-    response = await route_llm(agent_output)
+        agent_output = await run_agents(intent)
 
-    return {"response": response}
+        response = await route_llm(agent_output)
+
+        return {"response": response}
+
+    except Exception as e:
+        print("HANDLE_UPDATE ERROR:", e)
+        return {"response": "error"}
