@@ -4,7 +4,7 @@ TON_API = "https://toncenter.com/api/v2"
 
 async def get_balance(wallet: str):
 
-    async with httpx.AsyncClient(timeout=10) as client:
+    async with httpx.AsyncClient(timeout=5) as client:
         r = await client.get(
             f"{TON_API}/getAddressBalance",
             params={"address": wallet}
