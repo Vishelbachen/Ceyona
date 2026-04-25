@@ -8,21 +8,32 @@ async def handle_update(update: dict):
     from llm.router import route_llm
 
     message = update["message"]["text"]
+    chat_id = update["message"]["chat"]["id"]
 
     intent = build_intent(message)
 
     decision = evaluate(intent)
 
+    # ❗ вместо return → просто текст-ответ внутри системы
     if decision == "DENY":
-        return {"status": "denied"}
+        return {
+            "chat_id": chat_id,
+            "text": "⛔ denied"
+        }
 
     wallet = update["message"]["from"]["id"]
 
     if not await check_access(wallet, intent):
-        return {"status": "payment_required"}
+        return {
+            "chat_id": chat_id,
+            "text": "💳 payment required"
+        }
 
     agent_output = await run_agents(intent)
 
     response = await route_llm(agent_output)
 
-    return {"response": response}
+    return {
+        "chat_id": chat_id,
+        "text": str(response)
+    }
