@@ -1,12 +1,12 @@
-from core.cognition.intent_engine import build_intent
-from core.kernel.execution_policy_kernel import evaluate
-from payments.access_controller import check_access
-from agents.consensus import run_agents
-from llm.router import route_llm
-
 async def handle_update(update: dict):
 
-    message = update["message"]["text"]
+    message = update.get("message", {}).get("text")
+    if not message:
+        return {"status": "ignored"}
+
+    wallet = update.get("message", {}).get("from", {}).get("id")
+    if not wallet:
+        return {"status": "no_user"}
 
     intent = build_intent(message)
 
@@ -15,13 +15,19 @@ async def handle_update(update: dict):
     if decision == "DENY":
         return {"status": "denied"}
 
-    wallet = update["message"]["from"]["id"]
+    try:
+        access = await check_access(wallet, intent)
+    except Exception:
+        return {"status": "access_error"}
 
-    if not await check_access(wallet, intent):
+    if not access:
         return {"status": "payment_required"}
 
     agent_output = await run_agents(intent)
 
-    response = await route_llm(agent_output)
+    try:
+        response = await route_llm(agent_output)
+    except Exception:
+        return {"status": "llm_error"}
 
     return {"response": response}
