@@ -1,3 +1,4 @@
+from fastapi.responses import JSONResponse
 import redis
 from app.settings import settings
 
@@ -15,6 +16,6 @@ def init_rate_limiter(app):
         r.expire(key, 60)
 
         if count > 60:
-            return {"error": "rate_limited"}
+            return JSONResponse({"error": "rate_limited"}, status_code=429)
 
         return await call_next(request)
