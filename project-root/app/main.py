@@ -1,16 +1,18 @@
 from fastapi import FastAPI
-from app.bootstrap import create_app
+
+def create_app() -> FastAPI:
+    app = FastAPI(title="v4.0 AI Execution System")
+
+    # lazy imports (IMPORTANT FIX)
+    from transport.telegram.webhook import router as telegram_router
+    from security.rate_limiter import init_rate_limiter
+
+    init_rate_limiter(app)
+    app.include_router(telegram_router, prefix="/telegram")
+
+    return app
 
 app = create_app()
-
-
-@app.on_event("startup")
-async def startup_event():
-    from observability.tracing import setup_tracing
-    from observability.sentry import init_sentry
-
-    init_sentry()
-    setup_tracing()
 
 
 @app.get("/health")
