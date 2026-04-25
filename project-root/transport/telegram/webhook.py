@@ -1,15 +1,20 @@
+from fastapi import APIRouter, Request
+
+router = APIRouter()
+
+
 @router.post("/webhook")
 async def webhook(request: Request):
 
-    try:
-        update = await request.json()
+    # lazy import (CRITICAL FIX)
+    from transport.telegram.message_router import handle_update
+    from transport.telegram.middleware import telegram_security_middleware
 
-        signature = request.headers.get("X-Telegram-Signature", "")
+    update = await request.json()
 
-        if not await telegram_security_middleware(update, signature):
-            return {"error": "unauthorized"}
+    signature = request.headers.get("X-Telegram-Signature", "")
 
-        return await handle_update(update)
+    if not await telegram_security_middleware(update, signature):
+        return {"error": "unauthorized"}
 
-    except Exception as e:
-        return {"error": str(e)}
+    return await handle_update(update)
