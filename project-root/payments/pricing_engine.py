@@ -1,21 +1,17 @@
-from fastapi.responses import JSONResponse
-import redis
-from app.settings import settings
+def estimate_cost(intent: dict) -> float:
 
-r = redis.from_url(settings.REDIS_URL)
+    if not isinstance(intent, dict):
+        return 0.01
 
-def init_rate_limiter(app):
+    intent_type = intent.get("type", "default")
 
-    @app.middleware("http")
-    async def limit_requests(request, call_next):
+    if intent_type == "simple":
+        return 0.0
 
-        ip = request.client.host
-        key = f"rl:{ip}"
+    if intent_type == "reasoning":
+        return 0.001
 
-        count = r.incr(key)
-        r.expire(key, 60)
+    if intent_type == "multi_agent":
+        return 0.005
 
-        if count > 60:
-            return JSONResponse({"error": "rate_limited"}, status_code=429)
-
-        return await call_next(request)
+    return 0.01
