@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+  pull_request:
 
 jobs:
   test:
@@ -19,11 +20,13 @@ jobs:
       - name: Upgrade pip
         run: pip install --upgrade pip
 
-      - name: Install project (pyproject)
+      - name: Install dependencies
         run: pip install .
 
-      - name: Import sanity check
+      - name: Import check
         run: python -c "import app.main"
 
-      - name: Run ruff (lint check)
-        run: pip install ruff && ruff check .
+      - name: Lint (ruff)
+        run: |
+          pip install ruff
+          ruff check .
