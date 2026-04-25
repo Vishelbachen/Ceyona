@@ -1,4 +1,3 @@
-import httpx
 from payments.ton_client import get_balance
 from payments.pricing_engine import estimate_cost
 
