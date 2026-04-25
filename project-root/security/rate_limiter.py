@@ -17,10 +17,13 @@ def init_rate_limiter(app):
             r.expire(key, 60)
 
             if count > 60:
-                return JSONResponse({"error": "rate_limited"}, status_code=429)
+                return JSONResponse(
+                    {"error": "rate_limited"},
+                    status_code=429
+                )
 
         except Exception:
-            # ❗ NEVER BREAK REQUEST PIPELINE
+            # ❗ NEVER BREAK REQUEST FLOW
             pass
 
         return await call_next(request)
