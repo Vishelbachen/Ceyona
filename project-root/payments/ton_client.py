@@ -1,16 +1,18 @@
-import httpx
-from app.settings import settings
-
-TON_API = "https://toncenter.com/api/v2"
-
 async def get_balance(wallet: str):
 
-    async with httpx.AsyncClient() as client:
-        r = await client.get(
-            f"{TON_API}/getAddressBalance",
-            params={"address": wallet}
-        )
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(
+                f"{TON_API}/getAddressBalance",
+                params={"address": wallet}
+            )
 
-    data = r.json()
+        if r.status_code != 200:
+            return 0.0
 
-    return int(data["result"]) / 1e9
+        data = r.json()
+
+        return int(data.get("result", 0)) / 1e9
+
+    except Exception:
+        return 0.0
