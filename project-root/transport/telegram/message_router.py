@@ -16,7 +16,6 @@ async def handle_update(update: dict):
             return {"response": "ignored"}
 
         intent = build_intent(message)
-
         decision = evaluate(intent)
 
         if decision == "DENY":
@@ -28,7 +27,6 @@ async def handle_update(update: dict):
             return {"response": "payment_required"}
 
         agent_output = await run_agents(intent)
-
         response = await route_llm(agent_output)
 
         return {"response": response}
