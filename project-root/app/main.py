@@ -6,11 +6,14 @@ app = create_app()
 
 @app.on_event("startup")
 async def startup_event():
-    from observability.sentry import init_sentry
-    from observability.tracing import setup_tracing
+    try:
+        from observability.sentry import init_sentry
+        from observability.tracing import setup_tracing
 
-    init_sentry()
-    setup_tracing()
+        init_sentry()
+        setup_tracing()
+    except Exception:
+        pass
 
 
 @app.get("/health")
