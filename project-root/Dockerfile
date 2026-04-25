@@ -12,14 +12,16 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # =========================
-# PYTHON TOOLING
+# PYTHON TOOLCHAIN
 # =========================
 RUN pip install --upgrade pip setuptools wheel
 
 # =========================
-# DEPENDENCY LAYER (CACHED)
+# DEPENDENCIES (CACHED LAYER)
 # =========================
 COPY pyproject.toml ./
+COPY README.md ./
+
 RUN pip install .
 
 # =========================
@@ -31,8 +33,9 @@ COPY . .
 # RUNTIME CONFIG
 # =========================
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    OTEL_SERVICE_NAME=ai-platform \
-    OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+    PYTHONDONTWRITEBYTECODE=1
 
-CMD sh -c "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"
+# =========================
+# START COMMAND
+# =========================
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
