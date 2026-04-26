@@ -5,35 +5,50 @@ from typing import Dict, Literal
 
 
 # =========================
-# MODEL TIERS (COST GROUPING)
+# MODEL TIERS (PURE LLM COST GROUPS)
 # =========================
-ModelTier = Literal["fast", "general", "heavy", "retrieval", "agent"]
+ModelTier = Literal["fast", "general", "heavy"]
 
 
+# =========================
+# SUBSYSTEM FLAGS
+# =========================
+@dataclass(frozen=True)
+class SubsystemCost:
+    retrieval: float = 0.0
+    agent: float = 0.0
+
+
+# =========================
+# BASE COST PROFILE
+# =========================
 @dataclass(frozen=True)
 class CostProfile:
     """
-    Defines abstract compute cost per operation unit.
+    Pure compute cost model.
 
-    NOTE:
-    This is NOT billing.
-    This is internal cost modeling for control + limits.
+    ROLE:
+    - estimate relative system load
+    - normalize heterogeneous pipeline costs
+
+    DOES NOT:
+    - enforce billing
+    - influence routing
+    - block execution
     """
-    per_request_cost: float
+
+    base_cost: float
     llm_multiplier: float = 1.0
-    retrieval_cost: float = 0.0
-    agent_cost: float = 0.0
+    subsystem: SubsystemCost = SubsystemCost()
 
 
 # =========================
-# DEFAULT COST TABLE
+# COST TABLE (CLEAN SEPARATION)
 # =========================
 COST_TABLE: Dict[ModelTier, CostProfile] = {
-    "fast": CostProfile(per_request_cost=1.0, llm_multiplier=0.5),
-    "general": CostProfile(per_request_cost=2.0, llm_multiplier=1.0),
-    "heavy": CostProfile(per_request_cost=5.0, llm_multiplier=2.5),
-    "retrieval": CostProfile(per_request_cost=1.5, retrieval_cost=1.0),
-    "agent": CostProfile(per_request_cost=3.0, agent_cost=2.0),
+    "fast": CostProfile(base_cost=1.0, llm_multiplier=0.5),
+    "general": CostProfile(base_cost=2.0, llm_multiplier=1.0),
+    "heavy": CostProfile(base_cost=5.0, llm_multiplier=2.5),
 }
 
 
@@ -43,16 +58,19 @@ COST_TABLE: Dict[ModelTier, CostProfile] = {
 class PricingEngine:
     """
     ROLE:
-    - estimate compute cost BEFORE execution
-    - normalize heterogeneous pipeline costs into unified units
-    - support AccessController + future optimization layer
+    - deterministic cost estimation
+    - unified compute abstraction layer
+    - pre-execution cost projection
 
     DOES NOT:
     - enforce limits
-    - block requests
     - make routing decisions
+    - influence EPK or agents
     """
 
+    # =========================
+    # SINGLE REQUEST COST
+    # =========================
     def estimate_request_cost(
         self,
         tier: ModelTier,
@@ -64,22 +82,20 @@ class PricingEngine:
 
         profile = COST_TABLE[tier]
 
-        cost = profile.per_request_cost
+        # base LLM cost
+        cost = profile.base_cost * profile.llm_multiplier * llm_steps
 
-        # LLM scaling
-        cost *= profile.llm_multiplier * llm_steps
-
-        # optional subsystems
+        # subsystem costs (additive, deterministic)
         if use_retrieval:
-            cost += profile.retrieval_cost
+            cost += profile.subsystem.retrieval
 
         if use_agents:
-            cost += profile.agent_cost
+            cost += profile.subsystem.agent
 
         return cost
 
     # =========================
-    # BATCH ESTIMATION
+    # BATCH COST
     # =========================
     def estimate_batch_cost(
         self,
@@ -87,4 +103,5 @@ class PricingEngine:
         batch_size: int,
         **kwargs,
     ) -> float:
+
         return self.estimate_request_cost(tier, **kwargs) * batch_size
