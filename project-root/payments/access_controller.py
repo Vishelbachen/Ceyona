@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Literal
+from typing import Dict, Optional, Literal, Protocol
 
 
 # =========================
@@ -26,7 +26,18 @@ PLANS: Dict[PlanType, PlanLimits] = {
 
 
 # =========================
-# USAGE STATE (IN-MEMORY CACHE)
+# OPTIONAL DEPENDENCY PORTS (DI READY)
+# =========================
+class PricingPort(Protocol):
+    def estimate_request_cost(self, *args, **kwargs) -> float: ...
+
+
+class UsageSnapshotPort(Protocol):
+    def record(self, user_id: str, cost: float) -> None: ...
+
+
+# =========================
+# USAGE STATE
 # =========================
 @dataclass
 class UsageState:
@@ -49,28 +60,37 @@ class AccessDecision:
 
 
 # =========================
-# ACCESS CONTROLLER (BILLING POLICY ENGINE)
+# ACCESS CONTROLLER
 # =========================
 class AccessController:
     """
-    ROLE:
-    - enforce subscription-based limits
-    - decide ALLOW / DENY based on plan rules
+    BILLING POLICY ENGINE
 
-    DOES NOT:
-    - track raw usage metrics (UsageMeter does that)
-    - handle burst protection (RateLimiter)
-    - compute pricing (PricingEngine)
+    RESPONSIBILITY:
+    - enforce subscription limits
+    - enforce deterministic quota rules
+
+    OPTIONAL INPUTS (future-safe):
+    - PricingEngine (cost awareness)
+    - UsageMeter (observability sync)
     """
 
     DAY_SECONDS = 86400
     MONTH_SECONDS = 2592000
 
-    def __init__(self):
+    def __init__(
+        self,
+        pricing: Optional[PricingPort] = None,
+        usage_meter: Optional[UsageSnapshotPort] = None,
+    ):
         self._usage: Dict[str, UsageState] = {}
 
+        # optional DI (future extensibility)
+        self._pricing = pricing
+        self._usage_meter = usage_meter
+
     # =========================
-    # INTERNAL
+    # INTERNAL STATE
     # =========================
     def _state(self, user_id: str) -> UsageState:
         if user_id not in self._usage:
@@ -124,15 +144,24 @@ class AccessController:
         )
 
     # =========================
-    # COMMIT (ONLY AFTER APPROVED EXECUTION)
+    # COMMIT
     # =========================
-    def commit(self, user_id: str) -> None:
+    def commit(
+        self,
+        user_id: str,
+        *,
+        cost: Optional[float] = None,
+    ) -> None:
 
         state = self._state(user_id)
         self._reset(state)
 
         state.daily_count += 1
         state.monthly_count += 1
+
+        # optional hooks (future observability + pricing alignment)
+        if self._usage_meter and cost is not None:
+            self._usage_meter.record(user_id, cost)
 
     # =========================
     # ADMIN RESET
