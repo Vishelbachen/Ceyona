@@ -1,93 +1,78 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Dict, Optional
-
-from llm.model_router import route_llm
-from cognition.intent_engine import IntentContext
+from typing import Dict, Any, Optional
 
 
-@dataclass
-class DeepAgentInput:
-    prompt: str
-    context: Optional[Dict[str, Any]] = None
-    system_instructions: Optional[str] = None
-
-
-@dataclass
-class DeepAgentOutput:
-    content: str
-    model_used: str
-    metadata: Dict[str, Any]
-
-
+# =========================
+# DEEP AGENT
+# =========================
 class DeepAgent:
     """
-    Deep reasoning agent (HEAVY / GENERAL LLM layer consumer)
-
     ROLE:
-    - complex reasoning
-    - multi-step inference
-    - structured synthesis
-    - long-context processing
+    - multi-step reasoning execution
+    - structured decomposition of complex tasks
+    - coordination with heavy LLM models
 
-    DOES NOT:
-    - decide routing
-    - access memory directly
-    - call retrieval
-    - modify system state
+    STRICT RULES:
+    - no routing decisions
+    - no access control
+    - no pricing logic
+    - no system orchestration
     """
 
-    def __init__(self):
-        pass
+    def __init__(self, llm_client):
+        self._llm = llm_client
 
+    # =========================
+    # MAIN EXECUTION PIPELINE
+    # =========================
     async def run(
         self,
-        input_data: DeepAgentInput,
-        intent: Optional[IntentContext] = None
-    ) -> DeepAgentOutput:
+        prompt: str,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Deep reasoning execution:
+        - decomposition
+        - structured inference
+        - synthesis
+        """
 
-        # Build structured prompt (no logic here, only formatting)
-        messages = self._build_messages(input_data, intent)
-
-        # Route to LLM layer (ONLY authority layer here)
-        result = await route_llm(
-            mode="deep",
-            messages=messages
+        # STEP 1: reasoning expansion
+        expanded = await self._llm.generate(
+            model="general",
+            prompt=self._build_reasoning_prompt(prompt),
+            context=context or {},
         )
 
-        return DeepAgentOutput(
-            content=result["content"],
-            model_used=result.get("model", "unknown"),
-            metadata={
-                "agent": "deep_agent",
-                "intent_type": intent.type if intent else None
-            }
+        # STEP 2: refinement pass (heavy model if needed)
+        refined = await self._llm.generate(
+            model="heavy",
+            prompt=self._build_refinement_prompt(expanded),
+            context=context or {},
         )
 
-    def _build_messages(
-        self,
-        input_data: DeepAgentInput,
-        intent: Optional[IntentContext]
-    ):
-        messages = []
+        return {
+            "agent": "deep",
+            "output": refined,
+            "raw_reasoning": expanded,
+            "confidence": 0.85,
+            "mode": "multi_step_reasoning",
+        }
 
-        if input_data.system_instructions:
-            messages.append({
-                "role": "system",
-                "content": input_data.system_instructions
-            })
+    # =========================
+    # INTERNAL PROMPTING
+    # =========================
+    def _build_reasoning_prompt(self, prompt: str) -> str:
+        return (
+            "Break down the following task into structured reasoning steps:\n\n"
+            f"{prompt}\n\n"
+            "Return a structured decomposition."
+        )
 
-        # Intent provides structure, NOT decisions
-        if intent:
-            messages.append({
-                "role": "system",
-                "content": f"Intent context: {intent.type} | complexity={intent.complexity}"
-            })
-
-        messages.append({
-            "role": "user",
-            "content": input_data.prompt
-        })
-
-        return messages
+    def _build_refinement_prompt(self, reasoning: str) -> str:
+        return (
+            "Refine the following reasoning into a final high-quality answer:\n\n"
+            f"{reasoning}\n\n"
+            "Return only the final structured response."
+        )
