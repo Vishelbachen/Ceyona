@@ -1,14 +1,7 @@
 from __future__ import annotations
 
-import base64
 from typing import Union
-
 from cryptography.fernet import Fernet
-
-from infra.config_loader import get_settings
-
-
-settings = get_settings()
 
 
 # =========================
@@ -20,62 +13,41 @@ class EncryptionService:
 
     ROLE:
     - encrypt sensitive payloads
-    - decrypt previously encrypted payloads
-    - ensure transport/storage safety
+    - decrypt payloads
+    - protect storage & transport data
 
     DOES NOT:
     - interpret data
+    - decide encryption policy
     - modify business logic
-    - decide what should be encrypted
     """
 
-    def __init__(self):
-        self._fernet = Fernet(self._load_key())
-
-    # =========================
-    # KEY HANDLING
-    # =========================
-    def _load_key(self) -> bytes:
+    def __init__(self, encryption_key: str):
         """
-        ENCRYPTION_KEY must be base64-encoded 32-byte key.
+        encryption_key must be base64-encoded Fernet key
         """
-
-        key = settings.ENCRYPTION_KEY
-
-        if isinstance(key, str):
-            key = key.encode()
-
-        return key
+        self._fernet = Fernet(encryption_key.encode())
 
     # =========================
     # ENCRYPT
     # =========================
     def encrypt(self, data: Union[str, bytes]) -> str:
-
         if isinstance(data, str):
             data = data.encode("utf-8")
 
         encrypted = self._fernet.encrypt(data)
 
-        return base64.urlsafe_b64encode(encrypted).decode("utf-8")
+        return encrypted.decode("utf-8")
 
     # =========================
     # DECRYPT
     # =========================
     def decrypt(self, token: str) -> str:
-
-        decoded = base64.urlsafe_b64decode(token.encode("utf-8"))
-
-        decrypted = self._fernet.decrypt(decoded)
-
+        decrypted = self._fernet.decrypt(token.encode("utf-8"))
         return decrypted.decode("utf-8")
 
     # =========================
-    # SAFE ROUNDTRIP CHECK
+    # ROUNDTRIP TEST
     # =========================
     def roundtrip(self, data: str) -> str:
-        """
-        Utility for validation/testing only.
-        """
-
         return self.decrypt(self.encrypt(data))
