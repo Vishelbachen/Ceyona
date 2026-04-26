@@ -1,103 +1,105 @@
-from dataclasses import dataclass
-from typing import Dict, Any, Literal
+from __future__ import annotations
+
+from typing import Dict, Any, Literal, Optional
 
 
+# =========================
+# INTENT TYPES
+# =========================
 IntentType = Literal[
     "chat",
-    "question",
-    "task",
+    "reasoning",
+    "creative",
     "code",
-    "retrieval",
+    "search",
     "system",
+    "unknown",
 ]
 
 
-@dataclass
-class IntentResult:
-    intent: IntentType
-    confidence: float
-    metadata: Dict[str, Any]
-
-
 # =========================
-# 🧠 INTENT ENGINE
+# INTENT ENGINE
 # =========================
 class IntentEngine:
     """
-    Stateless intent classification layer.
+    ROLE:
+    - classify user intent from input
+    - provide structured signal for orchestrator
+    - NOT responsible for execution decisions
 
-    RULES:
-    - NO memory access
-    - NO LLM routing
-    - NO business logic
-    - ONLY classification + structuring
+    STRICT RULES:
+    - no agent selection authority
+    - no LLM routing decisions
+    - no business logic
     """
 
-    def __init__(self):
-        pass
+    def __init__(self, llm_classifier):
+        self._llm = llm_classifier
 
     # =========================
-    # 🚀 MAIN ENTRY
+    # MAIN CLASSIFICATION
     # =========================
-    def classify(self, message: str, context: Dict[str, Any] | None = None) -> IntentResult:
+    async def classify(
+        self,
+        text: str,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
 
-        text = message.lower().strip()
-
-        # =========================
-        # 🧩 SYSTEM INTENT
-        # =========================
-        if any(cmd in text for cmd in ["/start", "/help", "/reset"]):
-            return IntentResult(
-                intent="system",
-                confidence=0.99,
-                metadata={"type": "command"},
-            )
-
-        # =========================
-        # 💻 CODE INTENT
-        # =========================
-        if "```" in text or "def " in text or "class " in text:
-            return IntentResult(
-                intent="code",
-                confidence=0.85,
-                metadata={"type": "code_block"},
-            )
-
-        # =========================
-        # 🔍 RETRIEVAL INTENT
-        # =========================
-        if any(word in text for word in ["find", "search", "look up", "what is", "who is"]):
-            return IntentResult(
-                intent="retrieval",
-                confidence=0.75,
-                metadata={"type": "knowledge_query"},
-            )
-
-        # =========================
-        # ❓ QUESTION INTENT
-        # =========================
-        if "?" in text:
-            return IntentResult(
-                intent="question",
-                confidence=0.7,
-                metadata={"type": "interrogative"},
-            )
-
-        # =========================
-        # 🧩 TASK INTENT
-        # =========================
-        if any(word in text for word in ["create", "build", "make", "generate", "write"]):
-            return IntentResult(
-                intent="task",
-                confidence=0.7,
-                metadata={"type": "action_request"},
-            )
-
-        # =========================
-        # 💬 DEFAULT CHAT
-        # =========================
-        return IntentResult(
-            intent="chat",
-            confidence=0.6,
-            metadata={"type": "freeform"},
+        raw = await self._llm.generate(
+            model="general",
+            prompt=self._build_prompt(text),
+            context=context or {},
         )
+
+        intent = self._parse_intent(raw)
+
+        return {
+            "intent": intent,
+            "raw": raw,
+            "confidence": self._estimate_confidence(raw),
+        }
+
+    # =========================
+    # PROMPT BUILDER
+    # =========================
+    def _build_prompt(self, text: str) -> str:
+        return (
+            "Classify the user intent into one of:\n"
+            "chat, reasoning, creative, code, search, system, unknown\n\n"
+            f"Input:\n{text}\n\n"
+            "Return only the intent label."
+        )
+
+    # =========================
+    # PARSING
+    # =========================
+    def _parse_intent(self, raw: str) -> IntentType:
+        normalized = raw.strip().lower()
+
+        for intent in [
+            "chat",
+            "reasoning",
+            "creative",
+            "code",
+            "search",
+            "system",
+        ]:
+            if intent in normalized:
+                return intent  # type: ignore
+
+        return "unknown"
+
+    # =========================
+    # CONFIDENCE ESTIMATION
+    # =========================
+    def _estimate_confidence(self, raw: str) -> float:
+        """
+        Simple heuristic:
+        longer / cleaner response → higher confidence
+        """
+
+        if not raw:
+            return 0.0
+
+        score = len(raw.strip()) / 50.0
+        return max(0.1, min(score, 1.0))
