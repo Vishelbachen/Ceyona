@@ -1,51 +1,58 @@
-from fastapi import APIRouter, Request
-import os
-import httpx
+from __future__ import annotations
 
+from fastapi import APIRouter, Request, HTTPException
+
+from transport.telegram.update_handler import UpdateHandler
+from security.origin_guard import OriginGuard
+
+
+# =========================
+# ROUTER
+# =========================
 router = APIRouter()
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
+
+# =========================
+# DEPENDENCIES (INJECTED VIA BOOTSTRAP)
+# =========================
+update_handler = UpdateHandler()
+origin_guard = OriginGuard()
 
 
-async def send_message(chat_id: int, text: str):
-    async with httpx.AsyncClient(timeout=10) as client:
-        await client.post(
-            f"{TELEGRAM_API}/sendMessage",
-            json={
-                "chat_id": chat_id,
-                "text": text
-            }
+# =========================
+# TELEGRAM WEBHOOK ENTRYPOINT
+# =========================
+@router.post("/telegram/webhook")
+async def telegram_webhook(request: Request):
+    """
+    ROLE:
+    - receive raw Telegram updates
+    - validate origin (light security gate)
+    - forward payload to update handler
+
+    STRICT RULES:
+    - no business logic
+    - no payments logic
+    - no LLM calls
+    - no decision making
+    """
+
+    origin = request.headers.get("origin")
+
+    origin_check = origin_guard.validate(origin)
+
+    if not origin_check.is_allowed:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Forbidden origin: {origin_check.reason}",
         )
 
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
-@router.post("/webhook")
-async def webhook(request: Request):
+    # forward to domain-ingestion layer
+    await update_handler.handle(payload)
 
-    # lazy imports (NO IMPORT TIME SIDE EFFECTS)
-    from transport.telegram.message_router import handle_update
-    from transport.telegram.middleware import telegram_security_middleware
-
-    update = await request.json()
-
-    signature = request.headers.get("X-Telegram-Signature", "")
-
-    if not await telegram_security_middleware(update, signature):
-        return {"ok": True}
-
-    result = await handle_update(update)
-
-    chat_id = update["message"]["chat"]["id"]
-
-    if isinstance(result, dict):
-
-        if "response" in result:
-            await send_message(chat_id, str(result["response"]))
-
-        elif result.get("status") == "denied":
-            await send_message(chat_id, "⛔ denied")
-
-        elif result.get("status") == "payment_required":
-            await send_message(chat_id, "💳 payment required")
-
-    return {"ok": True}
+    return {"status": "ok"}
