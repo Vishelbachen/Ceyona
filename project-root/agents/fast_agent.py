@@ -1,70 +1,52 @@
-from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from __future__ import annotations
 
-from llm.llm_router import LLMRouter
-
-
-@dataclass
-class FastAgentInput:
-    prompt: str
-    context: Optional[Dict[str, Any]] = None
+from typing import Dict, Any, Optional
 
 
-@dataclass
-class FastAgentOutput:
-    content: str
-    model_used: str
-    confidence: float
-    metadata: Dict[str, Any]
-
-
+# =========================
+# FAST AGENT
+# =========================
 class FastAgent:
     """
-    FAST AGENT:
-    - low latency inference
-    - shallow reasoning only
-    - no planning / no decomposition
+    ROLE:
+    - ultra-low latency response generation
+    - simple reasoning / structural transformation
+    - preprocessing or lightweight answer synthesis
+
+    STRICT RULES:
+    - no access control logic
+    - no pricing logic
+    - no memory decisions
+    - no orchestration
+    - no multi-step reasoning control
     """
 
-    def __init__(self, llm_router: LLMRouter):
-        self.llm_router = llm_router
-        self.role = "fast"
+    def __init__(self, llm_client):
+        self._llm = llm_client
 
-    async def run(self, input_data: FastAgentInput) -> FastAgentOutput:
+    # =========================
+    # MAIN EXECUTION
+    # =========================
+    async def run(
+        self,
+        prompt: str,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+
         """
-        Execute fast inference path.
+        Fast-path execution:
+        minimal reasoning depth, optimized for latency.
         """
 
-        response = await self.llm_router.route(
-            role="fast",
-            prompt=input_data.prompt,
-            context=input_data.context or {},
+        response = await self._llm.generate(
+            model="fast",
+            prompt=prompt,
+            context=context or {},
         )
 
-        return FastAgentOutput(
-            content=response.content,
-            model_used=response.model,
-            confidence=self._estimate_confidence(response),
-            metadata={
-                "agent": "fast",
-                "latency_class": "low",
-            },
-        )
-
-    def _estimate_confidence(self, response: Any) -> float:
-        """
-        Lightweight heuristic confidence estimator.
-        No external dependencies.
-        """
-
-        if not response or not getattr(response, "content", None):
-            return 0.0
-
-        length = len(response.content)
-
-        # simple heuristic (fast-path safe)
-        if length < 20:
-            return 0.45
-        if length < 200:
-            return 0.7
-        return 0.85
+        return {
+            "agent": "fast",
+            "output": response,
+            "confidence": 0.6,
+            "mode": "low_latency",
+        }
