@@ -1,130 +1,71 @@
-from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from __future__ import annotations
 
-
-@dataclass(frozen=True)
-class SynthesizerInput:
-    """
-    Fully prepared data from upstream layers.
-    NO raw reasoning here.
-    """
-    user_message: str
-    intent: str
-    llm_output: Optional[Any]
-    context: Dict[str, Any]
-    reasoning: Dict[str, Any]
-    mode: str = "normal"
-
-
-@dataclass(frozen=True)
-class SynthesizedResponse:
-    """
-    Final structured response container.
-    """
-    text: str
-    metadata: Dict[str, Any]
+from typing import Dict, Any, List, Optional
 
 
 # =========================
-# 🧠 RESPONSE SYNTHESIZER
+# RESPONSE SYNTHESIZER
 # =========================
 class ResponseSynthesizer:
     """
-    FINAL assembly layer.
+    ROLE:
+    - merge outputs from agents + consensus engine
+    - format final response structure
+    - normalize output for transport layer
 
-    RULES:
-    - NO LLM calls
-    - NO reasoning
-    - NO retrieval
-    - NO decisions
-    - ONLY formatting + merging outputs
+    STRICT RULES:
+    - no reasoning
+    - no agent selection
+    - no orchestration decisions
+    - no LLM routing
     """
 
-    def synthesize(self, input: SynthesizerInput) -> SynthesizedResponse:
+    # =========================
+    # MAIN ENTRYPOINT
+    # =========================
+    def synthesize(
+        self,
+        consensus_result: Dict[str, Any],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
 
-        # =========================
-        # 1. EXTRACT CORE DATA
-        # =========================
-        llm_output = input.llm_output
-        intent = input.intent
-        context = input.context
-        reasoning = input.reasoning
-
-        # =========================
-        # 2. BASE TEXT SELECTION
-        # =========================
-        if llm_output is None:
-            base_text = "No response generated."
-        else:
-            base_text = self._extract_text(llm_output)
-
-        # =========================
-        # 3. MODE ADJUSTMENTS
-        # =========================
-        if input.mode == "safe_minimal":
-            base_text = self._safe_trim(base_text)
-
-        if intent == "system":
-            base_text = self._system_format(base_text)
-
-        # =========================
-        # 4. OPTIONAL CONTEXT INJECTION
-        # =========================
-        if context.get("retrieval"):
-            base_text = self._inject_retrieval_hint(base_text, context)
-
-        # =========================
-        # 5. METADATA BUILD
-        # =========================
-        metadata = {
-            "intent": intent,
-            "mode": input.mode,
-            "has_llm_output": llm_output is not None,
-            "retrieval_used": bool(context.get("retrieval")),
-            "reasoning_confidence": reasoning.get("confidence"),
+        return {
+            "response": self._extract_response(consensus_result),
+            "meta": self._build_meta(consensus_result, metadata or {}),
         }
 
-        # =========================
-        # 6. FINAL OUTPUT
-        # =========================
-        return SynthesizedResponse(
-            text=base_text,
-            metadata=metadata,
-        )
+    # =========================
+    # RESPONSE EXTRACTION
+    # =========================
+    def _extract_response(self, consensus_result: Dict[str, Any]) -> Any:
+
+        # safe fallback
+        if not consensus_result:
+            return {
+                "text": "",
+                "status": "empty_response",
+            }
+
+        return {
+            "text": consensus_result.get("output"),
+            "agent": consensus_result.get("agent"),
+            "confidence": consensus_result.get("confidence"),
+        }
 
     # =========================
-    # 🔧 INTERNAL HELPERS
+    # META BUILDER
     # =========================
-    def _extract_text(self, llm_output: Any) -> str:
-        """
-        Normalizes different LLM response formats.
-        """
-        if isinstance(llm_output, str):
-            return llm_output
+    def _build_meta(
+        self,
+        consensus_result: Dict[str, Any],
+        metadata: Dict[str, Any],
+    ) -> Dict[str, Any]:
 
-        if isinstance(llm_output, dict):
-            return llm_output.get("text", str(llm_output))
+        context = consensus_result.get("context", {})
 
-        return str(llm_output)
-
-    def _safe_trim(self, text: str) -> str:
-        """
-        Minimal safe mode response.
-        """
-        return text[:500]
-
-    def _system_format(self, text: str) -> str:
-        """
-        System message formatting layer.
-        """
-        return f"[SYSTEM] {text}"
-
-    def _inject_retrieval_hint(self, text: str, context: Dict[str, Any]) -> str:
-        """
-        Lightweight augmentation (NOT reasoning).
-        """
-        retrieval = context.get("retrieval", [])
-        if not retrieval:
-            return text
-
-        return text + "\n\n(Additional context available)"
+        return {
+            "status": consensus_result.get("status", "unknown"),
+            "agents_used": context.get("agents_used", []),
+            "agent_count": context.get("count", 0),
+            "extra": metadata,
+        }
