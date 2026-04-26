@@ -1,204 +1,90 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
-
-from agents.fast_agent import FastAgent
-from agents.deep_agent import DeepAgent
-from agents.creative_agent import CreativeAgent
-from agents.safety_agent import SafetyAgent
-from agents.consensus_engine import ConsensusEngine
-
-from cognition.intent_engine import IntentResult
-from cognition.reasoning_engine import ReasoningResult
+from typing import Dict, Any, List, Optional
 
 
-@dataclass
-class AgentTask:
-    agent_name: str
-    payload: Dict[str, Any]
-
-
-@dataclass
-class AgentResult:
-    agent_name: str
-    output: Any
-    confidence: float
-
-
+# =========================
+# MULTI-AGENT COORDINATOR
+# =========================
 class MultiAgentCoordinator:
     """
-    Orchestrates agent execution layer.
+    ROLE:
+    - map reasoning plan → agent execution strategy
+    - distribute subtasks across available agents
+    - prepare execution bundle for orchestrator
 
-    Responsibilities:
-    - distribute tasks to agents
-    - collect results
-    - forward to consensus engine
-    - DO NOT perform reasoning or final decision making
+    STRICT RULES:
+    - no execution control
+    - no final decision making
+    - no LLM routing authority
+    - no access to payments/security
     """
 
-    def __init__(
+    # =========================
+    # MAIN ENTRYPOINT
+    # =========================
+    def distribute(
         self,
-        fast_agent: FastAgent,
-        deep_agent: DeepAgent,
-        creative_agent: CreativeAgent,
-        safety_agent: SafetyAgent,
-        consensus_engine: ConsensusEngine,
-    ):
-        self.fast_agent = fast_agent
-        self.deep_agent = deep_agent
-        self.creative_agent = creative_agent
-        self.safety_agent = safety_agent
-        self.consensus_engine = consensus_engine
-
-    async def execute(
-        self,
-        intent: IntentResult,
-        reasoning: ReasoningResult,
-        context: Optional[Dict[str, Any]] = None,
+        plan: List[str],
+        intent: str,
     ) -> Dict[str, Any]:
-        """
-        Main execution entry.
 
-        Input:
-            intent - parsed user intent
-            reasoning - structured reasoning output
-            context - optional memory/retrieval context
-
-        Output:
-            consensus result (final agent synthesis)
-        """
-
-        context = context or {}
-
-        # =========================
-        # 1. TASK DISPATCH
-        # =========================
-        tasks = self._build_tasks(intent, reasoning, context)
-
-        # =========================
-        # 2. PARALLEL EXECUTION
-        # =========================
-        results: List[AgentResult] = []
-
-        for task in tasks:
-            result = await self._execute_agent(task)
-            results.append(result)
-
-        # =========================
-        # 3. CONSENSUS PHASE
-        # =========================
-        final_output = await self.consensus_engine.resolve(
-            intent=intent,
-            reasoning=reasoning,
-            agent_results=results,
-        )
+        strategy = self._build_strategy(plan, intent)
 
         return {
-            "result": final_output,
-            "agent_results": [
-                {
-                    "agent": r.agent_name,
-                    "output": r.output,
-                    "confidence": r.confidence,
-                }
-                for r in results
-            ],
+            "strategy": strategy,
+            "execution_mode": self._infer_mode(intent, plan),
         }
 
-    # =========================================================
-    # INTERNAL DISPATCH LOGIC
-    # =========================================================
-
-    def _build_tasks(
+    # =========================
+    # STRATEGY BUILDER
+    # =========================
+    def _build_strategy(
         self,
-        intent: IntentResult,
-        reasoning: ReasoningResult,
-        context: Dict[str, Any],
-    ) -> List[AgentTask]:
+        plan: List[str],
+        intent: str,
+    ) -> List[Dict[str, Any]]:
 
-        tasks: List[AgentTask] = []
+        strategy: List[Dict[str, Any]] = []
 
-        # FAST AGENT — quick structural answer
-        tasks.append(
-            AgentTask(
-                agent_name="fast",
-                payload={
-                    "intent": intent,
-                    "reasoning": reasoning,
-                    "context": context,
-                },
-            )
-        )
+        for step in plan:
+            agent = self._select_agent(step, intent)
 
-        # DEEP AGENT — multi-step reasoning
-        tasks.append(
-            AgentTask(
-                agent_name="deep",
-                payload={
-                    "intent": intent,
-                    "reasoning": reasoning,
-                    "context": context,
-                },
-            )
-        )
+            strategy.append({
+                "step": step,
+                "agent": agent,
+            })
 
-        # CREATIVE AGENT — alternative formulations
-        tasks.append(
-            AgentTask(
-                agent_name="creative",
-                payload={
-                    "intent": intent,
-                    "reasoning": reasoning,
-                    "context": context,
-                },
-            )
-        )
+        return strategy
 
-        # SAFETY AGENT — validation layer
-        tasks.append(
-            AgentTask(
-                agent_name="safety",
-                payload={
-                    "intent": intent,
-                    "reasoning": reasoning,
-                    "context": context,
-                },
-            )
-        )
+    # =========================
+    # AGENT SELECTION (STATIC MAPPING ONLY)
+    # =========================
+    def _select_agent(self, step: str, intent: str) -> str:
 
-        return tasks
+        step = step.lower()
 
-    # =========================================================
-    # EXECUTION ROUTER
-    # =========================================================
+        if "code" in step or intent == "code":
+            return "deep"
 
-    async def _execute_agent(self, task: AgentTask) -> AgentResult:
-        """
-        Routes execution to correct agent.
-        """
+        if "creative" in step or intent == "creative":
+            return "creative"
 
-        if task.agent_name == "fast":
-            output = await self.fast_agent.run(task.payload)
-            confidence = 0.6
+        if "quick" in step or intent == "chat":
+            return "fast"
 
-        elif task.agent_name == "deep":
-            output = await self.deep_agent.run(task.payload)
-            confidence = 0.9
+        # default fallback reasoning path
+        return "deep"
 
-        elif task.agent_name == "creative":
-            output = await self.creative_agent.run(task.payload)
-            confidence = 0.7
+    # =========================
+    # MODE INFERENCE
+    # =========================
+    def _infer_mode(self, intent: str, plan: List[str]) -> str:
 
-        elif task.agent_name == "safety":
-            output = await self.safety_agent.run(task.payload)
-            confidence = 1.0  # deterministic guard layer
+        if intent == "creative":
+            return "diverse_generation"
 
-        else:
-            raise ValueError(f"Unknown agent: {task.agent_name}")
+        if len(plan) > 5:
+            return "multi_agent_complex"
 
-        return AgentResult(
-            agent_name=task.agent_name,
-            output=output,
-            confidence=confidence,
-        )
+        return "standard"
