@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Dict, Optional, Literal, Protocol
+from typing import Dict, Optional, Literal
 
 
 # =========================
@@ -11,7 +11,10 @@ from typing import Dict, Optional, Literal, Protocol
 PlanType = Literal["free", "pro", "premium"]
 
 
-@dataclass
+# =========================
+# PLAN LIMITS (STATIC POLICY DATA)
+# =========================
+@dataclass(frozen=True)
 class PlanLimits:
     daily_requests: int
     monthly_requests: int
@@ -26,26 +29,15 @@ PLANS: Dict[PlanType, PlanLimits] = {
 
 
 # =========================
-# OPTIONAL DEPENDENCY PORTS (DI READY)
-# =========================
-class PricingPort(Protocol):
-    def estimate_request_cost(self, *args, **kwargs) -> float: ...
-
-
-class UsageSnapshotPort(Protocol):
-    def record(self, user_id: str, cost: float) -> None: ...
-
-
-# =========================
-# USAGE STATE
+# USAGE STATE (LOCAL CACHE ONLY)
 # =========================
 @dataclass
 class UsageState:
     daily_count: int = 0
     monthly_count: int = 0
 
-    day_window_start: float = field(default_factory=lambda: time.time())
-    month_window_start: float = field(default_factory=lambda: time.time())
+    day_start: float = field(default_factory=lambda: time.time())
+    month_start: float = field(default_factory=lambda: time.time())
 
 
 # =========================
@@ -64,59 +56,52 @@ class AccessDecision:
 # =========================
 class AccessController:
     """
-    BILLING POLICY ENGINE
+    ROLE:
+    - enforce subscription limits (policy layer)
+    - decide ALLOW / DENY based on plan constraints
 
-    RESPONSIBILITY:
-    - enforce subscription limits
-    - enforce deterministic quota rules
+    STRICT RULES:
+    - DOES NOT track analytics (UsageMeter owns that)
+    - DOES NOT calculate cost (PricingEngine owns that)
+    - DOES NOT perform rate limiting (RateLimiter owns that)
 
-    OPTIONAL INPUTS (future-safe):
-    - PricingEngine (cost awareness)
-    - UsageMeter (observability sync)
+    IMPORTANT:
+    - this is a deterministic policy gate, NOT a usage tracker
     """
 
     DAY_SECONDS = 86400
     MONTH_SECONDS = 2592000
 
-    def __init__(
-        self,
-        pricing: Optional[PricingPort] = None,
-        usage_meter: Optional[UsageSnapshotPort] = None,
-    ):
-        self._usage: Dict[str, UsageState] = {}
-
-        # optional DI (future extensibility)
-        self._pricing = pricing
-        self._usage_meter = usage_meter
+    def __init__(self):
+        self._state: Dict[str, UsageState] = {}
 
     # =========================
     # INTERNAL STATE
     # =========================
-    def _state(self, user_id: str) -> UsageState:
-        if user_id not in self._usage:
-            self._usage[user_id] = UsageState()
-        return self._usage[user_id]
+    def _get_state(self, user_id: str) -> UsageState:
+        if user_id not in self._state:
+            self._state[user_id] = UsageState()
+        return self._state[user_id]
 
-    def _reset(self, state: UsageState) -> None:
+    def _reset_if_needed(self, state: UsageState) -> None:
         now = time.time()
 
-        if now - state.day_window_start >= self.DAY_SECONDS:
+        if now - state.day_start >= self.DAY_SECONDS:
             state.daily_count = 0
-            state.day_window_start = now
+            state.day_start = now
 
-        if now - state.month_window_start >= self.MONTH_SECONDS:
+        if now - state.month_start >= self.MONTH_SECONDS:
             state.monthly_count = 0
-            state.month_window_start = now
+            state.month_start = now
 
     # =========================
     # DECISION ENGINE
     # =========================
     def check(self, user_id: str, plan: PlanType = "free") -> AccessDecision:
-
         limits = PLANS[plan]
-        state = self._state(user_id)
+        state = self._get_state(user_id)
 
-        self._reset(state)
+        self._reset_if_needed(state)
 
         remaining_daily = limits.daily_requests - state.daily_count
         remaining_monthly = limits.monthly_requests - state.monthly_count
@@ -144,27 +129,17 @@ class AccessController:
         )
 
     # =========================
-    # COMMIT
+    # COMMIT USAGE (ONLY AFTER SUCCESSFUL EXECUTION)
     # =========================
-    def commit(
-        self,
-        user_id: str,
-        *,
-        cost: Optional[float] = None,
-    ) -> None:
-
-        state = self._state(user_id)
-        self._reset(state)
+    def commit(self, user_id: str) -> None:
+        state = self._get_state(user_id)
+        self._reset_if_needed(state)
 
         state.daily_count += 1
         state.monthly_count += 1
-
-        # optional hooks (future observability + pricing alignment)
-        if self._usage_meter and cost is not None:
-            self._usage_meter.record(user_id, cost)
 
     # =========================
     # ADMIN RESET
     # =========================
     def reset(self, user_id: str) -> None:
-        self._usage.pop(user_id, None)
+        self._state.pop(user_id, None)
