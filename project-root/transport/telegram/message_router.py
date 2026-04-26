@@ -1,36 +1,65 @@
-async def handle_update(update: dict):
+from __future__ import annotations
 
-    try:
-        from core.cognition.intent_engine import build_intent
-        from core.kernel.execution_policy_kernel import evaluate
-        from payments.access_controller import check_access
-        from agents.consensus import run_agents
-        from llm.router import route_llm
+from typing import Dict, Any
 
-        message = (
-            update.get("message", {}).get("text")
-            or update.get("edited_message", {}).get("text")
-        )
+from transport.telegram.update_handler import UpdateHandler
 
-        if not message:
-            return {"response": "ignored"}
 
-        intent = build_intent(message)
-        decision = evaluate(intent)
+# =========================
+# MESSAGE ROUTER
+# =========================
+class MessageRouter:
+    """
+    ROLE:
+    - route raw Telegram updates to correct handler
+    - normalize entrypoint between message / callback / system events
 
-        if decision == "DENY":
-            return {"response": "denied"}
+    STRICT RULES:
+    - no business logic
+    - no authentication logic
+    - no payments logic
+    - no LLM calls
+    """
 
-        wallet = update.get("message", {}).get("from", {}).get("id", "unknown")
+    def __init__(self, update_handler: UpdateHandler):
+        self._update_handler = update_handler
 
-        if not await check_access(wallet, intent):
-            return {"response": "payment_required"}
+    # =========================
+    # MAIN ENTRYPOINT
+    # =========================
+    async def route(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Central routing entry for Telegram updates.
+        """
 
-        agent_output = await run_agents(intent)
-        response = await route_llm(agent_output)
+        # callback queries go elsewhere
+        if "callback_query" in payload:
+            return {
+                "status": "forwarded",
+                "type": "callback",
+            }
 
-        return {"response": response}
+        # message-based updates
+        if "message" in payload:
+            return await self._handle_message(payload)
 
-    except Exception as e:
-        print("HANDLE_UPDATE ERROR:", e)
-        return {"response": "error"}
+        # unknown update type
+        return {
+            "status": "ignored",
+            "reason": "unsupported_update_type",
+        }
+
+    # =========================
+    # MESSAGE HANDLING
+    # =========================
+    async def _handle_message(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Forward message payload to domain ingestion layer.
+        """
+
+        await self._update_handler.handle(payload)
+
+        return {
+            "status": "ok",
+            "type": "message",
+        }
