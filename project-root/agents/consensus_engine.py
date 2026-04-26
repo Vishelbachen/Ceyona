@@ -1,127 +1,86 @@
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from __future__ import annotations
+
+from typing import Dict, Any, List, Optional
 
 
-@dataclass
-class AgentResult:
-    agent: str
-    output: Any
-    confidence: float
-
-
-@dataclass
-class ConsensusResult:
-    final_output: Any
-    confidence: float
-    breakdown: Dict[str, Any]
-
-
+# =========================
+# CONSENSUS ENGINE
+# =========================
 class ConsensusEngine:
     """
-    Consensus layer for multi-agent system.
-
     ROLE:
-    - aggregate outputs
-    - normalize conflicting results
-    - compute weighted confidence
+    - aggregate outputs from multiple agents
+    - resolve conflicts between fast / deep / creative agents
+    - produce final unified response candidate
 
-    DOES NOT:
-    - generate content
-    - decide strategy
-    - call LLM
-    - access retrieval/memory
+    STRICT RULES:
+    - no LLM calling (pure logic layer)
+    - no safety evaluation
+    - no routing decisions upstream
+    - no system control authority
     """
 
+    # =========================
+    # MAIN ENTRYPOINT
+    # =========================
     def resolve(
         self,
-        intent: Any,
-        reasoning: Any,
-        agent_results: List[AgentResult],
-    ) -> ConsensusResult:
+        agent_outputs: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """
+        Takes multiple agent outputs and returns a single consensus result.
+        """
 
-        if not agent_results:
-            return ConsensusResult(
-                final_output="No agent results available",
-                confidence=0.0,
-                breakdown={}
-            )
+        if not agent_outputs:
+            return {
+                "status": "empty",
+                "output": None,
+                "confidence": 0.0,
+            }
 
-        # =========================
-        # 1. WEIGHTED SELECTION
-        # =========================
-        weighted_scores = []
+        # STEP 1: prioritize deep > creative > fast
+        ranked = self._rank(agent_outputs)
 
-        for r in agent_results:
-            weight = self._agent_weight(r.agent)
-            score = r.confidence * weight
+        # STEP 2: select best candidate
+        best = ranked[0]
 
-            weighted_scores.append((r, score))
+        # STEP 3: optional merge context from others
+        merged_context = self._merge_context(agent_outputs)
 
-        # =========================
-        # 2. PICK BEST RESULT
-        # =========================
-        best_result = max(weighted_scores, key=lambda x: x[1])[0]
-
-        # =========================
-        # 3. CONFIDENCE AGGREGATION
-        # =========================
-        avg_confidence = sum(r.confidence for r in agent_results) / len(agent_results)
-
-        final_confidence = self._normalize_confidence(
-            best_result.confidence,
-            avg_confidence
-        )
-
-        # =========================
-        # 4. BUILD BREAKDOWN
-        # =========================
-        breakdown = {
-            "intent": getattr(intent, "intent", None),
-            "reasoning_confidence": getattr(reasoning, "confidence", None),
-            "agents": [
-                {
-                    "agent": r.agent,
-                    "confidence": r.confidence,
-                }
-                for r in agent_results
-            ],
-            "selected_agent": best_result.agent,
+        return {
+            "status": "consensus_resolved",
+            "output": best.get("output"),
+            "agent": best.get("agent"),
+            "confidence": best.get("confidence", 0.5),
+            "context": merged_context,
         }
 
-        return ConsensusResult(
-            final_output=best_result.output,
-            confidence=final_confidence,
-            breakdown=breakdown
+    # =========================
+    # RANKING STRATEGY
+    # =========================
+    def _rank(self, outputs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+
+        priority = {
+            "deep": 3,
+            "creative": 2,
+            "fast": 1,
+        }
+
+        return sorted(
+            outputs,
+            key=lambda x: priority.get(x.get("agent", ""), 0),
+            reverse=True,
         )
 
     # =========================
-    # ⚖️ INTERNAL WEIGHTS
+    # CONTEXT MERGING (LIGHTWEIGHT)
     # =========================
-    def _agent_weight(self, agent_name: str) -> float:
-        if agent_name == "safety":
-            return 1.2  # safety always dominates
-
-        if agent_name == "deep":
-            return 1.0
-
-        if agent_name == "fast":
-            return 0.7
-
-        if agent_name == "creative":
-            return 0.8
-
-        return 1.0
-
-    # =========================
-    # 📊 NORMALIZATION
-    # =========================
-    def _normalize_confidence(
+    def _merge_context(
         self,
-        best_conf: float,
-        avg_conf: float
-    ) -> float:
+        outputs: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
 
-        # blend best + stability of system
-        final = (best_conf * 0.7) + (avg_conf * 0.3)
-
-        return max(0.05, min(final, 0.99))
+        return {
+            "agents_used": [o.get("agent") for o in outputs],
+            "count": len(outputs),
+        }
