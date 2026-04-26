@@ -20,7 +20,6 @@ RUN pip install --upgrade pip setuptools wheel
 # DEPENDENCIES (CACHED LAYER)
 # =========================
 COPY pyproject.toml ./
-COPY README.md ./
 
 RUN pip install .
 
@@ -33,7 +32,8 @@ COPY . .
 # RUNTIME CONFIG
 # =========================
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app
 
 # =========================
 # START COMMAND
