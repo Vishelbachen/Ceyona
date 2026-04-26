@@ -1,246 +1,170 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 from app.settings import get_settings
 
-# Core
-from core.execution.orchestrator import Orchestrator
-from core.kernel.execution_policy_kernel import ExecutionPolicyKernel
-
-# Cognition
-from cognition.intent_engine import IntentEngine
-from cognition.reasoning_engine import ReasoningEngine
-from cognition.multi_agent_coordinator import MultiAgentCoordinator
-from cognition.response_synthesizer import ResponseSynthesizer
-
-# LLM
-from llm.model_router import ModelRouter
-from llm.prompt_engine import PromptEngine
-from llm.fallback_handler import FallbackHandler
-from llm.groq_client import GroqClient
-from llm.hf_client import HFClient
-
-# Memory
-from memory.supabase_store import SupabaseStore
-from memory.vector_memory import VectorMemory
-from memory.conversation_history import ConversationHistory
-
-# Retrieval
-from retrieval.retrieval_engine import RetrievalEngine
-from retrieval.query_preprocessor import QueryPreprocessor
-
-# Context
-from context.assembler import ContextAssembler
-from context.serializer import ContextSerializer
-
-# Security
 from security.auth import AuthService
 from security.encryption import EncryptionService
 from security.rate_limiter import RateLimiter
 from security.origin_guard import OriginGuard
 
-# Observability
-from observability.logger import Logger
-from observability.metrics import Metrics
-from observability.tracing import Tracer
+from payments.access_controller import AccessController
+from payments.pricing_engine import PricingEngine
+from payments.usage_meter import UsageMeter
+from payments.wallet_manager import WalletManager
 
-# Events
-from events.event_bus import EventBus
-from events.event_store import EventStore
+from llm.model_router import ModelRouter
+
+from core.execution.orchestrator import Orchestrator
 
 
 # =========================
-# 🧩 DI CONTAINER (LIGHTWEIGHT)
+# DI CONTAINER (LIGHTWEIGHT)
 # =========================
 @dataclass
 class Container:
-    # Core
-    orchestrator: Orchestrator
-    epk: ExecutionPolicyKernel
-
-    # Cognition
-    intent_engine: IntentEngine
-    reasoning_engine: ReasoningEngine
-    multi_agent: MultiAgentCoordinator
-    response_synthesizer: ResponseSynthesizer
-
-    # LLM
-    model_router: ModelRouter
-    prompt_engine: PromptEngine
-    fallback: FallbackHandler
-
-    # Memory
-    memory_store: SupabaseStore
-    vector_memory: VectorMemory
-    conversation_history: ConversationHistory
-
-    # Retrieval
-    retrieval_engine: RetrievalEngine
-    query_preprocessor: QueryPreprocessor
-
-    # Context
-    context_assembler: ContextAssembler
-    context_serializer: ContextSerializer
-
-    # Security
-    auth: AuthService
-    encryption: EncryptionService
-    rate_limiter: RateLimiter
-    origin_guard: OriginGuard
-
-    # Observability
-    logger: Logger
-    metrics: Metrics
-    tracer: Tracer
-
-    # Events
-    event_bus: EventBus
-    event_store: EventStore
-
-
-# =========================
-# ⚙️ BOOTSTRAP FUNCTION
-# =========================
-def build_container() -> Container:
     """
-    Composition root of the entire system.
-    NO BUSINESS LOGIC ALLOWED HERE.
-    ONLY WIRING.
+    Central dependency container.
+
+    ROLE:
+    - instantiate core system components
+    - manage dependency wiring
+    - provide single source of runtime graph
+
+    DOES NOT:
+    - contain logic
+    - execute workflows
+    - make decisions
     """
 
     settings = get_settings()
 
     # =========================
-    # OBSERVABILITY FIRST (base dependency)
+    # SECURITY LAYER
     # =========================
-    logger = Logger()
-    metrics = Metrics()
-    tracer = Tracer()
+    auth: AuthService
+    encryption: EncryptionService
+    rate_limiter: RateLimiter
+    origin_guard: OriginGuard
 
     # =========================
-    # EVENTS (observability layer)
+    # PAYMENTS LAYER
     # =========================
-    event_bus = EventBus(logger=logger)
-    event_store = EventStore()
-
-    # =========================
-    # SECURITY
-    # =========================
-    auth = AuthService(settings.JWT_SECRET)
-    encryption = EncryptionService(settings.ENCRYPTION_KEY)
-    rate_limiter = RateLimiter(settings.REDIS_URL)
-    origin_guard = OriginGuard(settings.ALLOWED_ORIGINS)
-
-    # =========================
-    # MEMORY
-    # =========================
-    memory_store = SupabaseStore(
-        url=settings.SUPABASE_URL,
-        anon_key=settings.SUPABASE_ANON_KEY,
-        service_key=settings.SUPABASE_SERVICE_ROLE_KEY,
-    )
-
-    vector_memory = VectorMemory(redis_url=settings.REDIS_URL)
-    conversation_history = ConversationHistory(memory_store)
-
-    # =========================
-    # RETRIEVAL
-    # =========================
-    query_preprocessor = QueryPreprocessor()
-
-    retrieval_engine = RetrievalEngine(
-        vector_memory=vector_memory,
-        query_preprocessor=query_preprocessor,
-    )
-
-    # =========================
-    # CONTEXT
-    # =========================
-    context_assembler = ContextAssembler()
-    context_serializer = ContextSerializer()
+    access_controller: AccessController
+    pricing_engine: PricingEngine
+    usage_meter: UsageMeter
+    wallet_manager: WalletManager
 
     # =========================
     # LLM LAYER
     # =========================
-    groq = GroqClient(settings.GROQ_API_KEY)
-    hf = HFClient(settings.HF_TOKEN)
+    model_router: ModelRouter
 
+    # =========================
+    # EXECUTION CORE
+    # =========================
+    orchestrator: Orchestrator
+
+
+# =========================
+# BOOTSTRAP FUNCTION
+# =========================
+def build_container() -> Container:
+    """
+    Creates fully wired application graph.
+
+    ORDER IS IMPORTANT (dependency-safe construction).
+    """
+
+    settings = get_settings()
+
+    # =========================
+    # SECURITY
+    # =========================
+    auth = AuthService(
+        jwt_secret=settings.JWT_SECRET
+    )
+
+    encryption = EncryptionService()
+
+    rate_limiter = RateLimiter(
+        max_requests_per_minute=60,
+        window_seconds=60,
+    )
+
+    origin_guard = OriginGuard()
+
+    # =========================
+    # PAYMENTS
+    # =========================
+    pricing_engine = PricingEngine()
+
+    access_controller = AccessController()
+
+    usage_meter = UsageMeter()
+
+    # TON client is assumed to exist in your architecture
+    from payments.ton_client import TONClient
+
+    ton_client = TONClient(
+        api_key=settings.TON_WALLET
+    )
+
+    wallet_manager = WalletManager(
+        ton_client=ton_client
+    )
+
+    # =========================
+    # LLM
+    # =========================
     model_router = ModelRouter(
-        groq=groq,
-        hf=hf,
+        groq_key=settings.GROQ_API_KEY,
+        hf_token=settings.HF_TOKEN,
     )
 
-    prompt_engine = PromptEngine()
-    fallback = FallbackHandler()
-
     # =========================
-    # COGNITION
+    # CORE ORCHESTRATION
     # =========================
-    intent_engine = IntentEngine()
-    reasoning_engine = ReasoningEngine()
-
-    multi_agent = MultiAgentCoordinator(
-        intent_engine=intent_engine,
-        reasoning_engine=reasoning_engine,
-    )
-
-    response_synthesizer = ResponseSynthesizer()
-
-    # =========================
-    # CORE
-    # =========================
-    epk = ExecutionPolicyKernel()
-
     orchestrator = Orchestrator(
-        epk=epk,
+        auth=auth,
+        rate_limiter=rate_limiter,
+        origin_guard=origin_guard,
+        access_controller=access_controller,
+        pricing_engine=pricing_engine,
+        usage_meter=usage_meter,
         model_router=model_router,
-        prompt_engine=prompt_engine,
-        retrieval_engine=retrieval_engine,
-        context_assembler=context_assembler,
-        response_synthesizer=response_synthesizer,
-        memory=conversation_history,
-        event_bus=event_bus,
     )
 
-    # =========================
-    # FINAL CONTAINER
-    # =========================
     return Container(
-        orchestrator=orchestrator,
-        epk=epk,
-        intent_engine=intent_engine,
-        reasoning_engine=reasoning_engine,
-        multi_agent=multi_agent,
-        response_synthesizer=response_synthesizer,
-        model_router=model_router,
-        prompt_engine=prompt_engine,
-        fallback=fallback,
-        memory_store=memory_store,
-        vector_memory=vector_memory,
-        conversation_history=conversation_history,
-        retrieval_engine=retrieval_engine,
-        query_preprocessor=query_preprocessor,
-        context_assembler=context_assembler,
-        context_serializer=context_serializer,
         auth=auth,
         encryption=encryption,
         rate_limiter=rate_limiter,
         origin_guard=origin_guard,
-        logger=logger,
-        metrics=metrics,
-        tracer=tracer,
-        event_bus=event_bus,
-        event_store=event_store,
+        access_controller=access_controller,
+        pricing_engine=pricing_engine,
+        usage_meter=usage_meter,
+        wallet_manager=wallet_manager,
+        model_router=model_router,
+        orchestrator=orchestrator,
     )
 
 
 # =========================
-# 🌍 GLOBAL ENTRY (SAFE)
+# GLOBAL SINGLETON (OPTIONAL)
 # =========================
 _container: Container | None = None
 
 
 def get_container() -> Container:
+    """
+    Lazy singleton container.
+
+    Safe for FastAPI / Telegram webhook runtime.
+    """
     global _container
+
     if _container is None:
         _container = build_container()
+
     return _container
