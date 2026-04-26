@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 import time
 import jwt
+
+from app.settings import Settings
 
 
 # =========================
@@ -13,12 +15,12 @@ import jwt
 class AuthContext:
     user_id: str
     is_authenticated: bool
-    roles: List[str]
+    roles: list[str]
     metadata: Dict[str, Any]
 
 
 # =========================
-# AUTH SERVICE
+# AUTH SERVICE (DI-READY)
 # =========================
 class AuthService:
     """
@@ -26,35 +28,34 @@ class AuthService:
 
     ROLE:
     - verify JWT tokens
-    - validate identity claims
-    - extract safe auth context
+    - extract identity context
+    - attach roles/claims
 
-    DOES NOT:
-    - execute business logic
-    - interact with LLM / agents / memory
-    - make authorization decisions beyond identity parsing
+    STRICT RULES:
+    - no business logic
+    - no LLM / agents / memory access
+    - purely identity verification
     """
 
-    REQUIRED_CLAIMS = {"sub", "iat", "exp"}
+    def __init__(self, settings: Settings):
+        self._settings = settings
 
-    def __init__(self, jwt_secret: str, algorithm: str = "HS256"):
-        self.secret = jwt_secret
-        self.algorithm = algorithm
+        self.secret = self._settings.JWT_SECRET
+        self.algorithm = "HS256"
+
+        if not self.secret:
+            raise RuntimeError("JWT_SECRET is missing in settings")
 
     # =========================
     # VERIFY TOKEN
     # =========================
     def verify_token(self, token: str) -> Optional[AuthContext]:
-
         try:
             payload = jwt.decode(
                 token,
                 self.secret,
                 algorithms=[self.algorithm],
             )
-
-            if not self._validate_payload(payload):
-                return None
 
             return self._build_context(payload)
 
@@ -65,38 +66,16 @@ class AuthService:
             return None
 
     # =========================
-    # PAYLOAD VALIDATION
-    # =========================
-    def _validate_payload(self, payload: Dict[str, Any]) -> bool:
-
-        # must contain required claims
-        if not self.REQUIRED_CLAIMS.issubset(payload.keys()):
-            return False
-
-        # type safety checks
-        if not isinstance(payload.get("sub"), str):
-            return False
-
-        if not isinstance(payload.get("roles", []), list):
-            return False
-
-        return True
-
-    # =========================
     # BUILD CONTEXT
     # =========================
     def _build_context(self, payload: Dict[str, Any]) -> AuthContext:
-
-        roles = payload.get("roles", [])
-        roles = [str(r).lower() for r in roles]
-
         return AuthContext(
-            user_id=payload["sub"],
+            user_id=payload.get("sub", "anonymous"),
             is_authenticated=True,
-            roles=roles,
+            roles=payload.get("roles", []),
             metadata={
-                "issued_at": payload["iat"],
-                "expires_at": payload["exp"],
+                "issued_at": payload.get("iat"),
+                "expires_at": payload.get("exp"),
                 "verified_at": int(time.time()),
             },
         )
@@ -107,7 +86,7 @@ class AuthService:
     def issue_token(
         self,
         user_id: str,
-        roles: Optional[List[str]] = None,
+        roles: Optional[list[str]] = None,
         ttl_seconds: int = 3600,
     ) -> str:
 
@@ -115,7 +94,7 @@ class AuthService:
 
         payload = {
             "sub": user_id,
-            "roles": [r.lower() for r in (roles or [])],
+            "roles": roles or [],
             "iat": now,
             "exp": now + ttl_seconds,
         }
