@@ -17,39 +17,38 @@ class EncryptionService:
     ROLE:
     - encrypt sensitive payloads
     - decrypt encrypted payloads
-    - ensure secure storage/transport
+    - ensure secure transport/storage
 
     STRICT RULES:
     - no business logic
     - no decision making
-    - no data interpretation
+    - no interpretation of data
     """
 
     def __init__(self, settings: Settings):
         self._settings = settings
-        self._fernet = Fernet(self._load_key())
+
+        key = self._load_key()
+
+        # fail-fast validation at startup (single source)
+        self._fernet = Fernet(key)
 
     # =========================
     # KEY LOADING
     # =========================
     def _load_key(self) -> bytes:
         """
-        ENCRYPTION_KEY must be a valid Fernet key:
-        base64-encoded 32-byte key
+        ENCRYPTION_KEY must be valid Fernet key (base64-encoded 32 bytes).
         """
 
         key = self._settings.ENCRYPTION_KEY
 
         if isinstance(key, str):
-            key = key.encode()
+            key = key.encode("utf-8")
 
-        # basic validation (fail-fast)
-        try:
-            Fernet(key)
-        except Exception as e:
-            raise RuntimeError(
-                "Invalid ENCRYPTION_KEY. Must be valid Fernet key."
-            ) from e
+        # minimal safety check (no double initialization)
+        if not key:
+            raise RuntimeError("ENCRYPTION_KEY is missing")
 
         return key
 
@@ -60,7 +59,6 @@ class EncryptionService:
         if isinstance(data, str):
             data = data.encode("utf-8")
 
-        # Fernet already returns base64-safe token
         return self._fernet.encrypt(data).decode("utf-8")
 
     # =========================
@@ -68,14 +66,13 @@ class EncryptionService:
     # =========================
     def decrypt(self, token: str) -> str:
         try:
-            decrypted = self._fernet.decrypt(token.encode("utf-8"))
-            return decrypted.decode("utf-8")
+            return self._fernet.decrypt(token.encode("utf-8")).decode("utf-8")
 
         except InvalidToken as e:
             raise ValueError("Invalid or corrupted encryption token") from e
 
     # =========================
-    # ROUNDTRIP TEST (DEBUG ONLY)
+    # ROUNDTRIP (DEBUG ONLY)
     # =========================
     def roundtrip(self, data: str) -> str:
         return self.decrypt(self.encrypt(data))
