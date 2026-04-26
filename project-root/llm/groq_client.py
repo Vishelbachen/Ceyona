@@ -1,22 +1,77 @@
-import os
-import httpx
+from __future__ import annotations
 
-async def ask_groq(prompt: str):
+from typing import Optional, List, Dict, Any
 
-    api_key = os.getenv("GROQ_API_KEY")
+from groq import Groq
 
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={
-                    "model": "llama-3.1-70b",
-                    "messages": [{"role": "user", "content": prompt}]
-                }
-            )
+from app.settings import Settings
 
-        return r.json()
 
-    except Exception:
-        return {"response": "llm_error"}
+# =========================
+# GROQ CLIENT
+# =========================
+class GroqClient:
+    """
+    ROLE:
+    - low-level wrapper over Groq API
+
+    STRICT RULES:
+    - no prompt logic
+    - no retries
+    - no business logic
+    - no formatting
+    """
+
+    def __init__(self, settings: Settings):
+        self._settings = settings
+        self._client = Groq(api_key=self._settings.GROQ_API_KEY)
+
+    # =========================
+    # CHAT COMPLETION
+    # =========================
+    def chat(
+        self,
+        model: str,
+        messages: List[Dict[str, str]],
+        temperature: float = 0.7,
+        max_tokens: Optional[int] = None,
+    ) -> str:
+
+        response = self._client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+
+        return response.choices[0].message.content
+
+    # =========================
+    # RAW RESPONSE (OPTIONAL)
+    # =========================
+    def chat_raw(
+        self,
+        model: str,
+        messages: List[Dict[str, str]],
+        temperature: float = 0.7,
+        max_tokens: Optional[int] = None,
+    ) -> Dict[str, Any]:
+
+        response = self._client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+
+        return response.model_dump()
+
+    # =========================
+    # HEALTH CHECK
+    # =========================
+    def healthcheck(self) -> bool:
+        try:
+            self._client.models.list()
+            return True
+        except Exception:
+            return False
