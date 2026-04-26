@@ -1,128 +1,109 @@
-from dataclasses import dataclass
-from typing import Any, Dict, Literal, Optional
+from __future__ import annotations
 
-from llm.groq_client import GroqClient
-from llm.hf_client import HFClient
+from typing import Literal, Dict
 
 
 # =========================
-# 🧠 MODEL MODES
+# MODEL TIERS
 # =========================
-ModelMode = Literal["fast", "general", "heavy", "safety"]
-
-
-@dataclass(frozen=True)
-class LLMRequest:
-    prompt: str
-    mode: ModelMode
-    metadata: Optional[Dict[str, Any]] = None
-
-
-@dataclass(frozen=True)
-class LLMResponse:
-    text: str
-    model_used: str
-    raw: Any
+ModelTier = Literal["fast", "general", "heavy", "retrieval", "agent"]
 
 
 # =========================
-# 🧠 MODEL ROUTER
+# MODEL ROUTER
 # =========================
 class ModelRouter:
     """
-    Deterministic LLM routing layer.
+    ROLE:
+    - deterministic mapping from task tier → model selection
 
-    RULES:
-    - NO reasoning
-    - NO intent classification
-    - NO policy decisions
-    - ONLY model selection + execution
+    STRICT RULES:
+    - no reasoning
+    - no dynamic scoring
+    - no prompt awareness
+    - no memory access
     """
 
-    def __init__(
-        self,
-        groq: GroqClient,
-        hf: HFClient,
-    ):
-        self.groq = groq
-        self.hf = hf
+    def __init__(self):
+
+        # FAST LAYER
+        self._fast = "llama-3.1-8b-instant"
+        self._fast_fallback = "groq/compound-mini"
+
+        # GENERAL LAYER
+        self._general_primary = "llama-3.3-70b-versatile"
+        self._general_alt = "qwen/qwen3-32b"
+        self._general_fallback = "openai/gpt-oss-20b"
+
+        # HEAVY LAYER
+        self._heavy_primary = "openai/gpt-oss-120b"
+        self._heavy_alt = "llama-4-scout-17b-16e-instruct"
+        self._heavy_exec = "groq/compound"
+
+        # RETRIEVAL / HYBRID
+        self._retrieval = "qwen/qwen3-32b"
+
+        # AGENT LAYER
+        self._agent = "llama-3.3-70b-versatile"
 
     # =========================
-    # 🚀 MAIN ENTRY
+    # RESOLVE MODEL
     # =========================
-    async def route(self, prompt: str, mode: ModelMode) -> LLMResponse:
+    def resolve(self, tier: ModelTier, *, fallback: bool = True) -> str:
 
-        if mode == "fast":
-            return await self._fast(prompt)
+        if tier == "fast":
+            return self._fast if not fallback else self._fast
 
-        if mode == "general":
-            return await self._general(prompt)
+        if tier == "general":
+            return self._general_primary
 
-        if mode == "heavy":
-            return await self._heavy(prompt)
+        if tier == "heavy":
+            return self._heavy_primary
 
-        if mode == "safety":
-            return await self._safety(prompt)
+        if tier == "retrieval":
+            return self._retrieval
 
-        # fallback guard (never should happen)
-        return await self._fast(prompt)
+        if tier == "agent":
+            return self._agent
 
-    # =========================
-    # 🟢 FAST LAYER
-    # =========================
-    async def _fast(self, prompt: str) -> LLMResponse:
-        result = await self.groq.complete(
-            model="llama-3.1-8b-instant",
-            prompt=prompt,
-        )
-
-        return LLMResponse(
-            text=result,
-            model_used="llama-3.1-8b-instant",
-            raw=result,
-        )
+        # safe fallback
+        return self._general_primary
 
     # =========================
-    # 🔵 GENERAL LAYER
+    # MULTI-OPTION (FOR ORCHESTRATOR FALLBACK LOGIC)
     # =========================
-    async def _general(self, prompt: str) -> LLMResponse:
-        result = await self.groq.complete(
-            model="llama-3.3-70b-versatile",
-            prompt=prompt,
-        )
+    def resolve_candidates(self, tier: ModelTier) -> Dict[str, str]:
 
-        return LLMResponse(
-            text=result,
-            model_used="llama-3.3-70b-versatile",
-            raw=result,
-        )
+        if tier == "fast":
+            return {
+                "primary": self._fast,
+                "fallback": self._fast_fallback,
+            }
 
-    # =========================
-    # 🔴 HEAVY LAYER
-    # =========================
-    async def _heavy(self, prompt: str) -> LLMResponse:
-        result = await self.groq.complete(
-            model="llama-4-scout-17b-16e-instruct",
-            prompt=prompt,
-        )
+        if tier == "general":
+            return {
+                "primary": self._general_primary,
+                "alt": self._general_alt,
+                "fallback": self._general_fallback,
+            }
 
-        return LLMResponse(
-            text=result,
-            model_used="llama-4-scout-17b-16e-instruct",
-            raw=result,
-        )
+        if tier == "heavy":
+            return {
+                "primary": self._heavy_primary,
+                "alt": self._heavy_alt,
+                "exec": self._heavy_exec,
+            }
 
-    # =========================
-    # 🛡 SAFETY LAYER
-    # =========================
-    async def _safety(self, prompt: str) -> LLMResponse:
-        result = await self.hf.complete(
-            model="gpt-oss-safeguard-20b",
-            prompt=prompt,
-        )
+        if tier == "retrieval":
+            return {
+                "primary": self._retrieval,
+            }
 
-        return LLMResponse(
-            text=result,
-            model_used="gpt-oss-safeguard-20b",
-            raw=result,
-        )
+        if tier == "agent":
+            return {
+                "primary": self._agent,
+            }
+
+        return {
+            "primary": self._general_primary,
+        }
