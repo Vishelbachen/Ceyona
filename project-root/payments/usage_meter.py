@@ -6,7 +6,7 @@ from typing import Dict, Optional
 
 
 # =========================
-# USAGE STATE
+# USAGE SNAPSHOT
 # =========================
 @dataclass
 class UsageSnapshot:
@@ -19,28 +19,28 @@ class UsageSnapshot:
     month_requests: int = 0
     month_cost: float = 0.0
 
-    day_start: float = field(default_factory=lambda: time.time())
-    month_start: float = field(default_factory=lambda: time.time())
+    last_day_reset: float = field(default_factory=lambda: time.time())
+    last_month_reset: float = field(default_factory=lambda: time.time())
 
 
 # =========================
-# USAGE METER (OBSERVABILITY FOR PAYMENTS)
+# USAGE METER (TELEMETRY LAYER ONLY)
 # =========================
 class UsageMeter:
     """
     ROLE:
-    - track real system consumption (requests + compute cost)
-    - provide analytics layer for payments & access control
-    - feed future optimization / cost_model tuning
+    - record real system usage (requests + cost)
+    - provide telemetry for billing + analytics
+    - feed observability / optimization
 
     DOES NOT:
-    - block requests
     - enforce limits
-    - decide routing
+    - make decisions
+    - control access
     """
 
     DAY_SECONDS = 86400
-    MONTH_SECONDS = 2592000  # ~30 days
+    MONTH_SECONDS = 2592000
 
     def __init__(self):
         self._state: Dict[str, UsageSnapshot] = {}
@@ -53,49 +53,46 @@ class UsageMeter:
             self._state[user_id] = UsageSnapshot()
         return self._state[user_id]
 
-    def _reset_if_needed(self, state: UsageSnapshot) -> None:
+    def _maybe_reset(self, state: UsageSnapshot) -> None:
+
         now = time.time()
 
-        if now - state.day_start >= self.DAY_SECONDS:
+        # daily reset
+        if now - state.last_day_reset >= self.DAY_SECONDS:
             state.day_requests = 0
             state.day_cost = 0.0
-            state.day_start = now
+            state.last_day_reset = now
 
-        if now - state.month_start >= self.MONTH_SECONDS:
+        # monthly reset
+        if now - state.last_month_reset >= self.MONTH_SECONDS:
             state.month_requests = 0
             state.month_cost = 0.0
-            state.month_start = now
+            state.last_month_reset = now
 
     # =========================
-    # COMMIT USAGE
+    # RECORD USAGE
     # =========================
-    def record(
-        self,
-        user_id: str,
-        cost: float,
-    ) -> None:
+    def record(self, user_id: str, cost: float) -> None:
 
         state = self._get(user_id)
-        self._reset_if_needed(state)
+        self._maybe_reset(state)
 
-        # global
         state.total_requests += 1
         state.total_cost += cost
 
-        # daily
         state.day_requests += 1
         state.day_cost += cost
 
-        # monthly
         state.month_requests += 1
         state.month_cost += cost
 
     # =========================
-    # READ API
+    # READ ONLY API
     # =========================
-    def get_usage(self, user_id: str) -> Dict[str, Optional[float]]:
+    def get_usage(self, user_id: str) -> Dict[str, float]:
+
         state = self._get(user_id)
-        self._reset_if_needed(state)
+        self._maybe_reset(state)
 
         return {
             "total_requests": state.total_requests,
@@ -107,8 +104,7 @@ class UsageMeter:
         }
 
     # =========================
-    # RESET (ADMIN / DEBUG)
+    # ADMIN RESET
     # =========================
     def reset(self, user_id: str) -> None:
-        if user_id in self._state:
-            del self._state[user_id]
+        self._state.pop(user_id, None)
