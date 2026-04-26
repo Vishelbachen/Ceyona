@@ -4,11 +4,6 @@ from dataclasses import dataclass
 from typing import List, Optional
 from urllib.parse import urlparse
 
-from infra.config_loader import get_settings
-
-
-settings = get_settings()
-
 
 # =========================
 # ORIGIN CONTEXT
@@ -21,39 +16,24 @@ class OriginContext:
 
 
 # =========================
-# ORIGIN GUARD
+# ORIGIN GUARD (SECURITY LAYER)
 # =========================
 class OriginGuard:
     """
-    Origin validation layer
-
     ROLE:
-    - validate request origin (CORS / webhook / API calls)
-    - enforce allowed domains list
-    - prevent unauthorized external sources
+    - validate request origin (CORS / webhooks / API ingress)
+    - enforce allowed origin whitelist
+    - block unauthorized external sources
 
     DOES NOT:
-    - authenticate user
-    - rate limit
-    - encrypt data
+    - authenticate users
+    - rate limit traffic
+    - perform encryption
     - influence business logic
     """
 
-    def __init__(self):
-        self.allowed_origins = self._load_allowed_origins()
-
-    # =========================
-    # LOAD CONFIG
-    # =========================
-    def _load_allowed_origins(self) -> List[str]:
-
-        origins = settings.ALLOWED_ORIGINS
-
-        # normalize
-        if isinstance(origins, str):
-            return [origins]
-
-        return list(origins or [])
+    def __init__(self, allowed_origins: List[str]):
+        self.allowed_origins = allowed_origins or []
 
     # =========================
     # VALIDATE ORIGIN
@@ -86,35 +66,36 @@ class OriginGuard:
     # =========================
     def _is_allowed(self, origin: str) -> bool:
 
-        # exact match
-        if origin in self.allowed_origins:
+        if "*" in self.allowed_origins:
             return True
 
-        # optional wildcard support (future-safe)
         for allowed in self.allowed_origins:
-            if allowed == "*":
-                return True
 
+            # wildcard subdomain support
             if allowed.startswith("*."):
                 domain = allowed[2:]
                 if origin.endswith(domain):
                     return True
+                continue
+
+            if origin == allowed:
+                return True
 
         return False
 
     # =========================
-    # NORMALIZATION
+    # NORMALIZATION (STRICT)
     # =========================
     def _normalize(self, origin: str) -> str:
 
         try:
             parsed = urlparse(origin)
 
-            # fallback for raw domains
-            if not parsed.scheme:
-                return origin.lower().strip()
+            # always prefer hostname if available
+            if parsed.hostname:
+                return parsed.hostname.lower().strip()
 
-            return parsed.netloc.lower().strip()
+            return origin.lower().strip()
 
         except Exception:
             return origin.lower().strip()
