@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from typing import List, Optional
 from urllib.parse import urlparse
 
+from app.settings import Settings
+
 
 # =========================
 # ORIGIN CONTEXT
@@ -16,30 +18,43 @@ class OriginContext:
 
 
 # =========================
-# ORIGIN GUARD (SECURITY LAYER)
+# ORIGIN GUARD
 # =========================
 class OriginGuard:
     """
     ROLE:
-    - validate request origin (CORS / webhooks / API ingress)
-    - enforce allowed origin whitelist
-    - block unauthorized external sources
+    - validate request origin (CORS / webhook / API)
+    - enforce allowed origins list
+    - protect ingress layer from unauthorized sources
 
-    DOES NOT:
-    - authenticate users
-    - rate limit traffic
-    - perform encryption
-    - influence business logic
+    STRICT RULES:
+    - no business logic
+    - no auth decisions beyond origin validation
+    - no dependency on internal systems
     """
 
-    def __init__(self, allowed_origins: List[str]):
-        self.allowed_origins = allowed_origins or []
+    def __init__(self, settings: Settings):
+        self._settings = settings
+        self.allowed_origins = self._load_allowed_origins()
+
+    # =========================
+    # LOAD CONFIG
+    # =========================
+    def _load_allowed_origins(self) -> List[str]:
+        origins = self._settings.ALLOWED_ORIGINS
+
+        if not origins:
+            return []
+
+        if isinstance(origins, str):
+            return [origins]
+
+        return list(origins)
 
     # =========================
     # VALIDATE ORIGIN
     # =========================
     def validate(self, origin: Optional[str]) -> OriginContext:
-
         if not origin:
             return OriginContext(
                 origin="unknown",
@@ -65,35 +80,30 @@ class OriginGuard:
     # CHECK LOGIC
     # =========================
     def _is_allowed(self, origin: str) -> bool:
-
         if "*" in self.allowed_origins:
             return True
 
+        if origin in self.allowed_origins:
+            return True
+
+        # wildcard subdomains support
         for allowed in self.allowed_origins:
-
-            # wildcard subdomain support
             if allowed.startswith("*."):
-                domain = allowed[2:]
-                if origin.endswith(domain):
+                base = allowed[2:]
+                if origin.endswith(base):
                     return True
-                continue
-
-            if origin == allowed:
-                return True
 
         return False
 
     # =========================
-    # NORMALIZATION (STRICT)
+    # NORMALIZATION
     # =========================
     def _normalize(self, origin: str) -> str:
-
         try:
             parsed = urlparse(origin)
 
-            # always prefer hostname if available
-            if parsed.hostname:
-                return parsed.hostname.lower().strip()
+            if parsed.scheme:
+                return parsed.netloc.lower().strip()
 
             return origin.lower().strip()
 
