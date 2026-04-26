@@ -6,52 +6,27 @@ from typing import Dict, Optional, Literal
 
 
 # =========================
-# PLAN DEFINITIONS
+# PLAN TYPES
 # =========================
 PlanType = Literal["free", "pro", "premium"]
 
 
 @dataclass
 class PlanLimits:
-    """
-    Hard business limits (billing layer)
-
-    NOTE:
-    This layer is NOT security.
-    This layer is NOT rate limiting.
-
-    It defines subscription economics.
-    """
-
     daily_requests: int
     monthly_requests: int
     monthly_price_ton: float
 
 
-# =========================
-# DEFAULT PLAN CONFIG
-# =========================
 PLANS: Dict[PlanType, PlanLimits] = {
-    "free": PlanLimits(
-        daily_requests=50,
-        monthly_requests=3000,
-        monthly_price_ton=0.0,
-    ),
-    "pro": PlanLimits(
-        daily_requests=200,
-        monthly_requests=10000,
-        monthly_price_ton=10.0,
-    ),
-    "premium": PlanLimits(
-        daily_requests=1000,
-        monthly_requests=50000,
-        monthly_price_ton=25.0,
-    ),
+    "free": PlanLimits(50, 3000, 0.0),
+    "pro": PlanLimits(200, 10000, 10.0),
+    "premium": PlanLimits(1000, 50000, 25.0),
 }
 
 
 # =========================
-# USAGE STATE
+# USAGE STATE (IN-MEMORY CACHE)
 # =========================
 @dataclass
 class UsageState:
@@ -74,65 +49,59 @@ class AccessDecision:
 
 
 # =========================
-# ACCESS CONTROLLER (BILLING LAYER)
+# ACCESS CONTROLLER (BILLING POLICY ENGINE)
 # =========================
 class AccessController:
     """
     ROLE:
-    - enforce subscription limits (daily/monthly caps)
-    - enforce plan-based access control
-    - separate from security rate limiting
+    - enforce subscription-based limits
+    - decide ALLOW / DENY based on plan rules
 
     DOES NOT:
-    - handle burst protection (RateLimiter does that)
-    - affect model routing (LLM layer does that)
-    - affect retrieval or cognition
+    - track raw usage metrics (UsageMeter does that)
+    - handle burst protection (RateLimiter)
+    - compute pricing (PricingEngine)
     """
+
+    DAY_SECONDS = 86400
+    MONTH_SECONDS = 2592000
 
     def __init__(self):
         self._usage: Dict[str, UsageState] = {}
 
     # =========================
-    # INTERNAL HELPERS
+    # INTERNAL
     # =========================
-    def _get_state(self, user_id: str) -> UsageState:
+    def _state(self, user_id: str) -> UsageState:
         if user_id not in self._usage:
             self._usage[user_id] = UsageState()
         return self._usage[user_id]
 
-    def _reset_daily_if_needed(self, state: UsageState) -> None:
+    def _reset(self, state: UsageState) -> None:
         now = time.time()
-        if now - state.day_window_start >= 86400:  # 24h
+
+        if now - state.day_window_start >= self.DAY_SECONDS:
             state.daily_count = 0
             state.day_window_start = now
 
-    def _reset_monthly_if_needed(self, state: UsageState) -> None:
-        now = time.time()
-        if now - state.month_window_start >= 2592000:  # ~30 days
+        if now - state.month_window_start >= self.MONTH_SECONDS:
             state.monthly_count = 0
             state.month_window_start = now
 
     # =========================
-    # MAIN ACCESS CHECK
+    # DECISION ENGINE
     # =========================
-    def check(
-        self,
-        user_id: str,
-        plan: PlanType = "free",
-    ) -> AccessDecision:
+    def check(self, user_id: str, plan: PlanType = "free") -> AccessDecision:
 
         limits = PLANS[plan]
-        state = self._get_state(user_id)
+        state = self._state(user_id)
 
-        self._reset_daily_if_needed(state)
-        self._reset_monthly_if_needed(state)
+        self._reset(state)
 
-        # remaining calculation
         remaining_daily = limits.daily_requests - state.daily_count
         remaining_monthly = limits.monthly_requests - state.monthly_count
 
-        # hard deny conditions
-        if state.daily_count >= limits.daily_requests:
+        if remaining_daily <= 0:
             return AccessDecision(
                 allowed=False,
                 reason="daily_limit_exceeded",
@@ -140,7 +109,7 @@ class AccessController:
                 remaining_monthly=max(0, remaining_monthly),
             )
 
-        if state.monthly_count >= limits.monthly_requests:
+        if remaining_monthly <= 0:
             return AccessDecision(
                 allowed=False,
                 reason="monthly_limit_exceeded",
@@ -155,16 +124,12 @@ class AccessController:
         )
 
     # =========================
-    # COMMIT USAGE (CALL AFTER SUCCESSFUL REQUEST)
+    # COMMIT (ONLY AFTER APPROVED EXECUTION)
     # =========================
-    def commit(
-        self,
-        user_id: str,
-    ) -> None:
-        state = self._get_state(user_id)
+    def commit(self, user_id: str) -> None:
 
-        self._reset_daily_if_needed(state)
-        self._reset_monthly_if_needed(state)
+        state = self._state(user_id)
+        self._reset(state)
 
         state.daily_count += 1
         state.monthly_count += 1
@@ -173,5 +138,4 @@ class AccessController:
     # ADMIN RESET
     # =========================
     def reset(self, user_id: str) -> None:
-        if user_id in self._usage:
-            del self._usage[user_id]
+        self._usage.pop(user_id, None)
