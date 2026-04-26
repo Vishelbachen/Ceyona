@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import List, Optional
 
-from pydantic import Field, field_validator
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     # =========================
     # SECURITY POLICY
     # =========================
-    ALLOWED_ORIGINS: List[str] = Field(default_factory=list)
+    ALLOWED_ORIGINS: List[str]
 
     # =========================
     # VALIDATION / NORMALIZATION
@@ -82,19 +82,23 @@ class Settings(BaseSettings):
         Supports:
         - "a.com,b.com"
         - ["a.com", "b.com"]
-        - None
         """
 
         if v is None:
-            return []
+            raise ValueError("ALLOWED_ORIGINS must be set")
 
         if isinstance(v, str):
-            return [item.strip() for item in v.split(",") if item.strip()]
+            parsed = [item.strip() for item in v.split(",") if item.strip()]
+            if not parsed:
+                raise ValueError("ALLOWED_ORIGINS cannot be empty")
+            return parsed
 
         if isinstance(v, list):
+            if not v:
+                raise ValueError("ALLOWED_ORIGINS cannot be empty")
             return v
 
-        return []
+        raise ValueError("Invalid ALLOWED_ORIGINS format")
 
 
 # =========================
