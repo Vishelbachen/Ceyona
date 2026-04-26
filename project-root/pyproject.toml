@@ -9,6 +9,7 @@ dependencies = [
     "uvicorn[standard]>=0.43,<0.45",
 
     "groq>=1.1,<2.0",
+    "huggingface-hub>=0.20,<1.0",
 
     "supabase>=2.8,<3.0",
     "httpx[http2]>=0.28,<0.30",
