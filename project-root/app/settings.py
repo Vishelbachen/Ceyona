@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from functools import lru_cache
 from typing import List, Optional
 
@@ -6,37 +8,44 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 # =========================
-# 🧱 BASE CONFIG
+# SETTINGS CORE
 # =========================
 class Settings(BaseSettings):
+    """
+    Single source of truth for environment configuration.
+
+    ROLE:
+    - load environment variables
+    - normalize configuration
+    - provide DI-safe settings object
+
+    DOES NOT:
+    - contain business logic
+    - interact with runtime systems
+    - perform I/O operations beyond env loading
+    """
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
-        case_sensitive=True,
         extra="ignore",
     )
 
     # =========================
-    # 📡 APP CORE
+    # CORE SECURITY
     # =========================
     BOT_TOKEN: str
-    WEBHOOK_URL: str
+    JWT_SECRET: str
+    ENCRYPTION_KEY: str
 
     # =========================
-    # 🔐 SECURITY
-    # =========================
-    JWT_SECRET: str = Field(min_length=16)
-    ENCRYPTION_KEY: str = Field(min_length=16)
-    ALLOWED_ORIGINS: List[str] = Field(default_factory=list)
-
-    # =========================
-    # 🤖 LLM PROVIDERS
+    # LLM PROVIDERS
     # =========================
     GROQ_API_KEY: str
-    HF_TOKEN: Optional[str] = None
+    HF_TOKEN: str
 
     # =========================
-    # 🧠 MEMORY / STORAGE
+    # MEMORY / STORAGE
     # =========================
     SUPABASE_URL: str
     SUPABASE_ANON_KEY: str
@@ -44,70 +53,60 @@ class Settings(BaseSettings):
     REDIS_URL: str
 
     # =========================
-    # 🌍 EXTERNAL SERVICES
+    # EXTERNAL SERVICES
     # =========================
     BREVO_API_KEY: Optional[str] = None
     MAPBOX_TOKEN: Optional[str] = None
     OPENWEATHER_API_KEY: Optional[str] = None
     SERPAPI_KEY: Optional[str] = None
-
-    # =========================
-    # 💳 ECONOMY / BLOCKCHAIN
-    # =========================
-    TON_WALLET: Optional[str] = None
-
-    # =========================
-    # 📊 OBSERVABILITY
-    # =========================
     SENTRY_DSN: Optional[str] = None
 
     # =========================
-    # ⚙️ INTERNAL FLAGS (future-proof)
+    # ECONOMY / DEPLOYMENT
     # =========================
-    ENVIRONMENT: str = "production"
-    DEBUG: bool = False
+    TON_WALLET: str
+    WEBHOOK_URL: Optional[str] = None
 
     # =========================
-    # 🧠 VALIDATION LAYER
+    # SECURITY POLICY
+    # =========================
+    ALLOWED_ORIGINS: List[str] = Field(default_factory=list)
+
+    # =========================
+    # VALIDATION / NORMALIZATION
     # =========================
     @field_validator("ALLOWED_ORIGINS", mode="before")
     @classmethod
-    def parse_origins(cls, v):
+    def parse_allowed_origins(cls, v):
         """
         Supports:
-        - "a,b,c"
-        - ["a", "b"]
-        - "a"
+        - "a.com,b.com"
+        - ["a.com", "b.com"]
+        - None
         """
+
         if v is None:
             return []
+
+        if isinstance(v, str):
+            return [item.strip() for item in v.split(",") if item.strip()]
+
         if isinstance(v, list):
             return v
-        if isinstance(v, str):
-            return [x.strip() for x in v.split(",") if x.strip()]
-        return v
 
-    @field_validator("JWT_SECRET", "ENCRYPTION_KEY")
-    @classmethod
-    def validate_secrets(cls, v: str):
-        if len(v) < 16:
-            raise ValueError("Secret must be at least 16 characters")
-        return v
+        return []
 
 
 # =========================
-# ⚡ SINGLETON ACCESSOR
+# SINGLETON ACCESS (DI SAFE)
 # =========================
 @lru_cache
 def get_settings() -> Settings:
     """
-    Cached singleton settings instance.
-    Used by bootstrap + DI container.
+    Cached settings instance for dependency injection.
+
+    IMPORTANT:
+    - never reloaded at runtime
+    - ensures deterministic configuration across system
     """
     return Settings()
-
-
-# =========================
-# 🧩 GLOBAL ACCESS (SAFE)
-# =========================
-settings = get_settings()
