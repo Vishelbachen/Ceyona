@@ -1,111 +1,77 @@
 from __future__ import annotations
 
+from typing import Any, Dict
+
 import httpx
-from typing import Any, Dict, Optional
-
-from infra.config_loader import ConfigLoader
 
 
+# =========================
+# TON CLIENT
+# =========================
 class TONClient:
     """
-    Thin TON network client wrapper.
-
     ROLE:
-    - interact with TON API / wallet backend
-    - send transactions
-    - fetch balances / status
+    - thin wrapper over TON API
+    - fetch wallet data (balance, transactions if needed)
+    - provide raw network responses
 
-    DOES NOT:
-    - decide pricing logic
-    - enforce access rules
-    - handle subscription logic
+    STRICT RULES:
+    - no business logic
+    - no pricing logic
+    - no access decisions
+    - no caching policy (handled by WalletManager)
     """
 
-    def __init__(
-        self,
-        base_url: Optional[str] = None,
-        timeout: float = 10.0,
-    ):
-        config = ConfigLoader.load()
+    def __init__(self, base_url: str = "https://toncenter.com/api/v2", api_key: str | None = None):
+        self.base_url = base_url
+        self.api_key = api_key
 
-        self.base_url = base_url or "https://toncenter.com/api/v2"
-        self.api_key = config.ton_wallet  # assumes wallet/API binding key or proxy token
-        self.timeout = timeout
-
-        self.client = httpx.AsyncClient(timeout=self.timeout)
+        self._client = httpx.AsyncClient(timeout=10.0)
 
     # =========================
-    # INTERNAL REQUEST WRAPPER
+    # INTERNAL REQUEST
     # =========================
-    async def _request(
-        self,
-        method: str,
-        endpoint: str,
-        params: Optional[Dict[str, Any]] = None,
-        json: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+    async def _get(self, endpoint: str, params: Dict[str, Any]) -> Dict[str, Any]:
+
+        if self.api_key:
+            params["api_key"] = self.api_key
 
         url = f"{self.base_url}/{endpoint}"
 
-        headers = {
-            "Authorization": f"Bearer {self.api_key}"
-        }
-
-        response = await self.client.request(
-            method=method,
-            url=url,
-            params=params,
-            json=json,
-            headers=headers,
-        )
-
+        response = await self._client.get(url, params=params)
         response.raise_for_status()
+
         return response.json()
 
     # =========================
-    # WALLET METHODS
+    # WALLET BALANCE
     # =========================
-    async def get_balance(self, address: str) -> Dict[str, Any]:
-        return await self._request(
-            "GET",
+    async def get_balance(self, wallet_address: str) -> Dict[str, Any]:
+
+        return await self._get(
             "getAddressBalance",
-            params={"address": address},
-        )
-
-    async def get_transactions(self, address: str, limit: int = 10) -> Dict[str, Any]:
-        return await self._request(
-            "GET",
-            "getTransactions",
-            params={
-                "address": address,
-                "limit": limit,
-            },
+            {"address": wallet_address},
         )
 
     # =========================
-    # TRANSFER
+    # TRANSACTION HISTORY (OPTIONAL FUTURE USE)
     # =========================
-    async def send_transaction(
+    async def get_transactions(
         self,
-        to_address: str,
-        amount_nano: int,
-        comment: Optional[str] = None,
+        wallet_address: str,
+        limit: int = 10,
     ) -> Dict[str, Any]:
 
-        payload = {
-            "to_address": to_address,
-            "amount": amount_nano,
-            "comment": comment,
-        }
-
-        return await self._request(
-            "POST",
-            "sendTransaction",
-            json=payload,
+        return await self._get(
+            "getTransactions",
+            {
+                "address": wallet_address,
+                "limit": limit,
+            },
         )
 
     # =========================
     # CLEANUP
     # =========================
     async def close(self) -> None:
-        await self.client.aclose()
+        await self._client.aclose()
