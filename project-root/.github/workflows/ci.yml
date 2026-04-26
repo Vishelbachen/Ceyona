@@ -12,21 +12,56 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # =========================
+      # PYTHON SETUP
+      # =========================
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
+      # =========================
+      # CACHE (SPEED OPTIMIZATION)
+      # =========================
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('pyproject.toml') }}
+
+      # =========================
+      # INSTALL
+      # =========================
       - name: Upgrade pip
         run: pip install --upgrade pip
 
       - name: Install dependencies
         run: pip install .
 
-      - name: Import check
+      # =========================
+      # ARCHITECTURE SAFETY CHECK
+      # =========================
+      - name: Import check (entrypoint safety)
         run: python -c "import app.main"
 
-      - name: Lint (ruff)
+      - name: Check critical module imports
+        run: |
+          python -c "import retrieval.router"
+          python -c "import core.execution.orchestrator"
+          python -c "import cognition.intent_engine"
+
+      # =========================
+      # LINTING
+      # =========================
+      - name: Ruff check
         run: |
           pip install ruff
           ruff check .
+
+      # =========================
+      # TESTS (MINIMAL BUT IMPORTANT)
+      # =========================
+      - name: Run tests
+        run: |
+          pip install pytest pytest-asyncio
+          pytest -q
