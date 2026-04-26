@@ -1,113 +1,85 @@
-from dataclasses import dataclass
-from typing import Any, Dict, Literal, Optional
+from __future__ import annotations
 
-from llm.llm_router import route_llm
-
-
-SafetyDecision = Literal["ALLOW", "DENY", "DEGRADED"]
+from typing import Dict, Any, Optional, Literal
 
 
-@dataclass
-class SafetyInput:
-    prompt: str
-    context: Optional[Dict[str, Any]] = None
-    intent: Optional[Dict[str, Any]] = None
+# =========================
+# SAFETY RESULT TYPES
+# =========================
+SafetyDecision = Literal["allow", "deny", "degrade"]
 
 
-@dataclass
-class SafetyOutput:
-    decision: SafetyDecision
-    confidence: float
-    reason: str
-    metadata: Dict[str, Any]
-
-
+# =========================
+# SAFETY AGENT
+# =========================
 class SafetyAgent:
     """
-    Safety Agent (policy enforcement layer)
-
     ROLE:
-    - classify risk level
-    - enforce deterministic safety policy
-    - block / degrade / allow execution
+    - evaluate safety of user input / system output
+    - enforce policy constraints
+    - act as final guard before response synthesis
 
-    DOES NOT:
-    - generate answers
-    - perform reasoning
-    - influence content generation
-    - access memory/retrieval
+    STRICT RULES:
+    - no generation
+    - no reasoning synthesis
+    - no business logic
+    - no access control decisions (only safety classification)
     """
 
-    def __init__(self):
-        self.role = "safety"
+    def __init__(self, llm_safety_client):
+        self._llm = llm_safety_client
 
-    async def run(self, input_data: SafetyInput) -> SafetyOutput:
+    # =========================
+    # MAIN SAFETY CHECK
+    # =========================
+    async def evaluate(
+        self,
+        prompt: str,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
 
-        # =========================
-        # 1. FAST SAFETY CHECK (LLM CLASSIFIER)
-        # =========================
-        result = await route_llm(
-            mode="safety",
-            messages=self._build_messages(input_data)
+        """
+        Returns safety classification result.
+        """
+
+        result = await self._llm.generate(
+            model="safety",
+            prompt=self._build_safety_prompt(prompt),
+            context=context or {},
         )
 
-        decision, confidence, reason = self._parse(result)
+        decision = self._parse_decision(result)
 
-        return SafetyOutput(
-            decision=decision,
-            confidence=confidence,
-            reason=reason,
-            metadata={
-                "agent": "safety",
-                "raw_model_output": result,
-            }
-        )
+        return {
+            "agent": "safety",
+            "decision": decision,
+            "raw": result,
+        }
 
     # =========================
     # PROMPT BUILDER
     # =========================
-    def _build_messages(self, input_data: SafetyInput):
-
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are a deterministic safety classification system.\n"
-                    "Classify the request into one of:\n"
-                    "- ALLOW: safe to proceed\n"
-                    "- DENY: unsafe, must be blocked\n"
-                    "- DEGRADED: allowed but must reduce capabilities\n\n"
-                    "Return strict JSON:\n"
-                    "{ decision: str, confidence: float, reason: str }"
-                )
-            },
-            {
-                "role": "user",
-                "content": input_data.prompt
-            }
-        ]
-
-        return messages
+    def _build_safety_prompt(self, prompt: str) -> str:
+        return (
+            "Evaluate the following input for policy, safety, and harmful intent.\n\n"
+            "Return one of:\n"
+            "- allow\n"
+            "- deny\n"
+            "- degrade\n\n"
+            f"Input:\n{prompt}\n"
+        )
 
     # =========================
-    # PARSING LAYER (STRICT)
+    # PARSE SAFETY OUTPUT
     # =========================
-    def _parse(self, result: Any):
+    def _parse_decision(self, result: str) -> SafetyDecision:
 
-        try:
-            data = result["content"]
+        normalized = result.strip().lower()
 
-            # expected structured output
-            decision = data.get("decision", "DEGRADED")
-            confidence = float(data.get("confidence", 0.5))
-            reason = data.get("reason", "no reason provided")
+        if "deny" in normalized:
+            return "deny"
 
-            # enforce hard constraints
-            if decision not in ("ALLOW", "DENY", "DEGRADED"):
-                decision = "DEGRADED"
+        if "degrade" in normalized:
+            return "degrade"
 
-            return decision, confidence, reason
-
-        except Exception:
-            # fail-safe default
-            return "DEGRADED", 0.3, "parsing_error"
+        return "allow"
