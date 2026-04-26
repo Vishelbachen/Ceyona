@@ -5,11 +5,6 @@ from typing import Optional, Dict, Any
 import time
 import jwt
 
-from infra.config_loader import get_settings
-
-
-settings = get_settings()
-
 
 # =========================
 # CONTEXT OBJECT
@@ -33,23 +28,20 @@ class AuthService:
     - verify JWT tokens
     - extract identity context
     - attach roles/claims
-    - provide safe auth context for pipeline
 
     DOES NOT:
-    - make authorization decisions beyond identity
     - access business logic
     - interact with LLM / agents / memory
     """
 
-    def __init__(self):
-        self.secret = settings.JWT_SECRET
-        self.algorithm = "HS256"
+    def __init__(self, jwt_secret: str, algorithm: str = "HS256"):
+        self.secret = jwt_secret
+        self.algorithm = algorithm
 
     # =========================
     # VERIFY TOKEN
     # =========================
     def verify_token(self, token: str) -> Optional[AuthContext]:
-
         try:
             payload = jwt.decode(
                 token,
@@ -69,7 +61,6 @@ class AuthService:
     # BUILD CONTEXT
     # =========================
     def _build_context(self, payload: Dict[str, Any]) -> AuthContext:
-
         return AuthContext(
             user_id=payload.get("sub", "anonymous"),
             is_authenticated=True,
@@ -82,7 +73,7 @@ class AuthService:
         )
 
     # =========================
-    # OPTIONAL: ISSUE TOKEN (SERVICE SIDE)
+    # ISSUE TOKEN
     # =========================
     def issue_token(
         self,
