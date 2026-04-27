@@ -4,11 +4,11 @@ import uvicorn
 from fastapi import FastAPI
 
 from app.bootstrap import get_container
-from infra.config_loader import get_settings
+from app.settings import get_settings
 
 
 # =========================
-# APP INIT (ZERO BUSINESS LOGIC)
+# INIT
 # =========================
 settings = get_settings()
 container = get_container()
@@ -22,7 +22,7 @@ app = FastAPI(
 
 
 # =========================
-# HEALTH CHECK
+# HEALTH
 # =========================
 @app.get("/health")
 async def health():
@@ -33,31 +33,15 @@ async def health():
 
 
 # =========================
-# CORE ENTRYPOINT (EXAMPLE PIPELINE HOOK)
+# CHAT ENDPOINT
 # =========================
 @app.post("/chat")
 async def chat(payload: dict):
-    """
-    Minimal transport layer endpoint.
-
-    ROLE:
-    - receive request
-    - delegate to orchestrator
-    - return response
-
-    DOES NOT:
-    - interpret logic
-    - decide routing
-    - touch internal layers directly
-    """
-
     user_id = payload.get("user_id", "anonymous")
     message = payload.get("message", "")
     origin = payload.get("origin")
 
-    # =========================
     # ORIGIN CHECK
-    # =========================
     origin_result = container.origin_guard.validate(origin)
     if not origin_result.is_allowed:
         return {
@@ -65,17 +49,13 @@ async def chat(payload: dict):
             "reason": origin_result.reason,
         }
 
-    # =========================
-    # RATE LIMIT CHECK
-    # =========================
+    # RATE LIMIT
     if not container.rate_limiter.allow(user_id):
         return {
             "error": "rate_limited",
         }
 
-    # =========================
-    # ACCESS CHECK (BILLING LAYER)
-    # =========================
+    # ACCESS CHECK
     access = container.access_controller.check(user_id)
 
     if not access.allowed:
@@ -84,23 +64,26 @@ async def chat(payload: dict):
             "reason": access.reason,
         }
 
-    # =========================
-    # MAIN ORCHESTRATION CALL
-    # =========================
-    result = await container.orchestrator.run(
-        user_id=user_id,
-        message=message,
-    )
+    # MAIN EXECUTION
+    try:
+        result = await container.orchestrator.run(
+            user_id=user_id,
+            message=message,
+        )
 
-    # =========================
-    # COMMIT USAGE (AFTER SUCCESS)
-    # =========================
+    except Exception as e:
+        return {
+            "error": "orchestrator_failed",
+            "detail": str(e),
+        }
+
+    # COMMIT ONLY ON SUCCESS
     container.access_controller.commit(user_id)
 
-    # optional telemetry
+    # usage tracking (temporary safe placeholder)
     container.usage_meter.record(
         user_id=user_id,
-        cost=0.0,  # placeholder until pricing hook is wired per request
+        cost=getattr(result, "cost", 0.0) if hasattr(result, "cost") else 0.0,
     )
 
     return {
@@ -113,7 +96,7 @@ async def chat(payload: dict):
 
 
 # =========================
-# ENTRYPOINT
+# RUN
 # =========================
 if __name__ == "__main__":
     uvicorn.run(
