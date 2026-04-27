@@ -6,20 +6,10 @@ from typing import List, Optional
 
 
 # =========================
-# SETTINGS MODEL
+# SETTINGS MODEL (SINGLE SOURCE OF TRUTH)
 # =========================
 @dataclass
 class Settings:
-    """
-    SINGLE SOURCE OF TRUTH (v4.7)
-
-    Contains:
-    - secrets
-    - limits
-    - model config
-    - pricing config
-    - system toggles
-    """
 
     # =========================
     # CORE SECURITY
@@ -54,13 +44,12 @@ class Settings:
     # PRICING (INTERNAL CREDITS)
     # =========================
     BASE_COST: float = 0.001
-
     COST_FAST: float = 0.002
     COST_GENERAL: float = 0.01
     COST_HEAVY: float = 0.05
 
     # =========================
-    # TON ECONOMY LAYER
+    # TON ECONOMY
     # =========================
     TON_WALLET: str
     TON_TO_CREDITS_RATE: int = 5000
@@ -82,12 +71,17 @@ class Settings:
     SENTRY_DSN: Optional[str] = None
 
     # =========================
+    # NOTIFICATIONS (BREVO)
+    # =========================
+    BREVO_API_KEY: Optional[str] = None
+
+    # =========================
     # SYSTEM
     # =========================
     WEBHOOK_URL: Optional[str] = None
 
     # =========================
-    # LOAD FROM ENV
+    # ENV LOADER
     # =========================
     @staticmethod
     def load() -> "Settings":
@@ -113,12 +107,14 @@ class Settings:
             SERPAPI_KEY=os.getenv("SERPAPI_KEY"),
             SENTRY_DSN=os.getenv("SENTRY_DSN"),
 
+            BREVO_API_KEY=os.getenv("BREVO_API_KEY"),
+
             WEBHOOK_URL=os.getenv("WEBHOOK_URL"),
         )
 
 
 # =========================
-# SINGLETON ACCESSOR
+# SINGLETON
 # =========================
 _settings: Settings | None = None
 
