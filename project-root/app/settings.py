@@ -11,19 +11,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # SETTINGS CORE
 # =========================
 class Settings(BaseSettings):
-    """
-    Single source of truth for environment configuration.
-
-    ROLE:
-    - load environment variables
-    - normalize configuration
-    - provide DI-safe settings object
-
-    DOES NOT:
-    - contain business logic
-    - interact with runtime systems
-    - perform I/O operations beyond env loading
-    """
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -78,19 +65,20 @@ class Settings(BaseSettings):
     @field_validator("ALLOWED_ORIGINS", mode="before")
     @classmethod
     def parse_allowed_origins(cls, v):
-        """
-        Supports:
-        - "a.com,b.com"
-        - ["a.com", "b.com"]
-        """
 
         if v is None:
             raise ValueError("ALLOWED_ORIGINS must be set")
 
+        # ✅ NEW: support wildcard "*"
         if isinstance(v, str):
+            if v.strip() == "*":
+                return ["*"]
+
             parsed = [item.strip() for item in v.split(",") if item.strip()]
+
             if not parsed:
                 raise ValueError("ALLOWED_ORIGINS cannot be empty")
+
             return parsed
 
         if isinstance(v, list):
@@ -106,11 +94,4 @@ class Settings(BaseSettings):
 # =========================
 @lru_cache
 def get_settings() -> Settings:
-    """
-    Cached settings instance for dependency injection.
-
-    IMPORTANT:
-    - never reloaded at runtime
-    - ensures deterministic configuration across system
-    """
     return Settings()
