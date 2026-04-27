@@ -1,4 +1,4 @@
-from future import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass
 
@@ -18,160 +18,110 @@ from llm.model_router import ModelRouter
 
 from core.execution.orchestrator import Orchestrator
 
-=========================
 
-DI CONTAINER (LIGHTWEIGHT)
-
-=========================
-
-@dataclass
+# =========================
+# DI CONTAINER
+# =========================
+@dataclass(frozen=True)
 class Container:
-"""
-Central dependency container.
+    auth: AuthService
+    encryption: EncryptionService
+    rate_limiter: RateLimiter
+    origin_guard: OriginGuard
 
-ROLE:  
-- instantiate core system components  
-- manage dependency wiring  
-- provide single source of runtime graph  
+    access_controller: AccessController
+    pricing_engine: PricingEngine
+    usage_meter: UsageMeter
+    wallet_manager: WalletManager
 
-DOES NOT:  
-- contain logic  
-- execute workflows  
-- make decisions  
-"""  
+    model_router: ModelRouter
+    orchestrator: Orchestrator
 
-settings = get_settings()  
 
-# =========================  
-# SECURITY LAYER  
-# =========================  
-auth: AuthService  
-encryption: EncryptionService  
-rate_limiter: RateLimiter  
-origin_guard: OriginGuard  
-
-# =========================  
-# PAYMENTS LAYER  
-# =========================  
-access_controller: AccessController  
-pricing_engine: PricingEngine  
-usage_meter: UsageMeter  
-wallet_manager: WalletManager  
-
-# =========================  
-# LLM LAYER  
-# =========================  
-model_router: ModelRouter  
-
-# =========================  
-# EXECUTION CORE  
-# =========================  
-orchestrator: Orchestrator
-
-=========================
-
-BOOTSTRAP FUNCTION
-
-=========================
-
+# =========================
+# BOOTSTRAP
+# =========================
 def build_container() -> Container:
-"""
-Creates fully wired application graph.
+    settings = get_settings()
 
-ORDER IS IMPORTANT (dependency-safe construction).  
-"""  
+    # =========================
+    # SECURITY LAYER
+    # =========================
+    auth = AuthService(settings=settings)
 
-settings = get_settings()  
+    encryption = EncryptionService(settings=settings)
 
-# =========================  
-# SECURITY  
-# =========================  
-auth = AuthService(  
-    settings=settings  
-)  
+    rate_limiter = RateLimiter(
+        max_requests_per_window=settings.RATE_LIMIT_PER_MINUTE,
+        window_seconds=settings.RATE_LIMIT_WINDOW_SECONDS,
+    )
 
-encryption = EncryptionService(  
-    settings=settings  # ← ЕДИНСТВЕННОЕ НОВОЕ ИСПРАВЛЕНИЕ  
-)  
+    origin_guard = OriginGuard(settings=settings)
 
-rate_limiter = RateLimiter(  
-    max_requests_per_minute=60,  
-    window_seconds=60,  
-)  
+    # =========================
+    # PAYMENTS LAYER
+    # =========================
+    pricing_engine = PricingEngine()
 
-origin_guard = OriginGuard()  
+    access_controller = AccessController()
 
-# =========================  
-# PAYMENTS  
-# =========================  
-pricing_engine = PricingEngine()  
+    usage_meter = UsageMeter()
 
-access_controller = AccessController()  
+    from payments.ton_client import TONClient
 
-usage_meter = UsageMeter()  
+    ton_client = TONClient(
+        api_key=settings.TON_WALLET
+    )
 
-# TON client is assumed to exist in your architecture  
-from payments.ton_client import TONClient  
+    wallet_manager = WalletManager(
+        ton_client=ton_client
+    )
 
-ton_client = TONClient(  
-    api_key=settings.TON_WALLET  
-)  
+    # =========================
+    # LLM LAYER
+    # =========================
+    model_router = ModelRouter(
+        groq_key=settings.GROQ_API_KEY,
+        hf_token=settings.HF_TOKEN,
+    )
 
-wallet_manager = WalletManager(  
-    ton_client=ton_client  
-)  
+    # =========================
+    # EXECUTION CORE
+    # =========================
+    orchestrator = Orchestrator(
+        auth=auth,
+        rate_limiter=rate_limiter,
+        origin_guard=origin_guard,
+        access_controller=access_controller,
+        pricing_engine=pricing_engine,
+        usage_meter=usage_meter,
+        model_router=model_router,
+    )
 
-# =========================  
-# LLM  
-# =========================  
-model_router = ModelRouter(  
-    groq_key=settings.GROQ_API_KEY,  
-    hf_token=settings.HF_TOKEN,  
-)  
+    return Container(
+        auth=auth,
+        encryption=encryption,
+        rate_limiter=rate_limiter,
+        origin_guard=origin_guard,
+        access_controller=access_controller,
+        pricing_engine=pricing_engine,
+        usage_meter=usage_meter,
+        wallet_manager=wallet_manager,
+        model_router=model_router,
+        orchestrator=orchestrator,
+    )
 
-# =========================  
-# CORE ORCHESTRATION  
-# =========================  
-orchestrator = Orchestrator(  
-    auth=auth,  
-    rate_limiter=rate_limiter,  
-    origin_guard=origin_guard,  
-    access_controller=access_controller,  
-    pricing_engine=pricing_engine,  
-    usage_meter=usage_meter,  
-    model_router=model_router,  
-)  
 
-return Container(  
-    auth=auth,  
-    encryption=encryption,  
-    rate_limiter=rate_limiter,  
-    origin_guard=origin_guard,  
-    access_controller=access_controller,  
-    pricing_engine=pricing_engine,  
-    usage_meter=usage_meter,  
-    wallet_manager=wallet_manager,  
-    model_router=model_router,  
-    orchestrator=orchestrator,  
-)
-
-=========================
-
-GLOBAL SINGLETON (OPTIONAL)
-
-=========================
-
+# =========================
+# SINGLETON (RUNTIME SAFE)
+# =========================
 _container: Container | None = None
 
+
 def get_container() -> Container:
-"""
-Lazy singleton container.
+    global _container
 
-Safe for FastAPI / Telegram webhook runtime.  
-"""  
-global _container  
+    if _container is None:
+        _container = build_container()
 
-if _container is None:  
-    _container = build_container()  
-
-return _container
+    return _container
