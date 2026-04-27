@@ -33,8 +33,8 @@ class OriginGuard:
     - no dependency on internal systems
     """
 
-    def __init__(self, settings: Settings):
-        self._settings = settings
+    def __init__(self, settings: Settings | None = None):  # ← MINIMAL FIX
+        self._settings = settings or Settings()  # ← fallback safe init
         self.allowed_origins = self._load_allowed_origins()
 
     # =========================
@@ -86,7 +86,6 @@ class OriginGuard:
         if origin in self.allowed_origins:
             return True
 
-        # wildcard subdomains support
         for allowed in self.allowed_origins:
             if allowed.startswith("*."):
                 base = allowed[2:]
