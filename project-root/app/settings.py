@@ -96,8 +96,7 @@ class Settings:
             JWT_SECRET=os.getenv("JWT_SECRET"),
             ENCRYPTION_KEY=os.getenv("ENCRYPTION_KEY"),
 
-            ALLOWED_ORIGINS=os.getenv("ALLOWED_ORIGINS", "*").split(","),
-
+            
             GROQ_API_KEY=os.getenv("GROQ_API_KEY"),
             HF_TOKEN=os.getenv("HF_TOKEN"),
 
