@@ -1,30 +1,21 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
-from typing import List, Optional
+from dataclasses import dataclass
+from typing import List
 
 
 # =========================
-# SETTINGS MODEL (SINGLE SOURCE OF TRUTH)
+# CORE SETTINGS
 # =========================
-@dataclass
+@dataclass(frozen=True)
 class Settings:
-
     # =========================
     # CORE SECURITY
     # =========================
     BOT_TOKEN: str
     JWT_SECRET: str
     ENCRYPTION_KEY: str
-
-    ALLOWED_ORIGINS: List[str]
-
-    # =========================
-    # RATE LIMITING
-    # =========================
-    RATE_LIMIT_REQUESTS: int = 60
-    RATE_LIMIT_WINDOW: int = 60
 
     # =========================
     # LLM PROVIDERS
@@ -33,96 +24,113 @@ class Settings:
     HF_TOKEN: str
 
     # =========================
-    # MODEL DEFAULTS
-    # =========================
-    FAST_MODEL: str = "llama-3.1-8b-instant"
-    GENERAL_MODEL: str = "llama-3.3-70b-versatile"
-    HEAVY_MODEL: str = "gpt-oss-120b"
-    SAFETY_MODEL: str = "gpt-oss-safeguard-20b"
-
-    # =========================
-    # PRICING (INTERNAL CREDITS)
-    # =========================
-    BASE_COST: float = 0.001
-    COST_FAST: float = 0.002
-    COST_GENERAL: float = 0.01
-    COST_HEAVY: float = 0.05
-
-    # =========================
-    # TON ECONOMY
-    # =========================
-    TON_WALLET: str
-    TON_TO_CREDITS_RATE: int = 5000
-
-    # =========================
     # MEMORY / STORAGE
     # =========================
-    SUPABASE_URL: Optional[str] = None
-    SUPABASE_ANON_KEY: Optional[str] = None
-    SUPABASE_SERVICE_ROLE_KEY: Optional[str] = None
-    REDIS_URL: Optional[str] = None
+    SUPABASE_URL: str
+    SUPABASE_ANON_KEY: str
+    SUPABASE_SERVICE_ROLE_KEY: str
+    REDIS_URL: str
 
     # =========================
     # EXTERNAL SERVICES
     # =========================
-    OPENWEATHER_API_KEY: Optional[str] = None
-    MAPBOX_TOKEN: Optional[str] = None
-    SERPAPI_KEY: Optional[str] = None
-    SENTRY_DSN: Optional[str] = None
+    BREVO_API_KEY: str
+    MAPBOX_TOKEN: str
+    OPENWEATHER_API_KEY: str
+    SERPAPI_KEY: str
+    SENTRY_DSN: str
 
     # =========================
-    # NOTIFICATIONS (BREVO)
+    # ECONOMY / DEPLOYMENT
     # =========================
-    BREVO_API_KEY: Optional[str] = None
-
-    # =========================
-    # SYSTEM
-    # =========================
-    WEBHOOK_URL: Optional[str] = None
+    TON_WALLET: str
+    WEBHOOK_URL: str
 
     # =========================
-    # ENV LOADER
+    # POLICY / LIMITS (RUNTIME CONTROL)
     # =========================
-    @staticmethod
-    def load() -> "Settings":
-        return Settings(
-            BOT_TOKEN=os.getenv("BOT_TOKEN"),
-            JWT_SECRET=os.getenv("JWT_SECRET"),
-            ENCRYPTION_KEY=os.getenv("ENCRYPTION_KEY"),
+    RATE_LIMIT_PER_MINUTE: int = 60
+    RATE_LIMIT_WINDOW_SECONDS: int = 60
 
-            ALLOWED_ORIGINS=os.getenv("ALLOWED_ORIGINS", "*").split(","),
+    MAX_CONTEXT_TOKENS: int = 8000
+    MAX_RESPONSE_TOKENS: int = 2000
 
-            GROQ_API_KEY=os.getenv("GROQ_API_KEY"),
-            HF_TOKEN=os.getenv("HF_TOKEN"),
+    # =========================
+    # MODEL DEFAULTS (v4.7 routing)
+    # =========================
+    FAST_MODEL: str = "llama-3.1-8b-instant"
+    GENERAL_MODEL: str = "llama-3.3-70b-versatile"
+    HEAVY_MODEL: str = "gpt-oss-120b"
 
-            TON_WALLET=os.getenv("TON_WALLET"),
+    EMBEDDING_MODEL: str = "bge-large-en-v1.5"
+    RERANKER_MODEL: str = "bge-reranker-large"
 
-            SUPABASE_URL=os.getenv("SUPABASE_URL"),
-            SUPABASE_ANON_KEY=os.getenv("SUPABASE_ANON_KEY"),
-            SUPABASE_SERVICE_ROLE_KEY=os.getenv("SUPABASE_SERVICE_ROLE_KEY"),
-            REDIS_URL=os.getenv("REDIS_URL"),
+    # =========================
+    # SECURITY POLICY
+    # =========================
+    ALLOWED_ORIGINS: List[str] = None
 
-            OPENWEATHER_API_KEY=os.getenv("OPENWEATHER_API_KEY"),
-            MAPBOX_TOKEN=os.getenv("MAPBOX_TOKEN"),
-            SERPAPI_KEY=os.getenv("SERPAPI_KEY"),
-            SENTRY_DSN=os.getenv("SENTRY_DSN"),
-
-            BREVO_API_KEY=os.getenv("BREVO_API_KEY"),
-
-            WEBHOOK_URL=os.getenv("WEBHOOK_URL"),
+    # =========================
+    # INIT SAFETY
+    # =========================
+    def __post_init__(self):
+        object.__setattr__(
+            self,
+            "ALLOWED_ORIGINS",
+            self.ALLOWED_ORIGINS or ["*"]
         )
 
 
 # =========================
-# SINGLETON
+# ENV LOADER
 # =========================
-_settings: Settings | None = None
-
-
 def get_settings() -> Settings:
-    global _settings
+    """
+    SINGLE SOURCE OF TRUTH CONFIG LOADER
+    """
 
-    if _settings is None:
-        _settings = Settings.load()
+    return Settings(
+        # CORE
+        BOT_TOKEN=os.getenv("BOT_TOKEN", ""),
+        JWT_SECRET=os.getenv("JWT_SECRET", ""),
+        ENCRYPTION_KEY=os.getenv("ENCRYPTION_KEY", ""),
 
-    return _settings
+        # LLM
+        GROQ_API_KEY=os.getenv("GROQ_API_KEY", ""),
+        HF_TOKEN=os.getenv("HF_TOKEN", ""),
+
+        # STORAGE
+        SUPABASE_URL=os.getenv("SUPABASE_URL", ""),
+        SUPABASE_ANON_KEY=os.getenv("SUPABASE_ANON_KEY", ""),
+        SUPABASE_SERVICE_ROLE_KEY=os.getenv("SUPABASE_SERVICE_ROLE_KEY", ""),
+        REDIS_URL=os.getenv("REDIS_URL", ""),
+
+        # EXTERNAL
+        BREVO_API_KEY=os.getenv("BREVO_API_KEY", ""),
+        MAPBOX_TOKEN=os.getenv("MAPBOX_TOKEN", ""),
+        OPENWEATHER_API_KEY=os.getenv("OPENWEATHER_API_KEY", ""),
+        SERPAPI_KEY=os.getenv("SERPAPI_KEY", ""),
+        SENTRY_DSN=os.getenv("SENTRY_DSN", ""),
+
+        # ECONOMY
+        TON_WALLET=os.getenv("TON_WALLET", ""),
+        WEBHOOK_URL=os.getenv("WEBHOOK_URL", ""),
+
+        # LIMITS
+        RATE_LIMIT_PER_MINUTE=int(os.getenv("RATE_LIMIT_PER_MINUTE", "60")),
+        RATE_LIMIT_WINDOW_SECONDS=int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60")),
+
+        MAX_CONTEXT_TOKENS=int(os.getenv("MAX_CONTEXT_TOKENS", "8000")),
+        MAX_RESPONSE_TOKENS=int(os.getenv("MAX_RESPONSE_TOKENS", "2000")),
+
+        # MODELS
+        FAST_MODEL=os.getenv("FAST_MODEL", "llama-3.1-8b-instant"),
+        GENERAL_MODEL=os.getenv("GENERAL_MODEL", "llama-3.3-70b-versatile"),
+        HEAVY_MODEL=os.getenv("HEAVY_MODEL", "gpt-oss-120b"),
+
+        EMBEDDING_MODEL=os.getenv("EMBEDDING_MODEL", "bge-large-en-v1.5"),
+        RERANKER_MODEL=os.getenv("RERANKER_MODEL", "bge-reranker-large"),
+
+        # SECURITY
+        ALLOWED_ORIGINS=os.getenv("ALLOWED_ORIGINS", "*").split(","),
+    )
