@@ -20,114 +20,64 @@ from core.execution.orchestrator import Orchestrator
 
 
 # =========================
-# DI CONTAINER (LIGHTWEIGHT)
+# DI CONTAINER
 # =========================
 @dataclass
 class Container:
-    """
-    Central dependency container.
-
-    ROLE:
-    - instantiate core system components
-    - manage dependency wiring
-    - provide single source of runtime graph
-
-    DOES NOT:
-    - contain logic
-    - execute workflows
-    - make decisions
-    """
-
     settings = get_settings()
 
-    # =========================
-    # SECURITY LAYER
-    # =========================
     auth: AuthService
     encryption: EncryptionService
     rate_limiter: RateLimiter
     origin_guard: OriginGuard
 
-    # =========================
-    # PAYMENTS LAYER
-    # =========================
     access_controller: AccessController
     pricing_engine: PricingEngine
     usage_meter: UsageMeter
     wallet_manager: WalletManager
 
-    # =========================
-    # LLM LAYER
-    # =========================
     model_router: ModelRouter
-
-    # =========================
-    # EXECUTION CORE
-    # =========================
     orchestrator: Orchestrator
 
 
 # =========================
-# BOOTSTRAP FUNCTION
+# BOOTSTRAP
 # =========================
 def build_container() -> Container:
-    """
-    Creates fully wired application graph.
-
-    ORDER IS IMPORTANT (dependency-safe construction).
-    """
 
     settings = get_settings()
 
-    # =========================
     # SECURITY
-    # =========================
-    auth = AuthService(
-        settings=settings
-    )
+    auth = AuthService(settings=settings)
 
-    encryption = EncryptionService(
-        settings=settings  # ← ЕДИНСТВЕННОЕ НОВОЕ ИСПРАВЛЕНИЕ
-    )
+    encryption = EncryptionService(settings=settings)
 
     rate_limiter = RateLimiter(
-        max_requests_per_minute=60,
+        max_requests_per_window=60,
         window_seconds=60,
     )
 
-    origin_guard = OriginGuard()
+    # ❗ FIX: OriginGuard требует settings
+    origin_guard = OriginGuard(settings=settings)
 
-    # =========================
     # PAYMENTS
-    # =========================
     pricing_engine = PricingEngine()
-
     access_controller = AccessController()
-
     usage_meter = UsageMeter()
 
-    # TON client is assumed to exist in your architecture
     from payments.ton_client import TONClient
 
-    ton_client = TONClient(
-        api_key=settings.TON_WALLET
-    )
+    ton_client = TONClient(api_key=settings.TON_WALLET)
 
-    wallet_manager = WalletManager(
-        ton_client=ton_client
-    )
+    wallet_manager = WalletManager(ton_client=ton_client)
 
-    # =========================
     # LLM
-    # =========================
     model_router = ModelRouter(
         groq_key=settings.GROQ_API_KEY,
         hf_token=settings.HF_TOKEN,
     )
 
-    # =========================
-    # CORE ORCHESTRATION
-    # =========================
+    # CORE
     orchestrator = Orchestrator(
         auth=auth,
         rate_limiter=rate_limiter,
@@ -153,17 +103,12 @@ def build_container() -> Container:
 
 
 # =========================
-# GLOBAL SINGLETON (OPTIONAL)
+# SINGLETON
 # =========================
 _container: Container | None = None
 
 
 def get_container() -> Container:
-    """
-    Lazy singleton container.
-
-    Safe for FastAPI / Telegram webhook runtime.
-    """
     global _container
 
     if _container is None:
