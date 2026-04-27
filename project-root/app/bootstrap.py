@@ -83,10 +83,12 @@ def build_container() -> Container:
     # SECURITY
     # =========================
     auth = AuthService(
-        settings=settings  # ← ЕДИНСТВЕННОЕ ИСПРАВЛЕНИЕ
+        settings=settings
     )
 
-    encryption = EncryptionService()
+    encryption = EncryptionService(
+        settings=settings  # ← ЕДИНСТВЕННОЕ НОВОЕ ИСПРАВЛЕНИЕ
+    )
 
     rate_limiter = RateLimiter(
         max_requests_per_minute=60,
