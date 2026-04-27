@@ -34,7 +34,12 @@ class RateLimiter:
         self,
         max_requests_per_window: int = 60,
         window_seconds: int = 60,
+        max_requests_per_minute: int | None = None,  # 👈 COMPAT FIX (bootstrap legacy)
     ):
+        # 🔧 compatibility layer
+        if max_requests_per_minute is not None:
+            max_requests_per_window = max_requests_per_minute
+
         self.max_requests = max_requests_per_window
         self.window = window_seconds
 
