@@ -1,128 +1,132 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-
-from app.settings import get_settings, Settings
-
-from security.auth import AuthService
-from security.encryption import EncryptionService
-from security.rate_limiter import RateLimiter
-from security.origin_guard import OriginGuard
-
-from payments.access_controller import AccessController
-from payments.pricing_engine import PricingEngine
-from payments.usage_meter import UsageMeter
-from payments.wallet_manager import WalletManager
-from payments.ton_client import TONClient
-
-from llm.model_router import ModelRouter
-
-from core.execution.orchestrator import Orchestrator
+import os
+from typing import List, Optional
 
 
 # =========================
-# DI CONTAINER
+# SETTINGS MODEL
 # =========================
 @dataclass
-class Container:
-    settings: Settings
+class Settings:
+    """
+    SINGLE SOURCE OF TRUTH (v4.7)
 
-    auth: AuthService
-    encryption: EncryptionService
-    rate_limiter: RateLimiter
-    origin_guard: OriginGuard
+    Contains:
+    - secrets
+    - limits
+    - model config
+    - pricing config
+    - system toggles
+    """
 
-    access_controller: AccessController
-    pricing_engine: PricingEngine
-    usage_meter: UsageMeter
-    wallet_manager: WalletManager
+    # =========================
+    # CORE SECURITY
+    # =========================
+    BOT_TOKEN: str
+    JWT_SECRET: str
+    ENCRYPTION_KEY: str
 
-    model_router: ModelRouter
-    orchestrator: Orchestrator
+    ALLOWED_ORIGINS: List[str]
+
+    # =========================
+    # RATE LIMITING
+    # =========================
+    RATE_LIMIT_REQUESTS: int = 60
+    RATE_LIMIT_WINDOW: int = 60
+
+    # =========================
+    # LLM PROVIDERS
+    # =========================
+    GROQ_API_KEY: str
+    HF_TOKEN: str
+
+    # =========================
+    # MODEL DEFAULTS
+    # =========================
+    FAST_MODEL: str = "llama-3.1-8b-instant"
+    GENERAL_MODEL: str = "llama-3.3-70b-versatile"
+    HEAVY_MODEL: str = "gpt-oss-120b"
+    SAFETY_MODEL: str = "gpt-oss-safeguard-20b"
+
+    # =========================
+    # PRICING (INTERNAL CREDITS)
+    # =========================
+    BASE_COST: float = 0.001
+
+    COST_FAST: float = 0.002
+    COST_GENERAL: float = 0.01
+    COST_HEAVY: float = 0.05
+
+    # =========================
+    # TON ECONOMY LAYER
+    # =========================
+    TON_WALLET: str
+    TON_TO_CREDITS_RATE: int = 5000
+
+    # =========================
+    # MEMORY / STORAGE
+    # =========================
+    SUPABASE_URL: Optional[str] = None
+    SUPABASE_ANON_KEY: Optional[str] = None
+    SUPABASE_SERVICE_ROLE_KEY: Optional[str] = None
+    REDIS_URL: Optional[str] = None
+
+    # =========================
+    # EXTERNAL SERVICES
+    # =========================
+    OPENWEATHER_API_KEY: Optional[str] = None
+    MAPBOX_TOKEN: Optional[str] = None
+    SERPAPI_KEY: Optional[str] = None
+    SENTRY_DSN: Optional[str] = None
+
+    # =========================
+    # SYSTEM
+    # =========================
+    WEBHOOK_URL: Optional[str] = None
+
+    # =========================
+    # LOAD FROM ENV
+    # =========================
+    @staticmethod
+    def load() -> "Settings":
+        return Settings(
+            BOT_TOKEN=os.getenv("BOT_TOKEN"),
+            JWT_SECRET=os.getenv("JWT_SECRET"),
+            ENCRYPTION_KEY=os.getenv("ENCRYPTION_KEY"),
+
+            ALLOWED_ORIGINS=os.getenv("ALLOWED_ORIGINS", "*").split(","),
+
+            GROQ_API_KEY=os.getenv("GROQ_API_KEY"),
+            HF_TOKEN=os.getenv("HF_TOKEN"),
+
+            TON_WALLET=os.getenv("TON_WALLET"),
+
+            SUPABASE_URL=os.getenv("SUPABASE_URL"),
+            SUPABASE_ANON_KEY=os.getenv("SUPABASE_ANON_KEY"),
+            SUPABASE_SERVICE_ROLE_KEY=os.getenv("SUPABASE_SERVICE_ROLE_KEY"),
+            REDIS_URL=os.getenv("REDIS_URL"),
+
+            OPENWEATHER_API_KEY=os.getenv("OPENWEATHER_API_KEY"),
+            MAPBOX_TOKEN=os.getenv("MAPBOX_TOKEN"),
+            SERPAPI_KEY=os.getenv("SERPAPI_KEY"),
+            SENTRY_DSN=os.getenv("SENTRY_DSN"),
+
+            WEBHOOK_URL=os.getenv("WEBHOOK_URL"),
+        )
 
 
 # =========================
-# BOOTSTRAP
+# SINGLETON ACCESSOR
 # =========================
-def build_container() -> Container:
-    settings = get_settings()
-
-    # =========================
-    # SECURITY
-    # =========================
-    auth = AuthService(settings=settings)
-    encryption = EncryptionService(settings=settings)
-
-    rate_limiter = RateLimiter(
-        max_requests_per_window=settings.RATE_LIMIT_REQUESTS,
-        window_seconds=settings.RATE_LIMIT_WINDOW,
-    )
-
-    origin_guard = OriginGuard(settings=settings)
-
-    # =========================
-    # PAYMENTS
-    # =========================
-    pricing_engine = PricingEngine(settings=settings)
-    access_controller = AccessController(settings=settings)
-    usage_meter = UsageMeter(settings=settings)
-
-    ton_client = TONClient(api_key=settings.TON_WALLET)
-
-    wallet_manager = WalletManager(
-        ton_client=ton_client,
-        settings=settings,
-    )
-
-    # =========================
-    # LLM LAYER
-    # =========================
-    model_router = ModelRouter(
-        settings=settings,
-    )
-
-    # =========================
-    # CORE ORCHESTRATION
-    # =========================
-    orchestrator = Orchestrator(
-        settings=settings,
-        auth=auth,
-        rate_limiter=rate_limiter,
-        origin_guard=origin_guard,
-        access_controller=access_controller,
-        pricing_engine=pricing_engine,
-        usage_meter=usage_meter,
-        model_router=model_router,
-    )
-
-    return Container(
-        settings=settings,
-
-        auth=auth,
-        encryption=encryption,
-        rate_limiter=rate_limiter,
-        origin_guard=origin_guard,
-
-        access_controller=access_controller,
-        pricing_engine=pricing_engine,
-        usage_meter=usage_meter,
-        wallet_manager=wallet_manager,
-
-        model_router=model_router,
-        orchestrator=orchestrator,
-    )
+_settings: Settings | None = None
 
 
-# =========================
-# SINGLETON
-# =========================
-_container: Container | None = None
+def get_settings() -> Settings:
+    global _settings
 
+    if _settings is None:
+        _settings = Settings.load()
 
-def get_container() -> Container:
-    global _container
-
-    if _container is None:
-        _container = build_container()
-
-    return _container
+    return _settings
