@@ -83,7 +83,7 @@ def build_container() -> Container:
     # SECURITY
     # =========================
     auth = AuthService(
-        jwt_secret=settings.JWT_SECRET
+        settings=settings  # ← ЕДИНСТВЕННОЕ ИСПРАВЛЕНИЕ
     )
 
     encryption = EncryptionService()
