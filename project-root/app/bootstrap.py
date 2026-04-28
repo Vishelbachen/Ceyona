@@ -39,7 +39,7 @@ class Container:
         return self._rate_limiter
 
     # =========================
-    # TELEGRAM OUTBOUND (FIXED ADDITION)
+    # TELEGRAM OUTBOUND
     # =========================
 
     @property
@@ -68,18 +68,24 @@ class Container:
         return self._retrieval_engine
 
     # =========================
-    # LLM
+    # LLM (FIXED)
     # =========================
 
     @property
     def model_router(self):
         if self._model_router is None:
             from llm.model_router import ModelRouter
-            self._model_router = ModelRouter(self.settings)
+            from llm.groq_client import GroqClient
+            from llm.hf_client import HFClient
+
+            self._model_router = ModelRouter(
+                groq_client=GroqClient(self.settings),
+                hf_client=HFClient(self.settings),
+            )
         return self._model_router
 
     # =========================
-    # ORCHESTRATOR (FIXED)
+    # ORCHESTRATOR
     # =========================
 
     @property
