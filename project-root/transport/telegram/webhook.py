@@ -8,17 +8,6 @@ router = APIRouter()
 async def telegram_webhook(request: Request):
     """
     AI Platform v4.7 — Telegram Inbound Adapter
-
-    RESPONSIBILITY:
-    - receive Telegram update
-    - validate input shape
-    - delegate to orchestrator
-    - send response back via Telegram client
-
-    STRICT RULES:
-    - no business logic
-    - no parsing decisions
-    - no routing decisions
     """
 
     container = get_container()
@@ -35,12 +24,18 @@ async def telegram_webhook(request: Request):
         return {"status": "ignored", "reason": "empty_payload"}
 
     # =========================
+    # 🔥 DEBUG: RAW TELEGRAM UPDATE
+    # =========================
+    print("RAW UPDATE:", update)
+
+    # =========================
     # EXECUTION PIPELINE
     # =========================
     try:
         result = await container.orchestrator.handle_update(update)
     except Exception as e:
-        # IMPORTANT: isolate orchestrator crashes from HTTP layer
+        # isolate crash from HTTP layer
+        print("ORCHESTRATOR ERROR:", str(e))
         return {
             "status": "orchestrator_error",
             "error": str(e),
@@ -54,13 +49,16 @@ async def telegram_webhook(request: Request):
     chat_id = chat.get("id")
 
     if chat_id:
-        await container.telegram_client.send_message(
-            chat_id=chat_id,
-            text=str(result.get("result", "")),
-        )
+        try:
+            await container.telegram_client.send_message(
+                chat_id=chat_id,
+                text=str(result.get("result", "")),
+            )
+        except Exception as e:
+            print("TELEGRAM SEND ERROR:", str(e))
 
     # =========================
-    # ACK TO TELEGRAM
+    # ACK
     # =========================
     return {
         "status": "ok",
