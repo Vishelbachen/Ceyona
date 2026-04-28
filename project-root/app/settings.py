@@ -1,5 +1,5 @@
 from functools import lru_cache
-from typing import Optional
+from typing import Optional, Any
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 import json
@@ -32,22 +32,13 @@ class Settings(BaseSettings):
     JWT_SECRET: Optional[str] = None
     ENCRYPTION_KEY: Optional[str] = None
 
-    # FIX: list must be string in env, parsed safely
-    ALLOWED_ORIGINS: list[str] = Field(default_factory=lambda: ["*"])
+    # FIX: raw string first (avoid Pydantic JSON crash)
+    ALLOWED_ORIGINS: Any = Field(default="*")
 
     @field_validator("ALLOWED_ORIGINS", mode="before")
     @classmethod
-    def parse_allowed_origins(cls, v):
-        if v is None or v == "":
-            return ["*"]
-        if isinstance(v, list):
-            return v
-        if isinstance(v, str):
-            try:
-                return json.loads(v)
-            except Exception:
-                return [v]
-        return ["*"]
+    def parse_allowed_origins(cls, v: Any):
+        return _safe_json_list(v, ["*"])
 
     # =========================
     # LLM PROVIDERS
@@ -108,12 +99,35 @@ class Settings(BaseSettings):
 
 
 # =========================
+# SAFE JSON PARSER (v4.7 FIXED)
+# =========================
+
+def _safe_json(value: Any, default: Any):
+    if value is None or value == "":
+        return default
+
+    if isinstance(value, (dict, list)):
+        return value
+
+    try:
+        return json.loads(value)
+    except Exception:
+        return default
+
+
+def _safe_json_list(value: Any, default: list):
+    parsed = _safe_json(value, default)
+
+    if isinstance(parsed, list):
+        return parsed
+
+    return default
+
+
+# =========================
 # SINGLETON ACCESS
 # =========================
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    """
-    Cached global settings instance.
-    """
     return Settings()
