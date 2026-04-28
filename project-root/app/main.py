@@ -5,40 +5,28 @@ from fastapi import FastAPI
 
 from app.settings import get_settings
 from app.bootstrap import get_container
+from transport.telegram.webhook import router as telegram_router
 
 # =========================
-# FASTAPI APP INIT
+# INIT (single source)
+# =========================
+settings = get_settings()
+container = get_container()
+
+# =========================
+# FASTAPI APP
 # =========================
 app = FastAPI(
-    title="AI Platform",
-    version="4.7",
+    title=settings.APP_NAME,
+    version=settings.APP_VERSION,
     docs_url="/docs",
     redoc_url=None,
 )
 
 # =========================
-# GLOBALS (LAZY SAFE)
+# ROUTES (IMPORT-TIME SAFE)
 # =========================
-settings = None
-container = None
-
-
-# =========================
-# LIFECYCLE EVENTS (CLEAN v4.7 WAY)
-# =========================
-@app.on_event("startup")
-def startup():
-    """
-    Controlled DI initialization (Railway-safe).
-    """
-    global settings, container
-
-    settings = get_settings()
-    container = get_container()
-
-    # transport layer registration (safe after DI init)
-    from transport.telegram.webhook import router as telegram_router
-    app.include_router(telegram_router, prefix="/telegram")
+app.include_router(telegram_router, prefix="/telegram")
 
 
 # =========================
@@ -48,9 +36,9 @@ def startup():
 def health():
     return {
         "status": "ok",
-        "app": settings.APP_NAME if settings else "AI Platform",
-        "version": settings.APP_VERSION if settings else "4.7",
-        "env": settings.ENV if settings else "unknown",
+        "app": settings.APP_NAME,
+        "version": settings.APP_VERSION,
+        "env": settings.ENV,
     }
 
 
@@ -60,13 +48,13 @@ def health():
 def run():
     """
     Local/dev entrypoint.
-    Production uses ASGI server (Railway/Docker).
+    Production uses ASGI server.
     """
     uvicorn.run(
         "app.main:app",
         host="0.0.0.0",
         port=8000,
-        reload=(settings.DEBUG if settings else False),
+        reload=settings.DEBUG,
     )
 
 
