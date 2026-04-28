@@ -1,64 +1,41 @@
+from dataclasses import dataclass
 import os
 
 
+@dataclass(frozen=True)
 class Settings:
-    """
-    Central configuration registry.
-    No external dependencies. Pure env-based config.
-    """
+    # ===== CORE AUTH =====
+    BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
+    JWT_SECRET: str = os.getenv("JWT_SECRET", "")
+    ENCRYPTION_KEY: str = os.getenv("ENCRYPTION_KEY", "")
 
-    # =========================
-    # LLM API KEYS
-    # =========================
-    GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-    HF_TOKEN = os.getenv("HF_TOKEN", "")
-    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+    # ===== LLM PROVIDERS =====
+    GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+    HF_TOKEN: str = os.getenv("HF_TOKEN", "")
 
-    # =========================
-    # STORAGE / MEMORY
-    # =========================
-    SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-    SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
-    REDIS_URL = os.getenv("REDIS_URL", "")
+    # ===== DATABASE (SUPABASE) =====
+    SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
+    SUPABASE_KEY: str = os.getenv("SUPABASE_KEY", "")
+    SUPABASE_ANON_KEY: str = os.getenv("SUPABASE_ANON_KEY", "")
 
-    # =========================
-    # OBSERVABILITY
-    # =========================
-    SENTRY_DSN = os.getenv("SENTRY_DSN", "")
+    # ===== INFRA =====
+    REDIS_URL: str = os.getenv("REDIS_URL", "")
+    SENTRY_DSN: str = os.getenv("SENTRY_DSN", "")
+    ALLOWED_ORIGINS: str = os.getenv("ALLOWED_ORIGINS", "*")
 
-    # =========================
-    # ECONOMY / BILLING
-    # =========================
-    TON_WALLET = os.getenv("TON_WALLET", "")
-    BILLING_ENABLED = os.getenv("BILLING_ENABLED", "false").lower() == "true"
+    # ===== EXTERNAL TOOLS =====
+    SERPAPI_KEY: str = os.getenv("SERPAPI_KEY", "")
+    MAPBOX_TOKEN: str = os.getenv("MAPBOX_TOKEN", "")
+    OPENWEATHER_API_KEY: str = os.getenv("OPENWEATHER_API_KEY", "")
 
-    # =========================
-    # MODEL ROUTING IDS
-    # =========================
-    MODELS = {
-        "FAST": "llama-3.1-8b-instant",
-        "GENERAL": "llama-3.3-70b",
-        "HEAVY": "gpt-oss-120b",
-        "FALLBACK": "hf-internal-mock"
-    }
+    # ===== PAYMENTS (TON) =====
+    TON_WALLET: str = os.getenv("TON_WALLET", "")
 
-    # =========================
-    # COST MODEL (v4.7)
-    # =========================
-    MODEL_RATES = {
-        "FAST": {"in": 0.25, "out": 0.9},
-        "GENERAL": {"in": 2.5, "out": 10},
-        "HEAVY": {"in": 8, "out": 30},
-    }
+    # ===== EMAIL / NOTIFS =====
+    BREVO_API_KEY: str = os.getenv("BREVO_API_KEY", "")
 
-    # =========================
-    # EP KERNEL LIMITS
-    # =========================
-    MAX_COST_THRESHOLD = float(os.getenv("MAX_COST_THRESHOLD", "0.3"))
+    # ===== DEPLOY =====
+    WEBHOOK_URL: str = os.getenv("WEBHOOK_URL", "")
 
-    @classmethod
-    def validate(cls):
-        """
-        Lightweight sanity check (non-blocking).
-        """
-        return True
+    # ===== FLAGS =====
+    DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
