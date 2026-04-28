@@ -1,6 +1,8 @@
 from functools import lru_cache
-from typing import List, Optional
+from typing import Optional
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+import json
 
 
 class Settings(BaseSettings):
@@ -29,7 +31,23 @@ class Settings(BaseSettings):
     BOT_TOKEN: Optional[str] = None
     JWT_SECRET: Optional[str] = None
     ENCRYPTION_KEY: Optional[str] = None
-    ALLOWED_ORIGINS: List[str] = ["*"]
+
+    # FIX: list must be string in env, parsed safely
+    ALLOWED_ORIGINS: list[str] = Field(default_factory=lambda: ["*"])
+
+    @field_validator("ALLOWED_ORIGINS", mode="before")
+    @classmethod
+    def parse_allowed_origins(cls, v):
+        if v is None or v == "":
+            return ["*"]
+        if isinstance(v, list):
+            return v
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except Exception:
+                return [v]
+        return ["*"]
 
     # =========================
     # LLM PROVIDERS
@@ -38,7 +56,7 @@ class Settings(BaseSettings):
     HF_TOKEN: Optional[str] = None
 
     # =========================
-    # MEMORY / STORAGE (SSoT)
+    # MEMORY / STORAGE
     # =========================
     SUPABASE_URL: Optional[str] = None
     SUPABASE_ANON_KEY: Optional[str] = None
@@ -97,6 +115,5 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """
     Cached global settings instance.
-    Used by bootstrap + DI container.
     """
     return Settings()
