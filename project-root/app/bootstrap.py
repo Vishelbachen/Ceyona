@@ -22,10 +22,20 @@ async def bootstrap() -> dict:
         settings.supabase_service_role_key,
     )
 
+    # ─── Event System ───────────────────────────────────
+    from events.event_bus import event_bus
+    from events.event_store import EventStore
+    from events.event_dispatcher import setup_dispatcher
+
+    event_store = EventStore(redis=redis)
+    setup_dispatcher(bus=event_bus, store=event_store)
+
     return {
-        "redis": redis,
-        "supabase": supabase,
-        "settings": settings,
+        "redis":       redis,
+        "supabase":    supabase,
+        "event_bus":   event_bus,
+        "event_store": event_store,
+        "settings":    settings,
     }
 
 
