@@ -1,9 +1,16 @@
-class MessageRouter:
+from core.execution.orchestrator import Orchestrator
+
+
+class TelegramMessageRouter:
     """
-    Transport layer only (no logic)
+    Routes Telegram messages into core orchestrator
     """
 
-    def listen(self):
-        while True:
-            msg = input("user> ")
-            print(f"received: {msg}")
+    def __init__(self):
+        self.orchestrator = Orchestrator()
+
+    def route(self, message: dict):
+        user_id = message["user_id"]
+        text = message["text"]
+
+        return self.orchestrator.handle(user_id, text)
