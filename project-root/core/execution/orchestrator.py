@@ -1,20 +1,7 @@
 from typing import Dict, Any
 
-from core.kernel.execution_policy_kernel import ExecutionPolicyKernel
-from core.kernel.decision_matrix import DecisionMatrix
-from core.kernel.cost_model import CostModel
-from core.kernel.policy_registry import PolicyRegistry
-
 
 class Orchestrator:
-    """
-    AI Platform v4.7 — Execution Orchestrator
-
-    RESPONSIBILITY:
-    - Flow control only
-    - No business logic
-    """
-
     def __init__(
         self,
         settings,
@@ -29,34 +16,43 @@ class Orchestrator:
         self.agents = agents
         self.consensus_engine = consensus_engine
 
-        # kernel layer (CONSISTENT INIT)
         self.epk = ExecutionPolicyKernel(settings)
         self.decision_matrix = DecisionMatrix()
         self.cost_model = CostModel(settings)
         self.policy_registry = PolicyRegistry()
 
     async def handle_update(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Execution pipeline entrypoint.
-        """
 
-        text = payload.get("text", "")
+        text = payload.get("text") or ""
 
         # =========================
-        # 1. ANALYSIS
+        # 1. ANALYSIS (SAFE)
         # =========================
         profile = self.decision_matrix.analyze(payload)
 
         # =========================
-        # 2. POLICY DECISION
+        # 2. POLICY DECISION (SAFE GUARDS)
         # =========================
         decision = self.epk.evaluate({"text": text})
-        tier = decision.tier
+
+        if not decision:
+            raise RuntimeError("EPK returned None decision")
+
+        tier = getattr(decision, "tier", None)
+
+        if not tier:
+            tier = "FAST"  # fallback safety gate
 
         policy = self.policy_registry.get(tier)
 
+        if not policy:
+            raise RuntimeError(f"No policy for tier={tier}")
+
+        if not policy.recommended_agents:
+            raise RuntimeError(f"Empty agent list for tier={tier}")
+
         # =========================
-        # 3. COST
+        # 3. COST (SAFE)
         # =========================
         cost = self.cost_model.estimate_from_payload(
             tier=tier,
@@ -64,16 +60,16 @@ class Orchestrator:
         )
 
         # =========================
-        # 4. AGENT SELECTION
+        # 4. AGENT
         # =========================
         agent_name = policy.recommended_agents[0]
         agent = self.agents.get(agent_name)
 
         if not agent:
-            raise RuntimeError(f"No agent found for tier={tier}")
+            raise RuntimeError(f"Agent not found: {agent_name}")
 
         # =========================
-        # 5. CONTEXT (FIXED BOUNDARY)
+        # 5. CONTEXT
         # =========================
         context = {
             "text": text,
@@ -84,9 +80,12 @@ class Orchestrator:
         }
 
         # =========================
-        # 6. EXECUTION
+        # 6. EXECUTION (ISOLATED CRASH PROTECTION)
         # =========================
-        result = await agent.run(context)
+        try:
+            result = await agent.run(context)
+        except Exception as e:
+            raise RuntimeError(f"Agent execution failed: {str(e)}")
 
         # =========================
         # 7. CONSENSUS
