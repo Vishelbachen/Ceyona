@@ -1,89 +1,54 @@
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
 
 
-class PromptEngine:
+@dataclass(frozen=True)
+class PromptContext:
+    user_message: str
+    system_prompt: str = ""
+    retrieved_context: str = ""
+    conversation_history: list[dict] | None = None
+
+
+def build_messages(ctx: PromptContext) -> list[dict]:
     """
-    AI Platform v4.7 — Prompt Engine
-
-    RESPONSIBILITY:
-    - Format input data into LLM-ready prompts
-    - Provide consistent prompt templates per agent type
-    - Normalize context into structured messages
-
-    STRICT RULES:
-    - No reasoning logic
-    - No model selection
-    - No routing decisions
-    - No retrieval execution
-    - No memory interpretation
+    Assemble messages array for LLM from prompt context.
+    Format: [system, ...history, user]
     """
+    messages: list[dict] = []
 
-    # =========================
-    # FAST PROMPT
-    # =========================
-    def build_fast_prompt(self, text: str) -> str:
-        return f"""
-You are a fast-response assistant.
-Provide a short, direct answer.
+    # ── system prompt ────────────────────────────────────
+    system = ctx.system_prompt
+    if ctx.retrieved_context:
+        system = (
+            f"{system}\n\n"
+            f"## Relevant context\n{ctx.retrieved_context}"
+        ).strip()
 
-INPUT:
-{text}
-""".strip()
+    if system:
+        messages.append({"role": "system", "content": system})
 
-    # =========================
-    # DEEP PROMPT
-    # =========================
-    def build_deep_prompt(
-        self,
-        text: str,
-        context: Dict[str, Any],
-        policy: Optional[Any] = None,
-    ) -> str:
+    # ── conversation history ─────────────────────────────
+    if ctx.conversation_history:
+        messages.extend(ctx.conversation_history)
 
-        context_block = self._format_context(context)
+    # ── current user message ─────────────────────────────
+    messages.append({"role": "user", "content": ctx.user_message})
 
-        return f"""
-You are a reasoning-capable assistant.
+    return messages
 
-Use provided context if relevant.
 
-CONTEXT:
-{context_block}
+def build_system_prompt(persona: str = "", rules: list[str] | None = None) -> str:
+    """
+    Build a system prompt string from persona and rules.
+    Optional helper — use when you need structured system prompts.
+    """
+    parts: list[str] = []
 
-INPUT:
-{text}
-""".strip()
+    if persona:
+        parts.append(persona)
 
-    # =========================
-    # CREATIVE PROMPT
-    # =========================
-    def build_creative_prompt(
-        self,
-        text: str,
-        policy: Optional[Any] = None,
-    ) -> str:
+    if rules:
+        rules_text = "\n".join(f"- {r}" for r in rules)
+        parts.append(f"## Rules\n{rules_text}")
 
-        return f"""
-You are a creative generation model.
-
-Generate high-quality, original output.
-
-INPUT:
-{text}
-""".strip()
-
-    # =========================
-    # CONTEXT FORMATTER
-    # =========================
-    def _format_context(self, context: Dict[str, Any]) -> str:
-        """
-        Deterministic serialization only.
-        """
-
-        if not context:
-            return "EMPTY"
-
-        return "\n".join(
-            f"{key}: {value}"
-            for key, value in context.items()
-        )
+    return "\n\n".join(parts)
