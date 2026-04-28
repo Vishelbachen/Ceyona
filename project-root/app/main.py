@@ -1,33 +1,33 @@
-from app.bootstrap import build_container
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+
+from app.bootstrap import bootstrap, shutdown
 
 
-def handle_request(container, user_input: str) -> dict:
-    """
-    Minimal request pipeline (stub execution flow).
-    Will be replaced by orchestrator later.
-    """
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # ── startup ─────────────────────────────────────────
+    state = await bootstrap()
+    app.state.redis = state["redis"]
+    app.state.supabase = state["supabase"]
+    app.state.settings = state["settings"]
 
-    # TEMP: mock response (LLM layer not connected yet)
-    return {
-        "input": user_input,
-        "output": f"[stub response] processed: {user_input}",
-        "status": "ok"
-    }
+    yield
 
-
-def main():
-    container = build_container()
-
-    # simple test flow
-    while True:
-        user_input = input(">>> ")
-
-        if user_input.lower() in ["exit", "quit"]:
-            break
-
-        result = handle_request(container, user_input)
-        print(result["output"])
+    # ── shutdown ─────────────────────────────────────────
+    await shutdown(state)
 
 
-if __name__ == "__main__":
-    main()
+app = FastAPI(
+    title="AI Platform",
+    version="1.0.0",
+    lifespan=lifespan,
+    docs_url=None,   # disable in production
+    redoc_url=None,
+)
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
