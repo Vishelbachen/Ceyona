@@ -1,62 +1,73 @@
-from typing import Any, Dict, List, Optional
+import httpx
+
+from app.settings import settings
+
+_BASE_URL = "https://api-inference.huggingface.co/models"
+_TIMEOUT = 30.0
+
+_HEADERS = {
+    "Authorization": f"Bearer {settings.hf_token}",
+    "Content-Type": "application/json",
+}
+
+# ─── MODEL IDENTIFIERS ───────────────────────────────────────────────────────
+
+BGE_LARGE = "BAAI/bge-large-en-v1.5"
+BGE_SMALL = "BAAI/bge-small-en-v1.5"
+BGE_RERANKER = "BAAI/bge-reranker-large"
 
 
 class HFClient:
-    """
-    AI Platform v4.7 — Hugging Face Inference Client
+    def __init__(self) -> None:
+        self._http = httpx.AsyncClient(
+            base_url=_BASE_URL,
+            headers=_HEADERS,
+            timeout=_TIMEOUT,
+        )
 
-    RESPONSIBILITY:
-    - Send inference requests to Hugging Face models
-    - Return raw model outputs
-    - Act as thin external API adapter
-
-    STRICT RULES:
-    - No model routing logic
-    - No prompt engineering
-    - No fallback logic
-    - No retrieval / memory access
-    - No orchestration decisions
-    """
-
-    def __init__(self, api_token: str, base_url: Optional[str] = None):
-        self.api_token = api_token
-        self.base_url = base_url or "https://api-inference.huggingface.co"
-
-    async def text_generation(
+    async def embed(
         self,
-        model: str,
-        inputs: str,
-        parameters: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        texts: list[str],
+        model: str = BGE_LARGE,
+    ) -> list[list[float]]:
         """
-        Sends text generation request to HF Inference API.
+        Generate embeddings for a list of texts.
+        Returns list of float vectors.
         """
+        response = await self._http.post(
+            f"/{model}",
+            json={"inputs": texts, "options": {"wait_for_model": True}},
+        )
+        response.raise_for_status()
+        return response.json()
 
-        return {
-            "model": model,
-            "generated_text": "mock hf response",
-            "parameters_used": parameters or {},
-        }
-
-    async def chat_completion(
+    async def rerank(
         self,
-        model: str,
-        messages: List[Dict[str, str]],
-        parameters: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        query: str,
+        candidates: list[str],
+        model: str = BGE_RERANKER,
+    ) -> list[float]:
         """
-        Chat-style inference wrapper.
+        Rerank candidates against a query.
+        Returns list of relevance scores (same order as candidates).
         """
+        pairs = [[query, candidate] for candidate in candidates]
+        response = await self._http.post(
+            f"/{model}",
+            json={"inputs": pairs, "options": {"wait_for_model": True}},
+        )
+        response.raise_for_status()
+        data = response.json()
 
-        return {
-            "model": model,
-            "choices": [
-                {
-                    "message": {
-                        "role": "assistant",
-                        "content": "mock hf chat response",
-                    }
-                }
-            ],
-            "parameters_used": parameters or {},
-        }
+        # HF reranker returns list of [{"score": float}]
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            return [item["score"] for item in data]
+
+        return data
+
+    async def aclose(self) -> None:
+        await self._http.aclose()
+
+
+# Singleton
+hf_client = HFClient()
