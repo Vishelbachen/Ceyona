@@ -9,6 +9,10 @@ from core.kernel.policy_registry import PolicyRegistry
 class Orchestrator:
     """
     AI Platform v4.7 — Execution Orchestrator
+
+    RESPONSIBILITY:
+    - Flow control only
+    - No business logic
     """
 
     def __init__(
@@ -19,44 +23,40 @@ class Orchestrator:
         agents: dict,
         consensus_engine,
     ):
-        # external systems
         self.settings = settings
         self.retrieval_engine = retrieval_engine
         self.model_router = model_router
         self.agents = agents
         self.consensus_engine = consensus_engine
 
-        # kernel layer (FIXED: INSTANCE, not CLASS)
-        self.epk = ExecutionPolicyKernel(self.settings)
+        # kernel layer (CONSISTENT INIT)
+        self.epk = ExecutionPolicyKernel(settings)
         self.decision_matrix = DecisionMatrix()
-        self.cost_model = CostModel(self.settings)
+        self.cost_model = CostModel(settings)
         self.policy_registry = PolicyRegistry()
 
     async def handle_update(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Main execution pipeline entrypoint.
+        Execution pipeline entrypoint.
         """
 
         text = payload.get("text", "")
 
         # =========================
-        # 1. FEATURE EXTRACTION
+        # 1. ANALYSIS
         # =========================
         profile = self.decision_matrix.analyze(payload)
 
         # =========================
-        # 2. EPK DECISION
+        # 2. POLICY DECISION
         # =========================
         decision = self.epk.evaluate({"text": text})
         tier = decision.tier
 
-        # =========================
-        # 3. POLICY LOOKUP
-        # =========================
         policy = self.policy_registry.get(tier)
 
         # =========================
-        # 4. COST ESTIMATION
+        # 3. COST
         # =========================
         cost = self.cost_model.estimate_from_payload(
             tier=tier,
@@ -64,7 +64,7 @@ class Orchestrator:
         )
 
         # =========================
-        # 5. ROUTING
+        # 4. AGENT SELECTION
         # =========================
         agent_name = policy.recommended_agents[0]
         agent = self.agents.get(agent_name)
@@ -73,19 +73,20 @@ class Orchestrator:
             raise RuntimeError(f"No agent found for tier={tier}")
 
         # =========================
+        # 5. CONTEXT (FIXED BOUNDARY)
+        # =========================
+        context = {
+            "text": text,
+            "tier": tier,
+            "policy": policy,
+            "cost": cost,
+            "profile": profile,
+        }
+
+        # =========================
         # 6. EXECUTION
         # =========================
-        result = await agent.run(
-            {
-                "text": text,
-                "tier": tier,
-                "policy": policy,
-                "cost": cost,
-                "profile": profile,
-                "retrieval_engine": self.retrieval_engine,
-                "model_router": self.model_router,
-            }
-        )
+        result = await agent.run(context)
 
         # =========================
         # 7. CONSENSUS
