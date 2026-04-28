@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import Optional, Dict, Any
 import httpx
 
@@ -7,40 +9,46 @@ class TelegramClient:
     AI Platform v4.7 — Telegram Transport Client
 
     RESPONSIBILITY:
-    - Send messages to Telegram API
-    - No business logic
-    - No orchestration
-    - No decision-making
+    - ONLY outbound communication to Telegram API
+    - NO business logic
+    - NO orchestration
+    - NO interpretation of messages
 
-    RULES:
-    - Pure I/O adapter
-    - Stateless
-    - Safe failure handling
+    RULE:
+    This is a pure I/O adapter (HTTP client wrapper).
     """
 
-    def __init__(self, bot_token: str, timeout: float = 10.0):
+    def __init__(self, bot_token: str):
         if not bot_token:
             raise ValueError("BOT_TOKEN is required for TelegramClient")
 
+        self.bot_token = bot_token
         self.base_url = f"https://api.telegram.org/bot{bot_token}"
-        self.timeout = timeout
 
+        self._client = httpx.AsyncClient(timeout=10.0)
+
+    # =========================
+    # CORE METHOD
+    # =========================
     async def send_message(
         self,
         chat_id: int,
         text: str,
         parse_mode: Optional[str] = None,
-        disable_web_page_preview: bool = True,
         extra: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Send message to Telegram chat.
+
+        STRICT:
+        - no formatting logic
+        - no fallback logic
+        - no retries (handled externally if needed)
         """
 
         payload: Dict[str, Any] = {
             "chat_id": chat_id,
             "text": text,
-            "disable_web_page_preview": disable_web_page_preview,
         }
 
         if parse_mode:
@@ -49,32 +57,19 @@ class TelegramClient:
         if extra:
             payload.update(extra)
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                f"{self.base_url}/sendMessage",
-                json=payload,
-            )
+        response = await self._client.post(
+            f"{self.base_url}/sendMessage",
+            json=payload,
+        )
 
-        # safe return (no crash propagation)
-        try:
-            return response.json()
-        except Exception:
-            return {
-                "ok": False,
-                "error": "Invalid Telegram response",
-                "status_code": response.status_code,
-            }
+        response.raise_for_status()
+        return response.json()
 
-    async def send_typing_action(self, chat_id: int) -> None:
+    # =========================
+    # OPTIONAL CLEANUP
+    # =========================
+    async def close(self):
         """
-        Optional UX improvement: show 'typing...' in Telegram.
+        Graceful shutdown of HTTP client.
         """
-
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            await client.post(
-                f"{self.base_url}/sendChatAction",
-                json={
-                    "chat_id": chat_id,
-                    "action": "typing",
-                },
-            )
+        await self._client.aclose()
