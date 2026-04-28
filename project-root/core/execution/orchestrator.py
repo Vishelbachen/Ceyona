@@ -9,38 +9,27 @@ from core.kernel.policy_registry import PolicyRegistry
 class Orchestrator:
     """
     AI Platform v4.7 — Execution Orchestrator
-
-    RESPONSIBILITY:
-    - Coordinate execution flow
-    - Call EPK for tier decision
-    - Fetch policy from registry
-    - Route to agents / retrieval / memory
-    - Aggregate final response
-
-    STRICT RULES:
-    - No business logic decisions inside
-    - No heuristic routing
-    - No LLM calls directly
-    - No retrieval / memory direct access
     """
 
     def __init__(
         self,
+        settings,
         retrieval_engine,
         model_router,
         agents: dict,
         consensus_engine,
     ):
         # external systems
+        self.settings = settings
         self.retrieval_engine = retrieval_engine
         self.model_router = model_router
         self.agents = agents
         self.consensus_engine = consensus_engine
 
-        # kernel layer
-        self.epk = ExecutionPolicyKernel
+        # kernel layer (FIXED: INSTANCE, not CLASS)
+        self.epk = ExecutionPolicyKernel(self.settings)
         self.decision_matrix = DecisionMatrix()
-        self.cost_model = CostModel
+        self.cost_model = CostModel(self.settings)
         self.policy_registry = PolicyRegistry()
 
     async def handle_update(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -58,9 +47,7 @@ class Orchestrator:
         # =========================
         # 2. EPK DECISION
         # =========================
-        epk = ExecutionPolicyKernel(self.epk.settings)
-        decision = epk.evaluate({"text": text})
-
+        decision = self.epk.evaluate({"text": text})
         tier = decision.tier
 
         # =========================
@@ -71,16 +58,15 @@ class Orchestrator:
         # =========================
         # 4. COST ESTIMATION
         # =========================
-        cost = self.cost_model(self.epk.settings).estimate_from_payload(
+        cost = self.cost_model.estimate_from_payload(
             tier=tier,
             payload=payload,
         )
 
         # =========================
-        # 5. ROUTING (NO LOGIC DECISIONS HERE)
+        # 5. ROUTING
         # =========================
         agent_name = policy.recommended_agents[0]
-
         agent = self.agents.get(agent_name)
 
         if not agent:
@@ -102,7 +88,7 @@ class Orchestrator:
         )
 
         # =========================
-        # 7. CONSENSUS (optional aggregation layer)
+        # 7. CONSENSUS
         # =========================
         final = self.consensus_engine.resolve(result)
 
