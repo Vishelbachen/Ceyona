@@ -10,7 +10,7 @@ async def telegram_webhook(request: Request):
 
     try:
         # =========================
-        # SAFE PARSE (CRITICAL FIX)
+        # SAFE JSON PARSE
         # =========================
         try:
             update = await request.json()
@@ -21,7 +21,7 @@ async def telegram_webhook(request: Request):
             return {"status": "ignored", "reason": "empty payload"}
 
         # =========================
-        # ORCHESTRATION SAFE CALL
+        # ORCHESTRATOR
         # =========================
         try:
             result = await container.orchestrator.handle_update(update)
@@ -32,7 +32,7 @@ async def telegram_webhook(request: Request):
             }
 
         # =========================
-        # TELEGRAM DATA SAFETY
+        # TELEGRAM OUTBOUND (FIXED NAME)
         # =========================
         message = update.get("message") or {}
         chat = message.get("chat") or {}
