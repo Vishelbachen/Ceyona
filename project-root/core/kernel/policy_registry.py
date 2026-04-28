@@ -1,76 +1,50 @@
 from dataclasses import dataclass
-from typing import Dict, Any, Optional
+from contracts.shared_types import Tier
 
 
 @dataclass(frozen=True)
-class PolicyRule:
-    """
-    Immutable execution policy rule definition.
-    """
-    name: str
-    description: str
-    max_tokens: int
-    allow_code_execution: bool
-    allow_retrieval: bool
-    allow_memory: bool
-    recommended_agents: list[str]
+class TierPolicy:
+    max_input_tokens: int
+    max_output_tokens: int
+    timeout_seconds: float
 
 
+@dataclass(frozen=True)
 class PolicyRegistry:
-    """
-    AI Platform v4.7 — Policy Registry
+    # EPK thresholds
+    degrade_threshold_usd: float
+    deny_above_balance: bool
 
-    RESPONSIBILITY:
-    - Store predefined execution policies
-    - Provide lookup for EPK / Orchestrator
-    - Act as immutable rule catalog
+    # Tier policies
+    tier_policies: dict[str, TierPolicy]
 
-    STRICT RULES:
-    - No decision-making
-    - No cost calculations
-    - No runtime evaluation
-    - No LLM / retrieval / memory access
-    """
+    # Rate limiting (requests per minute per user)
+    rate_limit_rpm: int
 
-    def __init__(self):
-        self._policies: Dict[str, PolicyRule] = {
-            "FAST": PolicyRule(
-                name="FAST",
-                description="Low latency simple reasoning",
-                max_tokens=300,
-                allow_code_execution=False,
-                allow_retrieval=False,
-                allow_memory=True,
-                recommended_agents=["fast"],
-            ),
-            "GENERAL": PolicyRule(
-                name="GENERAL",
-                description="Balanced reasoning and tool usage",
-                max_tokens=1200,
-                allow_code_execution=True,
-                allow_retrieval=True,
-                allow_memory=True,
-                recommended_agents=["deep", "fast"],
-            ),
-            "HEAVY": PolicyRule(
-                name="HEAVY",
-                description="Deep reasoning, long context, complex tasks",
-                max_tokens=3000,
-                allow_code_execution=True,
-                allow_retrieval=True,
-                allow_memory=True,
-                recommended_agents=["deep", "creative"],
-            ),
-        }
 
-    def get(self, tier: str) -> Optional[PolicyRule]:
-        """
-        Retrieve immutable policy definition.
-        """
-        return self._policies.get(tier)
+# ─── ACTIVE POLICY (v4.7) ────────────────────────────────────────────────────
 
-    def list_policies(self) -> Dict[str, PolicyRule]:
-        """
-        Returns full policy catalog (read-only usage expected).
-        """
-        return self._policies
+ACTIVE_POLICY = PolicyRegistry(
+    degrade_threshold_usd=0.30,
+    deny_above_balance=True,
+
+    tier_policies={
+        Tier.FAST: TierPolicy(
+            max_input_tokens=4_096,
+            max_output_tokens=300,
+            timeout_seconds=10.0,
+        ),
+        Tier.GENERAL: TierPolicy(
+            max_input_tokens=16_384,
+            max_output_tokens=1_200,
+            timeout_seconds=30.0,
+        ),
+        Tier.HEAVY: TierPolicy(
+            max_input_tokens=65_536,
+            max_output_tokens=3_000,
+            timeout_seconds=120.0,
+        ),
+    },
+
+    rate_limit_rpm=30,
+)
