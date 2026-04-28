@@ -1,145 +1,186 @@
+import logging
 from dataclasses import dataclass
-from typing import Dict, Any, Tuple
 
-from settings import Settings
+from contracts.shared_types import (
+    Complexity,
+    EPKDecision,
+    Tier,
+)
+from core.kernel.cost_model import (
+    actual_cost,
+    estimate_cost,
+    estimate_output_tokens,
+)
+from core.kernel.decision_matrix import select_tier
+from core.kernel.execution_policy_kernel import EPKInput, evaluate
+from llm.fallback_handler import complete_with_fallback
+from llm.groq_client import LLMResponse
+from llm.prompt_engine import PromptContext, build_messages
 
-
-# =========================================================
-# 🧠 EP KERNEL (minimal inline version)
-# =========================================================
-class ExecutionPolicyKernel:
-
-    @staticmethod
-    def evaluate(cost: float) -> str:
-        """
-        EPK decision engine:
-        - ALLOW
-        - DEGRADE
-        - DENY
-        """
-
-        if cost > Settings.MAX_COST_THRESHOLD:
-            return "DENY"
-        elif cost > Settings.MAX_COST_THRESHOLD * 0.5:
-            return "DEGRADE"
-        return "ALLOW"
+logger = logging.getLogger(__name__)
 
 
-# =========================================================
-# 💰 PRICING ENGINE (minimal inline version)
-# =========================================================
-class PricingEngine:
+# ─── ORCHESTRATOR I/O CONTRACTS ──────────────────────────────────────────────
 
-    @staticmethod
-    def estimate(model_tier: str, input_tokens: int, output_tokens: int) -> float:
-        rates = Settings.MODEL_RATES.get(model_tier, Settings.MODEL_RATES["FAST"])
-
-        cost = (
-            input_tokens * rates["in"] +
-            output_tokens * rates["out"]
-        ) / 1_000_000
-
-        return cost
-
-
-# =========================================================
-# 🧠 MODEL ROUTER (minimal stub)
-# =========================================================
-class ModelRouter:
-
-    @staticmethod
-    def route(user_input: str) -> str:
-        """
-        Very simple heuristic routing for now.
-        Later will be replaced by intent_engine.
-        """
-
-        length = len(user_input)
-
-        if length < 50:
-            return "FAST"
-        elif length < 200:
-            return "GENERAL"
-        return "HEAVY"
-
-
-# =========================================================
-# 📦 RESPONSE STRUCTURE
-# =========================================================
 @dataclass
-class ExecutionResult:
+class OrchestratorRequest:
+    user_message: str
+    user_balance: float             # USD
+    input_tokens: int               # pre-counted by caller
+    complexity: Complexity
+    system_prompt: str = ""
+    retrieved_context: str = ""
+    conversation_history: list[dict] | None = None
+    embedding_tokens: int = 0
+    rerank_tokens: int = 0
+    embedding_type: str = "large"
+
+
+@dataclass
+class UsageRecord:
+    input_tokens: int
+    output_tokens: int
+    embedding_tokens: int
+    rerank_tokens: int
+    tier: Tier
+    embedding_type: str
+    cost_usd: float
+
+
+@dataclass
+class OrchestratorResult:
+    text: str
+    tier: Tier
     model: str
-    decision: str
-    cost: float
-    response: str
+    epk_decision: EPKDecision
+    usage: UsageRecord
+    denied: bool = False
+    deny_reason: str = ""
 
 
-# =========================================================
-# 🚀 ORCHESTRATOR CORE
-# =========================================================
-class Orchestrator:
+# ─── MAIN FLOW ───────────────────────────────────────────────────────────────
 
-    def __init__(self):
-        self.settings = Settings
+async def run(request: OrchestratorRequest) -> OrchestratorResult:
+    """
+    Execute the full 16-step DAG:
 
-    def _mock_llm_response(self, model: str, prompt: str) -> str:
-        """
-        Placeholder LLM execution layer.
-        Later replaced by Groq / HF / OpenAI adapters.
-        """
-        return f"[{model}] ответ на: {prompt[:80]}"
+    1.  Feature extraction          ← done upstream, input_tokens provided
+    2.  Estimate output tokens
+    3.  Estimate cost
+    4.  EPK  (ALLOW / DENY / DEGRADE)
+    5.  Select tier (decision_matrix)
+    6-8. Retrieval / rerank         ← done upstream, tokens provided
+    9.  Build prompt (intent_engine / prompt_engine)
+    10. Agent execution             ← future layer, bypassed for now
+    11. Model routing
+    12. LLM execution
+    13. Usage meter (actual tokens)
+    14. Actual cost
+    15. TON deduction               ← future layer
+    16. Return result
+    """
 
-    def execute(self, user_input: str) -> ExecutionResult:
+    # ── step 2: estimate output tokens ───────────────────
+    estimated_output = estimate_output_tokens(
+        request.input_tokens,
+        request.complexity,
+        Tier.GENERAL,           # conservative estimate before tier is known
+    )
 
-        # 1. Route model
-        model_tier = ModelRouter.route(user_input)
+    # ── step 3: estimate cost ────────────────────────────
+    estimated = estimate_cost(
+        input_tokens=request.input_tokens,
+        estimated_output_tokens=estimated_output,
+        embedding_tokens=request.embedding_tokens,
+        rerank_tokens=request.rerank_tokens,
+        tier=Tier.GENERAL,
+        embedding_type=request.embedding_type,
+    )
 
-        # 2. Mock token estimation (temporary heuristic)
-        input_tokens = len(user_input) // 4
-        output_tokens = 120  # baseline response size
+    # ── step 4: EPK ──────────────────────────────────────
+    epk_out = evaluate(EPKInput(
+        estimated_cost=estimated,
+        user_balance=request.user_balance,
+    ))
 
-        # 3. Pricing
-        cost = PricingEngine.estimate(
-            model_tier,
-            input_tokens,
-            output_tokens
+    logger.info("EPK decision", extra={
+        "decision": epk_out.decision,
+        "estimated_cost": estimated,
+        "reason": epk_out.reason,
+    })
+
+    if epk_out.decision == EPKDecision.DENY:
+        return OrchestratorResult(
+            text="",
+            tier=Tier.FAST,
+            model="",
+            epk_decision=EPKDecision.DENY,
+            usage=UsageRecord(
+                input_tokens=request.input_tokens,
+                output_tokens=0,
+                embedding_tokens=request.embedding_tokens,
+                rerank_tokens=request.rerank_tokens,
+                tier=Tier.FAST,
+                embedding_type=request.embedding_type,
+                cost_usd=0.0,
+            ),
+            denied=True,
+            deny_reason=epk_out.reason,
         )
 
-        # 4. EPK decision
-        decision = ExecutionPolicyKernel.evaluate(cost)
+    # ── step 5: select tier ──────────────────────────────
+    tier = select_tier(estimated)
 
-        # 5. Handle policy
-        if decision == "DENY":
-            return ExecutionResult(
-                model=model_tier,
-                decision=decision,
-                cost=cost,
-                response="Request denied by EPK (cost limit exceeded)"
-            )
+    # DEGRADE → force FAST tier
+    if epk_out.decision == EPKDecision.DEGRADE:
+        tier = Tier.FAST
+        logger.info("EPK DEGRADE: forcing FAST tier")
 
-        if decision == "DEGRADE":
-            output_tokens = 60  # reduce response size
+    # ── step 9: build prompt ─────────────────────────────
+    messages = build_messages(PromptContext(
+        user_message=request.user_message,
+        system_prompt=request.system_prompt,
+        retrieved_context=request.retrieved_context,
+        conversation_history=request.conversation_history,
+    ))
 
-        # 6. Generate response (mock LLM)
-        response = self._mock_llm_response(model_tier, user_input)
+    # ── steps 11-12: route + LLM execution ───────────────
+    llm_response: LLMResponse = await complete_with_fallback(
+        tier=tier,
+        messages=messages,
+    )
 
-        return ExecutionResult(
-            model=model_tier,
-            decision=decision,
-            cost=cost,
-            response=response
-        )
+    # ── step 13-14: usage meter + actual cost ────────────
+    cost = actual_cost(
+        input_tokens=llm_response.input_tokens,
+        output_tokens=llm_response.output_tokens,
+        embedding_tokens=request.embedding_tokens,
+        rerank_tokens=request.rerank_tokens,
+        tier=tier,
+        embedding_type=request.embedding_type,
+    )
 
+    usage = UsageRecord(
+        input_tokens=llm_response.input_tokens,
+        output_tokens=llm_response.output_tokens,
+        embedding_tokens=request.embedding_tokens,
+        rerank_tokens=request.rerank_tokens,
+        tier=tier,
+        embedding_type=request.embedding_type,
+        cost_usd=cost,
+    )
 
-# =========================================================
-# 🧪 SIMPLE TEST ENTRY (optional local run)
-# =========================================================
-if __name__ == "__main__":
-    orch = Orchestrator()
+    logger.info("Execution complete", extra={
+        "tier": tier,
+        "model": llm_response.model,
+        "cost_usd": cost,
+        "output_tokens": llm_response.output_tokens,
+    })
 
-    test = orch.execute("Explain how to build a neural network step by step")
-
-    print("MODEL:", test.model)
-    print("DECISION:", test.decision)
-    print("COST:", test.cost)
-    print("RESPONSE:", test.response)
+    return OrchestratorResult(
+        text=llm_response.text,
+        tier=tier,
+        model=llm_response.model,
+        epk_decision=epk_out.decision,
+        usage=usage,
+    )
