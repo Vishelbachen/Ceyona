@@ -1,75 +1,20 @@
-from typing import Any, Dict, List, Optional, Union
-from dataclasses import dataclass
+from enum import Enum
 
 
-# =========================
-# GENERIC ID TYPES
-# =========================
-
-ID = str
-JSON = Dict[str, Any]
+class Tier(str, Enum):
+    FAST = "FAST"
+    GENERAL = "GENERAL"
+    HEAVY = "HEAVY"
 
 
-# =========================
-# SCORE TYPE
-# =========================
-
-Score = float
-
-
-# =========================
-# METADATA CONTAINER
-# =========================
-
-Metadata = Dict[str, Any]
+class Complexity(str, Enum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+    CRITICAL = "CRITICAL"
 
 
-# =========================
-# GENERIC DOCUMENT TYPE
-# =========================
-
-@dataclass
-class Document:
-    """
-    Universal document structure across all layers
-    """
-
-    id: ID
-    content: str
-    metadata: Optional[Metadata] = None
-
-
-# =========================
-# QUERY TYPE
-# =========================
-
-@dataclass
-class Query:
-    """
-    Universal query representation
-    """
-
-    text: str
-    metadata: Optional[Metadata] = None
-
-
-# =========================
-# EMBEDDING TYPE
-# =========================
-
-Embedding = List[float]
-
-
-# =========================
-# RESULT WRAPPER
-# =========================
-
-@dataclass
-class Result:
-    """
-    Generic result wrapper for system-wide usage
-    """
-
-    id: ID
-    score: Score
-    payload: Optional[JSON] = None
+class EPKDecision(str, Enum):
+    ALLOW = "ALLOW"
+    DENY = "DENY"
+    DEGRADE = "DEGRADE"
