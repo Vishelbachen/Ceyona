@@ -1,83 +1,93 @@
-from dataclasses import dataclass
-from typing import Dict, Any
+from contracts.shared_types import Tier, Complexity
 
-from app.settings import Settings
+# ─── PRICING TABLES ─────────────────────────────────────────────────────────
+# All rates in USD per 1M tokens
+
+MODEL_RATES: dict[str, dict[str, float]] = {
+    Tier.FAST:    {"input": 0.25,  "output": 0.9},
+    Tier.GENERAL: {"input": 2.5,   "output": 10.0},
+    Tier.HEAVY:   {"input": 8.0,   "output": 30.0},
+}
+
+EMBEDDING_RATES: dict[str, float] = {
+    "large": 0.1,
+    "small": 0.02,
+}
+
+RERANK_RATE: float = 1.0
+
+# ─── OUTPUT ESTIMATION ───────────────────────────────────────────────────────
+
+COMPLEXITY_MULTIPLIER: dict[str, float] = {
+    Complexity.LOW:      1.2,
+    Complexity.MEDIUM:   1.8,
+    Complexity.HIGH:     2.5,
+    Complexity.CRITICAL: 3.0,
+}
+
+MAX_OUTPUT_CAP: dict[str, int] = {
+    Tier.FAST:    300,
+    Tier.GENERAL: 1200,
+    Tier.HEAVY:   3000,
+}
 
 
-@dataclass
-class CostEstimate:
+def estimate_output_tokens(
+    input_tokens: int,
+    complexity: Complexity,
+    tier: Tier,
+) -> int:
     """
-    Structured cost output for execution planning.
+    Estimate output token count before execution.
+    Used by EPK for pre-flight cost check.
     """
-    input_cost: float
-    output_cost: float
-    total_cost: float
-    tier: str
+    raw = int(input_tokens * COMPLEXITY_MULTIPLIER[complexity])
+    return min(raw, MAX_OUTPUT_CAP[tier])
 
 
-class CostModel:
+# ─── COST ESTIMATION (PRE-EXECUTION) ────────────────────────────────────────
+
+def estimate_cost(
+    input_tokens: int,
+    estimated_output_tokens: int,
+    embedding_tokens: int,
+    rerank_tokens: int,
+    tier: Tier,
+    embedding_type: str = "large",
+) -> float:
     """
-    AI Platform v4.7 — Cost Model Engine
-
-    RESPONSIBILITY:
-    - Calculate deterministic cost estimates
-    - Based on MODEL_RATES (FAST / GENERAL / HEAVY)
-    - Provide pricing signal for EPK
-
-    STRICT RULES:
-    - No routing decisions
-    - No execution control
-    - No LLM calls
-    - No retrieval / memory access
+    Estimated cost before LLM execution.
+    Used by EPK to make ALLOW / DENY / DEGRADE decision.
+    Returns USD.
     """
+    rates = MODEL_RATES[tier]
+    return (
+        input_tokens * rates["input"]
+        + estimated_output_tokens * rates["output"]
+        + embedding_tokens * EMBEDDING_RATES[embedding_type]
+        + rerank_tokens * RERANK_RATE
+    ) / 1_000_000
 
-    def __init__(self, settings: Settings):
-        self.settings = settings
 
-        # v4.7 single source of truth rates
-        self.rates = {
-            "FAST": {"input": 0.25, "output": 0.9},
-            "GENERAL": {"input": 2.5, "output": 10},
-            "HEAVY": {"input": 8, "output": 30},
-        }
+# ─── ACTUAL COST (POST-EXECUTION) ────────────────────────────────────────────
 
-    def estimate(self, tier: str, input_tokens: int, output_tokens: int) -> CostEstimate:
-        """
-        Deterministic cost calculation.
-        """
-
-        if tier not in self.rates:
-            raise ValueError(f"Invalid tier: {tier}")
-
-        rate = self.rates[tier]
-
-        input_cost = (input_tokens / 1_000_000) * rate["input"]
-        output_cost = (output_tokens / 1_000_000) * rate["output"]
-
-        total_cost = input_cost + output_cost
-
-        return CostEstimate(
-            input_cost=input_cost,
-            output_cost=output_cost,
-            total_cost=total_cost,
-            tier=tier,
-        )
-
-    def estimate_from_payload(self, tier: str, payload: Dict[str, Any]) -> CostEstimate:
-        """
-        Convenience wrapper using heuristic token estimation.
-        """
-
-        text = payload.get("text", "") or ""
-
-        # deterministic token approximation (no NLP)
-        input_tokens = max(1, len(text) // 4)
-        output_tokens = self.settings.MAX_TOKENS_FAST if tier == "FAST" else (
-            self.settings.MAX_TOKENS_GENERAL if tier == "GENERAL" else self.settings.MAX_TOKENS_HEAVY
-        )
-
-        return self.estimate(
-            tier=tier,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-        )
+def actual_cost(
+    input_tokens: int,
+    output_tokens: int,
+    embedding_tokens: int,
+    rerank_tokens: int,
+    tier: Tier,
+    embedding_type: str = "large",
+) -> float:
+    """
+    Actual cost after LLM execution with real token counts.
+    Used by usage_meter for billing and TON deduction.
+    Returns USD.
+    """
+    rates = MODEL_RATES[tier]
+    return (
+        input_tokens * rates["input"]
+        + output_tokens * rates["output"]
+        + embedding_tokens * EMBEDDING_RATES[embedding_type]
+        + rerank_tokens * RERANK_RATE
+    ) / 1_000_000
