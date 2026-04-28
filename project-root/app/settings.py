@@ -1,6 +1,3 @@
-# settings.py
-# v4.7 Runtime Configuration Layer (minimal bootstrap)
-
 import os
 
 
