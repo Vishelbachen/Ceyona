@@ -1,43 +1,20 @@
 from dataclasses import dataclass
-from typing import Literal, Dict, Any
+from enum import Enum
+from typing import Any, Optional
 
 
-# =========================
-# CORE EVENT TYPE DEFINITIONS
-# =========================
-
-EventType = Literal[
-    "request_received",
-    "auth_failed",
-    "auth_success",
-    "update_normalized",
-    "message_routed",
-    "callback_received",
-    "execution_started",
-    "execution_completed",
-    "epk_decision_made",
-    "policy_selected",
-    "agent_invoked",
-    "retrieval_called",
-    "memory_written",
-    "response_generated",
-    "error_occurred",
-]
+class EventType(str, Enum):
+    REQUEST_RECEIVED = "request_received"
+    RETRIEVAL_DONE = "retrieval_done"
+    CONTEXT_BUILT = "context_built"
+    MODEL_INVOKED = "model_invoked"
+    RESPONSE_READY = "response_ready"
+    ERROR_OCCURRED = "error_occurred"
 
 
-@dataclass(frozen=True)
+@dataclass
 class Event:
-    """
-    AI Platform v4.7 — Event Contract
-
-    STRICT RULES:
-    - Immutable structure
-    - No logic
-    - No behavior
-    - Only data schema definition
-    """
-
     type: EventType
-    payload: Dict[str, Any]
-    timestamp: str
-    source: str
+    user_id: str
+    payload: dict[str, Any]
+    error: Optional[str] = None
