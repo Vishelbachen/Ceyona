@@ -1,41 +1,46 @@
-from dataclasses import dataclass
-import os
+from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
 
 
-@dataclass(frozen=True)
-class Settings:
-    # ===== CORE AUTH =====
-    BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
-    JWT_SECRET: str = os.getenv("JWT_SECRET", "")
-    ENCRYPTION_KEY: str = os.getenv("ENCRYPTION_KEY", "")
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",
+    )
 
-    # ===== LLM PROVIDERS =====
-    GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
-    HF_TOKEN: str = os.getenv("HF_TOKEN", "")
+    # ─── CORE ───────────────────────────────────────────
+    bot_token: str = Field(..., description="Telegram bot token")
+    jwt_secret: str = Field(..., description="JWT signing secret")
+    encryption_key: str = Field(..., description="Fernet encryption key")
+    webhook_url: str = Field(..., description="Public webhook URL")
+    allowed_origins: str = Field("*", description="Comma-separated allowed origins")
 
-    # ===== DATABASE (SUPABASE) =====
-    SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
-    SUPABASE_KEY: str = os.getenv("SUPABASE_KEY", "")
-    SUPABASE_ANON_KEY: str = os.getenv("SUPABASE_ANON_KEY", "")
+    # ─── LLM PROVIDERS ──────────────────────────────────
+    groq_api_key: str = Field(..., description="Groq API key")
+    hf_token: str = Field(..., description="HuggingFace token")
 
-    # ===== INFRA =====
-    REDIS_URL: str = os.getenv("REDIS_URL", "")
-    SENTRY_DSN: str = os.getenv("SENTRY_DSN", "")
-    ALLOWED_ORIGINS: str = os.getenv("ALLOWED_ORIGINS", "*")
+    # ─── MEMORY / STORAGE ───────────────────────────────
+    supabase_url: str = Field(..., description="Supabase project URL")
+    supabase_anon_key: str = Field(..., description="Supabase anon key")
+    supabase_service_role_key: str = Field(..., description="Supabase service role key")
+    redis_url: str = Field("redis://localhost:6379", description="Redis connection URL")
 
-    # ===== EXTERNAL TOOLS =====
-    SERPAPI_KEY: str = os.getenv("SERPAPI_KEY", "")
-    MAPBOX_TOKEN: str = os.getenv("MAPBOX_TOKEN", "")
-    OPENWEATHER_API_KEY: str = os.getenv("OPENWEATHER_API_KEY", "")
+    # ─── EXTERNAL SERVICES ──────────────────────────────
+    brevo_api_key: str = Field("", description="Brevo email API key")
+    mapbox_token: str = Field("", description="Mapbox token")
+    openweather_api_key: str = Field("", description="OpenWeather API key")
+    serpapi_key: str = Field("", description="SerpAPI key")
+    sentry_dsn: str = Field("", description="Sentry DSN")
 
-    # ===== PAYMENTS (TON) =====
-    TON_WALLET: str = os.getenv("TON_WALLET", "")
+    # ─── ECONOMY / TON ──────────────────────────────────
+    ton_wallet: str = Field("", description="TON wallet address")
 
-    # ===== EMAIL / NOTIFS =====
-    BREVO_API_KEY: str = os.getenv("BREVO_API_KEY", "")
+    # ─── RUNTIME ────────────────────────────────────────
+    debug: bool = Field(False, description="Debug mode")
+    environment: str = Field("production", description="Environment name")
 
-    # ===== DEPLOY =====
-    WEBHOOK_URL: str = os.getenv("WEBHOOK_URL", "")
 
-    # ===== FLAGS =====
-    DEBUG: bool = os.getenv("DEBUG", "false").lower() == "true"
+# Singleton — import this everywhere
+settings = Settings()
