@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request
 from app.bootstrap import get_container
 
 router = APIRouter()
@@ -6,40 +6,48 @@ router = APIRouter()
 
 @router.post("/webhook")
 async def telegram_webhook(request: Request):
+    container = get_container()
+
     try:
-        update = await request.json()
+        # =========================
+        # SAFE PARSE (CRITICAL FIX)
+        # =========================
+        try:
+            update = await request.json()
+        except Exception:
+            return {"status": "ignored", "reason": "invalid json"}
 
         if not update:
-            raise HTTPException(status_code=400, detail="Empty payload")
-
-        container = get_container()
-
-        result = await container.orchestrator.handle_update(update)
+            return {"status": "ignored", "reason": "empty payload"}
 
         # =========================
-        # EXTRACT TELEGRAM DATA
+        # ORCHESTRATION SAFE CALL
         # =========================
-        message = update.get("message", {})
-        chat = message.get("chat", {})
+        try:
+            result = await container.orchestrator.handle_update(update)
+        except Exception as e:
+            return {
+                "status": "orchestrator_error",
+                "error": str(e),
+            }
+
+        # =========================
+        # TELEGRAM DATA SAFETY
+        # =========================
+        message = update.get("message") or {}
+        chat = message.get("chat") or {}
         chat_id = chat.get("id")
 
-        text = str(result.get("result", ""))
+        if chat_id:
+            await container.telegram_client.send_message(
+                chat_id=chat_id,
+                text=str(result.get("result", "")),
+            )
 
-        # =========================
-        # OUTBOUND RESPONSE (CRITICAL FIX)
-        # =========================
-        await container.telegram_client.send_message(
-            chat_id=chat_id,
-            text=text,
-        )
-
-        return {
-            "status": "ok",
-            "processed": True,
-        }
+        return {"status": "ok"}
 
     except Exception as e:
         return {
-            "status": "error",
+            "status": "fatal_error",
             "message": str(e),
         }
