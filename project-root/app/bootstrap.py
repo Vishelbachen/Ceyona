@@ -1,26 +1,39 @@
-from app.settings import Settings
+from app.settings import settings
 
 
-class Container:
+async def bootstrap() -> dict:
     """
-    Lightweight dependency container (no logic, only wiring).
+    Initialise all infrastructure clients and return them
+    as a plain dict (the app state). Called once on startup.
     """
+    from redis.asyncio import from_url as redis_from_url
+    from supabase import create_client
 
-    def __init__(self, settings: Settings):
-        self.settings = settings
+    # ─── Redis ──────────────────────────────────────────
+    redis = redis_from_url(
+        settings.redis_url,
+        encoding="utf-8",
+        decode_responses=True,
+    )
 
-        # placeholders for later layers
-        self.model_router = None
-        self.orchestrator = None
-        self.epk = None
-        self.pricing_engine = None
+    # ─── Supabase ───────────────────────────────────────
+    supabase = create_client(
+        settings.supabase_url,
+        settings.supabase_service_role_key,
+    )
+
+    return {
+        "redis": redis,
+        "supabase": supabase,
+        "settings": settings,
+    }
 
 
-def build_container() -> Container:
+async def shutdown(state: dict) -> None:
     """
-    Entry DI factory.
+    Graceful teardown of all infrastructure clients.
+    Called once on shutdown.
     """
-    settings = Settings()
-    container = Container(settings=settings)
-
-    return container
+    redis = state.get("redis")
+    if redis:
+        await redis.aclose()
