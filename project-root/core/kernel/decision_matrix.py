@@ -1,89 +1,19 @@
-from dataclasses import dataclass
-from typing import Dict, Any
+from contracts.shared_types import Tier
+
+# ─── TIER THRESHOLDS (USD) ───────────────────────────────────────────────────
+
+_FAST_CEILING: float = 0.05
+_GENERAL_CEILING: float = 0.30
 
 
-@dataclass
-class DecisionProfile:
+def select_tier(estimated_cost: float) -> Tier:
     """
-    Structured interpretation of request signals.
+    Select execution tier based on estimated cost.
+    Called by orchestrator after EPK returns ALLOW or DEGRADE.
     """
-    has_code: bool
-    has_math: bool
-    length: int
-    intent_hint: str
-    risk_level: str
-
-
-class DecisionMatrix:
-    """
-    AI Platform v4.7 — Decision Matrix
-
-    RESPONSIBILITY:
-    - Convert raw payload signals into structured decision profile
-    - Provide deterministic rule hints for EPK
-
-    STRICT RULES:
-    - No execution
-    - No LLM calls
-    - No retrieval
-    - No agents
-    - No cost logic (handled by EPK only)
-    """
-
-    def analyze(self, payload: Dict[str, Any]) -> DecisionProfile:
-        """
-        Converts raw input into structured feature profile.
-        """
-
-        text = payload.get("text", "") or ""
-
-        length = len(text)
-
-        has_code = "```" in text
-
-        has_math = any(symbol in text for symbol in ["=", "+", "-", "*", "/", "^"])
-
-        # lightweight heuristic intent signal (NOT NLP)
-        intent_hint = self._infer_intent_hint(text)
-
-        risk_level = self._infer_risk_level(text, has_code)
-
-        return DecisionProfile(
-            has_code=has_code,
-            has_math=has_math,
-            length=length,
-            intent_hint=intent_hint,
-            risk_level=risk_level,
-        )
-
-    def _infer_intent_hint(self, text: str) -> str:
-        """
-        Minimal keyword-based hinting only.
-        No semantic understanding allowed.
-        """
-
-        lower = text.lower()
-
-        if any(k in lower for k in ["how", "как", "explain", "объясни"]):
-            return "explanation"
-
-        if any(k in lower for k in ["code", "python", "javascript"]):
-            return "coding"
-
-        if any(k in lower for k in ["what", "что", "who", "кто"]):
-            return "query"
-
-        return "general"
-
-    def _infer_risk_level(self, text: str, has_code: bool) -> str:
-        """
-        Determines operational risk category (not safety policy).
-        """
-
-        if has_code and len(text) > 500:
-            return "high"
-
-        if len(text) > 1000:
-            return "medium"
-
-        return "low"
+    if estimated_cost < _FAST_CEILING:
+        return Tier.FAST
+    elif estimated_cost < _GENERAL_CEILING:
+        return Tier.GENERAL
+    else:
+        return Tier.HEAVY
