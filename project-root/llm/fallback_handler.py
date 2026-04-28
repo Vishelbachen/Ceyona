@@ -1,65 +1,61 @@
-from typing import Any, Dict, Optional
+import logging
+from contracts.shared_types import Tier
+from llm.groq_client import groq_client, LLMResponse
+from llm.model_router import route_model, route_max_tokens
+
+logger = logging.getLogger(__name__)
+
+# Fallback cascade: if tier fails → try next lower tier
+_FALLBACK_CASCADE: dict[str, str | None] = {
+    Tier.HEAVY:   Tier.GENERAL,
+    Tier.GENERAL: Tier.FAST,
+    Tier.FAST:    None,           # no further fallback
+}
 
 
-class FallbackHandler:
+async def complete_with_fallback(
+    tier: Tier,
+    messages: list[dict],
+    max_retries: int = 1,
+) -> LLMResponse:
     """
-    AI Platform v4.7 — Fallback Handler
-
-    RESPONSIBILITY:
-    - Handle LLM failures (timeouts, errors, invalid responses)
-    - Provide deterministic fallback strategy selection
-    - Ensure system continuity under failure
-
-    STRICT RULES:
-    - No reasoning
-    - No response evaluation
-    - No model selection intelligence
-    - No retrieval / memory access
-    - No orchestration decisions
+    Attempt LLM completion with automatic tier fallback on failure.
+    Tries current tier, then cascades down if all retries exhausted.
+    Raises RuntimeError if all tiers fail.
     """
+    current_tier: str | None = tier
 
-    def __init__(self):
-        # deterministic fallback chain (fixed order)
-        self.fallback_chain = ["FAST", "GENERAL", "HEAVY"]
+    while current_tier is not None:
+        model = route_model(current_tier)
+        max_tokens = route_max_tokens(current_tier)
 
-    def handle_failure(
-        self,
-        mode: str,
-        error: Exception,
-        payload: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        """
-        Returns next fallback action (no intelligence).
-        """
+        for attempt in range(max_retries + 1):
+            try:
+                return await groq_client.complete(
+                    model=model,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "LLM call failed",
+                    extra={
+                        "tier": current_tier,
+                        "model": model,
+                        "attempt": attempt,
+                        "error": str(exc),
+                    },
+                )
+                if attempt == max_retries:
+                    break
 
-        next_mode = self._get_next_mode(mode)
+        # cascade to lower tier
+        next_tier = _FALLBACK_CASCADE[current_tier]
+        if next_tier:
+            logger.warning(
+                "Falling back to lower tier",
+                extra={"from": current_tier, "to": next_tier},
+            )
+        current_tier = next_tier
 
-        return {
-            "status": "fallback_triggered",
-            "failed_mode": mode,
-            "next_mode": next_mode,
-            "error": str(error),
-            "original_payload": payload,
-        }
-
-    def _get_next_mode(self, current_mode: str) -> Optional[str]:
-        """
-        Deterministic fallback progression.
-        """
-
-        if current_mode not in self.fallback_chain:
-            return None
-
-        index = self.fallback_chain.index(current_mode)
-
-        if index + 1 < len(self.fallback_chain):
-            return self.fallback_chain[index + 1]
-
-        return None
-
-    def should_retry(self, attempt: int, max_attempts: int = 2) -> bool:
-        """
-        Simple retry policy (no adaptive logic).
-        """
-
-        return attempt < max_attempts
+    raise RuntimeError("All LLM tiers exhausted. No response available.")
