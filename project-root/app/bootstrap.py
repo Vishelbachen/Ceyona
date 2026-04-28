@@ -1,19 +1,26 @@
-from core.execution.orchestrator import Orchestrator
-from transport.message_router import MessageRouter
-from llm.model_router import ModelRouter
-from retrieval.retrieval_engine import RetrievalEngine
-from core.kernel.execution_policy_kernel import ExecutionPolicyKernel
+from app.settings import Settings
 
 
-class Application:
-    def __init__(self):
-        self.router = MessageRouter()
-        self.orchestrator = Orchestrator()
+class Container:
+    """
+    Lightweight dependency container (no logic, only wiring).
+    """
 
-    def run(self):
-        print("v4.7 platform started")
-        self.router.listen()
+    def __init__(self, settings: Settings):
+        self.settings = settings
+
+        # placeholders for later layers
+        self.model_router = None
+        self.orchestrator = None
+        self.epk = None
+        self.pricing_engine = None
 
 
-def bootstrap_app() -> Application:
-    return Application()
+def build_container() -> Container:
+    """
+    Entry DI factory.
+    """
+    settings = Settings()
+    container = Container(settings=settings)
+
+    return container
