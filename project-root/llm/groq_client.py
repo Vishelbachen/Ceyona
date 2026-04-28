@@ -43,4 +43,4 @@ class GroqClient:
 
 
 # Singleton
-groq_client = GroqClient(
+groq_client = GroqClient()
