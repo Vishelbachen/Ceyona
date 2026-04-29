@@ -1,89 +1,31 @@
-from typing import Any, Dict, List, Optional
+import logging
+import httpx
+from app.settings import settings
+
+logger = logging.getLogger(__name__)
+_BASE = "https://serpapi.com/search"
+_TIMEOUT = 15.0
 
 
-class SearchClient:
-    """
-    AI Platform v4.7 — External Search Client
-
-    RESPONSIBILITY:
-    - Execute web search queries via external provider (e.g. SerpAPI)
-    - Return raw search results
-    - Provide unprocessed SERP data to retrieval layer
-
-    STRICT RULES:
-    - No ranking or reranking logic
-    - No summarization
-    - No semantic interpretation
-    - No LLM / memory / retrieval usage
-    - No decision-making
-    """
-
-    def __init__(self, api_key: str, base_url: Optional[str] = None):
-        self.api_key = api_key
-        self.base_url = base_url or "https://serpapi.com"
-
-    async def search(
-        self,
-        query: str,
-        num_results: int = 10,
-    ) -> Dict[str, Any]:
-        """
-        Executes a raw web search request.
-        """
-
-        return {
-            "query": query,
-            "results": [
+async def web_search(query: str, num: int = 5) -> list[dict]:
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            r = await client.get(_BASE, params={
+                "q": query,
+                "api_key": settings.serpapi_key,
+                "num": num,
+                "engine": "google",
+            })
+            r.raise_for_status()
+            results = r.json().get("organic_results", [])
+            return [
                 {
-                    "title": "mock result",
-                    "url": "https://example.com",
-                    "snippet": "mock snippet",
+                    "title": item.get("title"),
+                    "link": item.get("link"),
+                    "snippet": item.get("snippet"),
                 }
-                for _ in range(num_results)
-            ],
-            "source": "mock_serpapi",
-        }
-
-    async def news_search(
-        self,
-        query: str,
-        num_results: int = 10,
-    ) -> Dict[str, Any]:
-        """
-        Executes a news-specific search.
-        """
-
-        return {
-            "query": query,
-            "results": [
-                {
-                    "title": "mock news",
-                    "url": "https://news.example.com",
-                    "snippet": "mock news snippet",
-                    "published_at": "2026-01-01",
-                }
-                for _ in range(num_results)
-            ],
-            "source": "mock_serpapi_news",
-        }
-
-    async def image_search(
-        self,
-        query: str,
-        num_results: int = 5,
-    ) -> Dict[str, Any]:
-        """
-        Executes image search.
-        """
-
-        return {
-            "query": query,
-            "images": [
-                {
-                    "url": "https://example.com/image.jpg",
-                    "thumbnail": "https://example.com/thumb.jpg",
-                }
-                for _ in range(num_results)
-            ],
-            "source": "mock_serpapi_images",
-        }
+                for item in results[:num]
+            ]
+    except Exception as exc:
+        logger.error("Web search failed", extra={"query": query, "error": str(exc)})
+        return []
