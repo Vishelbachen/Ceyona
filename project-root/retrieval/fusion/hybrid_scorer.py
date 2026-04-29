@@ -1,41 +1,31 @@
-from contracts.retrieval_contracts import RetrievalDocument
-
-_DENSE_WEIGHT = 0.7
-_SPARSE_WEIGHT = 0.3
+from dataclasses import dataclass
 
 
-def fuse(
-    dense: list[RetrievalDocument],
-    sparse: list[RetrievalDocument],
-    top_k: int = 10,
-) -> list[RetrievalDocument]:
+@dataclass
+class FusedResult:
+    content: str
+    score: float
+    source: str = ""
+
+
+def reciprocal_rank_fusion(
+    sparse_results: list[tuple[str, float]],
+    dense_results: list[tuple[str, float]],
+    k: int = 60,
+    sparse_weight: float = 0.4,
+    dense_weight: float = 0.6,
+) -> list[FusedResult]:
     """
-    Reciprocal Rank Fusion of dense + sparse results.
-    Pure function. No I/O. No inference.
+    Reciprocal Rank Fusion of sparse (BM25) and dense (BGE) results.
+    Pure function. No I/O.
     """
     scores: dict[str, float] = {}
-    content_map: dict[str, RetrievalDocument] = {}
 
-    for rank, doc in enumerate(dense):
-        key = doc.content[:200]
-        scores[key] = scores.get(key, 0.0) + _DENSE_WEIGHT * (1.0 / (rank + 1))
-        content_map[key] = doc
+    for rank, (content, _) in enumerate(sparse_results):
+        scores[content] = scores.get(content, 0.0) + sparse_weight / (k + rank + 1)
 
-    for rank, doc in enumerate(sparse):
-        key = doc.content[:200]
-        scores[key] = scores.get(key, 0.0) + _SPARSE_WEIGHT * (1.0 / (rank + 1))
-        if key not in content_map:
-            content_map[key] = doc
+    for rank, (content, _) in enumerate(dense_results):
+        scores[content] = scores.get(content, 0.0) + dense_weight / (k + rank + 1)
 
     ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-
-    result = []
-    for key, score in ranked[:top_k]:
-        doc = content_map[key]
-        result.append(RetrievalDocument(
-            content=doc.content,
-            score=score,
-            source=doc.source,
-            metadata=doc.metadata,
-        ))
-    return result
+    return [FusedResult(content=c, score=s) for c, s in ranked]
