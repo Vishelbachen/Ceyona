@@ -45,10 +45,6 @@ async def lifespan(app: FastAPI):
     from security.rate_limiter import init_rate_limiter
     init_rate_limiter(state["redis"])
 
-    # ── webhook registration ──────────────────────────────
-    from transport.telegram.webhook import register_webhook
-    await register_webhook()
-
     # ── background wallet poller ──────────────────────────
     wallet_task = asyncio.create_task(
         _wallet_poll_loop(state["supabase"]),
