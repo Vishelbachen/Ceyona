@@ -1,11 +1,4 @@
-from dataclasses import dataclass
-
-
-@dataclass(frozen=True)
-class TTLPolicy:
-    query_ttl_seconds: int = 300        # 5 min
-    embedding_ttl_seconds: int = 3600   # 1 hour
-    rerank_ttl_seconds: int = 600       # 10 min
-
-
-ACTIVE_TTL = TTLPolicy()
+# TTL constants in seconds
+QUERY_CACHE_TTL = 60 * 10        # 10 minutes
+EMBEDDING_CACHE_TTL = 60 * 60   # 1 hour
+RERANK_CACHE_TTL = 60 * 5       # 5 minutes
