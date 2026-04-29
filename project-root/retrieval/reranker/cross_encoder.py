@@ -1,64 +1,36 @@
-from typing import Any, Dict, List, Tuple
+import logging
+
+from llm.hf_client import hf_client
+from retrieval.cache.rerank_cache import RerankCache
+
+logger = logging.getLogger(__name__)
 
 
-class CrossEncoderReranker:
+class CrossEncoder:
     """
-    AI Platform v4.7 — Cross Encoder Reranker
-
-    RESPONSIBILITY:
-    - Score (query, document) pairs
-    - Reorder retrieval results based on relevance scores
-    - Provide final ranking before context assembly
-
-    STRICT RULES:
-    - No answer generation
-    - No reasoning or explanation
-    - No query rewriting
-    - No LLM / memory / retrieval orchestration
-    - No external system decisions
+    Reranks candidates using BGE reranker.
+    Scoring only. No decision authority.
     """
 
-    def __init__(self):
-        pass
+    def __init__(self, rerank_cache: RerankCache) -> None:
+        self._cache = rerank_cache
 
-    def score_pair(self, query: str, document: str) -> float:
-        """
-        Computes relevance score for a query-document pair.
-
-        NOTE: placeholder scoring function (no ML model here)
-        """
-
-        query_tokens = set(query.lower().split())
-        doc_tokens = set(document.lower().split())
-
-        overlap = len(query_tokens & doc_tokens)
-        total = len(query_tokens | doc_tokens)
-
-        return overlap / total if total > 0 else 0.0
-
-    def rerank(
+    async def rerank(
         self,
         query: str,
-        documents: List[Dict[str, Any]],
-        top_k: int = 10,
-    ) -> List[Dict[str, Any]]:
-        """
-        Reorders documents using cross-encoder scoring.
-        """
+        candidates: list[str],
+    ) -> list[float]:
+        if not candidates:
+            return []
 
-        scored: List[Tuple[float, Dict[str, Any]]] = []
+        cached = await self._cache.get(query, candidates)
+        if cached is not None:
+            return cached
 
-        for doc in documents:
-            score = self.score_pair(query, doc.get("content", ""))
-
-            scored.append((score, doc))
-
-        scored.sort(key=lambda x: x[0], reverse=True)
-
-        return [
-            {
-                **doc,
-                "rerank_score": score,
-            }
-            for score, doc in scored[:top_k]
-        ]
+        try:
+            scores = await hf_client.rerank(query, candidates)
+            await self._cache.set(query, candidates, scores)
+            return scores
+        except Exception as exc:
+            logger.error("CrossEncoder rerank failed", extra={"error": str(exc)})
+            return [0.0] * len(candidates)
