@@ -81,27 +81,29 @@ async def telegram_webhook(
     chat_id = _get_chat_id(update)
     user_id = auth.user_id
     lang = _detect_lang(update)
+    supabase = request.app.state.supabase
 
-    # ── rate limiting ────────────────────────────────────
+    # ── rate limiting ─────────────────────────────────────
     from security.rate_limiter import get_rate_limiter
+    from cognition.response_synthesizer import get_system_message
+
     limiter = get_rate_limiter()
     if limiter and not await limiter.is_allowed(user_id):
-        from cognition.response_synthesizer import get_system_message
         if chat_id:
             await _send_message(chat_id, get_system_message("rate_limited", lang))
         return {"ok": True}
 
-    # ── real balance from Supabase ───────────────────────
-    user_balance = 1.0
+    # ── real balance ──────────────────────────────────────
+    user_balance = 0.0
     try:
         from payments.access_controller import AccessController
-        supabase = request.app.state.supabase
         ac = AccessController(supabase)
         balance_result = await ac.get_balance(user_id)
         user_balance = balance_result.balance_usd
     except Exception as exc:
-        logger.error("Balance fetch failed, using default", extra={"error": str(exc)})
+        logger.error("Balance fetch failed", extra={"error": str(exc)})
 
+    # ── message handling ──────────────────────────────────
     if update_type in (UpdateType.MESSAGE, UpdateType.EDITED_MESSAGE):
         result = await handle_message(
             update=update,
@@ -109,14 +111,15 @@ async def telegram_webhook(
             user_id=user_id,
             user_balance=user_balance,
             lang=lang,
+            supabase=supabase,      # ← передаём для истории
         )
 
-        # ── deduct actual cost after execution ───────────
+        # ── billing ───────────────────────────────────────
         if not result.denied and result.usage.cost_usd > 0:
             try:
                 from payments.access_controller import AccessController
                 from payments.usage_meter import UsageMeter, UsageEntry
-                supabase = request.app.state.supabase
+
                 ac = AccessController(supabase)
                 await ac.deduct(user_id, result.usage.cost_usd)
 
@@ -136,22 +139,27 @@ async def telegram_webhook(
                     lang=result.lang,
                 ))
             except Exception as exc:
-                logger.error("Post-execution billing failed", extra={"error": str(exc)})
+                logger.error("Billing failed", extra={"error": str(exc)})
 
         if chat_id:
             await _send_message(chat_id, result.text)
 
     elif update_type == UpdateType.CALLBACK_QUERY:
         ctx = parse_callback(update, user_id)
-        from cognition.response_synthesizer import get_system_message
+
         if ctx.action == CallbackAction.BALANCE:
-            # show real balance
             bal_text = f"💰 Balance: ${user_balance:.2f}"
             await _answer_callback(ctx.callback_query_id, bal_text)
         elif ctx.action == CallbackAction.HELP:
-            await _answer_callback(ctx.callback_query_id, get_system_message("help_display", lang))
+            await _answer_callback(
+                ctx.callback_query_id,
+                get_system_message("help_display", lang),
+            )
         elif ctx.action == CallbackAction.CANCEL:
-            await _answer_callback(ctx.callback_query_id, get_system_message("cancelled", lang))
+            await _answer_callback(
+                ctx.callback_query_id,
+                get_system_message("cancelled", lang),
+            )
         else:
             await _answer_callback(ctx.callback_query_id)
 
