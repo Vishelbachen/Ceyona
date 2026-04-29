@@ -1,39 +1,19 @@
-from dataclasses import dataclass, field
+import logging
 from collections import defaultdict
-import time
+
+logger = logging.getLogger(__name__)
+
+_counters: dict[str, int] = defaultdict(int)
+_gauges: dict[str, float] = {}
 
 
-@dataclass
-class Metrics:
-    request_count: int = 0
-    error_count: int = 0
-    total_cost_usd: float = 0.0
-    tier_counts: dict[str, int] = field(default_factory=lambda: defaultdict(int))
-    latencies: list[float] = field(default_factory=list)
-
-    def record_request(self, tier: str, cost_usd: float, latency_ms: float) -> None:
-        self.request_count += 1
-        self.total_cost_usd += cost_usd
-        self.tier_counts[tier] += 1
-        self.latencies.append(latency_ms)
-
-    def record_error(self) -> None:
-        self.error_count += 1
-
-    def avg_latency_ms(self) -> float:
-        if not self.latencies:
-            return 0.0
-        return sum(self.latencies) / len(self.latencies)
-
-    def summary(self) -> dict:
-        return {
-            "request_count": self.request_count,
-            "error_count": self.error_count,
-            "total_cost_usd": round(self.total_cost_usd, 6),
-            "avg_latency_ms": round(self.avg_latency_ms(), 2),
-            "tier_counts": dict(self.tier_counts),
-        }
+def increment(name: str, value: int = 1) -> None:
+    _counters[name] += value
 
 
-# Singleton
-metrics = Metrics()
+def gauge(name: str, value: float) -> None:
+    _gauges[name] = value
+
+
+def snapshot() -> dict:
+    return {"counters": dict(_counters), "gauges": dict(_gauges)}
