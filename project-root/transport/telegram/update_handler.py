@@ -15,6 +15,7 @@ def _classify_complexity(text: str) -> Complexity:
     has_code = "```" in text or "    " in text
     has_json = "{" in text and "}" in text
     length = len(text)
+
     if has_code and has_json:
         return Complexity.CRITICAL
     if has_code or has_json:
@@ -30,7 +31,7 @@ async def handle_message(
     user_id: int,
     user_balance: float,
     lang: str = "en",
-    conversation_history: list[dict] | None = None,
+    supabase=None,          # injected from webhook
 ) -> OrchestratorResult:
     text = extract_text(update)
 
@@ -58,6 +59,23 @@ async def handle_message(
     input_tokens = _estimate_tokens(text)
     complexity = _classify_complexity(text)
 
+    # ── load conversation history ─────────────────────────
+    conversation_history: list[dict] | None = None
+    history_store = None
+
+    if supabase is not None:
+        try:
+            from memory.conversation_history import ConversationHistory
+            history_store = ConversationHistory(supabase)
+            conversation_history = await history_store.get_history(user_id)
+            logger.info("History loaded", extra={
+                "user_id": user_id,
+                "turns": len(conversation_history),
+            })
+        except Exception as exc:
+            logger.error("History load failed", extra={"error": str(exc)})
+            conversation_history = None
+
     logger.info("Handling message", extra={
         "user_id": user_id,
         "input_tokens": input_tokens,
@@ -71,7 +89,18 @@ async def handle_message(
         input_tokens=input_tokens,
         complexity=complexity,
         lang=lang,
-        conversation_history=conversation_history or [],
+        conversation_history=conversation_history,
     )
 
-    return await run(request)
+    result = await run(request)
+
+    # ── save turns to history ─────────────────────────────
+    if history_store is not None and not result.denied:
+        try:
+            await history_store.append(user_id, "user", text)
+            if result.text:
+                await history_store.append(user_id, "assistant", result.text)
+        except Exception as exc:
+            logger.error("History save failed", extra={"error": str(exc)})
+
+    return result
