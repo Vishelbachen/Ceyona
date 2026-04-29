@@ -1,31 +1,31 @@
 import logging
-from app.settings import settings
+import sys
 
 logger = logging.getLogger(__name__)
 
 _REQUIRED = [
-    "bot_token",
-    "jwt_secret",
-    "encryption_key",
-    "webhook_url",
-    "groq_api_key",
-    "hf_token",
-    "supabase_url",
-    "supabase_anon_key",
-    "supabase_service_role_key",
+    "BOT_TOKEN",
+    "JWT_SECRET",
+    "ENCRYPTION_KEY",
+    "WEBHOOK_URL",
+    "GROQ_API_KEY",
+    "HF_TOKEN",
+    "SUPABASE_URL",
+    "SUPABASE_ANON_KEY",
+    "SUPABASE_SERVICE_ROLE_KEY",
+    "REDIS_URL",
 ]
 
 
-def validate() -> bool:
-    missing = []
-    for key in _REQUIRED:
-        val = getattr(settings, key, "")
-        if not val:
-            missing.append(key)
-
+def validate_env() -> None:
+    """
+    Check all required env vars are present.
+    Exits with code 1 if any are missing.
+    Call before app startup.
+    """
+    import os
+    missing = [k for k in _REQUIRED if not os.environ.get(k)]
     if missing:
-        logger.error("Missing required env vars", extra={"missing": missing})
-        return False
-
+        logger.critical("Missing required env vars", extra={"missing": missing})
+        sys.exit(1)
     logger.info("Env validation passed")
-    return True
