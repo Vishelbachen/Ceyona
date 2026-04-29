@@ -1,97 +1,37 @@
-from typing import Any, Dict, List, Optional
-import time
 import hashlib
+import json
+import logging
+
+from redis.asyncio import Redis
+from retrieval.cache.ttl_policy import ACTIVE_TTL
+
+logger = logging.getLogger(__name__)
+
+
+def _key(query: str, candidates: list[str]) -> str:
+    raw = query + "|".join(candidates)
+    h = hashlib.sha256(raw.encode()).hexdigest()
+    return f"rerank:{h}"
 
 
 class RerankCache:
-    """
-    AI Platform v4.7 — Rerank Cache
+    def __init__(self, redis: Redis) -> None:
+        self._redis = redis
 
-    RESPONSIBILITY:
-    - Cache reranked retrieval results
-    - Avoid recomputing cross-encoder scoring
-    - Provide deterministic query → ranked list mapping
-
-    STRICT RULES:
-    - No semantic reinterpretation of rankings
-    - No adaptive caching or learning
-    - No LLM / memory / retrieval reasoning
-    - No influence on reranker logic
-    - No orchestrator decisions
-    """
-
-    def __init__(self, ttl_seconds: int = 600):
-        self.ttl_seconds = ttl_seconds
-        self._store: Dict[str, Dict[str, Any]] = {}
-
-    def _hash_key(self, query: str, items: List[Dict[str, Any]]) -> str:
-        """
-        Creates deterministic cache key based on query + document ids.
-        """
-
-        doc_ids = ",".join([item.get("id", "") for item in items])
-        raw_key = f"{query}:{doc_ids}"
-
-        return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
-
-    def _is_expired(self, timestamp: float) -> bool:
-        """
-        Checks expiration.
-        """
-
-        return (time.time() - timestamp) > self.ttl_seconds
-
-    def get(
-        self,
-        query: str,
-        items: List[Dict[str, Any]],
-    ) -> Optional[List[Dict[str, Any]]]:
-        """
-        Retrieves cached reranked result.
-        """
-
-        key = self._hash_key(query, items)
-        entry = self._store.get(key)
-
-        if not entry:
+    async def get(self, query: str, candidates: list[str]) -> list[float] | None:
+        try:
+            val = await self._redis.get(_key(query, candidates))
+            return json.loads(val) if val else None
+        except Exception as exc:
+            logger.warning("RerankCache get failed", extra={"error": str(exc)})
             return None
 
-        if self._is_expired(entry["timestamp"]):
-            del self._store[key]
-            return None
-
-        return entry["value"]
-
-    def set(
-        self,
-        query: str,
-        items: List[Dict[str, Any]],
-        reranked: List[Dict[str, Any]],
-    ) -> None:
-        """
-        Stores reranked results.
-        """
-
-        key = self._hash_key(query, items)
-
-        self._store[key] = {
-            "value": reranked,
-            "timestamp": time.time(),
-        }
-
-    def invalidate(self, query: str, items: List[Dict[str, Any]]) -> None:
-        """
-        Removes cached rerank result.
-        """
-
-        key = self._hash_key(query, items)
-
-        if key in self._store:
-            del self._store[key]
-
-    def clear(self) -> None:
-        """
-        Clears entire cache.
-        """
-
-        self._store = {}
+    async def set(self, query: str, candidates: list[str], scores: list[float]) -> None:
+        try:
+            await self._redis.setex(
+                _key(query, candidates),
+                ACTIVE_TTL.rerank_ttl_seconds,
+                json.dumps(scores),
+            )
+        except Exception as exc:
+            logger.warning("RerankCache set failed", extra={"error": str(exc)})
