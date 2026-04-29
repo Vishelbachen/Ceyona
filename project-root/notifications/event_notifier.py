@@ -1,75 +1,88 @@
-from typing import Any, Dict, List, Optional
+import logging
+
+from notifications.email_service import email_service
+
+logger = logging.getLogger(__name__)
 
 
 class EventNotifier:
     """
-    AI Platform v4.7 — Event Notifier
-
-    RESPONSIBILITY:
-    - Dispatch system events to external notification channels
-    - Bridge event system and notification services
-    - Route already-decided events to delivery mechanisms
-
-    STRICT RULES:
-    - No event interpretation
-    - No business logic
-    - No decision-making
-    - No LLM / retrieval / memory usage
-    - No orchestrator influence
+    Async side-effects only.
+    No business logic. No control flow influence.
+    Fires notifications for system events.
     """
 
-    def __init__(
+    # ── balance events ───────────────────────────────────
+
+    async def on_balance_credited(
         self,
-        email_service: Any,
-        webhook_client: Optional[Any] = None,
-    ):
-        self.email_service = email_service
-        self.webhook_client = webhook_client
-
-    async def notify(self, event: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Dispatches a single event to appropriate channels.
-        """
-
-        event_type = event.get("type")
-        payload = event.get("payload", {})
-
-        results = {
-            "event_type": event_type,
-            "delivered_to": [],
-        }
-
-        # =========================
-        # EMAIL CHANNEL
-        # =========================
-        if event.get("channels", {}).get("email"):
-            await self.email_service.send_email(
-                to=payload.get("email"),
-                subject=payload.get("subject", "Notification"),
-                body=payload.get("body", ""),
+        user_id: int,
+        amount_usd: float,
+        new_balance_usd: float,
+        to_email: str | None = None,
+        to_name: str = "User",
+    ) -> None:
+        logger.info("Event: balance_credited", extra={
+            "user_id": user_id,
+            "amount_usd": amount_usd,
+            "new_balance_usd": new_balance_usd,
+        })
+        if to_email:
+            await email_service.send(
+                to_email=to_email,
+                to_name=to_name,
+                subject="✅ Balance topped up",
+                html_content=(
+                    f"<p>Hi {to_name},</p>"
+                    f"<p>Your balance has been topped up by "
+                    f"<strong>${amount_usd:.2f}</strong>.</p>"
+                    f"<p>Current balance: <strong>${new_balance_usd:.2f}</strong></p>"
+                ),
             )
-            results["delivered_to"].append("email")
 
-        # =========================
-        # WEBHOOK CHANNEL
-        # =========================
-        if self.webhook_client and event.get("channels", {}).get("webhook"):
-            await self.webhook_client.post(
-                url=payload.get("webhook_url"),
-                payload=payload,
+    async def on_balance_exhausted(
+        self,
+        user_id: int,
+        to_email: str | None = None,
+        to_name: str = "User",
+    ) -> None:
+        logger.warning("Event: balance_exhausted", extra={"user_id": user_id})
+        if to_email:
+            await email_service.send(
+                to_email=to_email,
+                to_name=to_name,
+                subject="⚠️ Balance exhausted",
+                html_content=(
+                    f"<p>Hi {to_name},</p>"
+                    f"<p>Your balance has run out. "
+                    f"Please top up to continue using the service.</p>"
+                ),
             )
-            results["delivered_to"].append("webhook")
 
-        return results
+    # ── safety events ────────────────────────────────────
 
-    async def notify_bulk(self, events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Processes multiple events sequentially (no batching intelligence).
-        """
+    async def on_safety_block(
+        self,
+        user_id: int,
+        reason: str,
+    ) -> None:
+        logger.warning("Event: safety_block", extra={
+            "user_id": user_id,
+            "reason": reason,
+        })
 
-        results = []
+    # ── system events ────────────────────────────────────
 
-        for event in events:
-            results.append(await self.notify(event))
+    async def on_system_error(
+        self,
+        error: str,
+        context: dict | None = None,
+    ) -> None:
+        logger.error("Event: system_error", extra={
+            "error": error,
+            "context": context or {},
+        })
 
-        return results
+
+# Singleton
+event_notifier = EventNotifier()
