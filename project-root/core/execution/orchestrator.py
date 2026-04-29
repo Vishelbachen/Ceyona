@@ -1,18 +1,20 @@
 import logging
 from dataclasses import dataclass
 
+from cognition.intent_engine import classify
+from cognition.multi_agent_coordinator import CoordinationResult, coordinate, plan_agents
+from cognition.reasoning_engine import select_strategy
+from cognition.response_synthesizer import SynthesisInput, synthesize
 from contracts.shared_types import Complexity, EPKDecision, Tier
 from core.kernel.cost_model import actual_cost, estimate_cost, estimate_output_tokens
 from core.kernel.decision_matrix import select_tier
 from core.kernel.execution_policy_kernel import EPKInput, evaluate
-from llm.fallback_handler import complete_with_fallback
-from llm.groq_client import LLMResponse
 from llm.prompt_engine import PromptContext, build_messages
-from cognition.intent_engine import classify
-from cognition.response_synthesizer import SynthesisInput, synthesize
 
 logger = logging.getLogger(__name__)
 
+
+# ─── CONTRACTS ───────────────────────────────────────────────────────────────
 
 @dataclass
 class OrchestratorRequest:
@@ -52,7 +54,15 @@ class OrchestratorResult:
     lang: str = "en"
 
 
+# ─── MAIN FLOW ───────────────────────────────────────────────────────────────
+
 async def run(request: OrchestratorRequest) -> OrchestratorResult:
+    """
+    Full 16-step DAG with agent layer.
+    """
+
+    # ── step 1: intent classification ────────────────────
+    intent_result = classify(request.user_message)
 
     # ── step 2: estimate output tokens ───────────────────
     estimated_output = estimate_output_tokens(
@@ -86,7 +96,7 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
     if epk_out.decision == EPKDecision.DENY:
         synthesis = synthesize(SynthesisInput(
             raw_text="",
-            intent=classify(request.user_message).intent,
+            intent=intent_result.intent,
             tier=Tier.FAST,
             denied=True,
             deny_reason="insufficient_balance",
@@ -118,26 +128,63 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
         tier = Tier.FAST
         logger.info("EPK DEGRADE: forcing FAST tier")
 
-    # ── step 9: build prompt ─────────────────────────────
-    intent_result = classify(request.user_message)
+    # ── step 6: reasoning strategy ───────────────────────
+    strategy = select_strategy(intent_result.intent, tier)
 
+    # ── step 7: agent plan ───────────────────────────────
+    plan = plan_agents(intent_result.intent, tier, strategy)
+
+    # ── step 8: build prompt ─────────────────────────────
     messages = build_messages(PromptContext(
-        user_message=request.user_message,
+        user_message=(
+            f"{strategy.instruction_prefix} {request.user_message}".strip()
+            if strategy.instruction_prefix
+            else request.user_message
+        ),
         system_prompt=request.system_prompt or intent_result.system_prompt,
         retrieved_context=request.retrieved_context,
         conversation_history=request.conversation_history,
     ))
 
-    # ── steps 11-12: route + LLM execution ───────────────
-    llm_response: LLMResponse = await complete_with_fallback(
-        tier=tier,
+    # ── steps 9-11: agent execution ──────────────────────
+    coordination: CoordinationResult = await coordinate(
+        plan=plan,
         messages=messages,
+        user_message=request.user_message,
     )
 
-    # ── step 13-14: usage meter + actual cost ────────────
+    if coordination.blocked:
+        synthesis = synthesize(SynthesisInput(
+            raw_text="",
+            intent=intent_result.intent,
+            tier=tier,
+            denied=True,
+            deny_reason="default_deny",
+            lang=request.lang,
+        ))
+        return OrchestratorResult(
+            text=synthesis.text,
+            tier=tier,
+            model="",
+            epk_decision=epk_out.decision,
+            usage=UsageRecord(
+                input_tokens=request.input_tokens,
+                output_tokens=0,
+                embedding_tokens=request.embedding_tokens,
+                rerank_tokens=request.rerank_tokens,
+                tier=tier,
+                embedding_type=request.embedding_type,
+                cost_usd=0.0,
+            ),
+            denied=True,
+            deny_reason="safety_block",
+            lang=request.lang,
+        )
+
+    # ── step 12-13: actual cost ──────────────────────────
     cost = actual_cost(
-        input_tokens=llm_response.input_tokens,
-        output_tokens=llm_response.output_tokens,
+        input_tokens=coordination.input_tokens,
+        output_tokens=coordination.output_tokens,
         embedding_tokens=request.embedding_tokens,
         rerank_tokens=request.rerank_tokens,
         tier=tier,
@@ -145,8 +192,8 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
     )
 
     usage = UsageRecord(
-        input_tokens=llm_response.input_tokens,
-        output_tokens=llm_response.output_tokens,
+        input_tokens=coordination.input_tokens,
+        output_tokens=coordination.output_tokens,
         embedding_tokens=request.embedding_tokens,
         rerank_tokens=request.rerank_tokens,
         tier=tier,
@@ -154,9 +201,9 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
         cost_usd=cost,
     )
 
-    # ── step 16: synthesize final response ───────────────
+    # ── step 14: synthesize response ─────────────────────
     synthesis = synthesize(SynthesisInput(
-        raw_text=llm_response.text,
+        raw_text=coordination.text,
         intent=intent_result.intent,
         tier=tier,
         lang=request.lang,
@@ -164,16 +211,18 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
 
     logger.info("Execution complete", extra={
         "tier": tier,
-        "model": llm_response.model,
+        "model": coordination.model,
         "cost_usd": cost,
-        "output_tokens": llm_response.output_tokens,
+        "output_tokens": coordination.output_tokens,
         "lang": request.lang,
+        "intent": intent_result.intent,
+        "agent_plan": plan.primary,
     })
 
     return OrchestratorResult(
         text=synthesis.text,
         tier=tier,
-        model=llm_response.model,
+        model=coordination.model,
         epk_decision=epk_out.decision,
         usage=usage,
         lang=request.lang,
