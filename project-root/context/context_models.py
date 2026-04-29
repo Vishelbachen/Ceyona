@@ -1,9 +1,15 @@
-from dataclasses import dataclass
-from typing import List
+from dataclasses import dataclass, field
 
 
-@dataclass
-class Context:
-    user_id: str
-    query: str
-    documents: List[str]
+@dataclass(frozen=True)
+class ContextChunk:
+    content: str
+    score: float
+    source: str = ""
+
+
+@dataclass(frozen=True)
+class AssembledContext:
+    chunks: list[ContextChunk]
+    total_chars: int
+    serialized: str
