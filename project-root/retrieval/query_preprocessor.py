@@ -1,16 +1,12 @@
 import re
 
 
-_COLLAPSE_WHITESPACE = re.compile(r"\s+")
-_MAX_QUERY_CHARS = 512
-
-
 def preprocess(text: str) -> str:
     """
-    Normalize query text for retrieval.
-    Pure function. No I/O. No semantic inference.
+    Normalize query text before embedding.
+    Deterministic. No I/O.
     """
     text = text.strip()
-    text = _COLLAPSE_WHITESPACE.sub(" ", text)
-    text = text[:_MAX_QUERY_CHARS]
+    text = re.sub(r"\s+", " ", text)
+    text = text[:512]   # hard cap for embedding models
     return text
