@@ -1,70 +1,18 @@
-from typing import Any, Dict, Optional
-import json
+import logging
+import httpx
+
+logger = logging.getLogger(__name__)
+_TIMEOUT = 15.0
+_MAX_CHARS = 5000
 
 
-class WebToolsClient:
-    """
-    AI Platform v4.7 — Web Tools Client
-
-    RESPONSIBILITY:
-    - Perform raw HTTP requests (GET/POST)
-    - Fetch external web resources
-    - Return unprocessed response data
-
-    STRICT RULES:
-    - No HTML parsing logic
-    - No content summarization
-    - No LLM / retrieval / memory usage
-    - No decision-making
-    - No data interpretation
-    """
-
-    def __init__(self, timeout: int = 10):
-        self.timeout = timeout
-
-    async def get(
-        self,
-        url: str,
-        headers: Optional[Dict[str, str]] = None,
-    ) -> Dict[str, Any]:
-        """
-        Performs raw HTTP GET request.
-        """
-
-        return {
-            "url": url,
-            "status_code": 200,
-            "headers": headers or {},
-            "body": "<raw html or json response>",
-        }
-
-    async def post(
-        self,
-        url: str,
-        payload: Dict[str, Any],
-        headers: Optional[Dict[str, str]] = None,
-    ) -> Dict[str, Any]:
-        """
-        Performs raw HTTP POST request.
-        """
-
-        return {
-            "url": url,
-            "status_code": 200,
-            "sent_payload": payload,
-            "headers": headers or {},
-            "body": json.dumps({"mock": "response"}),
-        }
-
-    async def fetch_json(
-        self,
-        url: str,
-    ) -> Dict[str, Any]:
-        """
-        Convenience wrapper for JSON endpoints (no parsing logic).
-        """
-
-        return {
-            "url": url,
-            "json": {"mock": "data"},
-        }
+async def fetch_page(url: str) -> str:
+    """Fetch raw text content from a URL."""
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True) as client:
+            r = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
+            r.raise_for_status()
+            return r.text[:_MAX_CHARS]
+    except Exception as exc:
+        logger.error("Page fetch failed", extra={"url": url, "error": str(exc)})
+        return ""
