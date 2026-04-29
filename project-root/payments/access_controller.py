@@ -5,8 +5,8 @@ from supabase import Client
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_BALANCE_USD = 0.0
 _TABLE = "user_balances"
+_DEFAULT_BALANCE_USD = 1.0    # ← стартовый баланс для новых пользователей
 
 
 @dataclass(frozen=True)
@@ -17,16 +17,10 @@ class BalanceResult:
 
 
 class AccessController:
-    """
-    Reads and writes user USD balances from Supabase.
-    Single source of truth for user balance state.
-    """
-
     def __init__(self, supabase: Client) -> None:
         self._db = supabase
 
     async def get_balance(self, user_id: int) -> BalanceResult:
-        """Fetch user balance. Returns 0.0 if user not found."""
         try:
             result = (
                 self._db
@@ -42,6 +36,8 @@ class AccessController:
                     balance_usd=float(result.data["balance_usd"]),
                     exists=True,
                 )
+            # ── новый пользователь → создать запись ──────
+            await self._create_default(user_id)
             return BalanceResult(
                 user_id=user_id,
                 balance_usd=_DEFAULT_BALANCE_USD,
@@ -52,17 +48,30 @@ class AccessController:
                 "user_id": user_id,
                 "error": str(exc),
             })
+            # fail open — даём дефолтный баланс чтобы не блокировать
             return BalanceResult(
                 user_id=user_id,
                 balance_usd=_DEFAULT_BALANCE_USD,
                 exists=False,
             )
 
+    async def _create_default(self, user_id: int) -> None:
+        try:
+            self._db.table(_TABLE).insert({
+                "user_id": user_id,
+                "balance_usd": _DEFAULT_BALANCE_USD,
+            }).execute()
+            logger.info("Default balance created", extra={
+                "user_id": user_id,
+                "balance_usd": _DEFAULT_BALANCE_USD,
+            })
+        except Exception as exc:
+            logger.warning("Default balance creation failed", extra={
+                "user_id": user_id,
+                "error": str(exc),
+            })
+
     async def credit(self, user_id: int, amount_usd: float) -> bool:
-        """
-        Add USD credit to user balance (upsert).
-        Called after verified TON payment.
-        """
         try:
             existing = await self.get_balance(user_id)
             new_balance = existing.balance_usd + amount_usd
@@ -78,7 +87,6 @@ class AccessController:
                 "new_balance": new_balance,
             })
             return True
-
         except Exception as exc:
             logger.error("credit failed", extra={
                 "user_id": user_id,
@@ -87,10 +95,6 @@ class AccessController:
             return False
 
     async def deduct(self, user_id: int, amount_usd: float) -> bool:
-        """
-        Deduct USD from user balance after successful LLM execution.
-        Returns False if insufficient balance.
-        """
         try:
             existing = await self.get_balance(user_id)
 
@@ -114,7 +118,6 @@ class AccessController:
                 "new_balance": new_balance,
             })
             return True
-
         except Exception as exc:
             logger.error("deduct failed", extra={
                 "user_id": user_id,
