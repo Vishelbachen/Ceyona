@@ -5,31 +5,21 @@ from supabase import Client
 
 logger = logging.getLogger(__name__)
 
-_TABLE = "conversation_his"   # matches Supabase table name shown in screenshot
+_TABLE = "conversation_his"
 _MAX_HISTORY = 20
 
 
 @dataclass
 class ConversationTurn:
-    role: str        # "user" | "assistant"
+    role: str
     content: str
 
 
 class ConversationHistory:
-    """
-    Stores and retrieves per-user conversation turns from Supabase.
-    Storage only. No semantic logic.
-    """
-
     def __init__(self, supabase: Client) -> None:
         self._db = supabase
 
-    async def append(
-        self,
-        user_id: int,
-        role: str,
-        content: str,
-    ) -> bool:
+    async def append(self, user_id: int, role: str, content: str) -> bool:
         try:
             self._db.table(_TABLE).insert({
                 "user_id": str(user_id),
@@ -39,8 +29,7 @@ class ConversationHistory:
             return True
         except Exception as exc:
             logger.error("ConversationHistory.append failed", extra={
-                "user_id": user_id,
-                "error": str(exc),
+                "user_id": user_id, "error": str(exc),
             })
             return False
 
@@ -49,10 +38,6 @@ class ConversationHistory:
         user_id: int,
         limit: int = _MAX_HISTORY,
     ) -> list[dict]:
-        """
-        Returns list of {"role": ..., "content": ...} dicts
-        ordered oldest-first, ready for LLM messages array.
-        """
         try:
             result = (
                 self._db.table(_TABLE)
@@ -63,13 +48,11 @@ class ConversationHistory:
                 .execute()
             )
             rows = result.data or []
-            # reverse to chronological order
             rows.reverse()
             return [{"role": r["role"], "content": r["content"]} for r in rows]
         except Exception as exc:
             logger.error("ConversationHistory.get_history failed", extra={
-                "user_id": user_id,
-                "error": str(exc),
+                "user_id": user_id, "error": str(exc),
             })
             return []
 
@@ -81,7 +64,6 @@ class ConversationHistory:
             return True
         except Exception as exc:
             logger.error("ConversationHistory.clear failed", extra={
-                "user_id": user_id,
-                "error": str(exc),
+                "user_id": user_id, "error": str(exc),
             })
             return False
