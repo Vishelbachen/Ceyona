@@ -1,72 +1,36 @@
-from typing import Any, Dict, Optional
-import time
+import hashlib
+import json
+import logging
+
+from redis.asyncio import Redis
+from retrieval.cache.ttl_policy import ACTIVE_TTL
+
+logger = logging.getLogger(__name__)
+
+
+def _key(query: str, user_id: str) -> str:
+    h = hashlib.sha256(f"{user_id}:{query}".encode()).hexdigest()
+    return f"qcache:{h}"
 
 
 class QueryCache:
-    """
-    AI Platform v4.7 — Query Cache
+    def __init__(self, redis: Redis) -> None:
+        self._redis = redis
 
-    RESPONSIBILITY:
-    - Store retrieval results for identical queries
-    - Reduce redundant retrieval computations
-    - Provide deterministic key-value caching
-
-    STRICT RULES:
-    - No semantic similarity matching
-    - No cache-based ranking decisions
-    - No LLM / memory / reasoning usage
-    - No orchestrator influence
-    - No adaptive invalidation logic
-    """
-
-    def __init__(self, ttl_seconds: int = 300):
-        self.ttl_seconds = ttl_seconds
-        self._store: Dict[str, Dict[str, Any]] = {}
-
-    def _is_expired(self, timestamp: float) -> bool:
-        """
-        Checks if cached entry is expired.
-        """
-
-        return (time.time() - timestamp) > self.ttl_seconds
-
-    def get(self, key: str) -> Optional[Dict[str, Any]]:
-        """
-        Retrieves cached value if not expired.
-        """
-
-        entry = self._store.get(key)
-
-        if not entry:
+    async def get(self, query: str, user_id: str) -> list[dict] | None:
+        try:
+            val = await self._redis.get(_key(query, user_id))
+            return json.loads(val) if val else None
+        except Exception as exc:
+            logger.warning("QueryCache get failed", extra={"error": str(exc)})
             return None
 
-        if self._is_expired(entry["timestamp"]):
-            del self._store[key]
-            return None
-
-        return entry["value"]
-
-    def set(self, key: str, value: Dict[str, Any]) -> None:
-        """
-        Stores value in cache.
-        """
-
-        self._store[key] = {
-            "value": value,
-            "timestamp": time.time(),
-        }
-
-    def invalidate(self, key: str) -> None:
-        """
-        Removes specific cache entry.
-        """
-
-        if key in self._store:
-            del self._store[key]
-
-    def clear(self) -> None:
-        """
-        Clears entire cache.
-        """
-
-        self._store = {}
+    async def set(self, query: str, user_id: str, results: list[dict]) -> None:
+        try:
+            await self._redis.setex(
+                _key(query, user_id),
+                ACTIVE_TTL.query_ttl_seconds,
+                json.dumps(results),
+            )
+        except Exception as exc:
+            logger.warning("QueryCache set failed", extra={"error": str(exc)})
