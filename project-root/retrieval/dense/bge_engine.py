@@ -1,71 +1,38 @@
-from typing import Any, Dict, List, Optional
-import math
+import logging
+
+from contracts.retrieval_contracts import RetrievedDocument
+from llm.hf_client import BGE_LARGE, BGE_SMALL, hf_client
+from retrieval.cache.embedding_cache import EmbeddingCache
+
+logger = logging.getLogger(__name__)
 
 
 class BGEEngine:
     """
-    AI Platform v4.7 — Dense Retrieval Engine (BGE)
-
-    RESPONSIBILITY:
-    - Perform embedding-based similarity search
-    - Compute vector similarity scores
-    - Return ranked candidate documents based on cosine similarity
-
-    STRICT RULES:
-    - No semantic interpretation
-    - No query rewriting
-    - No LLM reasoning
-    - No retrieval orchestration
-    - No fusion logic
+    Dense retrieval via BGE embeddings.
+    Generates query embedding only — document embeddings stored in Supabase.
     """
 
-    def __init__(self):
-        self.documents: List[Dict[str, Any]] = []
+    def __init__(self, embedding_cache: EmbeddingCache) -> None:
+        self._cache = embedding_cache
 
-    def add_documents(self, documents: List[Dict[str, Any]]) -> None:
-        """
-        Stores documents with embeddings.
-        Each document must include 'embedding': List[float]
-        """
-
-        self.documents = documents
-
-    def _cosine_similarity(self, a: List[float], b: List[float]) -> float:
-        """
-        Computes cosine similarity between two vectors.
-        """
-
-        dot = sum(x * y for x, y in zip(a, b))
-        norm_a = math.sqrt(sum(x * x for x in a))
-        norm_b = math.sqrt(sum(y * y for y in b))
-
-        if norm_a == 0 or norm_b == 0:
-            return 0.0
-
-        return dot / (norm_a * norm_b)
-
-    def similarity_search(
+    async def embed_query(
         self,
-        query_embedding: List[float],
-        top_k: int = 10,
-    ) -> List[Dict[str, Any]]:
-        """
-        Returns top-k most similar documents.
-        """
+        query: str,
+        use_fast: bool = False,
+    ) -> list[float]:
+        model = BGE_SMALL if use_fast else BGE_LARGE
 
-        scored = []
+        cached = await self._cache.get(query, model)
+        if cached is not None:
+            return cached
 
-        for doc in self.documents:
-            doc_embedding = doc.get("embedding", [])
-
-            score = self._cosine_similarity(query_embedding, doc_embedding)
-
-            scored.append({
-                "id": doc.get("id"),
-                "score": score,
-                "content": doc.get("content"),
-            })
-
-        scored.sort(key=lambda x: x["score"], reverse=True)
-
-        return scored[:top_k]
+        try:
+            vectors = await hf_client.embed([query], model=model)
+            embedding = vectors[0] if vectors else []
+            if embedding:
+                await self._cache.set(query, model, embedding)
+            return embedding
+        except Exception as exc:
+            logger.error("BGE embed failed", extra={"error": str(exc)})
+            return []
