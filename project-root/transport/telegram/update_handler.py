@@ -15,7 +15,6 @@ def _classify_complexity(text: str) -> Complexity:
     has_code = "```" in text or "    " in text
     has_json = "{" in text and "}" in text
     length = len(text)
-
     if has_code and has_json:
         return Complexity.CRITICAL
     if has_code or has_json:
@@ -31,6 +30,7 @@ async def handle_message(
     user_id: int,
     user_balance: float,
     lang: str = "en",
+    conversation_history: list[dict] | None = None,
 ) -> OrchestratorResult:
     text = extract_text(update)
 
@@ -71,6 +71,7 @@ async def handle_message(
         input_tokens=input_tokens,
         complexity=complexity,
         lang=lang,
+        conversation_history=conversation_history or [],
     )
 
     return await run(request)
