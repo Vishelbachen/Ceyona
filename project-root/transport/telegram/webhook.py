@@ -1,4 +1,5 @@
 import logging
+import re
 
 import httpx
 from fastapi import APIRouter, Header, HTTPException, Request, status
@@ -14,7 +15,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _TELEGRAM_API = f"https://api.telegram.org/bot{settings.bot_token}"
-_WEBHOOK_SECRET = settings.bot_token[:32]
+
+# secret_token: only A-Z a-z 0-9 _ - allowed, max 256 chars
+_WEBHOOK_SECRET = re.sub(r"[^A-Za-z0-9_\-]", "_", settings.bot_token)[:256]
 
 
 async def _send_message(chat_id: int, text: str) -> None:
@@ -63,11 +66,17 @@ async def telegram_webhook(
     request: Request,
     x_telegram_bot_api_secret_token: str | None = Header(default=None),
 ) -> dict:
+    # ── secret token check (optional — skip if not sent) ──
     if x_telegram_bot_api_secret_token:
         if not verify_webhook_secret(x_telegram_bot_api_secret_token, _WEBHOOK_SECRET):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
 
-    update: dict = await request.json()
+    try:
+        update: dict = await request.json()
+    except Exception as exc:
+        logger.error("Failed to parse update JSON", extra={"error": str(exc)})
+        return {"ok": True}
+
     update_type = classify_update(update)
 
     if update_type == UpdateType.UNKNOWN:
@@ -84,8 +93,8 @@ async def telegram_webhook(
     supabase = request.app.state.supabase
 
     # ── rate limiting ─────────────────────────────────────
-    from security.rate_limiter import get_rate_limiter
     from cognition.response_synthesizer import get_system_message
+    from security.rate_limiter import get_rate_limiter
 
     limiter = get_rate_limiter()
     if limiter and not await limiter.is_allowed(user_id):
@@ -105,20 +114,29 @@ async def telegram_webhook(
 
     # ── message handling ──────────────────────────────────
     if update_type in (UpdateType.MESSAGE, UpdateType.EDITED_MESSAGE):
-        result = await handle_message(
-            update=update,
-            update_type=update_type,
-            user_id=user_id,
-            user_balance=user_balance,
-            lang=lang,
-            supabase=supabase,      # ← передаём для истории
-        )
+        try:
+            result = await handle_message(
+                update=update,
+                update_type=update_type,
+                user_id=user_id,
+                user_balance=user_balance,
+                lang=lang,
+                supabase=supabase,
+            )
+        except Exception as exc:
+            logger.error("handle_message crashed", extra={"error": str(exc)})
+            if chat_id:
+                await _send_message(
+                    chat_id,
+                    get_system_message("no_response", lang),
+                )
+            return {"ok": True}
 
         # ── billing ───────────────────────────────────────
         if not result.denied and result.usage.cost_usd > 0:
             try:
                 from payments.access_controller import AccessController
-                from payments.usage_meter import UsageMeter, UsageEntry
+                from payments.usage_meter import UsageEntry, UsageMeter
 
                 ac = AccessController(supabase)
                 await ac.deduct(user_id, result.usage.cost_usd)
