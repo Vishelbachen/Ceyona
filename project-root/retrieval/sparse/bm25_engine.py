@@ -1,73 +1,68 @@
 import logging
 import math
 from collections import Counter
-
-from contracts.retrieval_contracts import RetrievalDocument
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
-# In-memory BM25 over a small static corpus.
-# Replace corpus with DB-backed fetch when scale requires it.
-_K1 = 1.5
-_B = 0.75
+
+@dataclass
+class BM25Result:
+    content: str
+    score: float
 
 
-def _tokenize(text: str) -> list[str]:
-    return text.lower().split()
-
-
-def _bm25_score(
-    query_terms: list[str],
-    doc_terms: list[str],
-    corpus_size: int,
-    avg_doc_len: float,
-    df: dict[str, int],
-) -> float:
-    doc_len = len(doc_terms)
-    term_freq = Counter(doc_terms)
-    score = 0.0
-    for term in query_terms:
-        if term not in term_freq:
-            continue
-        tf = term_freq[term]
-        n_docs_with_term = df.get(term, 0)
-        if n_docs_with_term == 0:
-            continue
-        idf = math.log((corpus_size - n_docs_with_term + 0.5) / (n_docs_with_term + 0.5) + 1)
-        tf_norm = (tf * (_K1 + 1)) / (tf + _K1 * (1 - _B + _B * doc_len / max(avg_doc_len, 1)))
-        score += idf * tf_norm
-    return score
-
-
-async def retrieve_sparse(
-    query: str,
-    corpus: list[str] | None = None,
-    top_k: int = 10,
-) -> list[RetrievalDocument]:
+class BM25Engine:
     """
-    BM25 sparse retrieval over provided corpus.
-    Returns ranked RetrievalDocument list.
-    If no corpus provided, returns empty list (retrieval_engine handles fallback).
+    In-memory BM25 sparse retrieval.
+    Deterministic. No I/O. No state beyond corpus.
     """
-    if not corpus:
-        return []
 
-    query_terms = _tokenize(query)
-    tokenized_corpus = [_tokenize(doc) for doc in corpus]
-    avg_doc_len = sum(len(d) for d in tokenized_corpus) / max(len(tokenized_corpus), 1)
+    def __init__(self, k1: float = 1.5, b: float = 0.75) -> None:
+        self.k1 = k1
+        self.b = b
+        self._corpus: list[str] = []
+        self._tf: list[Counter] = []
+        self._df: Counter = Counter()
+        self._avg_len: float = 0.0
 
-    df: dict[str, int] = {}
-    for doc_terms in tokenized_corpus:
-        for term in set(doc_terms):
-            df[term] = df.get(term, 0) + 1
+    def index(self, documents: list[str]) -> None:
+        self._corpus = documents
+        tokenized = [doc.lower().split() for doc in documents]
+        self._tf = [Counter(t) for t in tokenized]
+        self._df = Counter()
+        for t in tokenized:
+            for term in set(t):
+                self._df[term] += 1
+        lengths = [len(t) for t in tokenized]
+        self._avg_len = sum(lengths) / max(len(lengths), 1)
 
-    scored = []
-    for i, (doc_text, doc_terms) in enumerate(zip(corpus, tokenized_corpus)):
-        score = _bm25_score(
-            query_terms, doc_terms,
-            len(corpus), avg_doc_len, df,
-        )
-        scored.append(RetrievalDocument(content=doc_text, score=score, source="bm25"))
+    def search(self, query: str, top_k: int = 10) -> list[BM25Result]:
+        if not self._corpus:
+            return []
 
-    scored.sort(key=lambda d: d.score, reverse=True)
-    return scored[:top_k]
+        terms = query.lower().split()
+        n = len(self._corpus)
+        scores: list[float] = []
+
+        for i, tf in enumerate(self._tf):
+            doc_len = sum(tf.values())
+            score = 0.0
+            for term in terms:
+                if term not in tf:
+                    continue
+                df = self._df.get(term, 0)
+                idf = math.log((n - df + 0.5) / (df + 0.5) + 1)
+                tf_val = tf[term]
+                norm_tf = tf_val * (self.k1 + 1) / (
+                    tf_val + self.k1 * (1 - self.b + self.b * doc_len / self._avg_len)
+                )
+                score += idf * norm_tf
+            scores.append(score)
+
+        ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
+        return [
+            BM25Result(content=self._corpus[i], score=s)
+            for i, s in ranked[:top_k]
+            if s > 0
+        ]
