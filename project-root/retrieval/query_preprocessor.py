@@ -1,12 +1,16 @@
 import re
 
 
-def preprocess(query: str) -> str:
+_COLLAPSE_WHITESPACE = re.compile(r"\s+")
+_MAX_QUERY_CHARS = 512
+
+
+def preprocess(text: str) -> str:
     """
-    Clean and normalize query text before retrieval.
-    Deterministic. No I/O. No semantic inference.
+    Normalize query text for retrieval.
+    Pure function. No I/O. No semantic inference.
     """
-    query = query.strip()
-    query = re.sub(r"\s+", " ", query)
-    query = re.sub(r"[^\w\s\?\!\.\,\-]", "", query)
-    return query[:512]
+    text = text.strip()
+    text = _COLLAPSE_WHITESPACE.sub(" ", text)
+    text = text[:_MAX_QUERY_CHARS]
+    return text
