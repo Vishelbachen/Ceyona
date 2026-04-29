@@ -1,7 +1,46 @@
-class DeepAgent:
-    """
-    Deep reasoning agent (high accuracy)
-    """
+import logging
+from dataclasses import dataclass
 
-    def run(self, query: str) -> str:
-        return f"[DEEP AGENT] deep analysis for: {query}"
+from llm.fallback_handler import complete_with_fallback
+from contracts.shared_types import Tier
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class AgentResult:
+    text: str
+    model: str
+    input_tokens: int
+    output_tokens: int
+    success: bool
+    error: str = ""
+
+
+async def run(messages: list[dict]) -> AgentResult:
+    """
+    Deep agent — HEAVY tier, multi-step reasoning.
+    Used for: code, analysis, math, complex questions.
+    """
+    try:
+        response = await complete_with_fallback(
+            tier=Tier.HEAVY,
+            messages=messages,
+        )
+        return AgentResult(
+            text=response.text,
+            model=response.model,
+            input_tokens=response.input_tokens,
+            output_tokens=response.output_tokens,
+            success=True,
+        )
+    except Exception as exc:
+        logger.error("DeepAgent failed", extra={"error": str(exc)})
+        return AgentResult(
+            text="",
+            model="",
+            input_tokens=0,
+            output_tokens=0,
+            success=False,
+            error=str(exc),
+        )
