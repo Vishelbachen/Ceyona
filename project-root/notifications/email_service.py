@@ -1,71 +1,68 @@
-from typing import Any, Dict, Optional, List
+import logging
+
+import httpx
+
+from app.settings import settings
+
+logger = logging.getLogger(__name__)
+
+_BREVO_URL = "https://api.brevo.com/v3/smtp/email"
+_TIMEOUT = 10.0
+_FROM_EMAIL = "noreply@whileshesleeps.ai"
+_FROM_NAME = "AI Platform"
 
 
 class EmailService:
     """
-    AI Platform v4.7 — Email Notification Service
-
-    RESPONSIBILITY:
-    - Send email messages via external provider
-    - Deliver notification payloads
-    - Act as transport layer for communication
-
-    STRICT RULES:
-    - No business logic
-    - No template intelligence
-    - No routing decisions
-    - No LLM / retrieval / memory usage
-    - No orchestrator interaction logic
+    Sends transactional emails via Brevo API.
+    Async. No state. No retry logic (fire-and-forget).
     """
 
-    def __init__(self, smtp_client: Any):
-        self.smtp_client = smtp_client
+    def __init__(self) -> None:
+        self._headers = {
+            "api-key": settings.brevo_api_key,
+            "Content-Type": "application/json",
+        }
 
-    async def send_email(
+    async def send(
         self,
-        to: str,
+        to_email: str,
+        to_name: str,
         subject: str,
-        body: str,
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        """
-        Sends a single email.
-        """
+        html_content: str,
+    ) -> bool:
+        """Send a single transactional email."""
+        if not settings.brevo_api_key:
+            logger.warning("Brevo API key not set, skipping email")
+            return False
 
-        # NOTE: In production, this would call SMTP / API provider
-
-        return {
-            "status": "sent",
-            "to": to,
+        payload = {
+            "sender": {"name": _FROM_NAME, "email": _FROM_EMAIL},
+            "to": [{"email": to_email, "name": to_name}],
             "subject": subject,
-            "body": body,
-            "metadata": metadata or {},
-            "provider": "mock_smtp",
+            "htmlContent": html_content,
         }
 
-    async def send_bulk(
-        self,
-        recipients: List[str],
-        subject: str,
-        body: str,
-    ) -> Dict[str, Any]:
-        """
-        Sends email to multiple recipients (no batching logic).
-        """
-
-        results = []
-
-        for r in recipients:
-            results.append(
-                await self.send_email(
-                    to=r,
-                    subject=subject,
-                    body=body,
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                response = await client.post(
+                    _BREVO_URL,
+                    json=payload,
+                    headers=self._headers,
                 )
-            )
+                response.raise_for_status()
+                logger.info("Email sent", extra={
+                    "to": to_email,
+                    "subject": subject,
+                })
+                return True
+        except Exception as exc:
+            logger.error("Email send failed", extra={
+                "to": to_email,
+                "error": str(exc),
+            })
+            return False
 
-        return {
-            "status": "bulk_sent",
-            "count": len(results),
-            "results": results,
-        }
+
+# Singleton
+email_service = EmailService()
