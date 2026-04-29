@@ -1,118 +1,32 @@
-from typing import Any, Dict, List
+from dataclasses import dataclass
+
+_DENSE_WEIGHT = 0.7
+_SPARSE_WEIGHT = 0.3
 
 
-class HybridScorer:
+@dataclass(frozen=True)
+class FusionResult:
+    content: str
+    score: float
+
+
+def fuse(
+    dense: list[tuple[str, float]],
+    sparse: list[tuple[str, float]],
+    top_k: int = 5,
+) -> list[FusionResult]:
     """
-    AI Platform v4.7 — Hybrid Scoring (Fusion Layer)
-
-    RESPONSIBILITY:
-    - Combine scores from multiple retrieval sources
-    - Normalize and aggregate ranking signals
-    - Produce unified relevance score
-
-    STRICT RULES:
-    - No semantic interpretation
-    - No query understanding
-    - No decision-making logic
-    - No LLM / memory / reasoning usage
-    - No final ranking authority (reranker is final)
+    Reciprocal Rank Fusion (RRF) + weighted combination.
+    dense/sparse: list of (content, score) tuples.
+    Pure function. No I/O.
     """
+    scores: dict[str, float] = {}
 
-    def __init__(
-        self,
-        bm25_weight: float = 0.3,
-        dense_weight: float = 0.5,
-        web_weight: float = 0.2,
-    ):
-        self.bm25_weight = bm25_weight
-        self.dense_weight = dense_weight
-        self.web_weight = web_weight
+    for content, score in dense:
+        scores[content] = scores.get(content, 0.0) + score * _DENSE_WEIGHT
 
-    def _safe_score(self, value: float) -> float:
-        """
-        Ensures score is within [0, 1] range.
-        """
+    for content, score in sparse:
+        scores[content] = scores.get(content, 0.0) + score * _SPARSE_WEIGHT
 
-        if value is None:
-            return 0.0
-
-        return max(0.0, min(1.0, value))
-
-    def fuse(
-        self,
-        bm25_results: List[Dict[str, Any]],
-        dense_results: List[Dict[str, Any]],
-        web_results: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
-        """
-        Combines multiple retrieval sources into unified score list.
-        """
-
-        fused: Dict[str, Dict[str, Any]] = {}
-
-        # =========================
-        # BM25 SCORES
-        # =========================
-        for item in bm25_results:
-            doc_id = item["id"]
-
-            fused.setdefault(doc_id, {
-                "id": doc_id,
-                "content": item.get("content", ""),
-                "bm25": 0.0,
-                "dense": 0.0,
-                "web": 0.0,
-            })
-
-            fused[doc_id]["bm25"] = self._safe_score(item.get("score", 0.0))
-
-        # =========================
-        # DENSE SCORES
-        # =========================
-        for item in dense_results:
-            doc_id = item["id"]
-
-            fused.setdefault(doc_id, {
-                "id": doc_id,
-                "content": item.get("content", ""),
-                "bm25": 0.0,
-                "dense": 0.0,
-                "web": 0.0,
-            })
-
-            fused[doc_id]["dense"] = self._safe_score(item.get("score", 0.0))
-
-        # =========================
-        # WEB SCORES
-        # =========================
-        for item in web_results:
-            doc_id = item.get("id") or item.get("url")
-
-            fused.setdefault(doc_id, {
-                "id": doc_id,
-                "content": item.get("content", item.get("snippet", "")),
-                "bm25": 0.0,
-                "dense": 0.0,
-                "web": 0.0,
-            })
-
-            fused[doc_id]["web"] = self._safe_score(item.get("score", 0.0))
-
-        # =========================
-        # FINAL SCORE (LINEAR FUSION)
-        # =========================
-        results = []
-
-        for doc in fused.values():
-            score = (
-                doc["bm25"] * self.bm25_weight +
-                doc["dense"] * self.dense_weight +
-                doc["web"] * self.web_weight
-            )
-
-            results.append({
-                **doc,
-                "fused_score": score,
-            })
-
-        return sorted(results, key=lambda x: x["fused_score"], reverse=True)
+    ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    return [FusionResult(content=c, score=s) for c, s in ranked[:top_k]]
