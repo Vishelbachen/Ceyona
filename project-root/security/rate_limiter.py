@@ -1,37 +1,30 @@
 import logging
 import time
-from dataclasses import dataclass
 
 from redis.asyncio import Redis
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_RPM = 30
 _WINDOW_SECONDS = 60
-_DEFAULT_LIMIT = 30
-
-
-@dataclass(frozen=True)
-class RateLimitResult:
-    allowed: bool
-    remaining: int
-    retry_after: int = 0
 
 
 class RateLimiter:
     """
-    Sliding window rate limiter using Redis.
+    Sliding window rate limiter backed by Redis.
+    Per-user, per-minute.
     """
 
-    def __init__(self, redis: Redis) -> None:
+    def __init__(self, redis: Redis, rpm: int = _DEFAULT_RPM) -> None:
         self._redis = redis
+        self._rpm = rpm
 
-    async def check(
-        self,
-        user_id: int,
-        limit: int = _DEFAULT_LIMIT,
-    ) -> RateLimitResult:
-        key = f"rate:{user_id}"
-        now = int(time.time())
+    def _key(self, user_id: int) -> str:
+        return f"rl:{user_id}"
+
+    async def is_allowed(self, user_id: int) -> bool:
+        key = self._key(user_id)
+        now = time.time()
         window_start = now - _WINDOW_SECONDS
 
         try:
@@ -39,19 +32,25 @@ class RateLimiter:
             pipe.zremrangebyscore(key, 0, window_start)
             pipe.zcard(key)
             pipe.zadd(key, {str(now): now})
-            pipe.expire(key, _WINDOW_SECONDS)
+            pipe.expire(key, _WINDOW_SECONDS * 2)
             results = await pipe.execute()
 
             count = results[1]
-            if count >= limit:
-                logger.warning("Rate limit exceeded", extra={"user_id": user_id})
-                return RateLimitResult(
-                    allowed=False,
-                    remaining=0,
-                    retry_after=_WINDOW_SECONDS,
-                )
-            return RateLimitResult(allowed=True, remaining=limit - count - 1)
+            if count >= self._rpm:
+                logger.warning("Rate limit exceeded", extra={"user_id": user_id, "count": count})
+                return False
+            return True
 
         except Exception as exc:
-            logger.error("Rate limiter error", extra={"error": str(exc)})
-            return RateLimitResult(allowed=True, remaining=limit)
+            logger.warning("RateLimiter error, allowing", extra={"error": str(exc)})
+            return True  # fail open
+
+
+_rate_limiter: RateLimiter | None = None
+
+
+def get_rate_limiter(redis: Redis) -> RateLimiter:
+    global _rate_limiter
+    if _rate_limiter is None:
+        _rate_limiter = RateLimiter(redis)
+    return _rate_limiter
