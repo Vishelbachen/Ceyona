@@ -1,11 +1,16 @@
-from context.context_models import Context
+from context.context_models import ContextChunk
 
 
-class ContextSerializer:
+def serialize(chunks: list[ContextChunk]) -> str:
     """
-    Converts structured context into prompt string
+    Format context chunks into a single string for LLM injection.
+    Deterministic. No inference. No summarization.
     """
+    if not chunks:
+        return ""
 
-    def serialize(self, context: Context) -> str:
-        docs_text = "\n".join(context.documents)
-        return f"QUERY: {context.query}\n\nCONTEXT:\n{docs_text}"
+    parts = []
+    for i, chunk in enumerate(chunks, 1):
+        parts.append(f"[{i}] {chunk.content.strip()}")
+
+    return "\n\n".join(parts)
