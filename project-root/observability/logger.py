@@ -1,17 +1,31 @@
 import logging
+import sys
+
+import structlog
 
 
-class Logger:
-    """
-    Central logging service
-    """
+def setup_logging(debug: bool = False) -> None:
+    level = logging.DEBUG if debug else logging.INFO
 
-    def __init__(self):
-        self.logger = logging.getLogger("v4_7")
-        self.logger.setLevel(logging.INFO)
+    structlog.configure(
+        processors=[
+            structlog.stdlib.filter_by_level,
+            structlog.stdlib.add_logger_name,
+            structlog.stdlib.add_log_level,
+            structlog.stdlib.PositionalArgumentsFormatter(),
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.processors.StackInfoRenderer(),
+            structlog.processors.format_exc_info,
+            structlog.processors.JSONRenderer(),
+        ],
+        context_class=dict,
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
+        cache_logger_on_first_use=True,
+    )
 
-    def info(self, msg: str):
-        self.logger.info(msg)
-
-    def error(self, msg: str):
-        self.logger.error(msg)
+    logging.basicConfig(
+        format="%(message)s",
+        stream=sys.stdout,
+        level=level,
+    )
