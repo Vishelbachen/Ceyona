@@ -17,4 +17,28 @@ async def lifespan(app: FastAPI):
     app.state.conversation_history = ConversationHistory(state["redis"])
 
     from transport.telegram.webhook import register_webhook
-    await regist
+    await register_webhook()
+
+    yield
+
+    from app.bootstrap import shutdown
+    await shutdown(state)
+
+
+from app.bootstrap import bootstrap  # noqa: E402
+
+app = FastAPI(
+    title="AI Platform",
+    version="1.0.0",
+    lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+)
+
+from transport.telegram.webhook import router as telegram_router  # noqa: E402
+app.include_router(telegram_router)
+
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
