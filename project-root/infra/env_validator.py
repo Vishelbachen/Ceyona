@@ -1,59 +1,31 @@
-from typing import Any, Dict, List, Optional
-import re
+import logging
+from app.settings import settings
+
+logger = logging.getLogger(__name__)
+
+_REQUIRED = [
+    "bot_token",
+    "jwt_secret",
+    "encryption_key",
+    "webhook_url",
+    "groq_api_key",
+    "hf_token",
+    "supabase_url",
+    "supabase_anon_key",
+    "supabase_service_role_key",
+]
 
 
-class EnvValidator:
-    """
-    AI Platform v4.7 — Environment Validator
+def validate() -> bool:
+    missing = []
+    for key in _REQUIRED:
+        val = getattr(settings, key, "")
+        if not val:
+            missing.append(key)
 
-    RESPONSIBILITY:
-    - Validate presence of required environment variables
-    - Perform basic format validation (syntax-level only)
-    - Ensure runtime config completeness
+    if missing:
+        logger.error("Missing required env vars", extra={"missing": missing})
+        return False
 
-    STRICT RULES:
-    - No business logic validation
-    - No feature flag interpretation
-    - No security decisions
-    - No LLM / retrieval / memory usage
-    - No orchestration influence
-    """
-
-    def __init__(self):
-        self._errors: List[str] = []
-
-    def validate_required(self, env: Dict[str, Optional[str]], required_keys: List[str]) -> bool:
-        """
-        Checks that all required environment variables exist.
-        """
-
-        self._errors.clear()
-
-        for key in required_keys:
-            if not env.get(key):
-                self._errors.append(f"Missing required env var: {key}")
-
-        return len(self._errors) == 0
-
-    def validate_format(self, key: str, value: Optional[str], pattern: str) -> bool:
-        """
-        Validates value against regex pattern (syntactic only).
-        """
-
-        if value is None:
-            self._errors.append(f"{key} is None")
-            return False
-
-        if not re.match(pattern, value):
-            self._errors.append(f"{key} has invalid format")
-
-            return False
-
-        return True
-
-    def get_errors(self) -> List[str]:
-        """
-        Returns validation errors.
-        """
-
-        return self._errors
+    logger.info("Env validation passed")
+    return True
