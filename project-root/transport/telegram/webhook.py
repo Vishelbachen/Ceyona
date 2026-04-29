@@ -17,8 +17,6 @@ _TELEGRAM_API = f"https://api.telegram.org/bot{settings.bot_token}"
 _WEBHOOK_SECRET = settings.bot_token[:32]
 
 
-# ─── TELEGRAM API HELPERS ────────────────────────────────────────────────────
-
 async def _send_message(chat_id: int, text: str) -> None:
     if not text:
         return
@@ -60,18 +58,13 @@ def _detect_lang(update: dict) -> str:
     return "en"
 
 
-# ─── WEBHOOK ENDPOINT ────────────────────────────────────────────────────────
-
 @router.post("/webhook")
 async def telegram_webhook(
     request: Request,
     x_telegram_bot_api_secret_token: str | None = Header(default=None),
 ) -> dict:
     if x_telegram_bot_api_secret_token:
-        if not verify_webhook_secret(
-            x_telegram_bot_api_secret_token,
-            _WEBHOOK_SECRET,
-        ):
+        if not verify_webhook_secret(x_telegram_bot_api_secret_token, _WEBHOOK_SECRET):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
 
     update: dict = await request.json()
@@ -89,22 +82,25 @@ async def telegram_webhook(
     user_id = auth.user_id
     lang = _detect_lang(update)
 
+    # ── rate limiting ────────────────────────────────────
+    from security.rate_limiter import get_rate_limiter
+    limiter = get_rate_limiter()
+    if limiter and not await limiter.is_allowed(user_id):
+        from cognition.response_synthesizer import get_system_message
+        if chat_id:
+            await _send_message(chat_id, get_system_message("rate_limited", lang))
+        return {"ok": True}
+
     # ── real balance from Supabase ───────────────────────
-    user_balance: float = 1.0  # safe default
+    user_balance = 1.0
     try:
-        access_controller = request.app.state.access_controller
-        balance_result = await access_controller.get_balance(user_id)
+        from payments.access_controller import AccessController
+        supabase = request.app.state.supabase
+        ac = AccessController(supabase)
+        balance_result = await ac.get_balance(user_id)
         user_balance = balance_result.balance_usd
     except Exception as exc:
-        logger.warning("Balance fetch failed, using default", extra={"error": str(exc)})
-
-    # ── conversation history ─────────────────────────────
-    conversation_history: list[dict] = []
-    try:
-        conv_history = request.app.state.conversation_history
-        conversation_history = await conv_history.get(user_id)
-    except Exception as exc:
-        logger.warning("History fetch failed", extra={"error": str(exc)})
+        logger.error("Balance fetch failed, using default", extra={"error": str(exc)})
 
     if update_type in (UpdateType.MESSAGE, UpdateType.EDITED_MESSAGE):
         result = await handle_message(
@@ -113,42 +109,26 @@ async def telegram_webhook(
             user_id=user_id,
             user_balance=user_balance,
             lang=lang,
-            conversation_history=conversation_history,
         )
 
-        # ── save turns to history ────────────────────────
-        if not result.denied:
-            try:
-                conv_history = request.app.state.conversation_history
-                from transport.telegram.message_router import extract_text
-                user_text = extract_text(update)
-                await conv_history.append(user_id, "user", user_text)
-                if result.text:
-                    await conv_history.append(user_id, "assistant", result.text)
-            except Exception as exc:
-                logger.warning("History save failed", extra={"error": str(exc)})
-
-        # ── deduct balance after successful execution ────
+        # ── deduct actual cost after execution ───────────
         if not result.denied and result.usage.cost_usd > 0:
             try:
-                access_controller = request.app.state.access_controller
-                await access_controller.deduct(user_id, result.usage.cost_usd)
-            except Exception as exc:
-                logger.warning("Balance deduct failed", extra={"error": str(exc)})
+                from payments.access_controller import AccessController
+                from payments.usage_meter import UsageMeter, UsageEntry
+                supabase = request.app.state.supabase
+                ac = AccessController(supabase)
+                await ac.deduct(user_id, result.usage.cost_usd)
 
-        # ── record usage ─────────────────────────────────
-        if not result.denied:
-            try:
-                from payments.usage_meter import UsageEntry
-                usage_meter = request.app.state.usage_meter
-                billed = usage_meter.compute_billed(result.usage.cost_usd)
-                await usage_meter.record(UsageEntry(
+                meter = UsageMeter(supabase)
+                billed = meter.compute_billed(result.usage.cost_usd)
+                await meter.record(UsageEntry(
                     user_id=user_id,
                     input_tokens=result.usage.input_tokens,
                     output_tokens=result.usage.output_tokens,
                     embedding_tokens=result.usage.embedding_tokens,
                     rerank_tokens=result.usage.rerank_tokens,
-                    tier=result.tier,
+                    tier=result.usage.tier,
                     embedding_type=result.usage.embedding_type,
                     raw_cost_usd=result.usage.cost_usd,
                     billed_cost_usd=billed,
@@ -156,23 +136,17 @@ async def telegram_webhook(
                     lang=result.lang,
                 ))
             except Exception as exc:
-                logger.warning("Usage record failed", extra={"error": str(exc)})
+                logger.error("Post-execution billing failed", extra={"error": str(exc)})
 
         if chat_id:
             await _send_message(chat_id, result.text)
 
     elif update_type == UpdateType.CALLBACK_QUERY:
         ctx = parse_callback(update, user_id)
-
         from cognition.response_synthesizer import get_system_message
         if ctx.action == CallbackAction.BALANCE:
-            try:
-                access_controller = request.app.state.access_controller
-                balance_result = await access_controller.get_balance(user_id)
-                bal = balance_result.balance_usd
-                bal_text = f"💰 Balance: ${bal:.2f}"
-            except Exception:
-                bal_text = get_system_message("balance_display", lang)
+            # show real balance
+            bal_text = f"💰 Balance: ${user_balance:.2f}"
             await _answer_callback(ctx.callback_query_id, bal_text)
         elif ctx.action == CallbackAction.HELP:
             await _answer_callback(ctx.callback_query_id, get_system_message("help_display", lang))
@@ -183,8 +157,6 @@ async def telegram_webhook(
 
     return {"ok": True}
 
-
-# ─── WEBHOOK REGISTRATION ─────────────────────────────────────────────────────
 
 async def register_webhook() -> bool:
     async with httpx.AsyncClient() as client:
