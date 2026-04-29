@@ -1,66 +1,31 @@
-from typing import Any, Dict, Optional
+import logging
+import httpx
+from app.settings import settings
+
+logger = logging.getLogger(__name__)
+_BASE = "https://api.openweathermap.org/data/2.5"
+_TIMEOUT = 10.0
 
 
-class WeatherClient:
-    """
-    AI Platform v4.7 — Weather External Client
-
-    RESPONSIBILITY:
-    - Fetch current weather data
-    - Fetch forecast data
-    - Provide raw weather API response
-
-    STRICT RULES:
-    - No business logic
-    - No formatting for UI
-    - No decision-making
-    - No LLM / retrieval / memory usage
-    - No orchestration logic
-    """
-
-    def __init__(self, api_key: str, base_url: Optional[str] = None):
-        self.api_key = api_key
-        self.base_url = base_url or "https://api.openweathermap.org/data/2.5"
-
-    async def get_current_weather(
-        self,
-        location: str,
-        units: str = "metric",
-    ) -> Dict[str, Any]:
-        """
-        Returns current weather data (raw API response).
-        """
-
-        return {
-            "location": location,
-            "temperature": 0,
-            "condition": "clear",
-            "humidity": 0,
-            "units": units,
-            "source": "mock_openweather",
-        }
-
-    async def get_forecast(
-        self,
-        location: str,
-        days: int = 5,
-        units: str = "metric",
-    ) -> Dict[str, Any]:
-        """
-        Returns forecast data (raw API response).
-        """
-
-        return {
-            "location": location,
-            "days": days,
-            "forecast": [
-                {
-                    "day": i + 1,
-                    "temperature": 0,
-                    "condition": "clear",
-                }
-                for i in range(days)
-            ],
-            "units": units,
-            "source": "mock_openweather",
-        }
+async def get_weather(city: str, lang: str = "en") -> dict:
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            r = await client.get(f"{_BASE}/weather", params={
+                "q": city,
+                "appid": settings.openweather_api_key,
+                "units": "metric",
+                "lang": lang,
+            })
+            r.raise_for_status()
+            d = r.json()
+            return {
+                "city": d["name"],
+                "temp": d["main"]["temp"],
+                "feels_like": d["main"]["feels_like"],
+                "description": d["weather"][0]["description"],
+                "humidity": d["main"]["humidity"],
+                "wind_speed": d["wind"]["speed"],
+            }
+    except Exception as exc:
+        logger.error("Weather fetch failed", extra={"city": city, "error": str(exc)})
+        return {}
