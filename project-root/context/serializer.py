@@ -1,16 +1,16 @@
-from context.context_models import ContextChunk
+from contracts.context_contracts import AssembledContext
 
 
-def serialize(chunks: list[ContextChunk]) -> str:
-    """
-    Format context chunks into a single string for LLM injection.
-    Deterministic. No inference. No summarization.
-    """
-    if not chunks:
+def to_prompt_string(ctx: AssembledContext) -> str:
+    """Convert assembled context to a prompt-ready string."""
+    if not ctx.text:
         return ""
+    return ctx.text
 
-    parts = []
-    for i, chunk in enumerate(chunks, 1):
-        parts.append(f"[{i}] {chunk.content.strip()}")
 
-    return "\n\n".join(parts)
+def to_dict(ctx: AssembledContext) -> dict:
+    return {
+        "text": ctx.text,
+        "document_count": ctx.document_count,
+        "truncated": ctx.truncated,
+    }
