@@ -1,79 +1,73 @@
 import logging
 import math
-from collections import defaultdict
-from dataclasses import dataclass
+from collections import Counter
+
+from contracts.retrieval_contracts import RetrievalDocument
 
 logger = logging.getLogger(__name__)
 
+# In-memory BM25 over a small static corpus.
+# Replace corpus with DB-backed fetch when scale requires it.
 _K1 = 1.5
 _B = 0.75
 
 
-@dataclass(frozen=True)
-class BM25Result:
-    content: str
-    score: float
+def _tokenize(text: str) -> list[str]:
+    return text.lower().split()
 
 
-class BM25Engine:
+def _bm25_score(
+    query_terms: list[str],
+    doc_terms: list[str],
+    corpus_size: int,
+    avg_doc_len: float,
+    df: dict[str, int],
+) -> float:
+    doc_len = len(doc_terms)
+    term_freq = Counter(doc_terms)
+    score = 0.0
+    for term in query_terms:
+        if term not in term_freq:
+            continue
+        tf = term_freq[term]
+        n_docs_with_term = df.get(term, 0)
+        if n_docs_with_term == 0:
+            continue
+        idf = math.log((corpus_size - n_docs_with_term + 0.5) / (n_docs_with_term + 0.5) + 1)
+        tf_norm = (tf * (_K1 + 1)) / (tf + _K1 * (1 - _B + _B * doc_len / max(avg_doc_len, 1)))
+        score += idf * tf_norm
+    return score
+
+
+async def retrieve_sparse(
+    query: str,
+    corpus: list[str] | None = None,
+    top_k: int = 10,
+) -> list[RetrievalDocument]:
     """
-    In-memory BM25 sparse retrieval.
-    Built from a corpus at init time.
-    No I/O. No semantic inference.
+    BM25 sparse retrieval over provided corpus.
+    Returns ranked RetrievalDocument list.
+    If no corpus provided, returns empty list (retrieval_engine handles fallback).
     """
+    if not corpus:
+        return []
 
-    def __init__(self, corpus: list[str]) -> None:
-        self._corpus = corpus
-        self._n = len(corpus)
-        self._avgdl = 0.0
-        self._tf: list[dict[str, float]] = []
-        self._idf: dict[str, float] = {}
-        self._build()
+    query_terms = _tokenize(query)
+    tokenized_corpus = [_tokenize(doc) for doc in corpus]
+    avg_doc_len = sum(len(d) for d in tokenized_corpus) / max(len(tokenized_corpus), 1)
 
-    def _tokenize(self, text: str) -> list[str]:
-        return text.lower().split()
+    df: dict[str, int] = {}
+    for doc_terms in tokenized_corpus:
+        for term in set(doc_terms):
+            df[term] = df.get(term, 0) + 1
 
-    def _build(self) -> None:
-        if not self._corpus:
-            return
+    scored = []
+    for i, (doc_text, doc_terms) in enumerate(zip(corpus, tokenized_corpus)):
+        score = _bm25_score(
+            query_terms, doc_terms,
+            len(corpus), avg_doc_len, df,
+        )
+        scored.append(RetrievalDocument(content=doc_text, score=score, source="bm25"))
 
-        df: dict[str, int] = defaultdict(int)
-        tokenized = [self._tokenize(doc) for doc in self._corpus]
-        self._avgdl = sum(len(t) for t in tokenized) / self._n
-
-        for tokens in tokenized:
-            tf: dict[str, float] = defaultdict(float)
-            for tok in tokens:
-                tf[tok] += 1
-            self._tf.append(dict(tf))
-            for tok in set(tokens):
-                df[tok] += 1
-
-        for term, freq in df.items():
-            self._idf[term] = math.log((self._n - freq + 0.5) / (freq + 0.5) + 1)
-
-    def search(self, query: str, top_k: int = 5) -> list[BM25Result]:
-        if not self._corpus:
-            return []
-
-        tokens = self._tokenize(query)
-        scores: list[float] = []
-
-        for i, doc_tf in enumerate(self._tf):
-            dl = sum(doc_tf.values())
-            score = 0.0
-            for tok in tokens:
-                if tok not in self._idf:
-                    continue
-                tf = doc_tf.get(tok, 0.0)
-                numerator = tf * (_K1 + 1)
-                denominator = tf + _K1 * (1 - _B + _B * dl / self._avgdl)
-                score += self._idf[tok] * numerator / denominator
-            scores.append(score)
-
-        ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
-        return [
-            BM25Result(content=self._corpus[i], score=s)
-            for i, s in ranked[:top_k]
-            if s > 0
-        ]
+    scored.sort(key=lambda d: d.score, reverse=True)
+    return scored[:top_k]
