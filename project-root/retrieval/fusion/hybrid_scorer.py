@@ -1,32 +1,41 @@
-from dataclasses import dataclass
+from contracts.retrieval_contracts import RetrievalDocument
 
 _DENSE_WEIGHT = 0.7
 _SPARSE_WEIGHT = 0.3
 
 
-@dataclass(frozen=True)
-class FusionResult:
-    content: str
-    score: float
-
-
 def fuse(
-    dense: list[tuple[str, float]],
-    sparse: list[tuple[str, float]],
-    top_k: int = 5,
-) -> list[FusionResult]:
+    dense: list[RetrievalDocument],
+    sparse: list[RetrievalDocument],
+    top_k: int = 10,
+) -> list[RetrievalDocument]:
     """
-    Reciprocal Rank Fusion (RRF) + weighted combination.
-    dense/sparse: list of (content, score) tuples.
-    Pure function. No I/O.
+    Reciprocal Rank Fusion of dense + sparse results.
+    Pure function. No I/O. No inference.
     """
     scores: dict[str, float] = {}
+    content_map: dict[str, RetrievalDocument] = {}
 
-    for content, score in dense:
-        scores[content] = scores.get(content, 0.0) + score * _DENSE_WEIGHT
+    for rank, doc in enumerate(dense):
+        key = doc.content[:200]
+        scores[key] = scores.get(key, 0.0) + _DENSE_WEIGHT * (1.0 / (rank + 1))
+        content_map[key] = doc
 
-    for content, score in sparse:
-        scores[content] = scores.get(content, 0.0) + score * _SPARSE_WEIGHT
+    for rank, doc in enumerate(sparse):
+        key = doc.content[:200]
+        scores[key] = scores.get(key, 0.0) + _SPARSE_WEIGHT * (1.0 / (rank + 1))
+        if key not in content_map:
+            content_map[key] = doc
 
     ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-    return [FusionResult(content=c, score=s) for c, s in ranked[:top_k]]
+
+    result = []
+    for key, score in ranked[:top_k]:
+        doc = content_map[key]
+        result.append(RetrievalDocument(
+            content=doc.content,
+            score=score,
+            source=doc.source,
+            metadata=doc.metadata,
+        ))
+    return result
