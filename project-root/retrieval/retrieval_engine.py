@@ -1,92 +1,92 @@
 import logging
 
-from contracts.retrieval_contracts import (
-    RetrievalQuery,
-    RetrievalResult,
-    RetrievedDocument,
-)
-from retrieval.cache.embedding_cache import EmbeddingCache
-from retrieval.cache.query_cache import QueryCache
-from retrieval.cache.rerank_cache import RerankCache
-from retrieval.dense.bge_engine import BGEEngine
-from retrieval.fusion.hybrid_scorer import fuse
+from contracts.retrieval_contracts import RetrievalQuery, RetrievalResult, RetrievalDocument
 from retrieval.query_preprocessor import preprocess
-from retrieval.reranker.cross_encoder import CrossEncoder
-from retrieval.sparse.bm25_engine import BM25Engine
-from memory.supabase_store import SupabaseStore
 
 logger = logging.getLogger(__name__)
 
 
-class RetrievalEngine:
+async def retrieve(query: RetrievalQuery) -> RetrievalResult:
     """
-    ONLY entry point for retrieval.
-    Orchestrates: preprocess → cache → dense → sparse → fuse → rerank.
-    Returns ranked document sets only. No interpretation.
+    ONLY entry point for retrieval system.
+    Orchestrates: cache → embed → sparse → hybrid → rerank → return.
+    Returns ranked document set. No interpretation. No inference.
     """
+    processed = preprocess(query.text)
 
-    def __init__(
-        self,
-        supabase_store: SupabaseStore,
-        query_cache: QueryCache,
-        embedding_cache: EmbeddingCache,
-        rerank_cache: RerankCache,
-    ) -> None:
-        self._store = supabase_store
-        self._query_cache = query_cache
-        self._bge = BGEEngine(embedding_cache)
-        self._reranker = CrossEncoder(rerank_cache)
+    # ── embedding ────────────────────────────────────────
+    embedding_tokens = 0
+    rerank_tokens = 0
+    cache_hit = False
 
-    async def retrieve(self, query: RetrievalQuery) -> RetrievalResult:
-        clean = preprocess(query.text)
-
-        # ── query cache ──────────────────────────────────
-        cached = await self._query_cache.get(clean, query.user_id)
-        if cached:
-            docs = [RetrievedDocument(**d) for d in cached]
-            return RetrievalResult(query=clean, documents=docs, cached=True)
-
-        # ── dense retrieval ──────────────────────────────
-        embedding = await self._bge.embed_query(clean)
-        dense_records = await self._store.similarity_search(
-            embedding=embedding,
-            user_id=query.user_id,
-            limit=query.top_k * 2,
-            threshold=query.threshold,
-        )
-        dense = [(r.content, 1.0) for r in dense_records]
-
-        # ── sparse retrieval (BM25) ───────────────────────
-        corpus = [r.content for r in dense_records]
-        bm25 = BM25Engine(corpus)
-        sparse_results = bm25.search(clean, top_k=query.top_k * 2)
-        sparse = [(r.content, r.score) for r in sparse_results]
-
-        # ── fusion ───────────────────────────────────────
-        fused = fuse(dense, sparse, top_k=query.top_k * 2)
-        candidates = [f.content for f in fused]
-
-        # ── rerank ───────────────────────────────────────
-        reranked = False
-        if query.use_reranker and candidates:
-            scores = await self._reranker.rerank(clean, candidates)
-            paired = sorted(
-                zip(candidates, scores),
-                key=lambda x: x[1],
-                reverse=True,
+    try:
+        from retrieval.cache.query_cache import query_cache
+        cached = await query_cache.get(processed)
+        if cached is not None:
+            logger.info("Retrieval cache hit")
+            return RetrievalResult(
+                query=query.text,
+                documents=cached,
+                cache_hit=True,
             )
-            candidates = [c for c, _ in paired]
-            reranked = True
+    except Exception as exc:
+        logger.warning("Cache check failed", extra={"error": str(exc)})
 
-        documents = [
-            RetrievedDocument(content=c, score=fused[i].score if i < len(fused) else 0.0)
-            for i, c in enumerate(candidates[:query.top_k])
-        ]
-
-        # ── cache result ─────────────────────────────────
-        await self._query_cache.set(
-            clean, query.user_id,
-            [{"content": d.content, "score": d.score} for d in documents],
+    # ── dense retrieval ──────────────────────────────────
+    dense_docs: list[RetrievalDocument] = []
+    try:
+        from retrieval.dense.bge_engine import retrieve_dense
+        dense_docs, embedding_tokens = await retrieve_dense(
+            query=processed,
+            user_id=query.user_id,
+            top_k=query.top_k * 2,
+            embedding_type=query.embedding_type,
         )
+    except Exception as exc:
+        logger.warning("Dense retrieval failed", extra={"error": str(exc)})
 
-        return RetrievalResult(query=clean, documents=documents, reranked=reranked)
+    # ── sparse retrieval ─────────────────────────────────
+    sparse_docs: list[RetrievalDocument] = []
+    try:
+        from retrieval.sparse.bm25_engine import retrieve_sparse
+        sparse_docs = await retrieve_sparse(processed, top_k=query.top_k * 2)
+    except Exception as exc:
+        logger.warning("Sparse retrieval failed", extra={"error": str(exc)})
+
+    # ── hybrid fusion ────────────────────────────────────
+    fused: list[RetrievalDocument] = []
+    try:
+        from retrieval.fusion.hybrid_scorer import fuse
+        fused = fuse(dense_docs, sparse_docs, top_k=query.top_k * 2)
+    except Exception as exc:
+        logger.warning("Fusion failed, using dense", extra={"error": str(exc)})
+        fused = dense_docs
+
+    # ── reranker ─────────────────────────────────────────
+    final: list[RetrievalDocument] = fused
+    if query.use_reranker and fused:
+        try:
+            from retrieval.reranker.cross_encoder import rerank
+            final, rerank_tokens = await rerank(processed, fused, top_k=query.top_k)
+        except Exception as exc:
+            logger.warning("Reranker failed, using fused", extra={"error": str(exc)})
+            final = fused[:query.top_k]
+    else:
+        final = fused[:query.top_k]
+
+    result = RetrievalResult(
+        query=query.text,
+        documents=final,
+        embedding_tokens=embedding_tokens,
+        rerank_tokens=rerank_tokens,
+        cache_hit=False,
+    )
+
+    # ── write cache ──────────────────────────────────────
+    try:
+        from retrieval.cache.query_cache import query_cache
+        await query_cache.set(processed, final)
+    except Exception as exc:
+        logger.warning("Cache write failed", extra={"error": str(exc)})
+
+    return result
