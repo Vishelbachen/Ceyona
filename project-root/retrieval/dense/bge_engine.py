@@ -1,38 +1,55 @@
 import logging
 
-from contracts.retrieval_contracts import RetrievedDocument
+from contracts.retrieval_contracts import RetrievalDocument
 from llm.hf_client import BGE_LARGE, BGE_SMALL, hf_client
-from retrieval.cache.embedding_cache import EmbeddingCache
 
 logger = logging.getLogger(__name__)
 
 
-class BGEEngine:
+async def retrieve_dense(
+    query: str,
+    user_id: str,
+    top_k: int = 10,
+    embedding_type: str = "large",
+) -> tuple[list[RetrievalDocument], int]:
     """
-    Dense retrieval via BGE embeddings.
-    Generates query embedding only — document embeddings stored in Supabase.
+    Generate query embedding and search memory store.
+    Returns (documents, embedding_tokens).
     """
+    model = BGE_LARGE if embedding_type == "large" else BGE_SMALL
 
-    def __init__(self, embedding_cache: EmbeddingCache) -> None:
-        self._cache = embedding_cache
+    try:
+        vectors = await hf_client.embed([query], model=model)
+        if not vectors:
+            return [], 0
 
-    async def embed_query(
-        self,
-        query: str,
-        use_fast: bool = False,
-    ) -> list[float]:
-        model = BGE_SMALL if use_fast else BGE_LARGE
+        embedding = vectors[0]
+        # tokens estimate: query chars / 4
+        tokens = max(1, len(query) // 4)
 
-        cached = await self._cache.get(query, model)
-        if cached is not None:
-            return cached
+        from memory.supabase_store import SupabaseStore
+        from supabase import create_client
+        from app.settings import settings
+        supabase = create_client(settings.supabase_url, settings.supabase_service_role_key)
+        store = SupabaseStore(supabase)
 
-        try:
-            vectors = await hf_client.embed([query], model=model)
-            embedding = vectors[0] if vectors else []
-            if embedding:
-                await self._cache.set(query, model, embedding)
-            return embedding
-        except Exception as exc:
-            logger.error("BGE embed failed", extra={"error": str(exc)})
-            return []
+        records = await store.similarity_search(
+            embedding=embedding,
+            user_id=user_id,
+            limit=top_k,
+        )
+
+        docs = [
+            RetrievalDocument(
+                content=r.content,
+                score=r.importance,
+                source="memory",
+                metadata=r.metadata,
+            )
+            for r in records
+        ]
+        return docs, tokens
+
+    except Exception as exc:
+        logger.warning("bge_engine failed", extra={"error": str(exc)})
+        return [], 0
