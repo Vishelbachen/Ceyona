@@ -1,89 +1,66 @@
+import json
 import logging
-from dataclasses import dataclass
 
-from supabase import Client
+from redis.asyncio import Redis
 
 logger = logging.getLogger(__name__)
 
-_TABLE = "conversation_history"
-_DEFAULT_LIMIT = 20
-
-
-@dataclass(frozen=True)
-class ConversationTurn:
-    role: str       # "user" | "assistant"
-    content: str
-    created_at: str
+_KEY_PREFIX = "conv"
+_MAX_TURNS = 20          # keep last 20 messages per user
+_TTL_SECONDS = 60 * 60 * 24 * 7   # 7 days
 
 
 class ConversationHistory:
     """
-    Stores and retrieves conversation turns per user.
-    Returns history in LLM-ready format: list[dict] with role/content.
-    Storage only. No summarization. No semantic operations.
+    Redis-backed sliding window of conversation turns per user.
+    Storage only. No semantic logic. No summarization.
     """
 
-    def __init__(self, supabase: Client) -> None:
-        self._db = supabase
+    def __init__(self, redis: Redis) -> None:
+        self._redis = redis
 
-    async def append(
-        self,
-        user_id: str,
-        role: str,
-        content: str,
-    ) -> bool:
-        """Append a single turn to conversation history."""
+    def _key(self, user_id: int) -> str:
+        return f"{_KEY_PREFIX}:{user_id}"
+
+    async def append(self, user_id: int, role: str, content: str) -> None:
+        """
+        Append a single message turn.
+        role: 'user' | 'assistant'
+        Trims to _MAX_TURNS automatically.
+        """
+        key = self._key(user_id)
+        message = json.dumps({"role": role, "content": content})
         try:
-            self._db.table(_TABLE).insert({
-                "user_id": user_id,
-                "role": role,
-                "content": content,
-            }).execute()
-            return True
+            pipe = self._redis.pipeline()
+            pipe.rpush(key, message)
+            pipe.ltrim(key, -_MAX_TURNS, -1)
+            pipe.expire(key, _TTL_SECONDS)
+            await pipe.execute()
         except Exception as exc:
-            logger.error("append failed", extra={
-                "user_id": user_id,
-                "error": str(exc),
+            logger.warning("ConversationHistory.append failed", extra={
+                "user_id": user_id, "error": str(exc)
             })
-            return False
 
-    async def get(
-        self,
-        user_id: str,
-        limit: int = _DEFAULT_LIMIT,
-    ) -> list[dict]:
+    async def get(self, user_id: int) -> list[dict]:
         """
-        Fetch recent conversation turns for a user.
-        Returns LLM-ready format: [{"role": ..., "content": ...}]
-        Ordered oldest → newest for correct LLM context.
+        Return conversation history as list of {role, content} dicts.
+        Ready to pass directly into build_messages().
         """
+        key = self._key(user_id)
         try:
-            result = (
-                self._db.table(_TABLE)
-                .select("role, content, created_at")
-                .eq("user_id", user_id)
-                .order("created_at", desc=True)
-                .limit(limit)
-                .execute()
-            )
-            rows = result.data or []
-            # reverse: oldest first for LLM context
-            rows = list(reversed(rows))
-            return [{"role": r["role"], "content": r["content"]} for r in rows]
-
+            raw = await self._redis.lrange(key, 0, -1)
+            return [json.loads(m) for m in raw]
         except Exception as exc:
-            logger.error("get history failed", extra={
-                "user_id": user_id,
-                "error": str(exc),
+            logger.warning("ConversationHistory.get failed", extra={
+                "user_id": user_id, "error": str(exc)
             })
             return []
 
-    async def clear(self, user_id: str) -> bool:
-        """Delete all conversation history for a user."""
+    async def clear(self, user_id: int) -> None:
+        """Delete full history for a user."""
         try:
-            self._db.table(_TABLE).delete().eq("user_id", user_id).execute()
-            logger.info("History cleared", extra={"user_id": user_id})
-            return True
+            await self._redis.delete(self._key(user_id))
         except Exception as exc:
-            logger.error("clear failed", extra={"error": str(exc)})
-            return False
+            logger.warning("ConversationHistory.clear failed", extra={
+                "user_id": user_id, "error": str(exc)
+            })
