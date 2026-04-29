@@ -1,96 +1,79 @@
-from typing import Any, Dict, List, Optional
-from collections import defaultdict
+import logging
 import math
+from collections import defaultdict
+from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
+
+_K1 = 1.5
+_B = 0.75
+
+
+@dataclass(frozen=True)
+class BM25Result:
+    content: str
+    score: float
 
 
 class BM25Engine:
     """
-    AI Platform v4.7 — BM25 Sparse Retrieval Engine
-
-    RESPONSIBILITY:
-    - Perform lexical (keyword-based) document scoring
-    - Provide BM25 ranking over indexed documents
-
-    STRICT RULES:
-    - No semantic understanding
-    - No query rewriting
-    - No LLM / memory / retrieval orchestration
-    - No decision-making beyond formula scoring
+    In-memory BM25 sparse retrieval.
+    Built from a corpus at init time.
+    No I/O. No semantic inference.
     """
 
-    def __init__(self, k1: float = 1.5, b: float = 0.75):
-        self.k1 = k1
-        self.b = b
-        self.index: List[Dict[str, Any]] = []
-        self.doc_freq = defaultdict(int)
-        self.doc_lengths = {}
-        self.avg_doc_length = 0.0
+    def __init__(self, corpus: list[str]) -> None:
+        self._corpus = corpus
+        self._n = len(corpus)
+        self._avgdl = 0.0
+        self._tf: list[dict[str, float]] = []
+        self._idf: dict[str, float] = {}
+        self._build()
 
-    def add_documents(self, documents: List[Dict[str, Any]]) -> None:
-        """
-        Adds documents to index (no preprocessing logic).
-        """
+    def _tokenize(self, text: str) -> list[str]:
+        return text.lower().split()
 
-        self.index = documents
-        total_length = 0
+    def _build(self) -> None:
+        if not self._corpus:
+            return
 
-        for doc in documents:
-            doc_id = doc["id"]
-            content = doc["content"]
-            tokens = content.lower().split()
+        df: dict[str, int] = defaultdict(int)
+        tokenized = [self._tokenize(doc) for doc in self._corpus]
+        self._avgdl = sum(len(t) for t in tokenized) / self._n
 
-            self.doc_lengths[doc_id] = len(tokens)
-            total_length += len(tokens)
+        for tokens in tokenized:
+            tf: dict[str, float] = defaultdict(float)
+            for tok in tokens:
+                tf[tok] += 1
+            self._tf.append(dict(tf))
+            for tok in set(tokens):
+                df[tok] += 1
 
-            unique_tokens = set(tokens)
-            for token in unique_tokens:
-                self.doc_freq[token] += 1
+        for term, freq in df.items():
+            self._idf[term] = math.log((self._n - freq + 0.5) / (freq + 0.5) + 1)
 
-        if documents:
-            self.avg_doc_length = total_length / len(documents)
+    def search(self, query: str, top_k: int = 5) -> list[BM25Result]:
+        if not self._corpus:
+            return []
 
-    def _idf(self, term: str, total_docs: int) -> float:
-        """
-        Inverse document frequency.
-        """
+        tokens = self._tokenize(query)
+        scores: list[float] = []
 
-        df = self.doc_freq.get(term, 0)
-        return math.log((total_docs - df + 0.5) / (df + 0.5) + 1)
-
-    def search(self, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
-        """
-        Executes BM25 ranking over indexed documents.
-        """
-
-        query_tokens = query.lower().split()
-        scores = []
-
-        for doc in self.index:
-            doc_id = doc["id"]
-            content_tokens = doc["content"].lower().split()
-
+        for i, doc_tf in enumerate(self._tf):
+            dl = sum(doc_tf.values())
             score = 0.0
-
-            for term in query_tokens:
-                if term not in content_tokens:
+            for tok in tokens:
+                if tok not in self._idf:
                     continue
+                tf = doc_tf.get(tok, 0.0)
+                numerator = tf * (_K1 + 1)
+                denominator = tf + _K1 * (1 - _B + _B * dl / self._avgdl)
+                score += self._idf[tok] * numerator / denominator
+            scores.append(score)
 
-                tf = content_tokens.count(term)
-                idf = self._idf(term, len(self.index))
-
-                doc_len = self.doc_lengths.get(doc_id, 1)
-
-                score += idf * (
-                    (tf * (self.k1 + 1)) /
-                    (tf + self.k1 * (1 - self.b + self.b * doc_len / self.avg_doc_length))
-                )
-
-            scores.append({
-                "id": doc_id,
-                "score": score,
-                "content": doc["content"],
-            })
-
-        scores.sort(key=lambda x: x["score"], reverse=True)
-
-        return scores[:top_k]
+        ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
+        return [
+            BM25Result(content=self._corpus[i], score=s)
+            for i, s in ranked[:top_k]
+            if s > 0
+        ]
