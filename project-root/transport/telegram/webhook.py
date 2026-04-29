@@ -51,7 +51,6 @@ def _get_chat_id(update: dict) -> int | None:
 
 
 def _detect_lang(update: dict) -> str:
-    """Extract language_code from any update type."""
     for key in ("message", "edited_message", "callback_query"):
         entry = update.get(key, {})
         user = entry.get("from") or {}
@@ -90,7 +89,22 @@ async def telegram_webhook(
     user_id = auth.user_id
     lang = _detect_lang(update)
 
-    user_balance: float = 1.0
+    # ── real balance from Supabase ───────────────────────
+    user_balance: float = 1.0  # safe default
+    try:
+        access_controller = request.app.state.access_controller
+        balance_result = await access_controller.get_balance(user_id)
+        user_balance = balance_result.balance_usd
+    except Exception as exc:
+        logger.warning("Balance fetch failed, using default", extra={"error": str(exc)})
+
+    # ── conversation history ─────────────────────────────
+    conversation_history: list[dict] = []
+    try:
+        conv_history = request.app.state.conversation_history
+        conversation_history = await conv_history.get(user_id)
+    except Exception as exc:
+        logger.warning("History fetch failed", extra={"error": str(exc)})
 
     if update_type in (UpdateType.MESSAGE, UpdateType.EDITED_MESSAGE):
         result = await handle_message(
@@ -99,7 +113,50 @@ async def telegram_webhook(
             user_id=user_id,
             user_balance=user_balance,
             lang=lang,
+            conversation_history=conversation_history,
         )
+
+        # ── save turns to history ────────────────────────
+        if not result.denied:
+            try:
+                conv_history = request.app.state.conversation_history
+                from transport.telegram.message_router import extract_text
+                user_text = extract_text(update)
+                await conv_history.append(user_id, "user", user_text)
+                if result.text:
+                    await conv_history.append(user_id, "assistant", result.text)
+            except Exception as exc:
+                logger.warning("History save failed", extra={"error": str(exc)})
+
+        # ── deduct balance after successful execution ────
+        if not result.denied and result.usage.cost_usd > 0:
+            try:
+                access_controller = request.app.state.access_controller
+                await access_controller.deduct(user_id, result.usage.cost_usd)
+            except Exception as exc:
+                logger.warning("Balance deduct failed", extra={"error": str(exc)})
+
+        # ── record usage ─────────────────────────────────
+        if not result.denied:
+            try:
+                from payments.usage_meter import UsageEntry
+                usage_meter = request.app.state.usage_meter
+                billed = usage_meter.compute_billed(result.usage.cost_usd)
+                await usage_meter.record(UsageEntry(
+                    user_id=user_id,
+                    input_tokens=result.usage.input_tokens,
+                    output_tokens=result.usage.output_tokens,
+                    embedding_tokens=result.usage.embedding_tokens,
+                    rerank_tokens=result.usage.rerank_tokens,
+                    tier=result.tier,
+                    embedding_type=result.usage.embedding_type,
+                    raw_cost_usd=result.usage.cost_usd,
+                    billed_cost_usd=billed,
+                    model=result.model,
+                    lang=result.lang,
+                ))
+            except Exception as exc:
+                logger.warning("Usage record failed", extra={"error": str(exc)})
 
         if chat_id:
             await _send_message(chat_id, result.text)
@@ -109,7 +166,14 @@ async def telegram_webhook(
 
         from cognition.response_synthesizer import get_system_message
         if ctx.action == CallbackAction.BALANCE:
-            await _answer_callback(ctx.callback_query_id, get_system_message("balance_display", lang))
+            try:
+                access_controller = request.app.state.access_controller
+                balance_result = await access_controller.get_balance(user_id)
+                bal = balance_result.balance_usd
+                bal_text = f"💰 Balance: ${bal:.2f}"
+            except Exception:
+                bal_text = get_system_message("balance_display", lang)
+            await _answer_callback(ctx.callback_query_id, bal_text)
         elif ctx.action == CallbackAction.HELP:
             await _answer_callback(ctx.callback_query_id, get_system_message("help_display", lang))
         elif ctx.action == CallbackAction.CANCEL:
