@@ -1,36 +1,39 @@
 import logging
 
-from llm.hf_client import hf_client
-from retrieval.cache.rerank_cache import RerankCache
+from llm.hf_client import BGE_RERANKER, hf_client
 
 logger = logging.getLogger(__name__)
 
 
 class CrossEncoder:
     """
-    Reranks candidates using BGE reranker.
-    Scoring only. No decision authority.
+    Cross-encoder reranker using BGE-reranker-large.
+    Scores only. No generation. No decision authority.
     """
-
-    def __init__(self, rerank_cache: RerankCache) -> None:
-        self._cache = rerank_cache
 
     async def rerank(
         self,
         query: str,
         candidates: list[str],
-    ) -> list[float]:
+    ) -> list[tuple[str, float]]:
+        """
+        Returns list of (content, score) sorted by score descending.
+        """
         if not candidates:
             return []
-
-        cached = await self._cache.get(query, candidates)
-        if cached is not None:
-            return cached
-
         try:
-            scores = await hf_client.rerank(query, candidates)
-            await self._cache.set(query, candidates, scores)
-            return scores
+            scores = await hf_client.rerank(
+                query=query,
+                candidates=candidates,
+                model=BGE_RERANKER,
+            )
+            pairs = list(zip(candidates, scores))
+            pairs.sort(key=lambda x: x[1], reverse=True)
+            return pairs
         except Exception as exc:
-            logger.error("CrossEncoder rerank failed", extra={"error": str(exc)})
-            return [0.0] * len(candidates)
+            logger.error("CrossEncoder.rerank failed", extra={"error": str(exc)})
+            # fallback: return unranked with score 0
+            return [(c, 0.0) for c in candidates]
+
+
+cross_encoder = CrossEncoder()
