@@ -1,66 +1,38 @@
-from typing import Any, Dict, List, Optional
+import logging
+from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 
-class HealthCheck:
-    """
-    AI Platform v4.7 — Health Check System
+@dataclass(frozen=True)
+class HealthStatus:
+    ok: bool
+    checks: dict[str, bool]
 
-    RESPONSIBILITY:
-    - Check availability of system components
-    - Provide simple up/down status reporting
-    - Serve as runtime readiness probe
 
-    STRICT RULES:
-    - No diagnostics or root cause analysis
-    - No auto-healing logic
-    - No LLM / retrieval / memory usage
-    - No orchestration influence
-    - No performance evaluation
-    """
+async def run_checks(redis=None, supabase=None) -> HealthStatus:
+    checks: dict[str, bool] = {}
 
-    def __init__(self):
-        self._components: Dict[str, bool] = {}
+    # Redis
+    if redis:
+        try:
+            await redis.ping()
+            checks["redis"] = True
+        except Exception as exc:
+            logger.error("Redis health check failed", extra={"error": str(exc)})
+            checks["redis"] = False
+    else:
+        checks["redis"] = False
 
-    def register_component(self, name: str) -> None:
-        """
-        Registers a component as monitored.
-        """
+    # Supabase
+    if supabase:
+        try:
+            supabase.table("user_balances").select("user_id").limit(1).execute()
+            checks["supabase"] = True
+        except Exception as exc:
+            logger.error("Supabase health check failed", extra={"error": str(exc)})
+            checks["supabase"] = False
+    else:
+        checks["supabase"] = False
 
-        self._components[name] = True
-
-    def set_status(self, name: str, status: bool) -> None:
-        """
-        Updates component status.
-        """
-
-        self._components[name] = status
-
-    def is_healthy(self, name: str) -> bool:
-        """
-        Returns health status of a component.
-        """
-
-        return self._components.get(name, False)
-
-    def system_health(self) -> Dict[str, Any]:
-        """
-        Returns full system health snapshot.
-        """
-
-        total = len(self._components)
-        healthy = sum(1 for v in self._components.values() if v)
-
-        return {
-            "total_components": total,
-            "healthy_components": healthy,
-            "unhealthy_components": total - healthy,
-            "status": "healthy" if healthy == total else "degraded",
-            "components": self._components,
-        }
-
-    def list_unhealthy(self) -> List[str]:
-        """
-        Returns list of failed components.
-        """
-
-        return [name for name, status in self._components.items() if not status]
+    return HealthStatus(ok=all(checks.values()), checks=checks)
