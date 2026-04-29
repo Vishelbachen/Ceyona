@@ -5,14 +5,14 @@ from dataclasses import dataclass, field
 class RetrievalQuery:
     text: str
     user_id: str
-    top_k: int = 5
-    use_reranker: bool = True
+    top_k: int = 10
+    rerank_top_k: int = 3
     use_cache: bool = True
     embedding_type: str = "large"   # "large" | "small"
 
 
 @dataclass(frozen=True)
-class RetrievalDocument:
+class RetrievedDocument:
     content: str
     score: float
     source: str = ""
@@ -21,8 +21,7 @@ class RetrievalDocument:
 
 @dataclass(frozen=True)
 class RetrievalResult:
-    query: str
-    documents: list[RetrievalDocument]
-    embedding_tokens: int = 0
-    rerank_tokens: int = 0
+    documents: list[RetrievedDocument]
+    embedding_tokens: int
+    rerank_tokens: int
     cache_hit: bool = False
