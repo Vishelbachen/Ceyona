@@ -1,32 +1,24 @@
 import logging
 from dataclasses import dataclass
 
-from contracts.shared_types import (
-    Complexity,
-    EPKDecision,
-    Tier,
-)
-from core.kernel.cost_model import (
-    actual_cost,
-    estimate_cost,
-    estimate_output_tokens,
-)
+from contracts.shared_types import Complexity, EPKDecision, Tier
+from core.kernel.cost_model import actual_cost, estimate_cost, estimate_output_tokens
 from core.kernel.decision_matrix import select_tier
 from core.kernel.execution_policy_kernel import EPKInput, evaluate
 from llm.fallback_handler import complete_with_fallback
 from llm.groq_client import LLMResponse
 from llm.prompt_engine import PromptContext, build_messages
+from cognition.intent_engine import classify
+from cognition.response_synthesizer import SynthesisInput, synthesize
 
 logger = logging.getLogger(__name__)
 
 
-# ─── ORCHESTRATOR I/O CONTRACTS ──────────────────────────────────────────────
-
 @dataclass
 class OrchestratorRequest:
     user_message: str
-    user_balance: float             # USD
-    input_tokens: int               # pre-counted by caller
+    user_balance: float
+    input_tokens: int
     complexity: Complexity
     system_prompt: str = ""
     retrieved_context: str = ""
@@ -34,6 +26,7 @@ class OrchestratorRequest:
     embedding_tokens: int = 0
     rerank_tokens: int = 0
     embedding_type: str = "large"
+    lang: str = "en"
 
 
 @dataclass
@@ -56,35 +49,16 @@ class OrchestratorResult:
     usage: UsageRecord
     denied: bool = False
     deny_reason: str = ""
+    lang: str = "en"
 
-
-# ─── MAIN FLOW ───────────────────────────────────────────────────────────────
 
 async def run(request: OrchestratorRequest) -> OrchestratorResult:
-    """
-    Execute the full 16-step DAG:
-
-    1.  Feature extraction          ← done upstream, input_tokens provided
-    2.  Estimate output tokens
-    3.  Estimate cost
-    4.  EPK  (ALLOW / DENY / DEGRADE)
-    5.  Select tier (decision_matrix)
-    6-8. Retrieval / rerank         ← done upstream, tokens provided
-    9.  Build prompt (intent_engine / prompt_engine)
-    10. Agent execution             ← future layer, bypassed for now
-    11. Model routing
-    12. LLM execution
-    13. Usage meter (actual tokens)
-    14. Actual cost
-    15. TON deduction               ← future layer
-    16. Return result
-    """
 
     # ── step 2: estimate output tokens ───────────────────
     estimated_output = estimate_output_tokens(
         request.input_tokens,
         request.complexity,
-        Tier.GENERAL,           # conservative estimate before tier is known
+        Tier.GENERAL,
     )
 
     # ── step 3: estimate cost ────────────────────────────
@@ -110,8 +84,16 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
     })
 
     if epk_out.decision == EPKDecision.DENY:
+        synthesis = synthesize(SynthesisInput(
+            raw_text="",
+            intent=classify(request.user_message).intent,
+            tier=Tier.FAST,
+            denied=True,
+            deny_reason="insufficient_balance",
+            lang=request.lang,
+        ))
         return OrchestratorResult(
-            text="",
+            text=synthesis.text,
             tier=Tier.FAST,
             model="",
             epk_decision=EPKDecision.DENY,
@@ -126,20 +108,22 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             ),
             denied=True,
             deny_reason=epk_out.reason,
+            lang=request.lang,
         )
 
     # ── step 5: select tier ──────────────────────────────
     tier = select_tier(estimated)
 
-    # DEGRADE → force FAST tier
     if epk_out.decision == EPKDecision.DEGRADE:
         tier = Tier.FAST
         logger.info("EPK DEGRADE: forcing FAST tier")
 
     # ── step 9: build prompt ─────────────────────────────
+    intent_result = classify(request.user_message)
+
     messages = build_messages(PromptContext(
         user_message=request.user_message,
-        system_prompt=request.system_prompt,
+        system_prompt=request.system_prompt or intent_result.system_prompt,
         retrieved_context=request.retrieved_context,
         conversation_history=request.conversation_history,
     ))
@@ -170,17 +154,27 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
         cost_usd=cost,
     )
 
+    # ── step 16: synthesize final response ───────────────
+    synthesis = synthesize(SynthesisInput(
+        raw_text=llm_response.text,
+        intent=intent_result.intent,
+        tier=tier,
+        lang=request.lang,
+    ))
+
     logger.info("Execution complete", extra={
         "tier": tier,
         "model": llm_response.model,
         "cost_usd": cost,
         "output_tokens": llm_response.output_tokens,
+        "lang": request.lang,
     })
 
     return OrchestratorResult(
-        text=llm_response.text,
+        text=synthesis.text,
         tier=tier,
         model=llm_response.model,
         epk_decision=epk_out.decision,
         usage=usage,
+        lang=request.lang,
     )
