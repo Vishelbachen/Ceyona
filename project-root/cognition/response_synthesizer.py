@@ -161,7 +161,7 @@ def get_system_message(key: str, lang: str) -> str:
 @dataclass(frozen=True)
 class SynthesisInput:
     raw_text: str
-    intent: Intent
+    intent: "Intent | None"   # ← было Intent, стало Optional
     tier: Tier
     denied: bool = False
     deny_reason: str = ""
