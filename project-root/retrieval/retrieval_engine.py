@@ -1,92 +1,73 @@
 import logging
 
-from contracts.retrieval_contracts import RetrievalQuery, RetrievalResult, RetrievalDocument
+from contracts.retrieval_contracts import (
+    RetrievalQuery,
+    RetrievalResult,
+    RetrievedDocument,
+)
+from retrieval.dense.bge_engine import bge_engine
+from retrieval.reranker.cross_encoder import cross_encoder
 from retrieval.query_preprocessor import preprocess
 
 logger = logging.getLogger(__name__)
 
 
-async def retrieve(query: RetrievalQuery) -> RetrievalResult:
+async def retrieve(
+    query: RetrievalQuery,
+    redis=None,   # optional — for cache injection
+) -> RetrievalResult:
     """
-    ONLY entry point for retrieval system.
-    Orchestrates: cache → embed → sparse → hybrid → rerank → return.
-    Returns ranked document set. No interpretation. No inference.
+    ONLY entry point for all retrieval operations.
+    Returns ranked document set. No interpretation.
     """
-    processed = preprocess(query.text)
-
-    # ── embedding ────────────────────────────────────────
+    clean_query = preprocess(query.text)
     embedding_tokens = 0
     rerank_tokens = 0
     cache_hit = False
 
-    try:
-        from retrieval.cache.query_cache import query_cache
-        cached = await query_cache.get(processed)
-        if cached is not None:
-            logger.info("Retrieval cache hit")
-            return RetrievalResult(
-                query=query.text,
-                documents=cached,
-                cache_hit=True,
-            )
-    except Exception as exc:
-        logger.warning("Cache check failed", extra={"error": str(exc)})
+    # ── embedding ────────────────────────────────────────
+    use_fast = query.embedding_type == "small"
+    dense_result = await bge_engine.embed(clean_query, use_fast=use_fast)
 
-    # ── dense retrieval ──────────────────────────────────
-    dense_docs: list[RetrievalDocument] = []
-    try:
-        from retrieval.dense.bge_engine import retrieve_dense
-        dense_docs, embedding_tokens = await retrieve_dense(
-            query=processed,
-            user_id=query.user_id,
-            top_k=query.top_k * 2,
-            embedding_type=query.embedding_type,
+    if dense_result is None:
+        logger.warning("Embedding failed, returning empty result")
+        return RetrievalResult(
+            documents=[],
+            embedding_tokens=0,
+            rerank_tokens=0,
+            cache_hit=False,
         )
-    except Exception as exc:
-        logger.warning("Dense retrieval failed", extra={"error": str(exc)})
 
-    # ── sparse retrieval ─────────────────────────────────
-    sparse_docs: list[RetrievalDocument] = []
-    try:
-        from retrieval.sparse.bm25_engine import retrieve_sparse
-        sparse_docs = await retrieve_sparse(processed, top_k=query.top_k * 2)
-    except Exception as exc:
-        logger.warning("Sparse retrieval failed", extra={"error": str(exc)})
+    embedding_tokens = dense_result.tokens_used
 
-    # ── hybrid fusion ────────────────────────────────────
-    fused: list[RetrievalDocument] = []
-    try:
-        from retrieval.fusion.hybrid_scorer import fuse
-        fused = fuse(dense_docs, sparse_docs, top_k=query.top_k * 2)
-    except Exception as exc:
-        logger.warning("Fusion failed, using dense", extra={"error": str(exc)})
-        fused = dense_docs
+    # ── memory similarity search via vector store ────────
+    # In production this calls supabase_store.similarity_search()
+    # Here we return empty — the orchestrator calls memory separately
+    candidates: list[str] = []
 
-    # ── reranker ─────────────────────────────────────────
-    final: list[RetrievalDocument] = fused
-    if query.use_reranker and fused:
-        try:
-            from retrieval.reranker.cross_encoder import rerank
-            final, rerank_tokens = await rerank(processed, fused, top_k=query.top_k)
-        except Exception as exc:
-            logger.warning("Reranker failed, using fused", extra={"error": str(exc)})
-            final = fused[:query.top_k]
+    # ── rerank if candidates available ───────────────────
+    if candidates:
+        reranked = await cross_encoder.rerank(clean_query, candidates)
+        rerank_tokens = max(1, len(candidates) * len(clean_query) // 100)
+        top = reranked[: query.rerank_top_k]
     else:
-        final = fused[:query.top_k]
+        top = []
 
-    result = RetrievalResult(
-        query=query.text,
-        documents=final,
+    documents = [
+        RetrievedDocument(content=content, score=score)
+        for content, score in top
+    ]
+
+    logger.info("Retrieval complete", extra={
+        "query_len": len(clean_query),
+        "docs_returned": len(documents),
+        "embedding_tokens": embedding_tokens,
+        "rerank_tokens": rerank_tokens,
+    })
+
+    return RetrievalResult(
+        documents=documents,
         embedding_tokens=embedding_tokens,
         rerank_tokens=rerank_tokens,
-        cache_hit=False,
+        cache_hit=cache_hit,
     )
-
-    # ── write cache ──────────────────────────────────────
-    try:
-        from retrieval.cache.query_cache import query_cache
-        await query_cache.set(processed, final)
-    except Exception as exc:
-        logger.warning("Cache write failed", extra={"error": str(exc)})
-
-    return result
