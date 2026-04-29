@@ -14,31 +14,23 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _TELEGRAM_API = f"https://api.telegram.org/bot{settings.bot_token}"
-
-# Webhook secret — set once when registering webhook with Telegram
-_WEBHOOK_SECRET = settings.bot_token[:32]   # use first 32 chars as secret
+_WEBHOOK_SECRET = settings.bot_token[:32]
 
 
 # ─── TELEGRAM API HELPERS ────────────────────────────────────────────────────
 
 async def _send_message(chat_id: int, text: str) -> None:
-    """Send a text message to a Telegram chat."""
     if not text:
         return
     async with httpx.AsyncClient() as client:
         await client.post(
             f"{_TELEGRAM_API}/sendMessage",
-            json={
-                "chat_id": chat_id,
-                "text": text,
-                "parse_mode": "Markdown",
-            },
+            json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
             timeout=10.0,
         )
 
 
 async def _answer_callback(callback_query_id: str, text: str = "") -> None:
-    """Acknowledge a callback query (removes loading spinner)."""
     async with httpx.AsyncClient() as client:
         await client.post(
             f"{_TELEGRAM_API}/answerCallbackQuery",
@@ -48,7 +40,6 @@ async def _answer_callback(callback_query_id: str, text: str = "") -> None:
 
 
 def _get_chat_id(update: dict) -> int | None:
-    """Extract chat_id from any update type."""
     for key in ("message", "edited_message"):
         msg = update.get(key, {})
         chat = msg.get("chat", {})
@@ -59,6 +50,17 @@ def _get_chat_id(update: dict) -> int | None:
     return msg.get("chat", {}).get("id")
 
 
+def _detect_lang(update: dict) -> str:
+    """Extract language_code from any update type."""
+    for key in ("message", "edited_message", "callback_query"):
+        entry = update.get(key, {})
+        user = entry.get("from") or {}
+        code = user.get("language_code", "")
+        if code:
+            return code.split("-")[0].lower()
+    return "en"
+
+
 # ─── WEBHOOK ENDPOINT ────────────────────────────────────────────────────────
 
 @router.post("/webhook")
@@ -66,11 +68,6 @@ async def telegram_webhook(
     request: Request,
     x_telegram_bot_api_secret_token: str | None = Header(default=None),
 ) -> dict:
-    """
-    Main Telegram webhook endpoint.
-    Registered at: POST /webhook
-    """
-    # ── secret token check ───────────────────────────────
     if x_telegram_bot_api_secret_token:
         if not verify_webhook_secret(
             x_telegram_bot_api_secret_token,
@@ -84,7 +81,6 @@ async def telegram_webhook(
     if update_type == UpdateType.UNKNOWN:
         return {"ok": True}
 
-    # ── auth ─────────────────────────────────────────────
     auth = verify_update(update)
     if not auth.allowed:
         logger.warning("Rejected update", extra={"reason": auth.reason})
@@ -92,53 +88,41 @@ async def telegram_webhook(
 
     chat_id = _get_chat_id(update)
     user_id = auth.user_id
+    lang = _detect_lang(update)
 
-    # ── default user balance (replace with access_controller later) ──
     user_balance: float = 1.0
 
-    # ── route by update type ─────────────────────────────
     if update_type in (UpdateType.MESSAGE, UpdateType.EDITED_MESSAGE):
         result = await handle_message(
             update=update,
             update_type=update_type,
             user_id=user_id,
             user_balance=user_balance,
+            lang=lang,
         )
 
-        if result.denied:
-            reply = (
-                "⚠️ Недостаточно средств для выполнения запроса."
-                if result.deny_reason == "insufficient_balance"
-                else "⚠️ Не удалось обработать запрос."
-            )
-        else:
-            reply = result.text
-
         if chat_id:
-            await _send_message(chat_id, reply)
+            await _send_message(chat_id, result.text)
 
     elif update_type == UpdateType.CALLBACK_QUERY:
         ctx = parse_callback(update, user_id)
 
+        from cognition.response_synthesizer import get_system_message
         if ctx.action == CallbackAction.BALANCE:
-            await _answer_callback(ctx.callback_query_id, "💰 Баланс: $1.00")
+            await _answer_callback(ctx.callback_query_id, get_system_message("balance_display", lang))
         elif ctx.action == CallbackAction.HELP:
-            await _answer_callback(ctx.callback_query_id, "ℹ️ Помощь")
+            await _answer_callback(ctx.callback_query_id, get_system_message("help_display", lang))
         elif ctx.action == CallbackAction.CANCEL:
-            await _answer_callback(ctx.callback_query_id, "✅ Отменено")
+            await _answer_callback(ctx.callback_query_id, get_system_message("cancelled", lang))
         else:
             await _answer_callback(ctx.callback_query_id)
 
     return {"ok": True}
 
 
-# ─── WEBHOOK REGISTRATION HELPER ─────────────────────────────────────────────
+# ─── WEBHOOK REGISTRATION ─────────────────────────────────────────────────────
 
 async def register_webhook() -> bool:
-    """
-    Register webhook URL with Telegram.
-    Call once on startup from bootstrap.py if needed.
-    """
     async with httpx.AsyncClient() as client:
         response = await client.post(
             f"{_TELEGRAM_API}/setWebhook",
