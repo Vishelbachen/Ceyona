@@ -1,35 +1,42 @@
-from contracts.retrieval_contracts import RetrievalResult
-from context.context_models import AssembledContext, ContextChunk
+import logging
+from contracts.context_contracts import AssembledContext, ContextRequest
 
-_MAX_CHARS = 3000
-_MIN_SCORE = 0.5
+logger = logging.getLogger(__name__)
 
 
-def assemble(result: RetrievalResult) -> AssembledContext:
+def assemble(req: ContextRequest) -> AssembledContext:
     """
-    Convert retrieval result into context chunks.
-    Deterministic assembly only. No ranking. No inference.
+    Deterministic context assembly.
+    Concatenates retrieved documents up to max_chars limit.
+    No ranking. No inference. Formatting only.
     """
-    chunks: list[ContextChunk] = []
-    total_chars = 0
+    parts: list[str] = []
+    total = 0
+    truncated = False
 
-    for doc in result.documents:
-        if doc.score < _MIN_SCORE:
+    for doc in req.documents:
+        chunk = doc.content.strip()
+        if not chunk:
             continue
-        if total_chars + len(doc.content) > _MAX_CHARS:
-            break
-        chunks.append(ContextChunk(
-            content=doc.content,
-            score=doc.score,
-            source=doc.source,
-        ))
-        total_chars += len(doc.content)
 
-    from context.serializer import serialize
-    serialized = serialize(chunks)
+        addition = (req.separator + chunk) if parts else chunk
+        if total + len(addition) > req.max_chars:
+            truncated = True
+            break
+
+        parts.append(chunk)
+        total += len(addition)
+
+    text = req.separator.join(parts)
+
+    logger.debug("Context assembled", extra={
+        "doc_count": len(parts),
+        "chars": total,
+        "truncated": truncated,
+    })
 
     return AssembledContext(
-        chunks=chunks,
-        total_chars=total_chars,
-        serialized=serialized,
+        text=text,
+        document_count=len(parts),
+        truncated=truncated,
     )
