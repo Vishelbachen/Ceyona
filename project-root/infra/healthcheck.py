@@ -1,32 +1,34 @@
 import logging
 
+from redis.asyncio import Redis
+from supabase import Client
+
 logger = logging.getLogger(__name__)
 
 
-async def check_redis(redis) -> bool:
+async def check_redis(redis: Redis) -> bool:
     try:
         await redis.ping()
         return True
     except Exception as exc:
-        logger.warning("Redis healthcheck failed", extra={"error": str(exc)})
+        logger.error("Redis healthcheck failed", extra={"error": str(exc)})
         return False
 
 
-async def check_supabase(supabase) -> bool:
+async def check_supabase(supabase: Client) -> bool:
     try:
         supabase.table("user_balances").select("user_id").limit(1).execute()
         return True
     except Exception as exc:
-        logger.warning("Supabase healthcheck failed", extra={"error": str(exc)})
+        logger.error("Supabase healthcheck failed", extra={"error": str(exc)})
         return False
 
 
-async def full_health(app_state) -> dict:
-    redis_ok = await check_redis(app_state.redis)
-    supabase_ok = await check_supabase(app_state.supabase)
-    healthy = redis_ok and supabase_ok
+async def full_health(redis: Redis, supabase: Client) -> dict:
+    redis_ok = await check_redis(redis)
+    sb_ok = await check_supabase(supabase)
     return {
-        "status": "ok" if healthy else "degraded",
         "redis": "ok" if redis_ok else "error",
-        "supabase": "ok" if supabase_ok else "error",
+        "supabase": "ok" if sb_ok else "error",
+        "status": "ok" if (redis_ok and sb_ok) else "degraded",
     }
