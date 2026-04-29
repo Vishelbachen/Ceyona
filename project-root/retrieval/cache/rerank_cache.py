@@ -1,37 +1,40 @@
-import hashlib
 import json
 import logging
 
 from redis.asyncio import Redis
-from retrieval.cache.ttl_policy import ACTIVE_TTL
+from retrieval.cache.ttl_policy import RERANK_CACHE_TTL
 
 logger = logging.getLogger(__name__)
-
-
-def _key(query: str, candidates: list[str]) -> str:
-    raw = query + "|".join(candidates)
-    h = hashlib.sha256(raw.encode()).hexdigest()
-    return f"rerank:{h}"
 
 
 class RerankCache:
     def __init__(self, redis: Redis) -> None:
         self._redis = redis
 
-    async def get(self, query: str, candidates: list[str]) -> list[float] | None:
+    def _key(self, query: str, candidates_hash: str) -> str:
+        return f"rerank:{query[:40]}:{candidates_hash[:12]}"
+
+    async def get(self, query: str, candidates: list[str]) -> list[tuple[str, float]] | None:
+        import hashlib
+        h = hashlib.sha256("|".join(candidates).encode()).hexdigest()
         try:
-            val = await self._redis.get(_key(query, candidates))
-            return json.loads(val) if val else None
-        except Exception as exc:
-            logger.warning("RerankCache get failed", extra={"error": str(exc)})
+            raw = await self._redis.get(self._key(query, h))
+            if not raw:
+                return None
+            data = json.loads(raw)
+            return [(d["content"], d["score"]) for d in data]
+        except Exception:
             return None
 
-    async def set(self, query: str, candidates: list[str], scores: list[float]) -> None:
+    async def set(self, query: str, candidates: list[str], results: list[tuple[str, float]]) -> None:
+        import hashlib
+        h = hashlib.sha256("|".join(candidates).encode()).hexdigest()
         try:
+            data = [{"content": c, "score": s} for c, s in results]
             await self._redis.setex(
-                _key(query, candidates),
-                ACTIVE_TTL.rerank_ttl_seconds,
-                json.dumps(scores),
+                self._key(query, h),
+                RERANK_CACHE_TTL,
+                json.dumps(data),
             )
         except Exception as exc:
-            logger.warning("RerankCache set failed", extra={"error": str(exc)})
+            logger.warning("RerankCache.set failed", extra={"error": str(exc)})
