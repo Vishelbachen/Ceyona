@@ -5,7 +5,7 @@ from supabase import Client
 
 logger = logging.getLogger(__name__)
 
-_TABLE = "conversation_his"
+_TABLE = "conversation_history"   # ← исправлено
 _MAX_HISTORY = 20
 
 
@@ -22,7 +22,7 @@ class ConversationHistory:
     async def append(self, user_id: int, role: str, content: str) -> bool:
         try:
             self._db.table(_TABLE).insert({
-                "user_id": str(user_id),
+                "user_id": str(user_id),  # text в БД
                 "role": role,
                 "content": content,
             }).execute()
@@ -42,7 +42,7 @@ class ConversationHistory:
             result = (
                 self._db.table(_TABLE)
                 .select("role, content, created_at")
-                .eq("user_id", str(user_id))
+                .eq("user_id", str(user_id))  # text в БД
                 .order("created_at", desc=True)
                 .limit(limit)
                 .execute()
