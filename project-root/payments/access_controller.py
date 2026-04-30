@@ -6,7 +6,7 @@ from supabase import Client
 logger = logging.getLogger(__name__)
 
 _TABLE = "user_balances"
-_DEFAULT_BALANCE_USD = 1.0    # ← стартовый баланс для новых пользователей
+_DEFAULT_BALANCE_USD = 1.0
 
 
 @dataclass(frozen=True)
@@ -22,21 +22,22 @@ class AccessController:
 
     async def get_balance(self, user_id: int) -> BalanceResult:
         try:
+            # используем limit(1) вместо maybe_single() — избегаем 406
             result = (
-                self._db
-                .table(_TABLE)
+                self._db.table(_TABLE)
                 .select("balance_usd")
                 .eq("user_id", user_id)
-                .maybe_single()
+                .limit(1)
                 .execute()
             )
-            if result.data:
+            rows = result.data or []
+            if rows:
                 return BalanceResult(
                     user_id=user_id,
-                    balance_usd=float(result.data["balance_usd"]),
+                    balance_usd=float(rows[0]["balance_usd"]),
                     exists=True,
                 )
-            # ── новый пользователь → создать запись ──────
+            # новый пользователь
             await self._create_default(user_id)
             return BalanceResult(
                 user_id=user_id,
@@ -48,7 +49,6 @@ class AccessController:
                 "user_id": user_id,
                 "error": str(exc),
             })
-            # fail open — даём дефолтный баланс чтобы не блокировать
             return BalanceResult(
                 user_id=user_id,
                 balance_usd=_DEFAULT_BALANCE_USD,
@@ -75,12 +75,10 @@ class AccessController:
         try:
             existing = await self.get_balance(user_id)
             new_balance = existing.balance_usd + amount_usd
-
             self._db.table(_TABLE).upsert({
                 "user_id": user_id,
                 "balance_usd": new_balance,
             }).execute()
-
             logger.info("Balance credited", extra={
                 "user_id": user_id,
                 "amount_usd": amount_usd,
@@ -89,15 +87,13 @@ class AccessController:
             return True
         except Exception as exc:
             logger.error("credit failed", extra={
-                "user_id": user_id,
-                "error": str(exc),
+                "user_id": user_id, "error": str(exc),
             })
             return False
 
     async def deduct(self, user_id: int, amount_usd: float) -> bool:
         try:
             existing = await self.get_balance(user_id)
-
             if existing.balance_usd < amount_usd:
                 logger.warning("Insufficient balance for deduction", extra={
                     "user_id": user_id,
@@ -105,13 +101,10 @@ class AccessController:
                     "required": amount_usd,
                 })
                 return False
-
             new_balance = existing.balance_usd - amount_usd
-
             self._db.table(_TABLE).update({
                 "balance_usd": new_balance,
             }).eq("user_id", user_id).execute()
-
             logger.info("Balance deducted", extra={
                 "user_id": user_id,
                 "amount_usd": amount_usd,
@@ -120,7 +113,6 @@ class AccessController:
             return True
         except Exception as exc:
             logger.error("deduct failed", extra={
-                "user_id": user_id,
-                "error": str(exc),
+                "user_id": user_id, "error": str(exc),
             })
             return False
