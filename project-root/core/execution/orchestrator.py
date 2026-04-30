@@ -1,7 +1,7 @@
 import logging
 from dataclasses import dataclass
 
-from cognition.intent_engine import classify
+from cognition.intent_engine import Intent, classify
 from cognition.multi_agent_coordinator import CoordinationResult, coordinate, plan_agents
 from cognition.reasoning_engine import select_strategy
 from cognition.response_synthesizer import SynthesisInput, synthesize
@@ -90,6 +90,32 @@ def _denied_result(
     )
 
 
+# intents that always need GENERAL tier minimum
+_HEAVY_INTENTS = {Intent.CODE, Intent.ANALYSIS, Intent.MATH}
+_TOOL_INTENTS = {Intent.WEATHER, Intent.SEARCH}
+
+
+async def _run_tool(intent_result, lang: str) -> str | None:
+    """Call external tool if intent requires it. Returns tool output or None."""
+    if not intent_result.requires_tools or not intent_result.tool_name:
+        return None
+    try:
+        from external.web_tools import run_tool
+        result = await run_tool(
+            tool_name=intent_result.tool_name,
+            params=intent_result.tool_params,
+            lang=lang,
+        )
+        logger.info("Tool executed", extra={
+            "tool": intent_result.tool_name,
+            "params": intent_result.tool_params,
+        })
+        return result
+    except Exception as exc:
+        logger.error("Tool execution failed", extra={"error": str(exc)})
+        return None
+
+
 async def run(request: OrchestratorRequest) -> OrchestratorResult:
     logger.info("Orchestrator start", extra={
         "user_message_len": len(request.user_message),
@@ -101,16 +127,29 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
     try:
         # ── step 1: intent ────────────────────────────────
         intent_result = classify(request.user_message)
-        logger.info("Intent classified", extra={"intent": intent_result.intent})
+        logger.info("Intent classified", extra={
+            "intent": intent_result.intent,
+            "requires_tools": intent_result.requires_tools,
+            "tool_name": intent_result.tool_name,
+        })
 
-        # ── step 2: estimate output tokens ────────────────
+        # ── step 2: tool execution (weather/search) ───────
+        tool_output: str | None = None
+        if intent_result.requires_tools:
+            tool_output = await _run_tool(intent_result, request.lang)
+            logger.info("Tool output", extra={
+                "has_output": tool_output is not None,
+                "len": len(tool_output) if tool_output else 0,
+            })
+
+        # ── step 3: estimate output tokens ───────────────
         estimated_output = estimate_output_tokens(
             request.input_tokens,
             request.complexity,
             Tier.GENERAL,
         )
 
-        # ── step 3: estimate cost ─────────────────────────
+        # ── step 4: estimate cost ─────────────────────────
         estimated = estimate_cost(
             input_tokens=request.input_tokens,
             estimated_output_tokens=estimated_output,
@@ -120,7 +159,7 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             embedding_type=request.embedding_type,
         )
 
-        # ── step 4: EPK ───────────────────────────────────
+        # ── step 5: EPK ───────────────────────────────────
         epk_out = evaluate(EPKInput(
             estimated_cost=estimated,
             user_balance=request.user_balance,
@@ -143,19 +182,62 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
                 epk_decision=EPKDecision.DENY,
             )
 
-        # ── step 5: select tier ───────────────────────────
+        # ── step 6: select tier ───────────────────────────
         tier = select_tier(estimated)
+
         if epk_out.decision == EPKDecision.DEGRADE:
             tier = Tier.FAST
             logger.info("EPK DEGRADE: forcing FAST tier")
+        elif intent_result.intent in _HEAVY_INTENTS:
+            # code/math/analysis always get at least GENERAL
+            if tier == Tier.FAST:
+                tier = Tier.GENERAL
+                logger.info("Intent upgrade: FAST → GENERAL", extra={
+                    "intent": intent_result.intent,
+                })
 
-        # ── step 6: reasoning strategy ────────────────────
+        # ── step 7: reasoning strategy ────────────────────
         strategy = select_strategy(intent_result.intent, tier)
 
-        # ── step 7: agent plan ────────────────────────────
+        # ── step 8: agent plan ────────────────────────────
         plan = plan_agents(intent_result.intent, tier, strategy)
 
-        # ── step 8: build prompt ──────────────────────────
+        # ── step 9: build prompt ──────────────────────────
+        # inject tool output into context if available
+        retrieved_context = request.retrieved_context
+        if tool_output:
+            retrieved_context = (
+                f"{tool_output}\n\n{retrieved_context}".strip()
+                if retrieved_context
+                else tool_output
+            )
+
+        # for tool-only intents (weather/search) skip LLM if tool succeeded
+        if intent_result.intent in _TOOL_INTENTS and tool_output:
+            logger.info("Tool-only response, skipping LLM")
+            synthesis = synthesize(SynthesisInput(
+                raw_text=tool_output,
+                intent=intent_result.intent,
+                tier=tier,
+                lang=request.lang,
+            ))
+            return OrchestratorResult(
+                text=synthesis.text,
+                tier=tier,
+                model="tool",
+                epk_decision=epk_out.decision,
+                usage=UsageRecord(
+                    input_tokens=request.input_tokens,
+                    output_tokens=0,
+                    embedding_tokens=request.embedding_tokens,
+                    rerank_tokens=request.rerank_tokens,
+                    tier=tier,
+                    embedding_type=request.embedding_type,
+                    cost_usd=0.0,
+                ),
+                lang=request.lang,
+            )
+
         messages = build_messages(PromptContext(
             user_message=(
                 f"{strategy.instruction_prefix} {request.user_message}".strip()
@@ -163,13 +245,13 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
                 else request.user_message
             ),
             system_prompt=request.system_prompt or intent_result.system_prompt,
-            retrieved_context=request.retrieved_context,
+            retrieved_context=retrieved_context,
             conversation_history=request.conversation_history,
         ))
 
         logger.info("Messages built", extra={"message_count": len(messages)})
 
-        # ── steps 9-11: agent execution ───────────────────
+        # ── step 10: agent execution ──────────────────────
         coordination: CoordinationResult = await coordinate(
             plan=plan,
             messages=messages,
@@ -193,7 +275,7 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
                 epk_decision=epk_out.decision,
             )
 
-        # ── step 12-13: actual cost ───────────────────────
+        # ── step 11: actual cost ──────────────────────────
         cost = actual_cost(
             input_tokens=coordination.input_tokens,
             output_tokens=coordination.output_tokens,
@@ -213,7 +295,7 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             cost_usd=cost,
         )
 
-        # ── step 14: synthesize ───────────────────────────
+        # ── step 12: synthesize ───────────────────────────
         synthesis = synthesize(SynthesisInput(
             raw_text=coordination.text,
             intent=intent_result.intent,
@@ -226,7 +308,6 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             "model": coordination.model,
             "cost_usd": cost,
             "output_tokens": coordination.output_tokens,
-            "lang": request.lang,
         })
 
         return OrchestratorResult(
