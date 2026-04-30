@@ -96,9 +96,14 @@ _TOOL_INTENTS = {Intent.WEATHER, Intent.SEARCH}
 
 
 async def _run_tool(intent_result, lang: str) -> str | None:
-    """Call external tool if intent requires it. Returns tool output or None."""
     if not intent_result.requires_tools or not intent_result.tool_name:
         return None
+
+    logger.error("TOOL DEBUG: name=%s params=%s requires_tools=%s",
+                 intent_result.tool_name,
+                 intent_result.tool_params,
+                 intent_result.requires_tools)
+
     try:
         from external.web_tools import run_tool
         result = await run_tool(
@@ -106,13 +111,16 @@ async def _run_tool(intent_result, lang: str) -> str | None:
             params=intent_result.tool_params,
             lang=lang,
         )
-        logger.info("Tool executed", extra={
+        logger.info("Tool executed OK", extra={
             "tool": intent_result.tool_name,
-            "params": intent_result.tool_params,
+            "result": result[:100] if result else None,
         })
         return result
     except Exception as exc:
-        logger.error("Tool execution failed", extra={"error": str(exc)})
+        import traceback
+        logger.error("Tool execution failed FULL: %s\n%s",
+                     str(exc),
+                     traceback.format_exc())
         return None
 
 
