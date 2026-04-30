@@ -629,3 +629,45 @@ async def handle_message(
             logger.error("History save failed", extra={"error": str(exc)})
 
     return result
+
+
+
+# transport/telegram/message_router.py
+
+import logging
+from enum import Enum
+
+logger = logging.getLogger(__name__)
+
+
+class UpdateType(str, Enum):
+    MESSAGE = "message"
+    CALLBACK_QUERY = "callback_query"
+    EDITED_MESSAGE = "edited_message"
+    UNKNOWN = "unknown"
+
+
+def classify_update(update: dict) -> UpdateType:
+    """Classify incoming Telegram update by type."""
+    if "message" in update:
+        return UpdateType.MESSAGE
+    if "callback_query" in update:
+        return UpdateType.CALLBACK_QUERY
+    if "edited_message" in update:
+        return UpdateType.EDITED_MESSAGE
+    return UpdateType.UNKNOWN
+
+
+def extract_text(update: dict) -> str:
+    """Extract plain text from message or edited_message."""
+    for key in ("message", "edited_message"):
+        msg = update.get(key, {})
+        text = msg.get("text") or msg.get("caption") or ""
+        if text:
+            return text
+    return ""
+
+
+def extract_callback_data(update: dict) -> str:
+    """Extract callback_data from callback_query update."""
+    return update.get("callback_query", {}).get("data", "")
