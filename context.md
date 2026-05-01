@@ -4819,3 +4819,13 @@ def init_sentry() -> None:
 
 # infra/config_loader.py
 
+from app.settings import settings
+
+
+def get(key: str, default: str = "") -> str:
+    return getattr(settings, key, default)
+
+
+
+# infra/env_validator.py
+
