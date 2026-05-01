@@ -781,3 +781,7 @@ def verify_webhook_secret(token: str, expected: str) -> bool:
     Pass X-Telegram-Bot-Api-Secret-Token header value here.
     """
     return hmac.compare_digest(token.encode(), expected.encode())
+
+
+
+# core/kernel/execution_policy_kernel.py
