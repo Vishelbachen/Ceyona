@@ -2,6 +2,69 @@
 
 
 
+# docker-compose.yml
+
+version: "3.9"
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    restart: unless-stopped
+
+    ports:
+      - "8000:8000"
+
+    env_file:
+      - .env
+
+    environment:
+      PYTHONUNBUFFERED: 1
+
+    depends_on:
+      redis:
+        condition: service_healthy
+
+    networks:
+      - ai-network
+
+  redis:
+    image: redis:7-alpine
+
+    restart: unless-stopped
+
+    ports:
+      - "6379:6379"
+
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+
+    volumes:
+      - redis_data:/data
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+    networks:
+      - ai-network
+
+networks:
+  ai-network:
+    driver: bridge
+
+volumes:
+  redis_data:
+
+
+
 # pyproject.toml
 
 [project]
