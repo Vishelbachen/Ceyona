@@ -2,6 +2,22 @@
 
 
 
+# railway.toml
+
+[build]
+builder = "dockerfile"
+
+[deploy]
+startCommand = ""
+
+
+
+# pyproject.toml
+
+
+
+
+
 # . github/workflows/ci.yml
 
 
