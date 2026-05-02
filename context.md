@@ -347,6 +347,12 @@ contracts/
 ├── retrieval_contracts.py ×
 ├── context_contracts.py ×
 └── shared_types.py ×
+(полностью новый слой, без кода)
+meta/
+├── reflection.py
+├── correction.py
+├── analysis.py
+└── memory_audit.py
 
 
 # Все файлы текущей архитектуры с кодом в порядке структуры 
