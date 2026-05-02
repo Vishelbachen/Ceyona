@@ -2,6 +2,59 @@
 
 
 
+# .github/workflows/ci.yml
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('pyproject.toml') }}
+
+      - name: Upgrade pip
+        run: pip install --upgrade pip
+
+      - name: Install dependencies
+        run: pip install -e .
+
+      - name: Check critical module imports
+        run: |
+          python -c "import contracts.shared_types"
+          python -c "import cognition.intent_engine"
+          python -c "import core.execution.orchestrator"
+          python -c "import retrieval.retrieval_engine"
+          python -c "import context.assembler"
+
+      - name: Ruff check
+        run: |
+          pip install ruff
+          ruff check . --ignore E402
+
+      - name: Run tests
+        run: |
+          pip install pytest pytest-asyncio
+          pytest -q --tb=short
+
+
+
 # Dockerfile
 
 FROM python:3.11-slim
