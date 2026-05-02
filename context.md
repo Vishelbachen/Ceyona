@@ -12,16 +12,6 @@ startCommand = ""
 
 
 
-# pyproject.toml
-
-
-
-
-
-# . github/workflows/ci.yml
-
-
-
 
 # Архитектура v5.7
 
