@@ -61,6 +61,7 @@ llm/
 ├── hf_client.py ×
 ├── model_router.py ×
 ├── prompt_engine.py ×
+├── heavy_input_shaper.py (новый файл)
 └── fallback_handler.py ×
 
 external/
