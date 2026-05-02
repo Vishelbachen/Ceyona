@@ -1,7 +1,15 @@
-# Текущая архитектура,не включая Dockerfile, docker-compose.yml, pyproject.toml, railway.toml, .github/worflows/ci.yml (они будут в конце). Все файлы готовы и помечены ×, но желательно их добить и/или переписать/улучшить в случае и по мере необходимости.
+# Текущая архитектура, включая Dockerfile, docker-compose.yml, pyproject.toml, railway.toml, .github/worflows/ci.yml (они будут в начале). Все готовые файлы помечены × желательно их добить и/или переписать/улучшить в случае и по мере необходимости.
+
+
+
+# . github/workflows/ci.yml
+
+
 
 
 # Архитектура v5.7
+
+
 
 
 app/
