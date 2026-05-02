@@ -2,6 +2,74 @@
 
 
 
+# pyproject.toml
+
+[project]
+name = "ai-platform"
+version = "1.0.0"
+description = "Modular AI orchestration platform (EPK-driven)"
+requires-python = ">=3.11,<3.12"
+
+dependencies = [
+    "fastapi>=0.130,<0.136",
+    "uvicorn[standard]>=0.43,<0.45",
+
+    "groq>=1.1,<2.0",
+    "huggingface-hub>=0.20,<1.0",
+
+    "supabase>=2.8,<3.0",
+    "httpx[http2]>=0.28,<0.30",
+
+    "redis>=5.0,<6.0",
+    "tenacity>=9.1,<10.0",
+    "anyio>=4.4,<5.0",
+
+    "pydantic>=2.6,<2.13",
+    "pydantic-settings>=2.3,<3.0",
+
+    "typing-extensions>=4.14,<5.0",
+
+    "structlog>=25.0,<26.0",
+    "python-json-logger>=2.0,<3.0",
+
+    "cryptography>=45.0,<47.0",
+    "orjson>=3.10,<4.0",
+
+    "PyJWT>=2.8,<3.0",
+    "sentry-sdk>=2.0,<3.0",
+
+    "aiogram>=3.6,<3.13",
+
+    "python-dotenv>=1.1,<2.0",
+
+    "opentelemetry-api>=1.26,<2.0",
+    "opentelemetry-sdk>=1.26,<2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.4,<9.0",
+    "pytest-asyncio>=0.24,<1.0",
+    "ruff>=0.9,<1.0",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]
+ignore = ["E402", "B008"]
+
+
+
 # railway.toml
 
 [build]
