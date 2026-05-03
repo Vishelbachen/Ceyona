@@ -8,7 +8,6 @@ from llm.model_router import get_tier_models, requires_thinking_disabled, route_
 
 logger = logging.getLogger(__name__)
 
-# Fallback cascade: if ALL models in tier fail → try next lower tier
 _FALLBACK_CASCADE: dict[Tier, Tier | None] = {
     Tier.HEAVY:   Tier.GENERAL,
     Tier.GENERAL: Tier.FAST,
@@ -20,6 +19,7 @@ async def complete_with_fallback(
     tier: Tier,
     messages: list[dict],
     max_retries: int = 1,
+    temperature: float = 0.7,
 ) -> LLMResponse:
     """
     Attempt LLM completion with automatic fallback.
@@ -49,6 +49,7 @@ async def complete_with_fallback(
                         model=model,
                         messages=messages,
                         max_tokens=max_tokens,
+                        temperature=temperature,
                         **extra_params,
                     )
                 except Exception as exc:
@@ -65,7 +66,6 @@ async def complete_with_fallback(
                 "tier": current_tier, "model": model,
             })
 
-        # All models in tier exhausted → cascade down
         next_tier = _FALLBACK_CASCADE[current_tier]
         if next_tier:
             logger.warning("Cascading to lower tier", extra={
