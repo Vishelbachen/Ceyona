@@ -1,19 +1,3 @@
-"""
-core/execution/orchestrator.py
-
-ROLE: EPK signal execution only. Orchestrates the full request pipeline
-      from intent → agents → synthesis. Returns OrchestratorResult.
-
-INVARIANTS:
-  - NO policy generation (EPK is the sole policy authority)
-  - NO routing decisions (routing is in plan_agents / model_router)
-  - NO Heavy Tier self-activation
-  - NO direct LLM calls
-  - Passes lang to classify() — language must propagate from entry to exit
-  - On any failure: returns a meaningful localised error, NEVER empty text
-  - coordination.block_reason is forwarded to synthesizer — not hardcoded
-"""
-
 from __future__ import annotations
 
 import logging
