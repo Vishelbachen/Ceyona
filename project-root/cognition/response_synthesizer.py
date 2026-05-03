@@ -1,18 +1,3 @@
-"""
-cognition/response_synthesizer.py
-
-ROLE: Final output authority. Assembles, formats, applies correction,
-      and finalises the user-facing response.
-
-INVARIANTS:
-  - FINAL OUTPUT AUTHORITY — nothing downstream modifies text
-  - Pure function: synthesize() has NO I/O, NO state
-  - Calls meta/correction.py at step 4 (inline, non-authoritative)
-  - NEVER returns an empty string to the caller — always a meaningful message
-  - All user-facing strings are localised via get_system_message()
-  - Language is always respected: system messages match user's lang
-"""
-
 from __future__ import annotations
 
 import logging
