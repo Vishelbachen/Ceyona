@@ -689,4 +689,251 @@ safety_agent → deterministic cascade ❌
 heavy_input_shaper → self-gated utility ✅
 heavy_input_shaper → ONLY on HEAVY_REQUIRED ✅
 heavy_input_shaper → ALWAYS CALLED on HEAVY_REQUIRED ✅
-heavy_input_shaper → internal 
+heavy_input_shaper → internal NO-OP if not needed ✅
+heavy_input_shaper → SKIP on ALLOW ❌
+heavy_input_shaper → SKIP on DEGRADED ❌
+heavy_input_shaper → SKIP on DENY ❌
+heavy_input_shaper → reasoning ❌
+heavy_input_shaper → final output ❌
+heavy_input_shaper → NOT a tier ❌
+heavy_input_shaper → NOT an agent ❌
+
+analysis    → pre-reasoning DAG step ✅
+analysis    → hints non-binding / zero authority ✅
+analysis    → ACTIVE on ALLOW / HEAVY (full) ✅
+analysis    → ACTIVE on DEGRADED (lightweight) ✅
+analysis    → SKIP on DENY ❌
+analysis    → NO policy ❌
+analysis    → NO routing ❌
+analysis    → NOT called by Orchestrator ❌
+analysis    → automatic pipeline step ✅
+
+reflection  → post-execution side-channel ✅
+reflection  → OUTPUT: report → observability / memory_audit ✅
+reflection  → ACTIVE on ALLOW / HEAVY (full) ✅
+reflection  → ACTIVE on DEGRADED (lightweight) ✅
+reflection  → SKIP on DENY ❌
+reflection  → NO pipeline feedback ❌
+reflection  → NO response modification ❌
+reflection  → NO current request influence ❌
+
+correction  → owned by meta/ ✅
+correction  → executed ONLY by response_synthesizer ✅
+correction  → EXCLUDED from META side-channel DAG ❌
+correction  → NO authority ❌
+correction  → NO independent execution ❌
+correction  → CANNOT override synthesizer intent ❌
+
+memory_audit → read-only diagnostics ✅
+memory_audit → OUTPUT: audit_report ✅
+memory_audit → optional input для reflection ✅
+memory_audit → ACTIVE on ALLOW / HEAVY / DEGRADED ✅
+memory_audit → SKIP on DENY ❌
+memory_audit → NO memory write ❌
+memory_audit → NO conflict resolution ❌
+memory_audit → NO execution trigger ❌
+
+optimization → system behavior ❌
+optimization → response quality ✅
+
+── HEAVY_REQUIRED EXECUTION POLICY ───────────────
+
+HEAVY_REQUIRED:
+  analysis.py (full) ✅
+  [SKIP FAST TIER] ❌
+  [SKIP GENERAL TIER] ❌
+  Reasoning Engine: ACTIVE ✅
+  heavy_input_shaper: ALWAYS CALLED (self-gated) ✅
+  Heavy Tier (mandatory) ✅
+  safety_agent (mandatory) ✅
+  Consensus SKIP (mutex) ❌
+  Response Synthesizer агрегирует напрямую ✅
+  META: full active ✅
+
+── DEGRADED_MODE EXECUTION PATH ───────────────────
+
+DEGRADED_MODE →
+  Memory Retrieval ✅
+  Embedding Retrieval ✅
+  Reranker ✅
+  analysis.py (lightweight) ✅
+  Intent Engine ✅
+  Fast Tier (8b-instant) ✅
+  skip Reasoning Engine ❌
+  skip Multi-Agent Coordinator ❌
+  skip General Tier ❌
+  skip Agent Layer ❌
+  skip safety_agent ❌
+  skip heavy_input_shaper ❌
+  skip Heavy Tier ❌
+  skip Consensus ❌
+  Response Synthesizer напрямую ✅
+  correction.py вызывается внутри synthesizer ✅
+  META lightweight active ✅
+    reflection  → lightweight ✅
+    memory_audit → lightweight ✅
+
+── MULTILINGUAL NORMALIZATION ─────────────────────
+
+allam-2-7b    → арабский сегмент ✅
+                одна модель, один вызов
+                три контекста: preprocessing / TTS / routing
+                НЕ три инстанса ✅
+llama-3.3-70b → остальные языки ✅
+ДО EPK, NO policy influence ❌
+
+── OUTPUT AUTHORITY ───────────────────────────────
+
+epk                  → SOLE POLICY AUTHORITY ✅
+epk                  → HEAVY_REQUIRED signal ✅
+epk                  → DENY → immediate exit ✅
+
+orchestrator         → execution control ✅
+orchestrator         → EPK signal execution ✅
+orchestrator         → agent_execution_plan execution ✅
+orchestrator         → policy generation ❌
+orchestrator         → routing decisions ❌
+orchestrator         → Heavy Tier self-activation ❌
+
+response_synthesizer → FINAL OUTPUT AUTHORITY ✅
+response_synthesizer → агрегирует Heavy Tier при HEAVY_REQUIRED ✅
+response_synthesizer → вызывает correction.py (step 4) ✅
+response_synthesizer → policy control ❌
+response_synthesizer → agent selection ❌
+
+correction           → NO authority ❌
+correction           → NO independent execution ❌
+correction           → ONLY via synthesizer ✅
+
+── ACTIVATION RULES ───────────────────────────────
+
+Heavy Tier       → EPK = HEAVY_REQUIRED only
+                   output → Response Synthesizer напрямую
+                   NO self-activation ❌
+
+heavy_input_shaper → ONLY on HEAVY_REQUIRED
+                     ALWAYS CALLED, self-gated
+                     NO-OP if not needed
+                     SKIP on ALLOW / DEGRADED / DENY
+
+gpt-oss-120b     → PRIMARY: Heavy Tier reasoning
+                   SECONDARY: Consensus (mutex)
+                   никогда не активен в обеих ролях ❌
+
+reasoning_engine → ACTIVE on ALLOW / HEAVY_REQUIRED
+                   skip on DENY / DEGRADED
+
+safety_agent     → ACTIVE on ALLOW / HEAVY_REQUIRED
+                   skip on DEGRADED / DENY
+
+analysis.py      → ACTIVE on ALLOW / HEAVY (full)
+                   ACTIVE on DEGRADED (lightweight)
+                   SKIP on DENY
+
+reflection.py    → ACTIVE on ALLOW / HEAVY (full)
+                   ACTIVE on DEGRADED (lightweight)
+                   SKIP on DENY
+
+memory_audit.py  → ACTIVE on ALLOW / HEAVY / DEGRADED
+                   SKIP on DENY
+
+correction.py    → called by synthesizer always
+                   (synthesizer сам решает когда нужна коррекция)
+
+Speech Output    → is_voice_input = true only
+
+Safety models    → unavailable → DENY by default
+
+qwen/qwen3-32b   → thinking: False enforced
+
+── WRITE ISOLATION ────────────────────────────────
+
+Event Store + Memory Write → параллельное выполнение
+                             независимые failure domains
+                             сбой одного НЕ блокирует другой
+
+── LLM TIER CLARIFICATION ─────────────────────────
+
+FAST / GENERAL / HEAVY = тиры мощности
+heavy_input_shaper     = self-gated utility, НЕ тир ❌
+Cognition Layer        = intent / reasoning / coordinator / synthesizer
+Meta Layer             = observation / diagnostics / refinement
+Observability          = infrastructure telemetry
+
+── CROSS-LAYER ISOLATION ──────────────────────────
+
+Safety Layer         → read-only gate ✅
+safety_agent         → post-reasoning validation only ✅
+EPK                  → sole policy engine ✅
+Orchestrator         → execution only ✅
+Memory               → observational storage only ✅
+Reranker             → ordering only ✅
+Consensus            → arbitration only ✅
+Response Synthesizer → assembly + aggregation + correction ✅
+heavy_input_shaper   → input preparation only ✅
+Meta Layer           → observation only ✅
+correction.py        → refinement only, no authority ✅
+memory_audit.py      → diagnostics only, no write ✅
+analysis.py          → hints only, non-binding ✅
+reflection.py        → report only, no feedback ✅
+
+🧠 15. FINAL CLASSIFICATION (v6.3 — PRODUCTION SEALED)
+
+Safety Cascade Pass 1 (22m)
+  [DENY by default if unavailable]
+↓
+Feature Extraction (is_voice_input + structural signals)
+↓
+Safety Cascade Pass 2 (86m + safeguard-20b)
+  [DENY by default if unavailable]
+↓
+Multilingual Normalization
+  allam-2-7b → арабский / llama-3.3-70b → остальные
+↓
+EPK [SOLE POLICY AUTHORITY]
+  ALLOW | DENY | DEGRADED_MODE | HEAVY_REQUIRED
+  DENY → immediate exit
+↓
+Memory Substrate          [skip on DENY]
+↓
+Embedding Retrieval       [skip on DENY]
+↓
+Reranker                  [skip on DENY]
+↓
+analysis.py               [skip on DENY]
+  full on ALLOW / HEAVY
+  lightweight on DEGRADED
+↓
+Intent Engine             [skip on DENY]
+↓
+Reasoning Engine          [skip on DENY / DEGRADED]
+  [ACTIVE on ALLOW / HEAVY]
+  control-plane
+↓
+Multi-Agent Coordinator   [skip on DENY / DEGRADED]
+↓
+Orchestrator (execution only)
+↓
+── ALLOW ───────────────────────────────────────────
+Fast Tier → General Tier → Agents → safety_agent → Consensus
+── HEAVY_REQUIRED ──────────────────────────────────
+[SKIP FAST] [SKIP GENERAL]
+heavy_input_shaper (self-gated) → Heavy Tier → safety_agent
+[SKIP CONSENSUS]
+── DEGRADED ────────────────────────────────────────
+Fast Tier only → [skip all else]
+── ALL PATHS ───────────────────────────────────────
+↓
+Response Synthesizer (FINAL OUTPUT AUTHORITY)
+  assemble → structure → format → correction → finalize
+↓
+Speech Layer (orpheus) [voice only]
+↓
+Parallel Write (Event Store ∥ Memory Write)
+↓
+META side-channel [skip on DENY]
+  reflection  → report → observability
+  memory_audit → offline diagnostics
+  lightweight on DEGRADED / full on ALLOW / HEAVY
+↓
+OUTPUT
