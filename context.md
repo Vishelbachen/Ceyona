@@ -1247,6 +1247,8 @@ ACTIVE_POLICY = PolicyRegistry(
 
 # core/execution/orchestrator.py
 
+from __future__ import annotations
+
 import logging
 from dataclasses import dataclass
 
@@ -1262,6 +1264,8 @@ from llm.prompt_engine import PromptContext, build_messages
 
 logger = logging.getLogger(__name__)
 
+
+# ─── REQUEST / RESULT CONTRACTS ───────────────────────────────────────────────
 
 @dataclass
 class OrchestratorRequest:
@@ -1301,6 +1305,8 @@ class OrchestratorResult:
     lang: str = "en"
 
 
+# ─── INTERNAL HELPERS ─────────────────────────────────────────────────────────
+
 def _denied_result(
     reason: str,
     lang: str,
@@ -1311,6 +1317,7 @@ def _denied_result(
     embedding_type: str = "large",
     epk_decision: EPKDecision = EPKDecision.DENY,
 ) -> OrchestratorResult:
+    """Build a denied OrchestratorResult with a localised message."""
     synthesis = synthesize(SynthesisInput(
         raw_text="",
         intent=None,
@@ -1339,19 +1346,48 @@ def _denied_result(
     )
 
 
-# intents that always need GENERAL tier minimum
+def _empty_usage(
+    request: OrchestratorRequest,
+    tier: Tier = Tier.FAST,
+) -> UsageRecord:
+    return UsageRecord(
+        input_tokens=request.input_tokens,
+        output_tokens=0,
+        embedding_tokens=request.embedding_tokens,
+        rerank_tokens=request.rerank_tokens,
+        tier=tier,
+        embedding_type=request.embedding_type,
+        cost_usd=0.0,
+    )
+
+
+# ─── INTENT ROUTING CONSTANTS ─────────────────────────────────────────────────
+
+# Intents that require at least GENERAL tier (code quality / accuracy matters)
 _HEAVY_INTENTS = {Intent.CODE, Intent.ANALYSIS, Intent.MATH}
+
+# Intents that use external tools and can skip LLM entirely on tool success
 _TOOL_INTENTS = {Intent.WEATHER, Intent.SEARCH}
 
 
+# ─── TOOL RUNNER ──────────────────────────────────────────────────────────────
+
 async def _run_tool(intent_result, lang: str) -> str | None:
+    """
+    Execute an external tool (weather / search).
+    Returns tool output string or None on failure.
+    Never raises.
+    """
     if not intent_result.requires_tools or not intent_result.tool_name:
         return None
 
-    logger.error("TOOL DEBUG: name=%s params=%s requires_tools=%s",
-                 intent_result.tool_name,
-                 intent_result.tool_params,
-                 intent_result.requires_tools)
+    logger.info(
+        "Tool dispatch",
+        extra={
+            "tool": intent_result.tool_name,
+            "params": intent_result.tool_params,
+        },
+    )
 
     try:
         from external.web_tools import run_tool
@@ -1360,53 +1396,74 @@ async def _run_tool(intent_result, lang: str) -> str | None:
             params=intent_result.tool_params,
             lang=lang,
         )
-        logger.info("Tool executed OK", extra={
-            "tool": intent_result.tool_name,
-            "result": result[:100] if result else None,
-        })
+        logger.info(
+            "Tool executed",
+            extra={"tool": intent_result.tool_name, "result_len": len(result) if result else 0},
+        )
         return result
     except Exception as exc:
-        import traceback
-        logger.error("Tool execution failed FULL: %s\n%s",
-                     str(exc),
-                     traceback.format_exc())
+        logger.error(
+            "Tool execution failed",
+            extra={"tool": intent_result.tool_name, "error": str(exc)},
+            exc_info=True,
+        )
         return None
 
 
+# ─── MAIN PIPELINE ────────────────────────────────────────────────────────────
+
 async def run(request: OrchestratorRequest) -> OrchestratorResult:
+    """
+    Full execution pipeline. EPK signal execution only.
+
+    Steps:
+      1. Intent classification (language-aware)
+      2. Tool execution (weather / search) — if applicable
+      3. Estimate output tokens
+      4. Estimate cost
+      5. EPK decision (ALLOW / DENY / DEGRADE)
+      6. Tier selection
+      7. Reasoning strategy selection
+      8. Agent plan selection
+      9. Prompt construction
+      10. Agent coordination (with fallback)
+      11. Actual cost calculation
+      12. Response synthesis
+
+    On any unrecoverable failure: returns localised error, never empty text.
+    """
+    lang = request.lang or "en"
+
     logger.info("Orchestrator start", extra={
-        "user_message_len": len(request.user_message),
+        "message_len": len(request.user_message),
         "input_tokens": request.input_tokens,
         "complexity": request.complexity,
-        "lang": request.lang,
+        "lang": lang,
+        "balance": request.user_balance,
     })
 
     try:
-        # ── step 1: intent ────────────────────────────────
-        intent_result = classify(request.user_message)
-        logger.info("Intent classified", extra={
+        # ── step 1: intent (lang-aware) ───────────────────────────────────────
+        intent_result = classify(request.user_message, lang=lang)
+        logger.info("Intent", extra={
             "intent": intent_result.intent,
+            "confidence": intent_result.confidence,
             "requires_tools": intent_result.requires_tools,
-            "tool_name": intent_result.tool_name,
         })
 
-        # ── step 2: tool execution (weather/search) ───────
+        # ── step 2: tool execution ────────────────────────────────────────────
         tool_output: str | None = None
         if intent_result.requires_tools:
-            tool_output = await _run_tool(intent_result, request.lang)
-            logger.info("Tool output", extra={
-                "has_output": tool_output is not None,
-                "len": len(tool_output) if tool_output else 0,
-            })
+            tool_output = await _run_tool(intent_result, lang)
 
-        # ── step 3: estimate output tokens ───────────────
+        # ── step 3: estimate output tokens ────────────────────────────────────
         estimated_output = estimate_output_tokens(
             request.input_tokens,
             request.complexity,
             Tier.GENERAL,
         )
 
-        # ── step 4: estimate cost ─────────────────────────
+        # ── step 4: estimate cost ─────────────────────────────────────────────
         estimated = estimate_cost(
             input_tokens=request.input_tokens,
             estimated_output_tokens=estimated_output,
@@ -1416,22 +1473,22 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             embedding_type=request.embedding_type,
         )
 
-        # ── step 5: EPK ───────────────────────────────────
+        # ── step 5: EPK ───────────────────────────────────────────────────────
         epk_out = evaluate(EPKInput(
             estimated_cost=estimated,
             user_balance=request.user_balance,
         ))
 
-        logger.info("EPK decision", extra={
+        logger.info("EPK", extra={
             "decision": epk_out.decision,
-            "estimated_cost": estimated,
+            "estimated_cost": f"{estimated:.6f}",
             "balance": request.user_balance,
         })
 
         if epk_out.decision == EPKDecision.DENY:
             return _denied_result(
                 reason="insufficient_balance",
-                lang=request.lang,
+                lang=lang,
                 input_tokens=request.input_tokens,
                 embedding_tokens=request.embedding_tokens,
                 rerank_tokens=request.rerank_tokens,
@@ -1439,29 +1496,32 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
                 epk_decision=EPKDecision.DENY,
             )
 
-        # ── step 6: select tier ───────────────────────────
+        # ── step 6: tier selection ────────────────────────────────────────────
         tier = select_tier(estimated)
 
-        if epk_out.decision == EPKDecision.DEGRADE:
+        if epk_out.decision == EPKDecision.DENY:
+            # Already handled above — guard only
+            pass
+        elif epk_out.decision == EPKDecision.DEGRADE:
             tier = Tier.FAST
-            logger.info("EPK DEGRADE: forcing FAST tier")
-        elif intent_result.intent in _HEAVY_INTENTS:
-            # code/math/analysis always get at least GENERAL
-            if tier == Tier.FAST:
-                tier = Tier.GENERAL
-                logger.info("Intent upgrade: FAST → GENERAL", extra={
-                    "intent": intent_result.intent,
-                })
+            logger.info("EPK DEGRADE → FAST tier")
+        elif intent_result.intent in _HEAVY_INTENTS and tier == Tier.FAST:
+            # Code / Math / Analysis always get at least GENERAL for quality
+            tier = Tier.GENERAL
+            logger.info(
+                "Intent upgrade FAST → GENERAL",
+                extra={"intent": intent_result.intent},
+            )
 
-        # ── step 7: reasoning strategy ────────────────────
+        # ── step 7: reasoning strategy ────────────────────────────────────────
         strategy = select_strategy(intent_result.intent, tier)
 
-        # ── step 8: agent plan ────────────────────────────
+        # ── step 8: agent plan ────────────────────────────────────────────────
         plan = plan_agents(intent_result.intent, tier, strategy)
 
-        # ── step 9: build prompt ──────────────────────────
-        # inject tool output into context if available
-        retrieved_context = request.retrieved_context
+        # ── step 9: prompt construction ───────────────────────────────────────
+        # Inject tool output into context if available
+        retrieved_context = request.retrieved_context or ""
         if tool_output:
             retrieved_context = (
                 f"{tool_output}\n\n{retrieved_context}".strip()
@@ -1469,61 +1529,62 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
                 else tool_output
             )
 
-        # for tool-only intents (weather/search) skip LLM if tool succeeded
+        # Tool-only intents: skip LLM entirely when tool succeeded
         if intent_result.intent in _TOOL_INTENTS and tool_output:
-            logger.info("Tool-only response, skipping LLM")
+            logger.info("Tool-only path — skipping LLM", extra={"intent": intent_result.intent})
             synthesis = synthesize(SynthesisInput(
                 raw_text=tool_output,
                 intent=intent_result.intent,
                 tier=tier,
-                lang=request.lang,
+                lang=lang,
             ))
             return OrchestratorResult(
                 text=synthesis.text,
                 tier=tier,
                 model="tool",
                 epk_decision=epk_out.decision,
-                usage=UsageRecord(
-                    input_tokens=request.input_tokens,
-                    output_tokens=0,
-                    embedding_tokens=request.embedding_tokens,
-                    rerank_tokens=request.rerank_tokens,
-                    tier=tier,
-                    embedding_type=request.embedding_type,
-                    cost_usd=0.0,
-                ),
-                lang=request.lang,
+                usage=_empty_usage(request, tier),
+                lang=lang,
             )
 
+        # Use the language-aware system prompt from intent_engine
+        system_prompt = request.system_prompt or intent_result.system_prompt
+
+        user_message_for_prompt = (
+            f"{strategy.instruction_prefix} {request.user_message}".strip()
+            if strategy.instruction_prefix
+            else request.user_message
+        )
+
         messages = build_messages(PromptContext(
-            user_message=(
-                f"{strategy.instruction_prefix} {request.user_message}".strip()
-                if strategy.instruction_prefix
-                else request.user_message
-            ),
-            system_prompt=request.system_prompt or intent_result.system_prompt,
+            user_message=user_message_for_prompt,
+            system_prompt=system_prompt,
             retrieved_context=retrieved_context,
             conversation_history=request.conversation_history,
         ))
 
-        logger.info("Messages built", extra={"message_count": len(messages)})
+        logger.debug("Prompt built", extra={"message_count": len(messages)})
 
-        # ── step 10: agent execution ──────────────────────
+        # ── step 10: agent coordination ───────────────────────────────────────
         coordination: CoordinationResult = await coordinate(
             plan=plan,
             messages=messages,
             user_message=request.user_message,
         )
 
-        logger.info("Coordination done", extra={
+        logger.info("Coordination", extra={
             "blocked": coordination.blocked,
+            "block_reason": coordination.block_reason,
             "text_len": len(coordination.text),
+            "model": coordination.model,
         })
 
+        # Forward the actual block_reason from coordinator (not hardcoded)
         if coordination.blocked:
+            block_reason = coordination.block_reason or "default_deny"
             return _denied_result(
-                reason="default_deny",
-                lang=request.lang,
+                reason=block_reason,
+                lang=lang,
                 tier=tier,
                 input_tokens=request.input_tokens,
                 embedding_tokens=request.embedding_tokens,
@@ -1532,7 +1593,7 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
                 epk_decision=epk_out.decision,
             )
 
-        # ── step 11: actual cost ──────────────────────────
+        # ── step 11: actual cost ──────────────────────────────────────────────
         cost = actual_cost(
             input_tokens=coordination.input_tokens,
             output_tokens=coordination.output_tokens,
@@ -1552,19 +1613,19 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             cost_usd=cost,
         )
 
-        # ── step 12: synthesize ───────────────────────────
+        # ── step 12: synthesis (final output authority) ───────────────────────
         synthesis = synthesize(SynthesisInput(
             raw_text=coordination.text,
             intent=intent_result.intent,
             tier=tier,
-            lang=request.lang,
+            lang=lang,
         ))
 
         logger.info("Orchestrator complete", extra={
             "tier": tier,
             "model": coordination.model,
-            "cost_usd": cost,
-            "output_tokens": coordination.output_tokens,
+            "cost_usd": f"{cost:.6f}",
+            "output_len": len(synthesis.text),
         })
 
         return OrchestratorResult(
@@ -1573,10 +1634,11 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             model=coordination.model,
             epk_decision=epk_out.decision,
             usage=usage,
-            lang=request.lang,
+            lang=lang,
         )
 
     except Exception as exc:
+        # Catch-all: orchestrator must never crash silently
         logger.error("Orchestrator crashed", extra={"error": str(exc)}, exc_info=True)
         synthesis = synthesize(SynthesisInput(
             raw_text="",
@@ -1584,26 +1646,20 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             tier=Tier.FAST,
             denied=True,
             deny_reason="default_deny",
-            lang=request.lang,
+            lang=lang,
         ))
         return OrchestratorResult(
             text=synthesis.text,
             tier=Tier.FAST,
             model="",
             epk_decision=EPKDecision.DENY,
-            usage=UsageRecord(
-                input_tokens=request.input_tokens,
-                output_tokens=0,
-                embedding_tokens=request.embedding_tokens,
-                rerank_tokens=request.rerank_tokens,
-                tier=Tier.FAST,
-                embedding_type=request.embedding_type,
-                cost_usd=0.0,
-            ),
+            usage=_empty_usage(request),
             denied=True,
             deny_reason="internal_error",
-            lang=request.lang,
+            lang=lang,
         )
+
+           
 
 
 
@@ -1992,22 +2048,28 @@ class EventReplay:
 
 # cognition/intent_engine.py
 
-from dataclasses import dataclass
+from __future__ import annotations
+
+from dataclasses import dataclass, field
 from enum import Enum
 
 
-class Intent(str, Enum):
-    QUESTION        = "question"
-    INSTRUCTION     = "instruction"
-    CODE            = "code"
-    ANALYSIS        = "analysis"
-    CREATIVE        = "creative"
-    CONVERSATION    = "conversation"
-    MATH            = "math"
-    WEATHER         = "weather"
-    SEARCH          = "search"
-    UNKNOWN         = "unknown"
+# ─── INTENT TAXONOMY ──────────────────────────────────────────────────────────
 
+class Intent(str, Enum):
+    QUESTION     = "question"
+    CODE         = "code"
+    ANALYSIS     = "analysis"
+    CREATIVE     = "creative"
+    CONVERSATION = "conversation"
+    MATH         = "math"
+    INSTRUCTION  = "instruction"
+    WEATHER      = "weather"
+    SEARCH       = "search"
+    UNKNOWN      = "unknown"
+
+
+# ─── RESULT CONTRACT ──────────────────────────────────────────────────────────
 
 @dataclass(frozen=True)
 class IntentResult:
@@ -2017,209 +2079,403 @@ class IntentResult:
     requires_retrieval: bool
     requires_tools: bool
     tool_name: str = ""
-    tool_params: dict = None
-
-    def __post_init__(self):
-        if self.tool_params is None:
-            object.__setattr__(self, "tool_params", {})
+    tool_params: dict = field(default_factory=dict)
 
 
-_SYSTEM_PROMPTS: dict[Intent, str] = {
+# ─── LANGUAGE INSTRUCTION ─────────────────────────────────────────────────────
+#
+# This is the core of multilingual support.
+# The LLM receives the user's detected language code and is instructed
+# to respond in that exact language — regardless of the system prompt language.
+#
+# We keep system prompts in English (LLMs understand them best),
+# but prepend a hard language directive that the model must follow.
+
+_LANG_NAMES: dict[str, str] = {
+    "ru": "Russian",
+    "en": "English",
+    "de": "German",
+    "fr": "French",
+    "es": "Spanish",
+    "pt": "Portuguese",
+    "it": "Italian",
+    "tr": "Turkish",
+    "ar": "Arabic",
+    "zh": "Chinese",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "pl": "Polish",
+    "uk": "Ukrainian",
+    "fa": "Persian (Farsi)",
+    "nl": "Dutch",
+    "sv": "Swedish",
+    "no": "Norwegian",
+    "da": "Danish",
+    "fi": "Finnish",
+    "cs": "Czech",
+    "sk": "Slovak",
+    "ro": "Romanian",
+    "hu": "Hungarian",
+    "bg": "Bulgarian",
+    "hr": "Croatian",
+    "sr": "Serbian",
+    "he": "Hebrew",
+    "vi": "Vietnamese",
+    "th": "Thai",
+    "id": "Indonesian",
+    "ms": "Malay",
+    "hi": "Hindi",
+    "bn": "Bengali",
+    "ur": "Urdu",
+    "az": "Azerbaijani",
+    "kk": "Kazakh",
+    "uz": "Uzbek",
+}
+
+
+def _lang_directive(lang: str) -> str:
+    """
+    Build a hard language instruction prepended to every system prompt.
+    The LLM must reply in the user's detected language.
+    Falls back to 'the same language the user wrote in' if lang unknown.
+    """
+    lang_name = _LANG_NAMES.get(lang)
+    if lang_name:
+        return (
+            f"IMPORTANT: The user writes in {lang_name}. "
+            f"You MUST reply exclusively in {lang_name}. "
+            "Never switch languages. Never reply in English unless the user wrote in English.\n\n"
+        )
+    # Unknown language code — instruct model to mirror the input language
+    return (
+        "IMPORTANT: Detect the language of the user's message and reply "
+        "exclusively in that same language. Never switch languages.\n\n"
+    )
+
+
+# ─── BASE SYSTEM PROMPTS (English — model-facing) ─────────────────────────────
+
+_BASE_PROMPTS: dict[Intent, str] = {
     Intent.QUESTION: (
-        "You are a precise and concise assistant. "
-        "Answer the user's question directly and factually. "
-        "If you are unsure, say so explicitly."
+        "You are a knowledgeable and direct assistant. "
+        "Answer the user's question accurately and concisely. "
+        "If you are unsure, say so explicitly. "
+        "Do not pad the answer with unnecessary preamble."
     ),
     Intent.INSTRUCTION: (
-        "You are a helpful assistant. "
-        "Provide clear, numbered step-by-step instructions. "
-        "Be complete but concise."
+        "You are a helpful assistant specialising in step-by-step guidance. "
+        "Provide clear, numbered instructions. "
+        "Be complete but concise. Start directly with step 1."
     ),
     Intent.CODE: (
         "You are an expert software engineer. "
-        "Write clean, well-commented code. "
-        "Always specify the language. Explain your approach briefly."
+        "Write clean, correct, well-commented code. "
+        "Always specify the programming language. "
+        "Briefly explain your approach before the code block."
     ),
     Intent.ANALYSIS: (
         "You are an analytical assistant. "
-        "Structure your analysis clearly with key findings first. "
-        "Be objective and evidence-based."
+        "Structure your analysis with key findings first. "
+        "Be objective, evidence-based, and avoid filler."
     ),
     Intent.CREATIVE: (
         "You are a creative writing assistant. "
         "Be imaginative, engaging, and original. "
-        "Match the tone and style the user requests."
+        "Match the tone, style, and format the user requests."
     ),
     Intent.CONVERSATION: (
-        "You are a friendly and helpful assistant. "
-        "Keep responses conversational and appropriately brief."
+        "You are a friendly, warm, and helpful conversational assistant. "
+        "Keep responses natural, concise, and appropriately informal. "
+        "Engage genuinely — don't be robotic."
     ),
     Intent.MATH: (
         "You are a precise mathematical assistant. "
         "Show your work step by step. "
-        "State the final answer clearly."
+        "State the final answer clearly and unambiguously."
     ),
     Intent.WEATHER: (
         "You are a helpful assistant providing weather information. "
-        "Present weather data clearly and concisely."
+        "Present weather data in a clear, readable format. "
+        "Include temperature, conditions, and any relevant advice."
     ),
     Intent.SEARCH: (
-        "You are a helpful assistant. "
-        "Summarize search results clearly and concisely."
+        "You are a helpful research assistant. "
+        "Summarise search results clearly and concisely. "
+        "Cite sources where possible."
     ),
     Intent.UNKNOWN: (
-        "You are a helpful assistant. "
-        "Do your best to understand and respond to the user's request."
+        "You are a helpful, versatile assistant. "
+        "Carefully read the user's message and respond as helpfully as possible. "
+        "If the request is ambiguous, make a reasonable interpretation and answer it. "
+        "Never refuse to respond just because the topic is unclear — always try."
     ),
 }
 
-_CODE_SIGNALS = (
-    "```", "def ", "class ", "import ", "function ", "return ",
+
+def build_system_prompt(intent: Intent, lang: str) -> str:
+    """
+    Combine language directive + base prompt.
+    This is the only function that constructs system prompts.
+    """
+    directive = _lang_directive(lang)
+    base = _BASE_PROMPTS[intent]
+    return directive + base
+
+
+# ─── SIGNAL TABLES ────────────────────────────────────────────────────────────
+# Ordered by specificity. Each tuple is (signal_string, case_sensitive).
+# All signals are lowercase-matched unless noted.
+
+_CODE_SIGNALS: tuple[str, ...] = (
+    # universal symbols
+    "```", "def ", "class ", "import ", "return ", "function ",
     "var ", "const ", "let ", "print(", "console.log", "#!/",
-    "напиши код", "напиши скрипт", "write code", "write a script",
-    "write a function", "write a program", "fix this code",
-    "исправь код", "почини код", "debug", "дебаг",
+    # English
+    "write code", "write a script", "write a function", "write a program",
+    "fix this code", "fix the code", "fix my code", "refactor",
+    "debug this", "debug the", "implement", "unit test",
+    # Russian
+    "напиши код", "напиши скрипт", "напиши функцию", "напиши программу",
+    "исправь код", "почини код", "отрефактори", "реализуй",
+    "дебаг", "отладь",
+    # German / French / Spanish
+    "schreib code", "code écrire", "escribe código",
 )
-_MATH_SIGNALS = (
-    "=", "∑", "∫", "√", "calculate", "solve", "formula",
-    "equation", "вычисли", "посчитай", "реши", "сколько будет",
-    "how much is", "what is", "%", "процент", "percent",
-    "производная", "integral", "matrix", "матрица",
+
+_MATH_SIGNALS: tuple[str, ...] = (
+    "∑", "∫", "√", "²", "³", "π",
+    "calculate", "solve", "formula", "equation", "derivative",
+    "integral", "matrix", "determinant", "eigenvalue",
+    "вычисли", "посчитай", "реши", "сколько будет",
+    "производная", "матрица", "определитель",
+    "rechne", "berechne", "calculer", "calcule", "calcula",
 )
-_QUESTION_ENDS = ("?", "؟", "？")
-_CREATIVE_SIGNALS = (
-    "write a", "write me", "poem", "story", "essay",
-    "generate", "create a", "напиши", "сочини", "придумай",
-    "стихотворение", "рассказ", "сказку", "песню",
-)
-_ANALYSIS_SIGNALS = (
+
+_ANALYSIS_SIGNALS: tuple[str, ...] = (
     "analyse", "analyze", "compare", "evaluate", "review",
-    "summarize", "summarise", "проанализируй", "сравни",
-    "оцени", "резюмируй", "объясни почему", "explain why",
+    "summarize", "summarise", "assess", "examine", "breakdown",
+    "pros and cons", "advantages", "disadvantages",
+    "проанализируй", "сравни", "оцени", "резюмируй",
+    "объясни почему", "разбери", "плюсы и минусы",
+    "analysiere", "analyser", "analysez", "analiza",
 )
-_INSTRUCTION_SIGNALS = (
-    "how to", "how do i", "steps to", "guide", "explain how",
-    "walk me through", "как", "как сделать", "как установить",
-    "как настроить", "покажи как", "научи",
+
+_CREATIVE_SIGNALS: tuple[str, ...] = (
+    "write a poem", "write me a poem", "write a story", "write me a story",
+    "write an essay", "write a letter", "write a song",
+    "poem", "poetry", "haiku", "limerick", "sonnet",
+    "create a story", "generate a story", "make up a story",
+    "напиши стихотворение", "напиши стих", "напиши рассказ",
+    "напиши сказку", "напиши песню", "напиши эссе", "напиши историю",
+    "сочини", "придумай историю", "придумай стихотворение",
+    "schreib ein gedicht", "écris un poème", "escribe un poema",
 )
-_GREETING_SIGNALS = (
-    "hello", "hi", "hey", "good morning", "good evening",
-    "thanks", "thank you", "привет", "здравствуй", "добрый",
-    "спасибо", "пока", "bye", "salut", "hola", "naber",
-    "merhaba", "ciao", "こんにちは", "안녕",
+
+_INSTRUCTION_SIGNALS: tuple[str, ...] = (
+    "how to", "how do i", "how do you", "steps to", "guide to",
+    "explain how", "walk me through", "show me how", "tutorial",
+    "как сделать", "как установить", "как настроить", "как использовать",
+    "как ", "покажи как", "научи меня", "объясни как",
+    "wie man", "comment faire", "cómo hacer",
 )
-_WEATHER_SIGNALS = (
-    "weather", "погода", "погоду", "температура", "temperature",
-    "дождь", "rain", "snow", "снег", "forecast", "прогноз",
-    "холодно", "жарко", "тепло", "cold", "hot", "warm",
-    "sunny", "cloudy", "облачно", "ветер", "wind",
-    "hava", "météo", "wetter", "clima", "meteo",
+
+_GREETING_SIGNALS: tuple[str, ...] = (
+    "hello", "hi there", "hey there", "hey!", "hi!", "good morning",
+    "good evening", "good afternoon", "good night",
+    "thanks", "thank you", "thx", "ty", "bye", "goodbye", "see you",
+    "привет", "здравствуй", "здравствуйте", "добрый день", "добрый вечер",
+    "доброе утро", "спасибо", "пока", "до свидания", "salut", "bonjour",
+    "hola", "gracias", "ciao", "danke", "merci", "naber", "merhaba",
+    "こんにちは", "안녕", "你好", "سلام", "مرحبا",
 )
-_SEARCH_SIGNALS = (
-    "найди", "поищи", "search for", "find", "look up",
-    "what happened", "latest", "news", "новости", "что произошло",
-    "кто такой", "who is", "что такое", "what is",
-    "tell me about", "расскажи о", "информация о",
+
+_WEATHER_SIGNALS: tuple[str, ...] = (
+    "weather", "forecast", "temperature", "rain", "snow", "sunny",
+    "cloudy", "humidity", "wind", "storm", "celsius", "fahrenheit",
+    "погода", "прогноз погоды", "температура", "дождь", "снег",
+    "облачно", "ветер", "жарко", "холодно", "тепло",
+    "hava", "météo", "wetter", "clima", "meteo", "vremya",
+)
+
+_SEARCH_SIGNALS: tuple[str, ...] = (
+    "search for", "look up", "find information", "find out",
+    "what happened", "latest news", "news about", "who is",
+    "tell me about", "what is the current",
+    "найди", "поищи", "найди информацию", "новости", "что произошло",
+    "кто такой", "расскажи о", "информация о", "последние новости",
+)
+
+_QUESTION_ENDS: tuple[str, ...] = ("?", "؟", "？", "?")
+
+
+# ─── CITY EXTRACTOR (for weather) ────────────────────────────────────────────
+
+_CITY_MARKERS: tuple[str, ...] = (
+    "weather in ", "forecast for ", "temperature in ", "in ",
+    "погода в ", "прогноз для ", "температура в ", "в ",
+    "wetter in ", "météo à ", "clima en ",
 )
 
 
 def _extract_city(text: str) -> str:
-    """Simple city extraction from weather query."""
     lower = text.lower()
-    markers = [
-        "в ", "in ", "at ", "for ", "weather in ", "погода в ",
-        "погоду в ", "weather at ", "температура в ",
-    ]
-    for marker in markers:
+    for marker in _CITY_MARKERS:
         idx = lower.find(marker)
         if idx != -1:
             rest = text[idx + len(marker):].strip()
-            city = rest.split()[0].rstrip("?.!,")
-            if city:
-                return city
-    # fallback: last word
-    words = text.strip().rstrip("?.!").split()
-    return words[-1] if words else ""
+            words = rest.split()
+            if words:
+                city = words[0].rstrip("?.!,")
+                if len(city) > 1:
+                    return city
+    # fallback: last non-trivial word
+    words = text.strip().rstrip("?.!,").split()
+    candidates = [w for w in words if len(w) > 2]
+    return candidates[-1] if candidates else ""
 
 
-def classify(text: str) -> IntentResult:
+# ─── CORE CLASSIFY ────────────────────────────────────────────────────────────
+
+def classify(text: str, lang: str = "en") -> IntentResult:
+    """
+    Classify user intent from text.
+    Pure function. No I/O. Never raises.
+    Always returns a valid IntentResult with a language-aware system prompt.
+
+    Priority order (highest specificity first):
+      weather → code → math → creative → analysis →
+      instruction → search → question (ends with ?) → greeting → unknown
+    """
     lower = text.lower().strip()
 
-    # ── weather ──────────────────────────────────────────
+    # ── weather ──────────────────────────────────────────────────────────────
     if any(s in lower for s in _WEATHER_SIGNALS):
         city = _extract_city(text)
-        return _result(
-            Intent.WEATHER, 0.9,
+        return _make(
+            intent=Intent.WEATHER,
+            confidence=0.90,
+            lang=lang,
             requires_retrieval=False,
             requires_tools=True,
             tool_name="weather",
-            tool_params={"city": city} if city else {},
+            tool_params={"city": city, "lang": lang} if city else {"lang": lang},
         )
 
-    # ── code ─────────────────────────────────────────────
-    if any(s in text for s in _CODE_SIGNALS):
-        return _result(Intent.CODE, 0.9,
-                       requires_retrieval=False, requires_tools=False)
+    # ── code (check original text for backticks / indentation) ───────────────
+    if any(s in text for s in ("```", "    ")) or any(s in lower for s in _CODE_SIGNALS):
+        return _make(
+            intent=Intent.CODE,
+            confidence=0.90,
+            lang=lang,
+            requires_retrieval=False,
+            requires_tools=False,
+        )
 
-    # ── math ─────────────────────────────────────────────
+    # ── math ─────────────────────────────────────────────────────────────────
     if any(s in lower for s in _MATH_SIGNALS):
-        return _result(Intent.MATH, 0.8,
-                       requires_retrieval=False, requires_tools=False)
+        # avoid false-positives from "what is" in search context
+        if not any(s in lower for s in _SEARCH_SIGNALS):
+            return _make(
+                intent=Intent.MATH,
+                confidence=0.85,
+                lang=lang,
+                requires_retrieval=False,
+                requires_tools=False,
+            )
 
-    # ── analysis ─────────────────────────────────────────
-    if any(s in lower for s in _ANALYSIS_SIGNALS):
-        return _result(Intent.ANALYSIS, 0.85,
-                       requires_retrieval=True, requires_tools=False)
-
-    # ── creative ─────────────────────────────────────────
+    # ── creative ─────────────────────────────────────────────────────────────
     if any(s in lower for s in _CREATIVE_SIGNALS):
-        return _result(Intent.CREATIVE, 0.85,
-                       requires_retrieval=False, requires_tools=False)
+        return _make(
+            intent=Intent.CREATIVE,
+            confidence=0.88,
+            lang=lang,
+            requires_retrieval=False,
+            requires_tools=False,
+        )
 
-    # ── instruction ──────────────────────────────────────
+    # ── analysis ─────────────────────────────────────────────────────────────
+    if any(s in lower for s in _ANALYSIS_SIGNALS):
+        return _make(
+            intent=Intent.ANALYSIS,
+            confidence=0.85,
+            lang=lang,
+            requires_retrieval=True,
+            requires_tools=False,
+        )
+
+    # ── instruction ──────────────────────────────────────────────────────────
     if any(s in lower for s in _INSTRUCTION_SIGNALS):
-        return _result(Intent.INSTRUCTION, 0.85,
-                       requires_retrieval=True, requires_tools=False)
+        return _make(
+            intent=Intent.INSTRUCTION,
+            confidence=0.85,
+            lang=lang,
+            requires_retrieval=True,
+            requires_tools=False,
+        )
 
-    # ── search ───────────────────────────────────────────
+    # ── search ───────────────────────────────────────────────────────────────
     if any(s in lower for s in _SEARCH_SIGNALS):
-        return _result(Intent.SEARCH, 0.8,
-                       requires_retrieval=False, requires_tools=True,
-                       tool_name="search",
-                       tool_params={"query": text, "num": 5})
+        return _make(
+            intent=Intent.SEARCH,
+            confidence=0.80,
+            lang=lang,
+            requires_retrieval=False,
+            requires_tools=True,
+            tool_name="search",
+            tool_params={"query": text, "num": 5, "lang": lang},
+        )
 
-    # ── question ─────────────────────────────────────────
+    # ── question (ends with ?) ────────────────────────────────────────────────
     if any(lower.endswith(e) for e in _QUESTION_ENDS):
-        return _result(Intent.QUESTION, 0.8,
-                       requires_retrieval=True, requires_tools=False)
+        return _make(
+            intent=Intent.QUESTION,
+            confidence=0.80,
+            lang=lang,
+            requires_retrieval=True,
+            requires_tools=False,
+        )
 
-    # ── conversation ─────────────────────────────────────
-    if any(s in lower for s in _GREETING_SIGNALS):
-        return _result(Intent.CONVERSATION, 0.9,
-                       requires_retrieval=False, requires_tools=False)
+    # ── greeting / short social ───────────────────────────────────────────────
+    if any(s in lower for s in _GREETING_SIGNALS) or len(lower.split()) <= 3:
+        return _make(
+            intent=Intent.CONVERSATION,
+            confidence=0.88,
+            lang=lang,
+            requires_retrieval=False,
+            requires_tools=False,
+        )
 
-    # ── fallback ─────────────────────────────────────────
-    return _result(Intent.UNKNOWN, 0.4,
-                   requires_retrieval=True, requires_tools=False)
+    # ── unknown — always attempt to answer, never silently fail ──────────────
+    return _make(
+        intent=Intent.UNKNOWN,
+        confidence=0.50,
+        lang=lang,
+        requires_retrieval=True,
+        requires_tools=False,
+    )
 
 
-def _result(
+# ─── INTERNAL FACTORY ─────────────────────────────────────────────────────────
+
+def _make(
     intent: Intent,
     confidence: float,
+    lang: str,
     requires_retrieval: bool,
     requires_tools: bool,
     tool_name: str = "",
-    tool_params: dict = None,
+    tool_params: dict | None = None,
 ) -> IntentResult:
     return IntentResult(
         intent=intent,
         confidence=confidence,
-        system_prompt=_SYSTEM_PROMPTS[intent],
+        system_prompt=build_system_prompt(intent, lang),
         requires_retrieval=requires_retrieval,
         requires_tools=requires_tools,
         tool_name=tool_name,
         tool_params=tool_params or {},
     )
+
 
 
 
@@ -2415,6 +2671,8 @@ def select_strategy(intent: Intent, tier: Tier) -> ReasoningStrategy:
 
 # cognition/multi_agent_coordinator.py
 
+from __future__ import annotations
+
 import asyncio
 import logging
 from dataclasses import dataclass, field
@@ -2433,28 +2691,29 @@ from contracts.shared_types import Tier
 logger = logging.getLogger(__name__)
 
 
-# ─── AGENT IDENTIFIERS ───────────────────────────────────────────────────────
+# ─── AGENT IDENTIFIERS ────────────────────────────────────────────────────────
 
 class AgentType(str, Enum):
-    FAST     = "fast_agent"
-    DEEP     = "deep_agent"
-    CREATIVE = "creative_agent"
-    SAFETY   = "safety_agent"
+    FAST     = "fast"
+    DEEP     = "deep"
+    CREATIVE = "creative"
+    SAFETY   = "safety"
 
 
-# ─── AGENT PLAN ──────────────────────────────────────────────────────────────
+# ─── PLAN CONTRACT ────────────────────────────────────────────────────────────
 
 @dataclass(frozen=True)
 class AgentPlan:
     primary: AgentType
+    fallback: AgentType | None          # used when primary fails
     validators: list[AgentType] = field(default_factory=list)
     use_consensus: bool = False
     parallel: bool = False
 
 
-# ─── COORDINATION RESULT ─────────────────────────────────────────────────────
+# ─── RESULT CONTRACT ──────────────────────────────────────────────────────────
 
-@dataclass(frozen=True)
+@dataclass
 class CoordinationResult:
     text: str
     model: str
@@ -2464,7 +2723,7 @@ class CoordinationResult:
     block_reason: str = ""
 
 
-# ─── PLAN SELECTION ──────────────────────────────────────────────────────────
+# ─── PLAN SELECTION ───────────────────────────────────────────────────────────
 
 def plan_agents(
     intent: Intent,
@@ -2472,12 +2731,18 @@ def plan_agents(
     strategy: ReasoningStrategy,
 ) -> AgentPlan:
     """
-    Select which agents to activate.
+    Select which agents to activate based on intent + tier + strategy.
     Pure function. No I/O. No state. No LLM calls.
+
+    Fallback rules:
+      - FAST tier primary always falls back to FAST (retry with same agent)
+      - DEEP primary falls back to FAST (cheaper, always available)
+      - CREATIVE primary falls back to FAST
     """
     if tier == Tier.FAST:
         return AgentPlan(
             primary=AgentType.FAST,
+            fallback=AgentType.FAST,   # retry is the only option at this tier
             validators=[AgentType.SAFETY],
             use_consensus=False,
             parallel=False,
@@ -2486,6 +2751,7 @@ def plan_agents(
     if intent == Intent.CREATIVE:
         return AgentPlan(
             primary=AgentType.CREATIVE,
+            fallback=AgentType.FAST,
             validators=[AgentType.SAFETY],
             use_consensus=False,
             parallel=True,
@@ -2494,6 +2760,7 @@ def plan_agents(
     if tier == Tier.HEAVY:
         return AgentPlan(
             primary=AgentType.DEEP,
+            fallback=AgentType.FAST,   # if heavy fails, still return something
             validators=[AgentType.FAST, AgentType.SAFETY],
             use_consensus=True,
             parallel=True,
@@ -2502,6 +2769,7 @@ def plan_agents(
     if strategy.mode == ReasoningMode.EXPLORATORY:
         return AgentPlan(
             primary=AgentType.DEEP,
+            fallback=AgentType.FAST,
             validators=[AgentType.SAFETY],
             use_consensus=False,
             parallel=True,
@@ -2510,34 +2778,51 @@ def plan_agents(
     if intent in (Intent.CODE, Intent.MATH, Intent.ANALYSIS):
         return AgentPlan(
             primary=AgentType.DEEP,
+            fallback=AgentType.FAST,
             validators=[AgentType.SAFETY],
             use_consensus=False,
             parallel=False,
         )
 
+    # default: GENERAL tier, non-special intent
     return AgentPlan(
         primary=AgentType.FAST,
+        fallback=None,
         validators=[AgentType.SAFETY],
         use_consensus=False,
         parallel=False,
     )
 
 
-# ─── AGENT DISPATCHER ────────────────────────────────────────────────────────
+# ─── AGENT DISPATCHER ─────────────────────────────────────────────────────────
 
 async def _run_agent(agent_type: AgentType, messages: list[dict]) -> AgentResult:
-    """Dispatch to the correct agent module."""
-    if agent_type == AgentType.FAST:
-        return await fast_agent.run(messages)
-    if agent_type == AgentType.DEEP:
-        return await deep_agent.run(messages)
-    if agent_type == AgentType.CREATIVE:
-        return await creative_agent.run(messages)
-    # safety_agent is always sync check — never dispatched as LLM agent
+    """
+    Dispatch to the correct agent module.
+    Never raises — returns AgentResult(success=False) on any error.
+    """
+    try:
+        if agent_type == AgentType.FAST:
+            return await fast_agent.run(messages)
+        if agent_type == AgentType.DEEP:
+            return await deep_agent.run(messages)
+        if agent_type == AgentType.CREATIVE:
+            return await creative_agent.run(messages)
+    except Exception as exc:
+        logger.error(
+            "Agent dispatch error",
+            extra={"agent": agent_type, "error": str(exc)},
+            exc_info=True,
+        )
+    # safety_agent is always a sync check — not dispatched as an LLM agent
     return AgentResult(text="", model="", input_tokens=0, output_tokens=0, success=False)
 
 
-# ─── MAIN COORDINATOR ────────────────────────────────────────────────────────
+def _agent_succeeded(result: AgentResult) -> bool:
+    return result.success and bool(result.text.strip())
+
+
+# ─── MAIN COORDINATOR ─────────────────────────────────────────────────────────
 
 async def coordinate(
     plan: AgentPlan,
@@ -2545,11 +2830,19 @@ async def coordinate(
     user_message: str,
 ) -> CoordinationResult:
     """
-    Execute agent plan and return final result.
-    Handles: safety check, parallel/sequential execution, consensus.
+    Execute agent plan and return CoordinationResult to orchestrator.
+
+    Execution order:
+      1. Safety check (sync, no LLM)
+      2. Primary agent
+      3. Fallback agent (if primary fails and fallback is configured)
+      4. Consensus (HEAVY tier only)
+
+    GUARANTEE: If blocked=False, text is always non-empty.
+               If blocked=True, orchestrator renders the deny message.
     """
 
-    # ── safety check first (always sync, no LLM) ────────
+    # ── 1. safety check (sync, no LLM) ───────────────────────────────────────
     safety: SafetyResult = safety_check(user_message)
     if not safety.safe:
         logger.warning("Safety block", extra={"reason": safety.reason})
@@ -2559,13 +2852,13 @@ async def coordinate(
             input_tokens=0,
             output_tokens=0,
             blocked=True,
-            block_reason=safety.reason,
+            block_reason="safety_block",
         )
 
-    # ── primary agent execution ──────────────────────────
+    # ── 2. primary agent ──────────────────────────────────────────────────────
     primary_result = await _run_agent(plan.primary, messages)
 
-    # ── consensus path (HEAVY tier) ──────────────────────
+    # ── 3. consensus path (HEAVY tier) ────────────────────────────────────────
     if plan.use_consensus:
         validator_types = [v for v in plan.validators if v != AgentType.SAFETY]
 
@@ -2577,36 +2870,76 @@ async def coordinate(
             for vt in validator_types:
                 validator_results.append(await _run_agent(vt, messages))
 
-        all_results = [primary_result, *validator_results]
-        consensus: ConsensusResult = resolve(all_results)
+        # Filter to only successful results; include primary if it succeeded
+        candidates = [r for r in [primary_result, *validator_results] if _agent_succeeded(r)]
 
+        if candidates:
+            consensus: ConsensusResult = resolve(candidates)
+            return CoordinationResult(
+                text=consensus.text,
+                model=consensus.model,
+                input_tokens=consensus.input_tokens,
+                output_tokens=consensus.output_tokens,
+            )
+
+        # All consensus agents failed — fall through to fallback logic below
+        logger.warning("All consensus agents failed — attempting fallback")
+
+    # ── 4. primary succeeded ──────────────────────────────────────────────────
+    if _agent_succeeded(primary_result):
         return CoordinationResult(
-            text=consensus.text,
-            model=consensus.model,
-            input_tokens=consensus.input_tokens,
-            output_tokens=consensus.output_tokens,
+            text=primary_result.text,
+            model=primary_result.model,
+            input_tokens=primary_result.input_tokens,
+            output_tokens=primary_result.output_tokens,
         )
 
-    # ── single agent path ────────────────────────────────
-    if not primary_result.success or not primary_result.text.strip():
-        logger.warning("Primary agent failed, no fallback available")
-        return CoordinationResult(
-            text="",
-            model="",
-            input_tokens=0,
-            output_tokens=0,
+    # ── 5. primary failed → try fallback ──────────────────────────────────────
+    logger.warning(
+        "Primary agent failed",
+        extra={
+            "agent": plan.primary,
+            "success": primary_result.success,
+            "text_len": len(primary_result.text),
+            "error": primary_result.error,
+        },
+    )
+
+    if plan.fallback is not None and plan.fallback != plan.primary:
+        logger.info("Trying fallback agent", extra={"agent": plan.fallback})
+        fallback_result = await _run_agent(plan.fallback, messages)
+
+        if _agent_succeeded(fallback_result):
+            logger.info("Fallback agent succeeded")
+            return CoordinationResult(
+                text=fallback_result.text,
+                model=fallback_result.model,
+                input_tokens=fallback_result.input_tokens,
+                output_tokens=fallback_result.output_tokens,
+            )
+
+        logger.error(
+            "Fallback agent also failed",
+            extra={"agent": plan.fallback, "error": fallback_result.error},
         )
 
+    # ── 6. all agents failed — return blocked so orchestrator renders error ───
+    logger.error("All agents failed — returning blocked result")
     return CoordinationResult(
-        text=primary_result.text,
-        model=primary_result.model,
-        input_tokens=primary_result.input_tokens,
-        output_tokens=primary_result.output_tokens,
+        text="",
+        model="",
+        input_tokens=0,
+        output_tokens=0,
+        blocked=True,
+        block_reason="no_response",
     )
 
 
 
+
 # cognition/response_synthesizer.py
+
+from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
@@ -2616,13 +2949,29 @@ from contracts.shared_types import Tier
 
 logger = logging.getLogger(__name__)
 
-# ─── TELEGRAM LIMITS ─────────────────────────────────────────────────────────
+# ─── TELEGRAM LIMITS ──────────────────────────────────────────────────────────
 
 _TELEGRAM_MAX_CHARS = 4096
 
-# ─── SUPPORTED LANGUAGES (hardcoded — covers ~95% of Telegram users) ─────────
+# ─── SUPPORTED LANGUAGES ──────────────────────────────────────────────────────
+# Covers ~98% of Telegram's user base.
+# Add new langs here — system messages below are the only touch point.
+
+_SUPPORTED_LANGS = {
+    "en", "ru", "de", "fr", "es", "pt", "it", "tr", "ar",
+    "zh", "ja", "ko", "pl", "uk", "fa", "nl", "sv", "no",
+    "da", "fi", "cs", "sk", "ro", "hu", "bg", "hr", "sr",
+    "he", "vi", "th", "id", "ms", "hi", "bn", "ur",
+    "az", "kk", "uz",
+}
+
+# ─── SYSTEM MESSAGES ──────────────────────────────────────────────────────────
+# Keys map to deny_reason or explicit UI states.
+# Rule: every key MUST have "en" as the guaranteed fallback.
 
 _MESSAGES: dict[str, dict[str, str]] = {
+
+    # ── balance ───────────────────────────────────────────────────────────────
     "insufficient_balance": {
         "en": "⚠️ *Insufficient balance.*\nPlease top up to continue.",
         "ru": "⚠️ *Недостаточно средств.*\nПополните баланс, чтобы продолжить.",
@@ -2635,11 +2984,24 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "ar": "⚠️ *رصيد غير كافٍ.*\nيرجى إعادة الشحن للمتابعة.",
         "zh": "⚠️ *余额不足。*\n请充值以继续。",
         "ja": "⚠️ *残高不足です。*\n続けるにはチャージしてください。",
-        "ko": "⚠️ *잔액이 부족합니다.*\n계속하려면 충전해 주세요.",
+        "ko": "⚠️ *잔액이 부족합니다.*\n계속하려면 충전해 주세요。",
         "pl": "⚠️ *Niewystarczające środki.*\nProszę doładować, aby kontynuować.",
         "uk": "⚠️ *Недостатньо коштів.*\nПоповніть баланс, щоб продовжити.",
         "fa": "⚠️ *موجودی کافی نیست.*\nلطفاً برای ادامه شارژ کنید.",
+        "nl": "⚠️ *Onvoldoende saldo.*\nGelieve op te laden om door te gaan.",
+        "sv": "⚠️ *Otillräckligt saldo.*\nVänligen fyll på för att fortsätta.",
+        "no": "⚠️ *Utilstrekkelig saldo.*\nVennligst fyll på for å fortsette.",
+        "da": "⚠️ *Utilstrækkelig saldo.*\nVenligst optank for at fortsætte.",
+        "fi": "⚠️ *Saldo ei riitä.*\nLisää saldoa jatkaaksesi.",
+        "he": "⚠️ *יתרה לא מספיקה.*\nאנא טען כדי להמשיך.",
+        "hi": "⚠️ *अपर्याप्त शेष।*\nजारी रखने के लिए कृपया राशि जोड़ें।",
+        "id": "⚠️ *Saldo tidak mencukupi.*\nSilakan isi ulang untuk melanjutkan.",
+        "az": "⚠️ *Balans kifayət deyil.*\nDavam etmək üçün zəhmət olmasa yükləyin.",
+        "kk": "⚠️ *Баланс жеткіліксіз.*\nЖалғастыру үшін балансты толтырыңыз.",
+        "uz": "⚠️ *Balans yetarli emas.*\nDavom etish uchun iltimos to'ldiring.",
     },
+
+    # ── no LLM response received ───────────────────────────────────────────────
     "no_response": {
         "en": "⚠️ No response received. Please try again.",
         "ru": "⚠️ Не удалось получить ответ. Попробуйте ещё раз.",
@@ -2656,122 +3018,278 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "pl": "⚠️ Nie otrzymano odpowiedzi. Proszę spróbować ponownie.",
         "uk": "⚠️ Не вдалося отримати відповідь. Спробуйте ще раз.",
         "fa": "⚠️ پاسخی دریافت نشد. لطفاً دوباره امتحان کنید.",
+        "nl": "⚠️ Geen antwoord ontvangen. Probeer het opnieuw.",
+        "sv": "⚠️ Inget svar mottaget. Försök igen.",
+        "no": "⚠️ Ingen respons mottatt. Vennligst prøv igjen.",
+        "da": "⚠️ Intet svar modtaget. Prøv venligst igen.",
+        "fi": "⚠️ Vastausta ei saatu. Yritä uudelleen.",
+        "he": "⚠️ לא התקבלה תגובה. אנא נסה שנית.",
+        "hi": "⚠️ कोई प्रतिक्रिया नहीं मिली। कृपया पुनः प्रयास करें।",
+        "id": "⚠️ Tidak ada respons. Silakan coba lagi.",
+        "az": "⚠️ Cavab alınmadı. Zəhmət olmasa yenidən cəhd edin.",
+        "kk": "⚠️ Жауап алынбады. Қайталап көріңіз.",
+        "uz": "⚠️ Javob olinmadi. Iltimos qayta urinib ko'ring.",
     },
+
+    # ── generic deny ──────────────────────────────────────────────────────────
     "default_deny": {
-        "en": "⚠️ Request cannot be processed.",
-        "ru": "⚠️ Запрос не может быть выполнен.",
-        "de": "⚠️ Anfrage kann nicht verarbeitet werden.",
-        "fr": "⚠️ La demande ne peut pas être traitée.",
-        "es": "⚠️ La solicitud no puede procesarse.",
-        "pt": "⚠️ O pedido não pode ser processado.",
-        "it": "⚠️ La richiesta non può essere elaborata.",
-        "tr": "⚠️ İstek işlenemiyor.",
-        "ar": "⚠️ لا يمكن معالجة الطلب.",
-        "zh": "⚠️ 请求无法处理。",
-        "ja": "⚠️ リクエストを処理できません。",
-        "ko": "⚠️ 요청을 처리할 수 없습니다.",
-        "pl": "⚠️ Żądanie nie może być przetworzone.",
-        "uk": "⚠️ Запит не може бути виконаний.",
-        "fa": "⚠️ درخواست قابل پردازش نیست.",
+        "en": "⚠️ I couldn't process that request. Please rephrase or try again.",
+        "ru": "⚠️ Не удалось обработать запрос. Попробуйте переформулировать.",
+        "de": "⚠️ Die Anfrage konnte nicht verarbeitet werden. Bitte umformulieren.",
+        "fr": "⚠️ Impossible de traiter la demande. Veuillez reformuler.",
+        "es": "⚠️ No pude procesar esa solicitud. Por favor reformula.",
+        "pt": "⚠️ Não consegui processar esse pedido. Por favor reformule.",
+        "it": "⚠️ Non riesco a elaborare la richiesta. Per favore riformula.",
+        "tr": "⚠️ İstek işlenemedi. Lütfen yeniden ifade edin.",
+        "ar": "⚠️ تعذّر معالجة الطلب. حاول إعادة الصياغة.",
+        "zh": "⚠️ 无法处理该请求。请换种说法再试。",
+        "ja": "⚠️ リクエストを処理できませんでした。言い方を変えてお試しください。",
+        "ko": "⚠️ 요청을 처리할 수 없었습니다. 다르게 표현해 보세요.",
+        "pl": "⚠️ Nie mogłem przetworzyć tego żądania. Proszę przeformułować.",
+        "uk": "⚠️ Не вдалося обробити запит. Спробуйте переформулювати.",
+        "fa": "⚠️ این درخواست قابل پردازش نیست. لطفاً دوباره بیان کنید.",
+        "nl": "⚠️ Kon dat verzoek niet verwerken. Probeer het anders te formuleren.",
+        "sv": "⚠️ Kunde inte behandla den begäran. Försök omformulera.",
+        "no": "⚠️ Kunne ikke behandle den forespørselen. Prøv å omformulere.",
+        "da": "⚠️ Kunne ikke behandle den forespørgsel. Prøv at omformulere.",
+        "fi": "⚠️ Pyyntöä ei voitu käsitellä. Yritä muotoilla uudelleen.",
+        "he": "⚠️ לא ניתן לעבד את הבקשה. נסה לנסח מחדש.",
+        "hi": "⚠️ इस अनुरोध को प्रोसेस नहीं किया जा सका। कृपया दोबारा लिखें।",
+        "id": "⚠️ Tidak dapat memproses permintaan itu. Coba ungkapkan kembali.",
+        "az": "⚠️ Bu sorğu işlənə bilmədi. Zəhmət olmasa yenidən ifadə edin.",
+        "kk": "⚠️ Сұранысты өңдеу мүмкін болмады. Қайта тұжырымдап көріңіз.",
+        "uz": "⚠️ Bu so'rovni qayta ishlash imkoni bo'lmadi. Iltimos qayta ifodalang.",
     },
+
+    # ── safety block ──────────────────────────────────────────────────────────
+    "safety_block": {
+        "en": "🚫 That request goes against my guidelines. Please try something else.",
+        "ru": "🚫 Этот запрос нарушает мои правила. Попробуйте другое.",
+        "de": "🚫 Diese Anfrage verstößt gegen meine Richtlinien. Bitte anderes versuchen.",
+        "fr": "🚫 Cette demande enfreint mes directives. Essayez autre chose.",
+        "es": "🚫 Esa solicitud va contra mis pautas. Por favor intenta otra cosa.",
+        "pt": "🚫 Esse pedido vai contra as minhas diretrizes. Por favor tente outra coisa.",
+        "it": "🚫 Questa richiesta va contro le mie linee guida. Prova qualcos'altro.",
+        "tr": "🚫 Bu istek kurallarıma aykırı. Lütfen başka bir şey deneyin.",
+        "ar": "🚫 هذا الطلب يخالف قواعدي. الرجاء تجربة شيء آخر.",
+        "zh": "🚫 该请求违反了我的准则。请尝试其他内容。",
+        "ja": "🚫 そのリクエストはガイドラインに違反しています。他のことをお試しください。",
+        "ko": "🚫 해당 요청은 내 지침에 위배됩니다. 다른 것을 시도해 보세요.",
+        "pl": "🚫 To żądanie narusza moje wytyczne. Proszę spróbować czegoś innego.",
+        "uk": "🚫 Цей запит порушує мої правила. Спробуйте щось інше.",
+        "fa": "🚫 این درخواست با دستورالعمل‌های من مغایرت دارد. چیز دیگری امتحان کنید.",
+        "nl": "🚫 Dat verzoek gaat in tegen mijn richtlijnen. Probeer iets anders.",
+        "sv": "🚫 Den begäran strider mot mina riktlinjer. Försök med något annat.",
+        "no": "🚫 Den forespørselen er mot retningslinjene mine. Prøv noe annet.",
+        "da": "🚫 Den forespørgsel er imod mine retningslinjer. Prøv noget andet.",
+        "fi": "🚫 Pyyntö rikkoo ohjeistustani. Kokeile jotain muuta.",
+        "he": "🚫 הבקשה הזו מפרה את ההנחיות שלי. אנא נסה משהו אחר.",
+        "hi": "🚫 वह अनुरोध मेरे दिशानिर्देशों के खिलाफ है। कृपया कुछ और आज़माएं।",
+        "id": "🚫 Permintaan itu bertentangan dengan pedoman saya. Silakan coba yang lain.",
+        "az": "🚫 Bu sorğu qaydalarıma ziddir. Zəhmət olmasa başqa şey sınayın.",
+        "kk": "🚫 Бұл сұраныс ережелерімді бұзады. Басқа нәрсе сынап көріңіз.",
+        "uz": "🚫 Bu so'rov qoidalarimga zid. Iltimos boshqa narsa sinab ko'ring.",
+    },
+
+    # ── rate limiting ─────────────────────────────────────────────────────────
+    "rate_limited": {
+        "en": "⏳ You're sending messages too fast. Please wait a moment.",
+        "ru": "⏳ Вы отправляете сообщения слишком быстро. Подождите немного.",
+        "de": "⏳ Du sendest Nachrichten zu schnell. Bitte kurz warten.",
+        "fr": "⏳ Vous envoyez des messages trop vite. Patientez un instant.",
+        "es": "⏳ Estás enviando mensajes demasiado rápido. Espera un momento.",
+        "pt": "⏳ Está enviando mensagens rápido demais. Por favor aguarde.",
+        "it": "⏳ Stai inviando messaggi troppo velocemente. Aspetta un momento.",
+        "tr": "⏳ Çok hızlı mesaj gönderiyorsunuz. Lütfen biraz bekleyin.",
+        "ar": "⏳ أنت ترسل رسائل بسرعة كبيرة. الرجاء الانتظار لحظة.",
+        "zh": "⏳ 您发送消息太快了。请稍等片刻。",
+        "ja": "⏳ メッセージの送信が速すぎます。少々お待ちください。",
+        "ko": "⏳ 메시지를 너무 빨리 보내고 있습니다. 잠시 기다려 주세요.",
+        "pl": "⏳ Wysyłasz wiadomości zbyt szybko. Poczekaj chwilę.",
+        "uk": "⏳ Ви надсилаєте повідомлення занадто швидко. Зачекайте хвилину.",
+        "fa": "⏳ پیام‌ها را خیلی سریع ارسال می‌کنید. لطفاً کمی صبر کنید.",
+        "nl": "⏳ U stuurt berichten te snel. Even wachten alstublieft.",
+        "sv": "⏳ Du skickar meddelanden för snabbt. Vänta lite.",
+        "no": "⏳ Du sender meldinger for raskt. Vent litt.",
+        "da": "⏳ Du sender beskeder for hurtigt. Vent venligst lidt.",
+        "fi": "⏳ Lähetät viestejä liian nopeasti. Odota hetki.",
+        "he": "⏳ אתה שולח הודעות מהר מדי. אנא המתן רגע.",
+        "hi": "⏳ आप बहुत तेज़ी से संदेश भेज रहे हैं। कृपया थोड़ा रुकें।",
+        "id": "⏳ Anda mengirim pesan terlalu cepat. Harap tunggu sebentar.",
+        "az": "⏳ Siz mesajları çox sürətli göndərirsiniz. Zəhmət olmasa bir az gözləyin.",
+        "kk": "⏳ Сіз хабарларды тым жылдам жіберіп жатырсыз. Біраз күте тұрыңыз.",
+        "uz": "⏳ Xabarlarni juda tez yuboryapsiz. Iltimos bir oz kuting.",
+    },
+
+    # ── truncation suffix (appended when response is cut) ────────────────────
     "truncation_suffix": {
-        "en": "\n\n_...response truncated_",
-        "ru": "\n\n_...ответ сокращён_",
-        "de": "\n\n_...Antwort gekürzt_",
-        "fr": "\n\n_...réponse tronquée_",
-        "es": "\n\n_...respuesta truncada_",
-        "pt": "\n\n_...resposta truncada_",
-        "it": "\n\n_...risposta troncata_",
-        "tr": "\n\n_...yanıt kısaltıldı_",
-        "ar": "\n\n_...تم اقتصاص الرد_",
-        "zh": "\n\n_...回复已截断_",
-        "ja": "\n\n_...返答が省略されました_",
-        "ko": "\n\n_...응답이 잘렸습니다_",
-        "pl": "\n\n_...odpowiedź skrócona_",
-        "uk": "\n\n_...відповідь скорочено_",
-        "fa": "\n\n_...پاسخ کوتاه شد_",
+        "en": "\n\n_…response truncated_",
+        "ru": "\n\n_…ответ сокращён_",
+        "de": "\n\n_…Antwort gekürzt_",
+        "fr": "\n\n_…réponse tronquée_",
+        "es": "\n\n_…respuesta truncada_",
+        "pt": "\n\n_…resposta truncada_",
+        "it": "\n\n_…risposta troncata_",
+        "tr": "\n\n_…yanıt kısaltıldı_",
+        "ar": "\n\n_…تم اقتصاص الرد_",
+        "zh": "\n\n_…回复已截断_",
+        "ja": "\n\n_…返答が省略されました_",
+        "ko": "\n\n_…응답이 잘렸습니다_",
+        "pl": "\n\n_…odpowiedź skrócona_",
+        "uk": "\n\n_…відповідь скорочено_",
+        "fa": "\n\n_…پاسخ کوتاه شد_",
+        "nl": "\n\n_…antwoord afgekapt_",
+        "sv": "\n\n_…svar avkortat_",
+        "no": "\n\n_…svar avkortet_",
+        "da": "\n\n_…svar afkortet_",
+        "fi": "\n\n_…vastaus katkaistu_",
+        "he": "\n\n_…התגובה קוצרה_",
+        "hi": "\n\n_…प्रतिक्रिया काटी गई_",
+        "id": "\n\n_…respons dipotong_",
+        "az": "\n\n_…cavab qısaldıldı_",
+        "kk": "\n\n_…жауап қысқартылды_",
+        "uz": "\n\n_…javob qisqartirildi_",
     },
-    "balance_display": {
-        "en": "💰 Balance: $1.00",
-        "ru": "💰 Баланс: $1.00",
-        "de": "💰 Guthaben: $1.00",
-        "fr": "💰 Solde : $1.00",
-        "es": "💰 Saldo: $1.00",
-        "pt": "💰 Saldo: $1.00",
-        "it": "💰 Saldo: $1.00",
-        "tr": "💰 Bakiye: $1.00",
-        "ar": "💰 الرصيد: $1.00",
-        "zh": "💰 余额：$1.00",
-        "ja": "💰 残高：$1.00",
-        "ko": "💰 잔액: $1.00",
-        "pl": "💰 Saldo: $1.00",
-        "uk": "💰 Баланс: $1.00",
-        "fa": "💰 موجودی: $1.00",
-    },
+
+    # ── help text ─────────────────────────────────────────────────────────────
     "help_display": {
-        "en": "ℹ️ Help",
-        "ru": "ℹ️ Помощь",
-        "de": "ℹ️ Hilfe",
-        "fr": "ℹ️ Aide",
-        "es": "ℹ️ Ayuda",
-        "pt": "ℹ️ Ajuda",
-        "it": "ℹ️ Aiuto",
-        "tr": "ℹ️ Yardım",
-        "ar": "ℹ️ مساعدة",
-        "zh": "ℹ️ 帮助",
-        "ja": "ℹ️ ヘルプ",
-        "ko": "ℹ️ 도움말",
-        "pl": "ℹ️ Pomoc",
-        "uk": "ℹ️ Допомога",
-        "fa": "ℹ️ راهنما",
+        "en": (
+            "ℹ️ *Help*\n\n"
+            "I'm your AI assistant. You can:\n"
+            "• Ask me anything\n"
+            "• Request code, analysis, or creative writing\n"
+            "• Ask for weather or web searches\n"
+            "• Check your balance with /balance\n\n"
+            "I reply in your language automatically."
+        ),
+        "ru": (
+            "ℹ️ *Помощь*\n\n"
+            "Я ваш ИИ-ассистент. Вы можете:\n"
+            "• Задать любой вопрос\n"
+            "• Попросить код, анализ или текст\n"
+            "• Узнать погоду или сделать поиск\n"
+            "• Проверить баланс через /balance\n\n"
+            "Я отвечаю на вашем языке автоматически."
+        ),
+        "de": (
+            "ℹ️ *Hilfe*\n\n"
+            "Ich bin dein KI-Assistent. Du kannst:\n"
+            "• Alles fragen\n"
+            "• Code, Analysen oder kreative Texte anfordern\n"
+            "• Wetter oder Websuche anfragen\n"
+            "• Mit /balance dein Guthaben prüfen\n\n"
+            "Ich antworte automatisch in deiner Sprache."
+        ),
+        "fr": (
+            "ℹ️ *Aide*\n\n"
+            "Je suis votre assistant IA. Vous pouvez :\n"
+            "• Poser n'importe quelle question\n"
+            "• Demander du code, une analyse ou un texte créatif\n"
+            "• Demander la météo ou une recherche web\n"
+            "• Vérifier votre solde avec /balance\n\n"
+            "Je réponds automatiquement dans votre langue."
+        ),
+        "es": (
+            "ℹ️ *Ayuda*\n\n"
+            "Soy tu asistente de IA. Puedes:\n"
+            "• Preguntar lo que quieras\n"
+            "• Pedir código, análisis o escritura creativa\n"
+            "• Consultar el clima o buscar en la web\n"
+            "• Ver tu saldo con /balance\n\n"
+            "Respondo automáticamente en tu idioma."
+        ),
+        "ar": (
+            "ℹ️ *مساعدة*\n\n"
+            "أنا مساعدك الذكي. يمكنك:\n"
+            "• السؤال عن أي شيء\n"
+            "• طلب كود أو تحليل أو كتابة إبداعية\n"
+            "• الاستفسار عن الطقس أو البحث على الويب\n"
+            "• التحقق من رصيدك بـ /balance\n\n"
+            "أرد تلقائياً بلغتك."
+        ),
+        "zh": (
+            "ℹ️ *帮助*\n\n"
+            "我是您的AI助手。您可以：\n"
+            "• 问我任何问题\n"
+            "• 请求代码、分析或创意写作\n"
+            "• 查询天气或搜索网页\n"
+            "• 用 /balance 查看余额\n\n"
+            "我会自动用您的语言回复。"
+        ),
     },
+
+    # ── balance display ───────────────────────────────────────────────────────
+    "balance_display": {
+        "en": "💰 Balance: ${amount}",
+        "ru": "💰 Баланс: ${amount}",
+        "de": "💰 Guthaben: ${amount}",
+        "fr": "💰 Solde : ${amount}",
+        "es": "💰 Saldo: ${amount}",
+        "pt": "💰 Saldo: ${amount}",
+        "it": "💰 Saldo: ${amount}",
+        "tr": "💰 Bakiye: ${amount}",
+        "ar": "💰 الرصيد: ${amount}",
+        "zh": "💰 余额：${amount}",
+        "ja": "💰 残高：${amount}",
+        "ko": "💰 잔액: ${amount}",
+        "pl": "💰 Saldo: ${amount}",
+        "uk": "💰 Баланс: ${amount}",
+        "fa": "💰 موجودی: ${amount}",
+    },
+
+    # ── callback / UI states ──────────────────────────────────────────────────
     "cancelled": {
-        "en": "✅ Cancelled",
-        "ru": "✅ Отменено",
-        "de": "✅ Abgebrochen",
-        "fr": "✅ Annulé",
-        "es": "✅ Cancelado",
-        "pt": "✅ Cancelado",
-        "it": "✅ Annullato",
-        "tr": "✅ İptal edildi",
-        "ar": "✅ تم الإلغاء",
-        "zh": "✅ 已取消",
-        "ja": "✅ キャンセルしました",
-        "ko": "✅ 취소됨",
-        "pl": "✅ Anulowano",
-        "uk": "✅ Скасовано",
-        "fa": "✅ لغو شد",
+        "en": "✅ Cancelled.",
+        "ru": "✅ Отменено.",
+        "de": "✅ Abgebrochen.",
+        "fr": "✅ Annulé.",
+        "es": "✅ Cancelado.",
+        "pt": "✅ Cancelado.",
+        "it": "✅ Annullato.",
+        "tr": "✅ İptal edildi.",
+        "ar": "✅ تم الإلغاء.",
+        "zh": "✅ 已取消。",
+        "ja": "✅ キャンセルしました。",
+        "ko": "✅ 취소됨.",
+        "pl": "✅ Anulowano.",
+        "uk": "✅ Скасовано.",
+        "fa": "✅ لغو شد.",
     },
-    "empty_message": {
-        "en": "", "ru": "", "de": "", "fr": "", "es": "", "pt": "",
-        "it": "", "tr": "", "ar": "", "zh": "", "ja": "", "ko": "",
-        "pl": "", "uk": "", "fa": "",
-    },
-    "no_user_id": {
-        "en": "", "ru": "", "de": "", "fr": "", "es": "", "pt": "",
-        "it": "", "tr": "", "ar": "", "zh": "", "ja": "", "ko": "",
-        "pl": "", "uk": "", "fa": "",
-    },
+
+    # ── silent keys — no message sent ─────────────────────────────────────────
+    "empty_message":  {"_silent": "true"},
+    "no_user_id":     {"_silent": "true"},
 }
 
-_SILENT_KEYS = {"empty_message", "no_user_id"}
+# Keys that intentionally produce no output
+_SILENT_KEYS: frozenset[str] = frozenset({"empty_message", "no_user_id"})
 
+# ─── PUBLIC API: LOCALISED MESSAGE LOOKUP ─────────────────────────────────────
 
 def get_system_message(key: str, lang: str) -> str:
     """
-    Return localised system message.
-    Falls back to English if lang not in registry.
+    Return a localised system message for the given key and language.
+    Falls back to English if lang not available.
+    Returns "" for silent keys.
     """
+    if key in _SILENT_KEYS:
+        return ""
     bucket = _MESSAGES.get(key, {})
-    return bucket.get(lang) or bucket.get("en", "")
+    return bucket.get(lang) or bucket.get("en", "⚠️ An error occurred.")
 
 
-# ─── I/O CONTRACTS ───────────────────────────────────────────────────────────
+def format_balance_message(balance: float, lang: str) -> str:
+    """Return a localised balance string with the amount substituted."""
+    template = get_system_message("balance_display", lang)
+    return template.replace("${amount}", f"{balance:.2f}")
+
+
+# ─── I/O CONTRACTS ────────────────────────────────────────────────────────────
 
 @dataclass(frozen=True)
 class SynthesisInput:
     raw_text: str
-    intent: "Intent | None"   # ← было Intent, стало Optional
+    intent: "Intent | None"
     tier: Tier
     denied: bool = False
     deny_reason: str = ""
@@ -2784,34 +3302,78 @@ class SynthesisResult:
     truncated: bool = False
 
 
-# ─── INTERNAL HELPERS ────────────────────────────────────────────────────────
+# ─── INTERNAL PIPELINE ────────────────────────────────────────────────────────
+
+def _assemble(raw: str) -> str:
+    """Step 1: take raw LLM output as-is."""
+    return raw
+
+
+def _structure(text: str, intent: "Intent | None") -> str:
+    """Step 2: intent-aware light structuring (currently a passthrough)."""
+    # Future: add intent-specific post-processing (e.g., code block wrapping)
+    return text
+
+
+def _format(text: str) -> str:
+    """Step 3: normalise whitespace, strip leading/trailing blank lines."""
+    lines = text.splitlines()
+    # Remove excessive blank lines (max 2 consecutive)
+    cleaned: list[str] = []
+    blank_run = 0
+    for line in lines:
+        if line.strip() == "":
+            blank_run += 1
+            if blank_run <= 2:
+                cleaned.append(line)
+        else:
+            blank_run = 0
+            cleaned.append(line)
+    return "\n".join(cleaned).strip()
+
+
+def _apply_correction(text: str) -> str:
+    """
+    Step 4: apply meta/correction.py.
+    correction.py is owned by meta/ but executed here — it has NO authority.
+    It may clean up formatting or fix minor issues; it cannot change meaning.
+    If correction raises, we silently skip it (synthesizer intent preserved).
+    """
+    try:
+        from meta.correction import apply
+        corrected = apply(text)
+        # Safety: if correction returns empty, discard and keep original
+        return corrected if corrected and corrected.strip() else text
+    except Exception:
+        return text
+
 
 def _truncate(text: str, lang: str) -> tuple[str, bool]:
-    suffix = get_system_message("truncation_suffix", lang)
+    """Step 5a: enforce Telegram 4096-char limit."""
     if len(text) <= _TELEGRAM_MAX_CHARS:
         return text, False
+    suffix = get_system_message("truncation_suffix", lang)
     cut = _TELEGRAM_MAX_CHARS - len(suffix)
     return text[:cut] + suffix, True
 
 
-# ─── MAIN SYNTHESIZER ────────────────────────────────────────────────────────
+def _finalize(text: str, lang: str) -> tuple[str, bool]:
+    """Step 5: truncate and return."""
+    return _truncate(text, lang)
+
+
+# ─── MAIN SYNTHESIZER ─────────────────────────────────────────────────────────
 
 def synthesize(inp: SynthesisInput) -> SynthesisResult:
     """
-    Convert raw LLM output into final user-facing text.
-    Pure function. No I/O. No state.
-    """
-    if inp.denied:
-        if inp.deny_reason in _SILENT_KEYS:
-            return SynthesisResult(text="")
-        key = inp.deny_reason if inp.deny_reason in _MESSAGES else "default_deny"
-        return SynthesisResult(text=get_system_message(key, inp.lang))
+    Convert raw LLM output into the final user-facing message.
 
-    if not inp.raw_text or not inp.raw_text.strip():
-        return SynthesisResult(text=get_system_message("no_response", inp.lang))
+    Pipeline:
+      1. assemble     — accept raw text
+      2. structure    — intent-aware shaping
+      3. format       — whitespace normalisation
+      4. correction   — meta/correction
 
-    final, truncated = _truncate(inp.raw_text.strip(), inp.lang)
-    return SynthesisResult(text=final, truncated=truncated)
 
 
 
