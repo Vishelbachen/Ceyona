@@ -1,8 +1,11 @@
 from dataclasses import dataclass
 from contracts.shared_types import EPKDecision
 
-_DENY_THRESHOLD: float = 0.001    # меньше $0.001 → DENY
-_DEGRADE_THRESHOLD: float = 0.30  # больше $0.30 → DEGRADE
+# ─── THRESHOLDS ───────────────────────────────────────────────────────────────
+
+_DENY_THRESHOLD:    float = 0.001   # balance ≤ 0 or cost > balance → DENY
+_HEAVY_THRESHOLD:   float = 0.30    # cost > 0.30 AND balance sufficient → HEAVY_REQUIRED
+_DEGRADE_THRESHOLD: float = 0.10    # cost > 0.10 AND balance sufficient → DEGRADED_MODE
 
 
 @dataclass(frozen=True)
@@ -18,27 +21,39 @@ class EPKOutput:
 
 
 def evaluate(epk_input: EPKInput) -> EPKOutput:
-    cost = epk_input.estimated_cost
+    """
+    SOLE POLICY AUTHORITY.
+    OUTPUT: ALLOW | DENY | DEGRADED_MODE | HEAVY_REQUIRED
+
+    Rules (evaluated in order):
+      1. balance ≤ 0 or cost > balance → DENY
+      2. cost > HEAVY_THRESHOLD        → HEAVY_REQUIRED
+      3. cost > DEGRADE_THRESHOLD      → DEGRADED_MODE
+      4. otherwise                     → ALLOW
+    """
+    cost    = epk_input.estimated_cost
     balance = epk_input.user_balance
 
-    # нет баланса совсем
-    if balance <= 0 and cost > _DENY_THRESHOLD:
+    # ── 1. DENY ───────────────────────────────────────────────────────────────
+    if balance <= 0 or cost > balance:
         return EPKOutput(
             decision=EPKDecision.DENY,
             reason=f"Insufficient balance: need {cost:.6f}, have {balance:.6f}",
         )
 
-    # баланс есть но не хватает
-    if cost > balance:
+    # ── 2. HEAVY_REQUIRED ─────────────────────────────────────────────────────
+    if cost > _HEAVY_THRESHOLD:
         return EPKOutput(
-            decision=EPKDecision.DENY,
-            reason=f"Insufficient balance: need {cost:.6f}, have {balance:.6f}",
+            decision=EPKDecision.HEAVY_REQUIRED,
+            reason=f"Cost {cost:.6f} exceeds heavy threshold {_HEAVY_THRESHOLD}",
         )
 
+    # ── 3. DEGRADED_MODE ──────────────────────────────────────────────────────
     if cost > _DEGRADE_THRESHOLD:
         return EPKOutput(
-            decision=EPKDecision.DEGRADE,
+            decision=EPKDecision.DEGRADED_MODE,
             reason=f"Cost {cost:.6f} exceeds degrade threshold {_DEGRADE_THRESHOLD}",
         )
 
+    # ── 4. ALLOW ──────────────────────────────────────────────────────────────
     return EPKOutput(decision=EPKDecision.ALLOW, reason="OK")
