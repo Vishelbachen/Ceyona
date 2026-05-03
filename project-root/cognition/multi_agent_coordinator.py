@@ -10,7 +10,7 @@ import agents.deep_agent as deep_agent
 import agents.fast_agent as fast_agent
 from agents.consensus_engine import ConsensusResult, resolve
 from agents.fast_agent import AgentResult
-from agents.safety_agent import SafetyResult, check as safety_check
+from agents.safety_agent import SafetyInput, SafetyResult, SafetyVerdict, check as safety_check
 from cognition.intent_engine import Intent
 from cognition.reasoning_engine import ReasoningMode, ReasoningStrategy
 from contracts.shared_types import Tier
@@ -24,7 +24,6 @@ class AgentType(str, Enum):
     FAST     = "fast"
     DEEP     = "deep"
     CREATIVE = "creative"
-    SAFETY   = "safety"
 
 
 # ─── PLAN CONTRACT ────────────────────────────────────────────────────────────
@@ -32,10 +31,9 @@ class AgentType(str, Enum):
 @dataclass(frozen=True)
 class AgentPlan:
     primary: AgentType
-    fallback: AgentType | None          # used when primary fails
-    validators: list[AgentType] = field(default_factory=list)
+    fallback: AgentType | None
     use_consensus: bool = False
-    parallel: bool = False
+    parallel_validators: list[AgentType] = field(default_factory=list)
 
 
 # ─── RESULT CONTRACT ──────────────────────────────────────────────────────────
@@ -58,66 +56,66 @@ def plan_agents(
     strategy: ReasoningStrategy,
 ) -> AgentPlan:
     """
-    Select which agents to activate based on intent + tier + strategy.
+    Select agent plan based on intent + tier + strategy.
     Pure function. No I/O. No state. No LLM calls.
+    NO policy authority. NO routing decisions.
 
-    Fallback rules:
-      - FAST tier primary always falls back to FAST (retry with same agent)
-      - DEEP primary falls back to FAST (cheaper, always available)
-      - CREATIVE primary falls back to FAST
+    HEAVY_REQUIRED tier:
+      primary=DEEP, no consensus (mutex), no Fast validators.
+    ALLOW tier:
+      Fast → General → Agents → safety_agent → Consensus.
+    DEGRADED_MODE:
+      Fast only (orchestrator routes here directly, plan is minimal).
     """
+    # HEAVY_REQUIRED — consensus is skipped (mutex with Heavy Tier)
+    if tier == Tier.HEAVY:
+        return AgentPlan(
+            primary=AgentType.DEEP,
+            fallback=AgentType.FAST,
+            use_consensus=False,        # mutex: Heavy Tier active → Consensus SKIP
+            parallel_validators=[],
+        )
+
+    # DEGRADED_MODE — Fast only
     if tier == Tier.FAST:
         return AgentPlan(
             primary=AgentType.FAST,
-            fallback=AgentType.FAST,   # retry is the only option at this tier
-            validators=[AgentType.SAFETY],
+            fallback=AgentType.FAST,
             use_consensus=False,
-            parallel=False,
+            parallel_validators=[],
         )
 
+    # ALLOW — GENERAL tier
     if intent == Intent.CREATIVE:
         return AgentPlan(
             primary=AgentType.CREATIVE,
             fallback=AgentType.FAST,
-            validators=[AgentType.SAFETY],
-            use_consensus=False,
-            parallel=True,
-        )
-
-    if tier == Tier.HEAVY:
-        return AgentPlan(
-            primary=AgentType.DEEP,
-            fallback=AgentType.FAST,   # if heavy fails, still return something
-            validators=[AgentType.FAST, AgentType.SAFETY],
             use_consensus=True,
-            parallel=True,
+            parallel_validators=[AgentType.FAST],
         )
 
     if strategy.mode == ReasoningMode.EXPLORATORY:
         return AgentPlan(
             primary=AgentType.DEEP,
             fallback=AgentType.FAST,
-            validators=[AgentType.SAFETY],
-            use_consensus=False,
-            parallel=True,
+            use_consensus=True,
+            parallel_validators=[AgentType.FAST],
         )
 
     if intent in (Intent.CODE, Intent.MATH, Intent.ANALYSIS):
         return AgentPlan(
             primary=AgentType.DEEP,
             fallback=AgentType.FAST,
-            validators=[AgentType.SAFETY],
             use_consensus=False,
-            parallel=False,
+            parallel_validators=[],
         )
 
-    # default: GENERAL tier, non-special intent
+    # default GENERAL
     return AgentPlan(
         primary=AgentType.FAST,
         fallback=None,
-        validators=[AgentType.SAFETY],
         use_consensus=False,
-        parallel=False,
+        parallel_validators=[],
     )
 
 
@@ -136,12 +134,9 @@ async def _run_agent(agent_type: AgentType, messages: list[dict]) -> AgentResult
         if agent_type == AgentType.CREATIVE:
             return await creative_agent.run(messages)
     except Exception as exc:
-        logger.error(
-            "Agent dispatch error",
-            extra={"agent": agent_type, "error": str(exc)},
-            exc_info=True,
-        )
-    # safety_agent is always a sync check — not dispatched as an LLM agent
+        logger.error("Agent dispatch error", extra={
+            "agent": agent_type, "error": str(exc),
+        }, exc_info=True)
     return AgentResult(text="", model="", input_tokens=0, output_tokens=0, success=False)
 
 
@@ -155,65 +150,94 @@ async def coordinate(
     plan: AgentPlan,
     messages: list[dict],
     user_message: str,
+    reasoning_plan: str = "",
 ) -> CoordinationResult:
     """
-    Execute agent plan and return CoordinationResult to orchestrator.
+    Execute agent plan. Return CoordinationResult to orchestrator.
 
-    Execution order:
-      1. Safety check (sync, no LLM)
-      2. Primary agent
-      3. Fallback agent (if primary fails and fallback is configured)
-      4. Consensus (HEAVY tier only)
+    Pipeline (ALLOW path):
+      1. Primary agent
+      2. Parallel validators (if any)
+      3. safety_agent — LAST before Consensus (post-reasoning semantic validation)
+      4. Consensus (ALLOW only, mutex with HEAVY)
 
-    GUARANTEE: If blocked=False, text is always non-empty.
-               If blocked=True, orchestrator renders the deny message.
+    Pipeline (HEAVY_REQUIRED path):
+      1. Primary agent (DEEP)
+      2. safety_agent — mandatory
+      3. Response Synthesizer aggregates directly (no Consensus)
+
+    Pipeline (DEGRADED_MODE path):
+      1. Fast agent only
+      (safety_agent skipped on DEGRADED per architecture)
+
+    GUARANTEE: blocked=False → text is always non-empty.
+               blocked=True  → orchestrator renders deny message.
     """
 
-    # ── 1. safety check (sync, no LLM) ───────────────────────────────────────
-    safety: SafetyResult = safety_check(user_message)
-    if not safety.safe:
-        logger.warning("Safety block", extra={"reason": safety.reason})
-        return CoordinationResult(
-            text="",
-            model="",
-            input_tokens=0,
-            output_tokens=0,
-            blocked=True,
-            block_reason="safety_block",
-        )
-
-    # ── 2. primary agent ──────────────────────────────────────────────────────
+    # ── primary agent ─────────────────────────────────────────────────────────
     primary_result = await _run_agent(plan.primary, messages)
 
-    # ── 3. consensus path (HEAVY tier) ────────────────────────────────────────
+    # ── consensus path (ALLOW only) ───────────────────────────────────────────
     if plan.use_consensus:
-        validator_types = [v for v in plan.validators if v != AgentType.SAFETY]
-
-        if plan.parallel and validator_types:
-            tasks = [_run_agent(vt, messages) for vt in validator_types]
+        if plan.parallel_validators:
+            tasks = [_run_agent(vt, messages) for vt in plan.parallel_validators]
             validator_results: list[AgentResult] = await asyncio.gather(*tasks)
         else:
             validator_results = []
-            for vt in validator_types:
-                validator_results.append(await _run_agent(vt, messages))
 
-        # Filter to only successful results; include primary if it succeeded
-        candidates = [r for r in [primary_result, *validator_results] if _agent_succeeded(r)]
+        candidates = [
+            r for r in [primary_result, *validator_results]
+            if _agent_succeeded(r)
+        ]
+
+        # safety_agent: LAST before Consensus
+        if candidates:
+            best_candidate = max(candidates, key=lambda r: len(r.text))
+            safety: SafetyResult = safety_check(SafetyInput(
+                reasoning_plan=reasoning_plan,
+                draft_response=best_candidate.text,
+                user_message=user_message,
+            ))
+            if safety.verdict == SafetyVerdict.BLOCK:
+                logger.warning("safety_agent BLOCK before consensus",
+                               extra={"reason": safety.reason})
+                return CoordinationResult(
+                    text="", model="", input_tokens=0, output_tokens=0,
+                    blocked=True, block_reason="safety_block",
+                )
 
         if candidates:
-            consensus: ConsensusResult = resolve(candidates)
-            return CoordinationResult(
-                text=consensus.text,
-                model=consensus.model,
-                input_tokens=consensus.input_tokens,
-                output_tokens=consensus.output_tokens,
-            )
+            consensus: ConsensusResult = await resolve(candidates)
+            if consensus.text:
+                return CoordinationResult(
+                    text=consensus.text,
+                    model=consensus.model,
+                    input_tokens=consensus.input_tokens,
+                    output_tokens=consensus.output_tokens,
+                )
 
-        # All consensus agents failed — fall through to fallback logic below
-        logger.warning("All consensus agents failed — attempting fallback")
+        logger.warning("All consensus candidates failed — attempting fallback")
 
-    # ── 4. primary succeeded ──────────────────────────────────────────────────
+    # ── primary succeeded (non-consensus path) ────────────────────────────────
     if _agent_succeeded(primary_result):
+        # safety_agent: mandatory on HEAVY_REQUIRED, skipped on DEGRADED
+        # plan.use_consensus=False covers both HEAVY and DEGRADED —
+        # distinguish by checking if fallback is FAST-only (DEGRADED has no validators)
+        if plan.parallel_validators == [] and plan.fallback is not None:
+            # HEAVY path: safety_agent mandatory
+            safety = safety_check(SafetyInput(
+                reasoning_plan=reasoning_plan,
+                draft_response=primary_result.text,
+                user_message=user_message,
+            ))
+            if safety.verdict == SafetyVerdict.BLOCK:
+                logger.warning("safety_agent BLOCK on HEAVY path",
+                               extra={"reason": safety.reason})
+                return CoordinationResult(
+                    text="", model="", input_tokens=0, output_tokens=0,
+                    blocked=True, block_reason="safety_block",
+                )
+
         return CoordinationResult(
             text=primary_result.text,
             model=primary_result.model,
@@ -221,16 +245,11 @@ async def coordinate(
             output_tokens=primary_result.output_tokens,
         )
 
-    # ── 5. primary failed → try fallback ──────────────────────────────────────
-    logger.warning(
-        "Primary agent failed",
-        extra={
-            "agent": plan.primary,
-            "success": primary_result.success,
-            "text_len": len(primary_result.text),
-            "error": primary_result.error,
-        },
-    )
+    # ── primary failed → fallback ─────────────────────────────────────────────
+    logger.warning("Primary agent failed", extra={
+        "agent": plan.primary,
+        "error": getattr(primary_result, "error", ""),
+    })
 
     if plan.fallback is not None and plan.fallback != plan.primary:
         logger.info("Trying fallback agent", extra={"agent": plan.fallback})
@@ -245,18 +264,12 @@ async def coordinate(
                 output_tokens=fallback_result.output_tokens,
             )
 
-        logger.error(
-            "Fallback agent also failed",
-            extra={"agent": plan.fallback, "error": fallback_result.error},
-        )
+        logger.error("Fallback agent also failed",
+                     extra={"agent": plan.fallback})
 
-    # ── 6. all agents failed — return blocked so orchestrator renders error ───
+    # ── all failed ────────────────────────────────────────────────────────────
     logger.error("All agents failed — returning blocked result")
     return CoordinationResult(
-        text="",
-        model="",
-        input_tokens=0,
-        output_tokens=0,
-        blocked=True,
-        block_reason="no_response",
+        text="", model="", input_tokens=0, output_tokens=0,
+        blocked=True, block_reason="no_response",
     )
