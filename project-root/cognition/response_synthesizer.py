@@ -432,3 +432,26 @@ def synthesize(inp: SynthesisInput) -> SynthesisResult:
       2. structure    — intent-aware shaping
       3. format       — whitespace normalisation
       4. correction   — meta/correction
+      5. finalize     — truncate to Telegram limit
+    """
+    lang = inp.lang if inp.lang in _SUPPORTED_LANGS else "en"
+
+    # ── DENY path ─────────────────────────────────────────────────────────────
+    if inp.denied:
+        key = inp.deny_reason if inp.deny_reason in _MESSAGES else "default_deny"
+        if key in _SILENT_KEYS:
+            return SynthesisResult(text="")
+        return SynthesisResult(text=get_system_message(key, lang))
+
+    # ── no LLM response ───────────────────────────────────────────────────────
+    if not inp.raw_text or not inp.raw_text.strip():
+        return SynthesisResult(text=get_system_message("no_response", lang))
+
+    # ── normal pipeline ───────────────────────────────────────────────────────
+    text = _assemble(inp.raw_text)
+    text = _structure(text, inp.intent)
+    text = _format(text)
+    text = _apply_correction(text)
+    text, truncated = _finalize(text, lang)
+
+    return SynthesisResult(text=text, truncated=truncated)
