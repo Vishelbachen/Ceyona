@@ -1,18 +1,3 @@
-"""
-cognition/intent_engine.py
-
-ROLE: Stateless intent classification + language-aware system prompt construction.
-      One input (text + lang) → one IntentResult.
-
-INVARIANTS:
-  - NO policy decisions
-  - NO routing decisions
-  - NO LLM calls
-  - NO I/O
-  - Always returns a valid IntentResult (never raises)
-  - System prompt always instructs the LLM to reply in the user's language
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
