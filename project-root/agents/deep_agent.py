@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 class AgentResult:
     text: str
     model: str
-input_tokens: int
+    input_tokens: int
     output_tokens: int
     success: bool
     error: str = ""
