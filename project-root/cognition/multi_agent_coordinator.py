@@ -1,21 +1,3 @@
-"""
-cognition/multi_agent_coordinator.py
-
-ROLE: Agent plan selection and execution. Returns CoordinationResult to orchestrator.
-      Coordinator builds agent_execution_plan and dispatches — nothing else.
-
-INVARIANTS:
-  - Called ONLY by orchestrator
-  - Returns ONLY to orchestrator
-  - NO pipeline control
-  - NO model selection
-  - NO policy decisions
-  - NO direct user output
-  - NEVER returns CoordinationResult with empty text silently —
-    always sets blocked=True if no text available, so orchestrator can handle it
-  - On primary agent failure: tries fallback agent before giving up
-"""
-
 from __future__ import annotations
 
 import asyncio
