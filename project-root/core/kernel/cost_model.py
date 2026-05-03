@@ -1,12 +1,12 @@
-from contracts.shared_types import Tier, Complexity
+from contracts.shared_types import Complexity, Tier
 
-# ─── PRICING TABLES ─────────────────────────────────────────────────────────
+# ─── PRICING TABLES ──────────────────────────────────────────────────────────
 # All rates in USD per 1M tokens
 
 MODEL_RATES: dict[str, dict[str, float]] = {
-    Tier.FAST:    {"input": 0.25,  "output": 0.9},
-    Tier.GENERAL: {"input": 2.5,   "output": 10.0},
-    Tier.HEAVY:   {"input": 8.0,   "output": 30.0},
+    Tier.FAST:    {"input": 0.25, "output": 0.9},
+    Tier.GENERAL: {"input": 2.5,  "output": 10.0},
+    Tier.HEAVY:   {"input": 8.0,  "output": 30.0},
 }
 
 EMBEDDING_RATES: dict[str, float] = {
@@ -25,10 +25,11 @@ COMPLEXITY_MULTIPLIER: dict[str, float] = {
     Complexity.CRITICAL: 3.0,
 }
 
+# Single source of truth — matches model_router._MAX_TOKENS exactly
 MAX_OUTPUT_CAP: dict[str, int] = {
-    Tier.FAST:    300,
-    Tier.GENERAL: 1200,
-    Tier.HEAVY:   3000,
+    Tier.FAST:    512,
+    Tier.GENERAL: 2048,
+    Tier.HEAVY:   4096,
 }
 
 
@@ -37,15 +38,9 @@ def estimate_output_tokens(
     complexity: Complexity,
     tier: Tier,
 ) -> int:
-    """
-    Estimate output token count before execution.
-    Used by EPK for pre-flight cost check.
-    """
     raw = int(input_tokens * COMPLEXITY_MULTIPLIER[complexity])
     return min(raw, MAX_OUTPUT_CAP[tier])
 
-
-# ─── COST ESTIMATION (PRE-EXECUTION) ────────────────────────────────────────
 
 def estimate_cost(
     input_tokens: int,
@@ -55,11 +50,6 @@ def estimate_cost(
     tier: Tier,
     embedding_type: str = "large",
 ) -> float:
-    """
-    Estimated cost before LLM execution.
-    Used by EPK to make ALLOW / DENY / DEGRADE decision.
-    Returns USD.
-    """
     rates = MODEL_RATES[tier]
     return (
         input_tokens * rates["input"]
@@ -69,8 +59,6 @@ def estimate_cost(
     ) / 1_000_000
 
 
-# ─── ACTUAL COST (POST-EXECUTION) ────────────────────────────────────────────
-
 def actual_cost(
     input_tokens: int,
     output_tokens: int,
@@ -79,11 +67,6 @@ def actual_cost(
     tier: Tier,
     embedding_type: str = "large",
 ) -> float:
-    """
-    Actual cost after LLM execution with real token counts.
-    Used by usage_meter for billing and TON deduction.
-    Returns USD.
-    """
     rates = MODEL_RATES[tier]
     return (
         input_tokens * rates["input"]
