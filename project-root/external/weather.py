@@ -101,55 +101,78 @@ class WeatherService:
             return None
 
     def format_current(self, data: dict, lang: str = "en") -> str:
-        """
-        Format raw OpenWeather current weather into a readable string.
-        Language-aware output where possible.
-        """
-        try:
-            city     = data.get("name", "Unknown")
-            country  = data.get("sys", {}).get("country", "")
-            temp     = data["main"]["temp"]
-            feels    = data["main"]["feels_like"]
-            humidity = data["main"]["humidity"]
-            desc     = data["weather"][0]["description"].capitalize()
-            wind     = data["wind"]["speed"]
+    """
+    Format raw OpenWeather current weather into a readable string.
+    Localised output based on lang.
+    """
+    _LABELS: dict[str, dict[str, str]] = {
+        "feels_like": {
+            "en": "feels like", "ru": "ощущается как", "de": "gefühlt",
+            "fr": "ressenti", "es": "sensación", "pt": "sensação",
+            "it": "percepito", "tr": "hissedilen", "ar": "يبدو كأنه",
+            "zh": "体感", "ja": "体感", "ko": "체감",
+            "pl": "odczuwalna", "uk": "відчувається як", "fa": "احساس می‌شود",
+            "nl": "gevoelstemperatuur", "sv": "känns som", "no": "føles som",
+            "da": "føles som", "fi": "tuntuu kuin", "he": "מורגש כ",
+            "hi": "महसूस होता है", "id": "terasa", "az": "hiss olunur",
+            "kk": "сезіледі", "uz": "seziladi",
+        },
+        "humidity": {
+            "en": "Humidity", "ru": "Влажность", "de": "Luftfeuchtigkeit",
+            "fr": "Humidité", "es": "Humedad", "pt": "Umidade",
+            "it": "Umidità", "tr": "Nem", "ar": "الرطوبة",
+            "zh": "湿度", "ja": "湿度", "ko": "습도",
+            "pl": "Wilgotność", "uk": "Вологість", "fa": "رطوبت",
+            "nl": "Vochtigheid", "sv": "Luftfuktighet", "no": "Luftfuktighet",
+            "da": "Luftfugtighed", "fi": "Kosteus", "he": "לחות",
+            "hi": "आर्द्रता", "id": "Kelembaban", "az": "Rütubət",
+            "kk": "Ылғалдылық", "uz": "Namlik",
+        },
+        "wind": {
+            "en": "Wind", "ru": "Ветер", "de": "Wind",
+            "fr": "Vent", "es": "Viento", "pt": "Vento",
+            "it": "Vento", "tr": "Rüzgar", "ar": "الرياح",
+            "zh": "风速", "ja": "風速", "ko": "바람",
+            "pl": "Wiatr", "uk": "Вітер", "fa": "باد",
+            "nl": "Wind", "sv": "Vind", "no": "Vind",
+            "da": "Vind", "fi": "Tuuli", "he": "רוח",
+            "hi": "हवा", "id": "Angin", "az": "Külək",
+            "kk": "Жел", "uz": "Shamol",
+        },
+        "ms": {
+            "en": "m/s", "ru": "м/с", "de": "m/s",
+            "fr": "m/s", "es": "m/s", "pt": "m/s",
+            "it": "m/s", "tr": "m/s", "ar": "م/ث",
+            "zh": "米/秒", "ja": "m/s", "ko": "m/s",
+            "pl": "m/s", "uk": "м/с", "fa": "م/ث",
+            "nl": "m/s", "sv": "m/s", "no": "m/s",
+            "da": "m/s", "fi": "m/s", "he": "מ/ש",
+            "hi": "मी/से", "id": "m/s", "az": "m/s",
+            "kk": "м/с", "uz": "m/s",
+        },
+    }
 
-            location = f"{city}, {country}" if country else city
+    def _l(key: str) -> str:
+        return _LABELS[key].get(lang) or _LABELS[key]["en"]
 
-            return (
-                f"🌤 {location}\n"
-                f"{desc}\n"
-                f"🌡 {temp:.0f}°C (feels like {feels:.0f}°C)\n"
-                f"💧 Humidity: {humidity}%\n"
-                f"💨 Wind: {wind} m/s"
-            )
-        except Exception as exc:
-            logger.error("format_current failed", extra={"error": str(exc)})
-            return "⚠️ Could not format weather data."
+    try:
+        city     = data.get("name", "Unknown")
+        country  = data.get("sys", {}).get("country", "")
+        temp     = data["main"]["temp"]
+        feels    = data["main"]["feels_like"]
+        humidity = data["main"]["humidity"]
+        desc     = data["weather"][0]["description"].capitalize()
+        wind     = data["wind"]["speed"]
 
-    def format_forecast(self, data: dict, lang: str = "en") -> str:
-        """
-        Format raw OpenWeather forecast into a readable string.
-        """
-        try:
-            city  = data.get("city", {}).get("name", "Unknown")
-            items = data.get("list", [])
+        location = f"{city}, {country}" if country else city
 
-            if not items:
-                return "⚠️ No forecast data available."
-
-            lines = [f"📅 Forecast for {city}:"]
-            for item in items:
-                dt_txt = item.get("dt_txt", "")
-                temp   = item["main"]["temp"]
-                desc   = item["weather"][0]["description"].capitalize()
-                lines.append(f"  {dt_txt}: {temp:.0f}°C, {desc}")
-
-            return "\n".join(lines)
-        except Exception as exc:
-            logger.error("format_forecast failed", extra={"error": str(exc)})
-            return "⚠️ Could not format forecast data."
-
-
-# Singleton
-weather_service = WeatherService()
+        return (
+            f"🌤 {location}\n"
+            f"{desc}\n"
+            f"🌡 {temp:.0f}°C ({_l('feels_like')} {feels:.0f}°C)\n"
+            f"💧 {_l('humidity')}: {humidity}%\n"
+            f"💨 {_l('wind')}: {wind} m/s {_l('ms')}"
+        )
+    except Exception as exc:
+        logger.error("format_current failed", extra={"error": str(exc)})
+        return "⚠️ Could not format weather data."
