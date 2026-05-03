@@ -157,12 +157,14 @@ async def _run_allow(
     ALLOW path: Fast → General → Agents → safety_agent → Consensus.
     Orchestrator executes EPK signal only — no routing decisions.
     """
-    plan = plan_agents(intent_result.intent, tier, select_strategy(intent_result.intent, tier))
+    strategy = select_strategy(intent_result.intent, tier)
+    plan = plan_agents(intent_result.intent, tier, strategy)
 
     coordination: CoordinationResult = await coordinate(
         plan=plan,
         messages=messages,
         user_message=request.user_message,
+        temperature=strategy.temperature,
     )
 
     if coordination.blocked:
@@ -224,13 +226,14 @@ async def _run_degraded(
            heavy_input_shaper / Heavy / Consensus.
     """
     tier = Tier.FAST
-
-    plan = plan_agents(intent_result.intent, tier, select_strategy(intent_result.intent, tier))
+    strategy = select_strategy(intent_result.intent, tier)
+    plan = plan_agents(intent_result.intent, tier, strategy)
 
     coordination: CoordinationResult = await coordinate(
         plan=plan,
         messages=messages,
         user_message=request.user_message,
+        temperature=strategy.temperature,
     )
 
     if coordination.blocked:
@@ -296,6 +299,7 @@ async def _run_heavy(
       Response Synthesizer aggregates directly.
     """
     tier = Tier.HEAVY
+    strategy = select_strategy(intent_result.intent, tier)
 
     # heavy_input_shaper: always called, self-gated internally
     shaper_result = shape(ShaperInput(
@@ -310,25 +314,22 @@ async def _run_heavy(
         logger.info("heavy_input_shaper shaped input", extra={
             "operation": shaper_result.operation,
         })
-
-    # Rebuild messages with shaped input if shaping occurred
-    if shaper_result.was_shaped:
         retrieved_context = request.retrieved_context or ""
-        shaped_message = shaper_result.text
         messages = build_messages(PromptContext(
-            user_message=shaped_message,
+            user_message=shaper_result.text,
             system_prompt=request.system_prompt or intent_result.system_prompt,
             retrieved_context=retrieved_context,
             conversation_history=request.conversation_history,
         ))
 
-    strategy = select_strategy(intent_result.intent, tier)
     plan = plan_agents(intent_result.intent, tier, strategy)
 
     coordination: CoordinationResult = await coordinate(
         plan=plan,
         messages=messages,
         user_message=request.user_message,
+        reasoning_plan="",
+        temperature=strategy.temperature,
     )
 
     if coordination.blocked:
@@ -352,7 +353,6 @@ async def _run_heavy(
         embedding_type=request.embedding_type,
     )
 
-    # Response Synthesizer aggregates Heavy Tier output directly
     synthesis = synthesize(SynthesisInput(
         raw_text=coordination.text,
         intent=intent_result.intent,
@@ -454,10 +454,10 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
                 epk_decision=EPKDecision.DENY,
             )
 
-        # ── tier selection (EPK → decision_matrix) ────────────────────────────
+        # ── tier selection ────────────────────────────────────────────────────
         tier = select_tier(estimated)
 
-        # ── tool-only path (skip LLM entirely) ───────────────────────────────
+        # ── tool-only path ────────────────────────────────────────────────────
         if intent_result.intent in _TOOL_INTENTS and tool_output:
             logger.info("Tool-only path", extra={"intent": intent_result.intent})
             synthesis = synthesize(SynthesisInput(
@@ -506,7 +506,6 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
         if epk_out.decision == EPKDecision.DEGRADED_MODE:
             return await _run_degraded(request, intent_result, messages, epk_out.decision, lang)
 
-        # ALLOW
         return await _run_allow(request, intent_result, messages, tier, epk_out.decision, lang)
 
     except Exception as exc:
