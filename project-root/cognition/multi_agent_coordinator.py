@@ -34,6 +34,7 @@ class AgentPlan:
     fallback: AgentType | None
     use_consensus: bool = False
     parallel_validators: list[AgentType] = field(default_factory=list)
+    temperature: float = 0.7
 
 
 # ─── RESULT CONTRACT ──────────────────────────────────────────────────────────
@@ -72,8 +73,9 @@ def plan_agents(
         return AgentPlan(
             primary=AgentType.DEEP,
             fallback=AgentType.FAST,
-            use_consensus=False,        # mutex: Heavy Tier active → Consensus SKIP
+            use_consensus=False,
             parallel_validators=[],
+            temperature=strategy.temperature,
         )
 
     # DEGRADED_MODE — Fast only
@@ -83,6 +85,7 @@ def plan_agents(
             fallback=AgentType.FAST,
             use_consensus=False,
             parallel_validators=[],
+            temperature=strategy.temperature,
         )
 
     # ALLOW — GENERAL tier
@@ -92,6 +95,7 @@ def plan_agents(
             fallback=AgentType.FAST,
             use_consensus=True,
             parallel_validators=[AgentType.FAST],
+            temperature=strategy.temperature,
         )
 
     if strategy.mode == ReasoningMode.EXPLORATORY:
@@ -100,6 +104,7 @@ def plan_agents(
             fallback=AgentType.FAST,
             use_consensus=True,
             parallel_validators=[AgentType.FAST],
+            temperature=strategy.temperature,
         )
 
     if intent in (Intent.CODE, Intent.MATH, Intent.ANALYSIS):
@@ -108,6 +113,7 @@ def plan_agents(
             fallback=AgentType.FAST,
             use_consensus=False,
             parallel_validators=[],
+            temperature=strategy.temperature,
         )
 
     # default GENERAL
@@ -116,23 +122,28 @@ def plan_agents(
         fallback=None,
         use_consensus=False,
         parallel_validators=[],
+        temperature=strategy.temperature,
     )
 
 
 # ─── AGENT DISPATCHER ─────────────────────────────────────────────────────────
 
-async def _run_agent(agent_type: AgentType, messages: list[dict]) -> AgentResult:
+async def _run_agent(
+    agent_type: AgentType,
+    messages: list[dict],
+    temperature: float = 0.7,
+) -> AgentResult:
     """
     Dispatch to the correct agent module.
     Never raises — returns AgentResult(success=False) on any error.
     """
     try:
         if agent_type == AgentType.FAST:
-            return await fast_agent.run(messages)
+            return await fast_agent.run(messages, temperature=temperature)
         if agent_type == AgentType.DEEP:
-            return await deep_agent.run(messages)
+            return await deep_agent.run(messages, temperature=temperature)
         if agent_type == AgentType.CREATIVE:
-            return await creative_agent.run(messages)
+            return await creative_agent.run(messages, temperature=temperature)
     except Exception as exc:
         logger.error("Agent dispatch error", extra={
             "agent": agent_type, "error": str(exc),
@@ -151,6 +162,7 @@ async def coordinate(
     messages: list[dict],
     user_message: str,
     reasoning_plan: str = "",
+    temperature: float = 0.7,
 ) -> CoordinationResult:
     """
     Execute agent plan. Return CoordinationResult to orchestrator.
@@ -175,12 +187,15 @@ async def coordinate(
     """
 
     # ── primary agent ─────────────────────────────────────────────────────────
-    primary_result = await _run_agent(plan.primary, messages)
+    primary_result = await _run_agent(plan.primary, messages, temperature)
 
     # ── consensus path (ALLOW only) ───────────────────────────────────────────
     if plan.use_consensus:
         if plan.parallel_validators:
-            tasks = [_run_agent(vt, messages) for vt in plan.parallel_validators]
+            tasks = [
+                _run_agent(vt, messages, temperature)
+                for vt in plan.parallel_validators
+            ]
             validator_results: list[AgentResult] = await asyncio.gather(*tasks)
         else:
             validator_results = []
@@ -220,11 +235,10 @@ async def coordinate(
 
     # ── primary succeeded (non-consensus path) ────────────────────────────────
     if _agent_succeeded(primary_result):
-        # safety_agent: mandatory on HEAVY_REQUIRED, skipped on DEGRADED
-        # plan.use_consensus=False covers both HEAVY and DEGRADED —
-        # distinguish by checking if fallback is FAST-only (DEGRADED has no validators)
-        if plan.parallel_validators == [] and plan.fallback is not None:
-            # HEAVY path: safety_agent mandatory
+        # HEAVY path: safety_agent mandatory
+        # DEGRADED path: safety_agent skipped (no parallel_validators, fallback is FAST==primary)
+        is_heavy = not plan.use_consensus and plan.parallel_validators == [] and plan.fallback != plan.primary
+        if is_heavy:
             safety = safety_check(SafetyInput(
                 reasoning_plan=reasoning_plan,
                 draft_response=primary_result.text,
@@ -253,7 +267,7 @@ async def coordinate(
 
     if plan.fallback is not None and plan.fallback != plan.primary:
         logger.info("Trying fallback agent", extra={"agent": plan.fallback})
-        fallback_result = await _run_agent(plan.fallback, messages)
+        fallback_result = await _run_agent(plan.fallback, messages, temperature)
 
         if _agent_succeeded(fallback_result):
             logger.info("Fallback agent succeeded")
