@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 
 from contracts.shared_types import Complexity, EPKDecision, Tier
@@ -9,6 +11,12 @@ logger = logging.getLogger(__name__)
 
 def _estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
+
+
+def _estimate_history_tokens(history: list[dict] | None) -> int:
+    if not history:
+        return 0
+    return sum(_estimate_tokens(t.get("content", "")) for t in history)
 
 
 def _classify_complexity(text: str) -> Complexity:
@@ -31,7 +39,7 @@ async def handle_message(
     user_id: int,
     user_balance: float,
     lang: str = "en",
-    supabase=None,          # injected from webhook
+    supabase=None,
 ) -> OrchestratorResult:
     text = extract_text(update)
 
@@ -56,10 +64,9 @@ async def handle_message(
             lang=lang,
         )
 
-    input_tokens = _estimate_tokens(text)
     complexity = _classify_complexity(text)
 
-    # ── load conversation history ─────────────────────────
+    # ── load conversation history ─────────────────────────────────────────────
     conversation_history: list[dict] | None = None
     history_store = None
 
@@ -76,11 +83,18 @@ async def handle_message(
             logger.error("History load failed", extra={"error": str(exc)})
             conversation_history = None
 
+    # ── token estimation (message + history) ──────────────────────────────────
+    message_tokens  = _estimate_tokens(text)
+    history_tokens  = _estimate_history_tokens(conversation_history)
+    input_tokens    = message_tokens + history_tokens
+
     logger.info("Handling message", extra={
-        "user_id": user_id,
-        "input_tokens": input_tokens,
-        "complexity": complexity,
-        "lang": lang,
+        "user_id":        user_id,
+        "input_tokens":   input_tokens,
+        "message_tokens": message_tokens,
+        "history_tokens": history_tokens,
+        "complexity":     complexity,
+        "lang":           lang,
     })
 
     request = OrchestratorRequest(
@@ -94,7 +108,7 @@ async def handle_message(
 
     result = await run(request)
 
-    # ── save turns to history ─────────────────────────────
+    # ── save turns to history ─────────────────────────────────────────────────
     if history_store is not None and not result.denied:
         try:
             await history_store.append(user_id, "user", text)
