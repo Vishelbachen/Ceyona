@@ -1,8 +1,10 @@
+from __future__ import annotations
+
 import logging
 from dataclasses import dataclass
 
-from llm.fallback_handler import complete_with_fallback
 from contracts.shared_types import Tier
+from llm.fallback_handler import complete_with_fallback
 
 logger = logging.getLogger(__name__)
 
@@ -11,13 +13,13 @@ logger = logging.getLogger(__name__)
 class AgentResult:
     text: str
     model: str
-    input_tokens: int
+input_tokens: int
     output_tokens: int
     success: bool
     error: str = ""
 
 
-async def run(messages: list[dict]) -> AgentResult:
+async def run(messages: list[dict], temperature: float = 0.7) -> AgentResult:
     """
     Deep agent — HEAVY tier, multi-step reasoning.
     Used for: code, analysis, math, complex questions.
@@ -26,6 +28,7 @@ async def run(messages: list[dict]) -> AgentResult:
         response = await complete_with_fallback(
             tier=Tier.HEAVY,
             messages=messages,
+            temperature=temperature,
         )
         return AgentResult(
             text=response.text,
