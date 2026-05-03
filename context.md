@@ -1025,8 +1025,11 @@ def verify_webhook_secret(token: str, expected: str) -> bool:
 from dataclasses import dataclass
 from contracts.shared_types import EPKDecision
 
-_DENY_THRESHOLD: float = 0.001    # меньше $0.001 → DENY
-_DEGRADE_THRESHOLD: float = 0.30  # больше $0.30 → DEGRADE
+# ─── THRESHOLDS ───────────────────────────────────────────────────────────────
+
+_DENY_THRESHOLD:    float = 0.001   # balance ≤ 0 or cost > balance → DENY
+_HEAVY_THRESHOLD:   float = 0.30    # cost > 0.30 AND balance sufficient → HEAVY_REQUIRED
+_DEGRADE_THRESHOLD: float = 0.10    # cost > 0.10 AND balance sufficient → DEGRADED_MODE
 
 
 @dataclass(frozen=True)
@@ -1042,29 +1045,41 @@ class EPKOutput:
 
 
 def evaluate(epk_input: EPKInput) -> EPKOutput:
-    cost = epk_input.estimated_cost
+    """
+    SOLE POLICY AUTHORITY.
+    OUTPUT: ALLOW | DENY | DEGRADED_MODE | HEAVY_REQUIRED
+
+    Rules (evaluated in order):
+      1. balance ≤ 0 or cost > balance → DENY
+      2. cost > HEAVY_THRESHOLD        → HEAVY_REQUIRED
+      3. cost > DEGRADE_THRESHOLD      → DEGRADED_MODE
+      4. otherwise                     → ALLOW
+    """
+    cost    = epk_input.estimated_cost
     balance = epk_input.user_balance
 
-    # нет баланса совсем
-    if balance <= 0 and cost > _DENY_THRESHOLD:
+    # ── 1. DENY ───────────────────────────────────────────────────────────────
+    if balance <= 0 or cost > balance:
         return EPKOutput(
             decision=EPKDecision.DENY,
             reason=f"Insufficient balance: need {cost:.6f}, have {balance:.6f}",
         )
 
-    # баланс есть но не хватает
-    if cost > balance:
+    # ── 2. HEAVY_REQUIRED ─────────────────────────────────────────────────────
+    if cost > _HEAVY_THRESHOLD:
         return EPKOutput(
-            decision=EPKDecision.DENY,
-            reason=f"Insufficient balance: need {cost:.6f}, have {balance:.6f}",
+            decision=EPKDecision.HEAVY_REQUIRED,
+            reason=f"Cost {cost:.6f} exceeds heavy threshold {_HEAVY_THRESHOLD}",
         )
 
+    # ── 3. DEGRADED_MODE ──────────────────────────────────────────────────────
     if cost > _DEGRADE_THRESHOLD:
         return EPKOutput(
-            decision=EPKDecision.DEGRADE,
+            decision=EPKDecision.DEGRADED_MODE,
             reason=f"Cost {cost:.6f} exceeds degrade threshold {_DEGRADE_THRESHOLD}",
         )
 
+    # ── 4. ALLOW ──────────────────────────────────────────────────────────────
     return EPKOutput(decision=EPKDecision.ALLOW, reason="OK")
 
 
@@ -1193,61 +1208,6 @@ def actual_cost(
 
 # core/kernel/policy_registry.py
 
-from dataclasses import dataclass
-from contracts.shared_types import Tier
-
-
-@dataclass(frozen=True)
-class TierPolicy:
-    max_input_tokens: int
-    max_output_tokens: int
-    timeout_seconds: float
-
-
-@dataclass(frozen=True)
-class PolicyRegistry:
-    # EPK thresholds
-    degrade_threshold_usd: float
-    deny_above_balance: bool
-
-    # Tier policies
-    tier_policies: dict[str, TierPolicy]
-
-    # Rate limiting (requests per minute per user)
-    rate_limit_rpm: int
-
-
-# ─── ACTIVE POLICY (v4.7) ────────────────────────────────────────────────────
-
-ACTIVE_POLICY = PolicyRegistry(
-    degrade_threshold_usd=0.30,
-    deny_above_balance=True,
-
-    tier_policies={
-        Tier.FAST: TierPolicy(
-            max_input_tokens=4_096,
-            max_output_tokens=300,
-            timeout_seconds=10.0,
-        ),
-        Tier.GENERAL: TierPolicy(
-            max_input_tokens=16_384,
-            max_output_tokens=1_200,
-            timeout_seconds=30.0,
-        ),
-        Tier.HEAVY: TierPolicy(
-            max_input_tokens=65_536,
-            max_output_tokens=3_000,
-            timeout_seconds=120.0,
-        ),
-    },
-
-    rate_limit_rpm=30,
-)
-
-
-
-# core/execution/orchestrator.py
-
 from __future__ import annotations
 
 import logging
@@ -1261,6 +1221,7 @@ from contracts.shared_types import Complexity, EPKDecision, Tier
 from core.kernel.cost_model import actual_cost, estimate_cost, estimate_output_tokens
 from core.kernel.decision_matrix import select_tier
 from core.kernel.execution_policy_kernel import EPKInput, evaluate
+from llm.heavy_input_shaper import ShaperInput, shape
 from llm.prompt_engine import PromptContext, build_messages
 
 logger = logging.getLogger(__name__)
@@ -1281,6 +1242,9 @@ class OrchestratorRequest:
     rerank_tokens: int = 0
     embedding_type: str = "large"
     lang: str = "en"
+    has_code_block: bool = False
+    has_json_shape: bool = False
+    context_size: int = 0
 
 
 @dataclass
@@ -1318,7 +1282,6 @@ def _denied_result(
     embedding_type: str = "large",
     epk_decision: EPKDecision = EPKDecision.DENY,
 ) -> OrchestratorResult:
-    """Build a denied OrchestratorResult with a localised message."""
     synthesis = synthesize(SynthesisInput(
         raw_text="",
         intent=None,
@@ -1362,34 +1325,14 @@ def _empty_usage(
     )
 
 
-# ─── INTENT ROUTING CONSTANTS ─────────────────────────────────────────────────
+# ─── TOOL RUNNER ──────────────────────────────────────────────────────────────
 
-# Intents that require at least GENERAL tier (code quality / accuracy matters)
-_HEAVY_INTENTS = {Intent.CODE, Intent.ANALYSIS, Intent.MATH}
-
-# Intents that use external tools and can skip LLM entirely on tool success
 _TOOL_INTENTS = {Intent.WEATHER, Intent.SEARCH}
 
 
-# ─── TOOL RUNNER ──────────────────────────────────────────────────────────────
-
 async def _run_tool(intent_result, lang: str) -> str | None:
-    """
-    Execute an external tool (weather / search).
-    Returns tool output string or None on failure.
-    Never raises.
-    """
     if not intent_result.requires_tools or not intent_result.tool_name:
         return None
-
-    logger.info(
-        "Tool dispatch",
-        extra={
-            "tool": intent_result.tool_name,
-            "params": intent_result.tool_params,
-        },
-    )
-
     try:
         from external.web_tools import run_tool
         result = await run_tool(
@@ -1397,41 +1340,267 @@ async def _run_tool(intent_result, lang: str) -> str | None:
             params=intent_result.tool_params,
             lang=lang,
         )
-        logger.info(
-            "Tool executed",
-            extra={"tool": intent_result.tool_name, "result_len": len(result) if result else 0},
-        )
+        logger.info("Tool executed", extra={
+            "tool": intent_result.tool_name,
+            "result_len": len(result) if result else 0,
+        })
         return result
     except Exception as exc:
-        logger.error(
-            "Tool execution failed",
-            extra={"tool": intent_result.tool_name, "error": str(exc)},
-            exc_info=True,
-        )
+        logger.error("Tool execution failed", extra={
+            "tool": intent_result.tool_name,
+            "error": str(exc),
+        }, exc_info=True)
         return None
+
+
+# ─── EXECUTION PATHS ──────────────────────────────────────────────────────────
+
+async def _run_allow(
+    request: OrchestratorRequest,
+    intent_result,
+    messages: list[dict],
+    tier: Tier,
+    epk_decision: EPKDecision,
+    lang: str,
+) -> OrchestratorResult:
+    """
+    ALLOW path: Fast → General → Agents → safety_agent → Consensus.
+    Orchestrator executes EPK signal only — no routing decisions.
+    """
+    plan = plan_agents(intent_result.intent, tier, select_strategy(intent_result.intent, tier))
+
+    coordination: CoordinationResult = await coordinate(
+        plan=plan,
+        messages=messages,
+        user_message=request.user_message,
+    )
+
+    if coordination.blocked:
+        return _denied_result(
+            reason=coordination.block_reason or "default_deny",
+            lang=lang,
+            tier=tier,
+            input_tokens=request.input_tokens,
+            embedding_tokens=request.embedding_tokens,
+            rerank_tokens=request.rerank_tokens,
+            embedding_type=request.embedding_type,
+            epk_decision=epk_decision,
+        )
+
+    cost = actual_cost(
+        input_tokens=coordination.input_tokens,
+        output_tokens=coordination.output_tokens,
+        embedding_tokens=request.embedding_tokens,
+        rerank_tokens=request.rerank_tokens,
+        tier=tier,
+        embedding_type=request.embedding_type,
+    )
+
+    synthesis = synthesize(SynthesisInput(
+        raw_text=coordination.text,
+        intent=intent_result.intent,
+        tier=tier,
+        lang=lang,
+    ))
+
+    return OrchestratorResult(
+        text=synthesis.text,
+        tier=tier,
+        model=coordination.model,
+        epk_decision=epk_decision,
+        usage=UsageRecord(
+            input_tokens=coordination.input_tokens,
+            output_tokens=coordination.output_tokens,
+            embedding_tokens=request.embedding_tokens,
+            rerank_tokens=request.rerank_tokens,
+            tier=tier,
+            embedding_type=request.embedding_type,
+            cost_usd=cost,
+        ),
+        lang=lang,
+    )
+
+
+async def _run_degraded(
+    request: OrchestratorRequest,
+    intent_result,
+    messages: list[dict],
+    epk_decision: EPKDecision,
+    lang: str,
+) -> OrchestratorResult:
+    """
+    DEGRADED_MODE path: Fast Tier only → Response Synthesizer directly.
+    Skips: Reasoning / Coordinator / General / Agents / safety_agent /
+           heavy_input_shaper / Heavy / Consensus.
+    """
+    tier = Tier.FAST
+
+    plan = plan_agents(intent_result.intent, tier, select_strategy(intent_result.intent, tier))
+
+    coordination: CoordinationResult = await coordinate(
+        plan=plan,
+        messages=messages,
+        user_message=request.user_message,
+    )
+
+    if coordination.blocked:
+        return _denied_result(
+            reason=coordination.block_reason or "default_deny",
+            lang=lang,
+            tier=tier,
+            input_tokens=request.input_tokens,
+            embedding_tokens=request.embedding_tokens,
+            rerank_tokens=request.rerank_tokens,
+            embedding_type=request.embedding_type,
+            epk_decision=epk_decision,
+        )
+
+    cost = actual_cost(
+        input_tokens=coordination.input_tokens,
+        output_tokens=coordination.output_tokens,
+        embedding_tokens=request.embedding_tokens,
+        rerank_tokens=request.rerank_tokens,
+        tier=tier,
+        embedding_type=request.embedding_type,
+    )
+
+    synthesis = synthesize(SynthesisInput(
+        raw_text=coordination.text,
+        intent=intent_result.intent,
+        tier=tier,
+        lang=lang,
+    ))
+
+    return OrchestratorResult(
+        text=synthesis.text,
+        tier=tier,
+        model=coordination.model,
+        epk_decision=epk_decision,
+        usage=UsageRecord(
+            input_tokens=coordination.input_tokens,
+            output_tokens=coordination.output_tokens,
+            embedding_tokens=request.embedding_tokens,
+            rerank_tokens=request.rerank_tokens,
+            tier=tier,
+            embedding_type=request.embedding_type,
+            cost_usd=cost,
+        ),
+        lang=lang,
+    )
+
+
+async def _run_heavy(
+    request: OrchestratorRequest,
+    intent_result,
+    messages: list[dict],
+    epk_decision: EPKDecision,
+    lang: str,
+) -> OrchestratorResult:
+    """
+    HEAVY_REQUIRED path:
+      Skip Fast, skip General.
+      heavy_input_shaper (ALWAYS called, self-gated).
+      Heavy Tier mandatory.
+      safety_agent mandatory.
+      Skip Consensus (mutex).
+      Response Synthesizer aggregates directly.
+    """
+    tier = Tier.HEAVY
+
+    # heavy_input_shaper: always called, self-gated internally
+    shaper_result = shape(ShaperInput(
+        text=request.user_message,
+        token_count=request.input_tokens,
+        has_code_block=request.has_code_block,
+        has_json_shape=request.has_json_shape,
+        context_size=request.context_size,
+    ))
+
+    if shaper_result.was_shaped:
+        logger.info("heavy_input_shaper shaped input", extra={
+            "operation": shaper_result.operation,
+        })
+
+    # Rebuild messages with shaped input if shaping occurred
+    if shaper_result.was_shaped:
+        retrieved_context = request.retrieved_context or ""
+        shaped_message = shaper_result.text
+        messages = build_messages(PromptContext(
+            user_message=shaped_message,
+            system_prompt=request.system_prompt or intent_result.system_prompt,
+            retrieved_context=retrieved_context,
+            conversation_history=request.conversation_history,
+        ))
+
+    strategy = select_strategy(intent_result.intent, tier)
+    plan = plan_agents(intent_result.intent, tier, strategy)
+
+    coordination: CoordinationResult = await coordinate(
+        plan=plan,
+        messages=messages,
+        user_message=request.user_message,
+    )
+
+    if coordination.blocked:
+        return _denied_result(
+            reason=coordination.block_reason or "default_deny",
+            lang=lang,
+            tier=tier,
+            input_tokens=request.input_tokens,
+            embedding_tokens=request.embedding_tokens,
+            rerank_tokens=request.rerank_tokens,
+            embedding_type=request.embedding_type,
+            epk_decision=epk_decision,
+        )
+
+    cost = actual_cost(
+        input_tokens=coordination.input_tokens,
+        output_tokens=coordination.output_tokens,
+        embedding_tokens=request.embedding_tokens,
+        rerank_tokens=request.rerank_tokens,
+        tier=tier,
+        embedding_type=request.embedding_type,
+    )
+
+    # Response Synthesizer aggregates Heavy Tier output directly
+    synthesis = synthesize(SynthesisInput(
+        raw_text=coordination.text,
+        intent=intent_result.intent,
+        tier=tier,
+        lang=lang,
+    ))
+
+    return OrchestratorResult(
+        text=synthesis.text,
+        tier=tier,
+        model=coordination.model,
+        epk_decision=epk_decision,
+        usage=UsageRecord(
+            input_tokens=coordination.input_tokens,
+            output_tokens=coordination.output_tokens,
+            embedding_tokens=request.embedding_tokens,
+            rerank_tokens=request.rerank_tokens,
+            tier=tier,
+            embedding_type=request.embedding_type,
+            cost_usd=cost,
+        ),
+        lang=lang,
+    )
 
 
 # ─── MAIN PIPELINE ────────────────────────────────────────────────────────────
 
 async def run(request: OrchestratorRequest) -> OrchestratorResult:
     """
-    Full execution pipeline. EPK signal execution only.
+    EPK signal execution only.
+    NO policy generation. NO routing decisions. NO Heavy Tier self-activation.
 
-    Steps:
-      1. Intent classification (language-aware)
-      2. Tool execution (weather / search) — if applicable
-      3. Estimate output tokens
-      4. Estimate cost
-      5. EPK decision (ALLOW / DENY / DEGRADE)
-      6. Tier selection
-      7. Reasoning strategy selection
-      8. Agent plan selection
-      9. Prompt construction
-      10. Agent coordination (with fallback)
-      11. Actual cost calculation
-      12. Response synthesis
-
-    On any unrecoverable failure: returns localised error, never empty text.
+    DAG:
+      Intent → Tool? → Estimate → EPK →
+        DENY           → exit
+        ALLOW          → _run_allow
+        DEGRADED_MODE  → _run_degraded
+        HEAVY_REQUIRED → _run_heavy
     """
     lang = request.lang or "en"
 
@@ -1444,27 +1613,26 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
     })
 
     try:
-        # ── step 1: intent (lang-aware) ───────────────────────────────────────
+        # ── intent classification (lang-aware) ────────────────────────────────
         intent_result = classify(request.user_message, lang=lang)
         logger.info("Intent", extra={
             "intent": intent_result.intent,
             "confidence": intent_result.confidence,
-            "requires_tools": intent_result.requires_tools,
         })
 
-        # ── step 2: tool execution ────────────────────────────────────────────
+        # ── tool execution ────────────────────────────────────────────────────
         tool_output: str | None = None
         if intent_result.requires_tools:
             tool_output = await _run_tool(intent_result, lang)
 
-        # ── step 3: estimate output tokens ────────────────────────────────────
+        # ── estimate output tokens ────────────────────────────────────────────
         estimated_output = estimate_output_tokens(
             request.input_tokens,
             request.complexity,
             Tier.GENERAL,
         )
 
-        # ── step 4: estimate cost ─────────────────────────────────────────────
+        # ── estimate cost ─────────────────────────────────────────────────────
         estimated = estimate_cost(
             input_tokens=request.input_tokens,
             estimated_output_tokens=estimated_output,
@@ -1474,7 +1642,7 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             embedding_type=request.embedding_type,
         )
 
-        # ── step 5: EPK ───────────────────────────────────────────────────────
+        # ── EPK: SOLE POLICY AUTHORITY ────────────────────────────────────────
         epk_out = evaluate(EPKInput(
             estimated_cost=estimated,
             user_balance=request.user_balance,
@@ -1483,7 +1651,6 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
         logger.info("EPK", extra={
             "decision": epk_out.decision,
             "estimated_cost": f"{estimated:.6f}",
-            "balance": request.user_balance,
         })
 
         if epk_out.decision == EPKDecision.DENY:
@@ -1497,42 +1664,12 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
                 epk_decision=EPKDecision.DENY,
             )
 
-        # ── step 6: tier selection ────────────────────────────────────────────
+        # ── tier selection (EPK → decision_matrix) ────────────────────────────
         tier = select_tier(estimated)
 
-        if epk_out.decision == EPKDecision.DENY:
-            # Already handled above — guard only
-            pass
-        elif epk_out.decision == EPKDecision.DEGRADE:
-            tier = Tier.FAST
-            logger.info("EPK DEGRADE → FAST tier")
-        elif intent_result.intent in _HEAVY_INTENTS and tier == Tier.FAST:
-            # Code / Math / Analysis always get at least GENERAL for quality
-            tier = Tier.GENERAL
-            logger.info(
-                "Intent upgrade FAST → GENERAL",
-                extra={"intent": intent_result.intent},
-            )
-
-        # ── step 7: reasoning strategy ────────────────────────────────────────
-        strategy = select_strategy(intent_result.intent, tier)
-
-        # ── step 8: agent plan ────────────────────────────────────────────────
-        plan = plan_agents(intent_result.intent, tier, strategy)
-
-        # ── step 9: prompt construction ───────────────────────────────────────
-        # Inject tool output into context if available
-        retrieved_context = request.retrieved_context or ""
-        if tool_output:
-            retrieved_context = (
-                f"{tool_output}\n\n{retrieved_context}".strip()
-                if retrieved_context
-                else tool_output
-            )
-
-        # Tool-only intents: skip LLM entirely when tool succeeded
+        # ── tool-only path (skip LLM entirely) ───────────────────────────────
         if intent_result.intent in _TOOL_INTENTS and tool_output:
-            logger.info("Tool-only path — skipping LLM", extra={"intent": intent_result.intent})
+            logger.info("Tool-only path", extra={"intent": intent_result.intent})
             synthesis = synthesize(SynthesisInput(
                 raw_text=tool_output,
                 intent=intent_result.intent,
@@ -1548,8 +1685,16 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
                 lang=lang,
             )
 
-        # Use the language-aware system prompt from intent_engine
-        system_prompt = request.system_prompt or intent_result.system_prompt
+        # ── prompt construction ───────────────────────────────────────────────
+        retrieved_context = request.retrieved_context or ""
+        if tool_output:
+            retrieved_context = (
+                f"{tool_output}\n\n{retrieved_context}".strip()
+                if retrieved_context
+                else tool_output
+            )
+
+        strategy = select_strategy(intent_result.intent, tier)
 
         user_message_for_prompt = (
             f"{strategy.instruction_prefix} {request.user_message}".strip()
@@ -1559,87 +1704,22 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
 
         messages = build_messages(PromptContext(
             user_message=user_message_for_prompt,
-            system_prompt=system_prompt,
+            system_prompt=request.system_prompt or intent_result.system_prompt,
             retrieved_context=retrieved_context,
             conversation_history=request.conversation_history,
         ))
 
-        logger.debug("Prompt built", extra={"message_count": len(messages)})
+        # ── EPK signal execution ──────────────────────────────────────────────
+        if epk_out.decision == EPKDecision.HEAVY_REQUIRED:
+            return await _run_heavy(request, intent_result, messages, epk_out.decision, lang)
 
-        # ── step 10: agent coordination ───────────────────────────────────────
-        coordination: CoordinationResult = await coordinate(
-            plan=plan,
-            messages=messages,
-            user_message=request.user_message,
-        )
+        if epk_out.decision == EPKDecision.DEGRADED_MODE:
+            return await _run_degraded(request, intent_result, messages, epk_out.decision, lang)
 
-        logger.info("Coordination", extra={
-            "blocked": coordination.blocked,
-            "block_reason": coordination.block_reason,
-            "text_len": len(coordination.text),
-            "model": coordination.model,
-        })
-
-        # Forward the actual block_reason from coordinator (not hardcoded)
-        if coordination.blocked:
-            block_reason = coordination.block_reason or "default_deny"
-            return _denied_result(
-                reason=block_reason,
-                lang=lang,
-                tier=tier,
-                input_tokens=request.input_tokens,
-                embedding_tokens=request.embedding_tokens,
-                rerank_tokens=request.rerank_tokens,
-                embedding_type=request.embedding_type,
-                epk_decision=epk_out.decision,
-            )
-
-        # ── step 11: actual cost ──────────────────────────────────────────────
-        cost = actual_cost(
-            input_tokens=coordination.input_tokens,
-            output_tokens=coordination.output_tokens,
-            embedding_tokens=request.embedding_tokens,
-            rerank_tokens=request.rerank_tokens,
-            tier=tier,
-            embedding_type=request.embedding_type,
-        )
-
-        usage = UsageRecord(
-            input_tokens=coordination.input_tokens,
-            output_tokens=coordination.output_tokens,
-            embedding_tokens=request.embedding_tokens,
-            rerank_tokens=request.rerank_tokens,
-            tier=tier,
-            embedding_type=request.embedding_type,
-            cost_usd=cost,
-        )
-
-        # ── step 12: synthesis (final output authority) ───────────────────────
-        synthesis = synthesize(SynthesisInput(
-            raw_text=coordination.text,
-            intent=intent_result.intent,
-            tier=tier,
-            lang=lang,
-        ))
-
-        logger.info("Orchestrator complete", extra={
-            "tier": tier,
-            "model": coordination.model,
-            "cost_usd": f"{cost:.6f}",
-            "output_len": len(synthesis.text),
-        })
-
-        return OrchestratorResult(
-            text=synthesis.text,
-            tier=tier,
-            model=coordination.model,
-            epk_decision=epk_out.decision,
-            usage=usage,
-            lang=lang,
-        )
+        # ALLOW
+        return await _run_allow(request, intent_result, messages, tier, epk_out.decision, lang)
 
     except Exception as exc:
-        # Catch-all: orchestrator must never crash silently
         logger.error("Orchestrator crashed", extra={"error": str(exc)}, exc_info=True)
         synthesis = synthesize(SynthesisInput(
             raw_text="",
@@ -1660,7 +1740,6 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             lang=lang,
         )
 
-           
 
 
 
@@ -4638,28 +4717,90 @@ hf_client = HFClient()
 
 # llm/model_router.py
 
+from __future__ import annotations
+
 from contracts.shared_types import Tier
 
-_TIER_MODEL_MAP: dict[str, str] = {
+# ─── MODEL REGISTRY ───────────────────────────────────────────────────────────
+# Source of truth for all model assignments per tier.
+# Matches SSoT v6.3 exactly.
+
+# Primary model per tier — used by default in all agent calls
+_PRIMARY: dict[Tier, str] = {
     Tier.FAST:    "llama-3.1-8b-instant",
-    Tier.GENERAL: "llama-3.3-70b-versatile",   # умная модель
-    Tier.HEAVY:   "llama-3.3-70b-versatile",
+    Tier.GENERAL: "llama-3.3-70b-versatile",
+    Tier.HEAVY:   "openai/gpt-oss-120b",
 }
 
-_TIER_MAX_TOKENS: dict[str, int] = {
-    Tier.FAST:    512,     # подняли с 300
-    Tier.GENERAL: 2048,    # подняли с 1200
-    Tier.HEAVY:   4096,    # подняли с 3000
+# All models available per tier (primary first)
+_TIER_MODELS: dict[Tier, list[str]] = {
+    Tier.FAST: [
+        "llama-3.1-8b-instant",
+    ],
+    Tier.GENERAL: [
+        "llama-3.3-70b-versatile",   # primary: reasoning + creative
+        "qwen/qwen3-32b",            # structured logic / formatting (thinking: False enforced)
+        "openai/gpt-oss-20b",        # constraint-aware general inference
+    ],
+    Tier.HEAVY: [
+        "openai/gpt-oss-120b",               # primary: deep multi-step reasoning + consensus arbiter
+        "llama-4-scout-17b-16e-instruct",    # long-context transformation (512K)
+    ],
 }
 
+# Max output tokens per tier
+_MAX_TOKENS: dict[Tier, int] = {
+    Tier.FAST:    512,
+    Tier.GENERAL: 2048,
+    Tier.HEAVY:   4096,
+}
+
+# Special-purpose model assignments (not tiers — utility roles)
+# heavy_input_shaper uses llama-3.1-8b-instant NOT as Fast Tier
+SHAPER_MODEL    = "llama-3.1-8b-instant"
+
+# Consensus arbiter — only active when Heavy Tier is NOT active (mutex)
+CONSENSUS_MODEL = "openai/gpt-oss-120b"
+
+# Multilingual normalization
+MULTILINGUAL_ARABIC_MODEL = "allam-2-7b"
+MULTILINGUAL_OTHER_MODEL  = "llama-3.3-70b-versatile"
+
+# Long-context specialist (Heavy Tier secondary)
+LONG_CONTEXT_MODEL = "llama-4-scout-17b-16e-instruct"
+
+# qwen must always have thinking disabled
+QWEN_THINKING_DISABLED_MODELS: frozenset[str] = frozenset({"qwen/qwen3-32b"})
+
+
+# ─── PUBLIC API ───────────────────────────────────────────────────────────────
 
 def route_model(tier: Tier) -> str:
-    return _TIER_MODEL_MAP[tier]
+    """Return the primary model for the given tier."""
+    return _PRIMARY[tier]
 
 
 def route_max_tokens(tier: Tier) -> int:
-    return _TIER_MAX_TOKENS[tier]
+    """Return the max output tokens for the given tier."""
+    return _MAX_TOKENS[tier]
 
+
+def get_tier_models(tier: Tier) -> list[str]:
+    """
+    Return all models available for the given tier (primary first).
+    Used by agents that need fallback within the same tier.
+    """
+    return list(_TIER_MODELS[tier])
+
+
+def requires_thinking_disabled(model: str) -> bool:
+    """
+    Return True if the model must have thinking mode explicitly disabled.
+    Applies to qwen/qwen3-32b — thinking: False must be enforced at call site.
+    """
+    return model in QWEN_THINKING_DISABLED_MODELS
+
+    
 
 
 # llm/prompt_engine.py
@@ -6321,22 +6462,23 @@ from enum import Enum
 
 
 class Tier(str, Enum):
-    FAST = "FAST"
+    FAST    = "FAST"
     GENERAL = "GENERAL"
-    HEAVY = "HEAVY"
+    HEAVY   = "HEAVY"
 
 
 class Complexity(str, Enum):
-    LOW = "LOW"
-    MEDIUM = "MEDIUM"
-    HIGH = "HIGH"
+    LOW      = "LOW"
+    MEDIUM   = "MEDIUM"
+    HIGH     = "HIGH"
     CRITICAL = "CRITICAL"
 
 
 class EPKDecision(str, Enum):
-    ALLOW = "ALLOW"
-    DENY = "DENY"
-    DEGRADE = "DEGRADE"
+    ALLOW          = "ALLOW"
+    DENY           = "DENY"
+    DEGRADED_MODE  = "DEGRADED_MODE"
+    HEAVY_REQUIRED = "HEAVY_REQUIRED"
 
 
 
