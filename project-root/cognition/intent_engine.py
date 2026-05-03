@@ -33,13 +33,6 @@ class IntentResult:
 
 
 # ─── LANGUAGE INSTRUCTION ─────────────────────────────────────────────────────
-#
-# This is the core of multilingual support.
-# The LLM receives the user's detected language code and is instructed
-# to respond in that exact language — regardless of the system prompt language.
-#
-# We keep system prompts in English (LLMs understand them best),
-# but prepend a hard language directive that the model must follow.
 
 _LANG_NAMES: dict[str, str] = {
     "ru": "Russian",
@@ -80,15 +73,15 @@ _LANG_NAMES: dict[str, str] = {
     "az": "Azerbaijani",
     "kk": "Kazakh",
     "uz": "Uzbek",
+    "ka": "Georgian",
+    "hy": "Armenian",
+    "mn": "Mongolian",
+    "sw": "Swahili",
+    "am": "Amharic",
 }
 
 
 def _lang_directive(lang: str) -> str:
-    """
-    Build a hard language instruction prepended to every system prompt.
-    The LLM must reply in the user's detected language.
-    Falls back to 'the same language the user wrote in' if lang unknown.
-    """
     lang_name = _LANG_NAMES.get(lang)
     if lang_name:
         return (
@@ -96,14 +89,13 @@ def _lang_directive(lang: str) -> str:
             f"You MUST reply exclusively in {lang_name}. "
             "Never switch languages. Never reply in English unless the user wrote in English.\n\n"
         )
-    # Unknown language code — instruct model to mirror the input language
     return (
         "IMPORTANT: Detect the language of the user's message and reply "
         "exclusively in that same language. Never switch languages.\n\n"
     )
 
 
-# ─── BASE SYSTEM PROMPTS (English — model-facing) ─────────────────────────────
+# ─── BASE SYSTEM PROMPTS ──────────────────────────────────────────────────────
 
 _BASE_PROMPTS: dict[Intent, str] = {
     Intent.QUESTION: (
@@ -163,32 +155,22 @@ _BASE_PROMPTS: dict[Intent, str] = {
 
 
 def build_system_prompt(intent: Intent, lang: str) -> str:
-    """
-    Combine language directive + base prompt.
-    This is the only function that constructs system prompts.
-    """
     directive = _lang_directive(lang)
     base = _BASE_PROMPTS[intent]
     return directive + base
 
 
 # ─── SIGNAL TABLES ────────────────────────────────────────────────────────────
-# Ordered by specificity. Each tuple is (signal_string, case_sensitive).
-# All signals are lowercase-matched unless noted.
 
 _CODE_SIGNALS: tuple[str, ...] = (
-    # universal symbols
     "```", "def ", "class ", "import ", "return ", "function ",
     "var ", "const ", "let ", "print(", "console.log", "#!/",
-    # English
     "write code", "write a script", "write a function", "write a program",
     "fix this code", "fix the code", "fix my code", "refactor",
     "debug this", "debug the", "implement", "unit test",
-    # Russian
     "напиши код", "напиши скрипт", "напиши функцию", "напиши программу",
     "исправь код", "почини код", "отрефактори", "реализуй",
     "дебаг", "отладь",
-    # German / French / Spanish
     "schreib code", "code écrire", "escribe código",
 )
 
@@ -237,14 +219,52 @@ _GREETING_SIGNALS: tuple[str, ...] = (
     "доброе утро", "спасибо", "пока", "до свидания", "salut", "bonjour",
     "hola", "gracias", "ciao", "danke", "merci", "naber", "merhaba",
     "こんにちは", "안녕", "你好", "سلام", "مرحبا",
+    # Georgian
+    "გამარჯობა", "მადლობა", "ნახვამდის",
+    # Armenian
+    "բարև", "շնորհակալություն",
 )
 
 _WEATHER_SIGNALS: tuple[str, ...] = (
+    # English
     "weather", "forecast", "temperature", "rain", "snow", "sunny",
     "cloudy", "humidity", "wind", "storm", "celsius", "fahrenheit",
+    # Russian
     "погода", "прогноз погоды", "температура", "дождь", "снег",
-    "облачно", "ветер", "жарко", "холодно", "тепло",
-    "hava", "météo", "wetter", "clima", "meteo", "vremya",
+    "облачно", "ветер", "жарко", "холодно", "тепло", "прогноз",
+    # European
+    "météo", "wetter", "clima", "meteo", "weer", "väder",
+    "vädret", "vejr", "sää", "idő", "počasí", "vreme",
+    # Turkish
+    "hava durumu", "yağmur", "kar yağıyor",
+    # Arabic
+    "طقس", "الطقس", "حرارة", "مطر", "ثلج",
+    # Chinese
+    "天气", "温度", "下雨", "下雪", "天氣",
+    # Japanese
+    "天気", "気温", "雨", "雪", "晴れ",
+    # Korean
+    "날씨", "기온", "비", "눈",
+    # Hindi
+    "मौसम", "तापमान", "बारिश", "बर्फ",
+    # Georgian
+    "ამინდი", "ტემპერატურა", "წვიმა", "თოვლი", "ქარი",
+    # Armenian
+    "եղանակ", "ջերմաստիճան", "անձրև",
+    # Azerbaijani
+    "yağış", "qar", "külək",
+    # Kazakh
+    "ауа райы", "жаңбыр", "қар",
+    # Uzbek
+    "ob-havo", "yomg'ir", "qor",
+    # Hebrew
+    "מזג אוויר", "גשם", "שלג",
+    # Vietnamese
+    "thời tiết", "nhiệt độ", "mưa",
+    # Thai
+    "อากาศ", "ฝน", "หิมะ",
+    # Indonesian / Malay
+    "cuaca", "hujan", "salju", "suhu",
 )
 
 _SEARCH_SIGNALS: tuple[str, ...] = (
@@ -258,17 +278,56 @@ _SEARCH_SIGNALS: tuple[str, ...] = (
 _QUESTION_ENDS: tuple[str, ...] = ("?", "؟", "？", "?")
 
 
-# ─── CITY EXTRACTOR (for weather) ────────────────────────────────────────────
+# ─── CITY EXTRACTOR ───────────────────────────────────────────────────────────
 
 _CITY_MARKERS: tuple[str, ...] = (
+    # English
     "weather in ", "forecast for ", "temperature in ", "in ",
+    # Russian
     "погода в ", "прогноз для ", "температура в ", "в ",
-    "wetter in ", "météo à ", "clima en ",
+    # European
+    "wetter in ", "météo à ", "clima en ", "weer in ",
+    "väder i ", "vädret i ", "vejr i ", "sää ",
+    # Turkish
+    "hava durumu ", "hava ",
+    # Arabic
+    "طقس في ", "في ",
+    # Chinese
+    "天气 ", "的天气",
+    # Japanese
+    "の天気", "天気 ",
+    # Korean
+    "날씨 ", "의 날씨",
+    # Hindi
+    "का मौसम", "में मौसम", "में ",
+    # Georgian — postposition -ში (in) attached to city name
+    # Georgian uses postpositions, city name comes before ამინდი
+    "ამინდი ", "ამინდია ",
+    # Armenian
+    "եղանակը ",
+    # Indonesian / Malay
+    "cuaca di ", "di ",
 )
 
 
 def _extract_city(text: str) -> str:
+    """
+    Extract city name from weather query.
+    Handles both prepositional (EN/RU) and postpositional (KA/HY) structures.
+    """
     lower = text.lower()
+
+    # Georgian special case: city name has suffix -ში (-shi = "in")
+    # e.g. "მოსკოვში" → "მოსკოვ" (strip -ში)
+    if "ში" in text:
+        words = text.split()
+        for word in words:
+            if word.endswith("ში") and len(word) > 3:
+                city = word[:-2].rstrip("?.!,")
+                if len(city) > 1:
+                    return city
+
+    # Standard marker-based extraction
     for marker in _CITY_MARKERS:
         idx = lower.find(marker)
         if idx != -1:
@@ -278,7 +337,8 @@ def _extract_city(text: str) -> str:
                 city = words[0].rstrip("?.!,")
                 if len(city) > 1:
                     return city
-    # fallback: last non-trivial word
+
+    # Fallback: last non-trivial word
     words = text.strip().rstrip("?.!,").split()
     candidates = [w for w in words if len(w) > 2]
     return candidates[-1] if candidates else ""
@@ -311,7 +371,7 @@ def classify(text: str, lang: str = "en") -> IntentResult:
             tool_params={"city": city, "lang": lang} if city else {"lang": lang},
         )
 
-    # ── code (check original text for backticks / indentation) ───────────────
+    # ── code ─────────────────────────────────────────────────────────────────
     if any(s in text for s in ("```", "    ")) or any(s in lower for s in _CODE_SIGNALS):
         return _make(
             intent=Intent.CODE,
@@ -323,7 +383,6 @@ def classify(text: str, lang: str = "en") -> IntentResult:
 
     # ── math ─────────────────────────────────────────────────────────────────
     if any(s in lower for s in _MATH_SIGNALS):
-        # avoid false-positives from "what is" in search context
         if not any(s in lower for s in _SEARCH_SIGNALS):
             return _make(
                 intent=Intent.MATH,
@@ -395,7 +454,7 @@ def classify(text: str, lang: str = "en") -> IntentResult:
             requires_tools=False,
         )
 
-    # ── unknown — always attempt to answer, never silently fail ──────────────
+    # ── unknown ───────────────────────────────────────────────────────────────
     return _make(
         intent=Intent.UNKNOWN,
         confidence=0.50,
