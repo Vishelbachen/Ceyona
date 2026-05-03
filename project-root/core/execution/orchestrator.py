@@ -1,3 +1,21 @@
+"""
+core/execution/orchestrator.py
+
+ROLE: EPK signal execution only. Orchestrates the full request pipeline
+      from intent → agents → synthesis. Returns OrchestratorResult.
+
+INVARIANTS:
+  - NO policy generation (EPK is the sole policy authority)
+  - NO routing decisions (routing is in plan_agents / model_router)
+  - NO Heavy Tier self-activation
+  - NO direct LLM calls
+  - Passes lang to classify() — language must propagate from entry to exit
+  - On any failure: returns a meaningful localised error, NEVER empty text
+  - coordination.block_reason is forwarded to synthesizer — not hardcoded
+"""
+
+from __future__ import annotations
+
 import logging
 from dataclasses import dataclass
 
@@ -13,6 +31,8 @@ from llm.prompt_engine import PromptContext, build_messages
 
 logger = logging.getLogger(__name__)
 
+
+# ─── REQUEST / RESULT CONTRACTS ───────────────────────────────────────────────
 
 @dataclass
 class OrchestratorRequest:
@@ -52,6 +72,8 @@ class OrchestratorResult:
     lang: str = "en"
 
 
+# ─── INTERNAL HELPERS ─────────────────────────────────────────────────────────
+
 def _denied_result(
     reason: str,
     lang: str,
@@ -62,6 +84,7 @@ def _denied_result(
     embedding_type: str = "large",
     epk_decision: EPKDecision = EPKDecision.DENY,
 ) -> OrchestratorResult:
+    """Build a denied OrchestratorResult with a localised message."""
     synthesis = synthesize(SynthesisInput(
         raw_text="",
         intent=None,
@@ -90,19 +113,48 @@ def _denied_result(
     )
 
 
-# intents that always need GENERAL tier minimum
+def _empty_usage(
+    request: OrchestratorRequest,
+    tier: Tier = Tier.FAST,
+) -> UsageRecord:
+    return UsageRecord(
+        input_tokens=request.input_tokens,
+        output_tokens=0,
+        embedding_tokens=request.embedding_tokens,
+        rerank_tokens=request.rerank_tokens,
+        tier=tier,
+        embedding_type=request.embedding_type,
+        cost_usd=0.0,
+    )
+
+
+# ─── INTENT ROUTING CONSTANTS ─────────────────────────────────────────────────
+
+# Intents that require at least GENERAL tier (code quality / accuracy matters)
 _HEAVY_INTENTS = {Intent.CODE, Intent.ANALYSIS, Intent.MATH}
+
+# Intents that use external tools and can skip LLM entirely on tool success
 _TOOL_INTENTS = {Intent.WEATHER, Intent.SEARCH}
 
 
+# ─── TOOL RUNNER ──────────────────────────────────────────────────────────────
+
 async def _run_tool(intent_result, lang: str) -> str | None:
+    """
+    Execute an external tool (weather / search).
+    Returns tool output string or None on failure.
+    Never raises.
+    """
     if not intent_result.requires_tools or not intent_result.tool_name:
         return None
 
-    logger.error("TOOL DEBUG: name=%s params=%s requires_tools=%s",
-                 intent_result.tool_name,
-                 intent_result.tool_params,
-                 intent_result.requires_tools)
+    logger.info(
+        "Tool dispatch",
+        extra={
+            "tool": intent_result.tool_name,
+            "params": intent_result.tool_params,
+        },
+    )
 
     try:
         from external.web_tools import run_tool
@@ -111,53 +163,74 @@ async def _run_tool(intent_result, lang: str) -> str | None:
             params=intent_result.tool_params,
             lang=lang,
         )
-        logger.info("Tool executed OK", extra={
-            "tool": intent_result.tool_name,
-            "result": result[:100] if result else None,
-        })
+        logger.info(
+            "Tool executed",
+            extra={"tool": intent_result.tool_name, "result_len": len(result) if result else 0},
+        )
         return result
     except Exception as exc:
-        import traceback
-        logger.error("Tool execution failed FULL: %s\n%s",
-                     str(exc),
-                     traceback.format_exc())
+        logger.error(
+            "Tool execution failed",
+            extra={"tool": intent_result.tool_name, "error": str(exc)},
+            exc_info=True,
+        )
         return None
 
 
+# ─── MAIN PIPELINE ────────────────────────────────────────────────────────────
+
 async def run(request: OrchestratorRequest) -> OrchestratorResult:
+    """
+    Full execution pipeline. EPK signal execution only.
+
+    Steps:
+      1. Intent classification (language-aware)
+      2. Tool execution (weather / search) — if applicable
+      3. Estimate output tokens
+      4. Estimate cost
+      5. EPK decision (ALLOW / DENY / DEGRADE)
+      6. Tier selection
+      7. Reasoning strategy selection
+      8. Agent plan selection
+      9. Prompt construction
+      10. Agent coordination (with fallback)
+      11. Actual cost calculation
+      12. Response synthesis
+
+    On any unrecoverable failure: returns localised error, never empty text.
+    """
+    lang = request.lang or "en"
+
     logger.info("Orchestrator start", extra={
-        "user_message_len": len(request.user_message),
+        "message_len": len(request.user_message),
         "input_tokens": request.input_tokens,
         "complexity": request.complexity,
-        "lang": request.lang,
+        "lang": lang,
+        "balance": request.user_balance,
     })
 
     try:
-        # ── step 1: intent ────────────────────────────────
-        intent_result = classify(request.user_message)
-        logger.info("Intent classified", extra={
+        # ── step 1: intent (lang-aware) ───────────────────────────────────────
+        intent_result = classify(request.user_message, lang=lang)
+        logger.info("Intent", extra={
             "intent": intent_result.intent,
+            "confidence": intent_result.confidence,
             "requires_tools": intent_result.requires_tools,
-            "tool_name": intent_result.tool_name,
         })
 
-        # ── step 2: tool execution (weather/search) ───────
+        # ── step 2: tool execution ────────────────────────────────────────────
         tool_output: str | None = None
         if intent_result.requires_tools:
-            tool_output = await _run_tool(intent_result, request.lang)
-            logger.info("Tool output", extra={
-                "has_output": tool_output is not None,
-                "len": len(tool_output) if tool_output else 0,
-            })
+            tool_output = await _run_tool(intent_result, lang)
 
-        # ── step 3: estimate output tokens ───────────────
+        # ── step 3: estimate output tokens ────────────────────────────────────
         estimated_output = estimate_output_tokens(
             request.input_tokens,
             request.complexity,
             Tier.GENERAL,
         )
 
-        # ── step 4: estimate cost ─────────────────────────
+        # ── step 4: estimate cost ─────────────────────────────────────────────
         estimated = estimate_cost(
             input_tokens=request.input_tokens,
             estimated_output_tokens=estimated_output,
@@ -167,22 +240,22 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             embedding_type=request.embedding_type,
         )
 
-        # ── step 5: EPK ───────────────────────────────────
+        # ── step 5: EPK ───────────────────────────────────────────────────────
         epk_out = evaluate(EPKInput(
             estimated_cost=estimated,
             user_balance=request.user_balance,
         ))
 
-        logger.info("EPK decision", extra={
+        logger.info("EPK", extra={
             "decision": epk_out.decision,
-            "estimated_cost": estimated,
+            "estimated_cost": f"{estimated:.6f}",
             "balance": request.user_balance,
         })
 
         if epk_out.decision == EPKDecision.DENY:
             return _denied_result(
                 reason="insufficient_balance",
-                lang=request.lang,
+                lang=lang,
                 input_tokens=request.input_tokens,
                 embedding_tokens=request.embedding_tokens,
                 rerank_tokens=request.rerank_tokens,
@@ -190,29 +263,32 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
                 epk_decision=EPKDecision.DENY,
             )
 
-        # ── step 6: select tier ───────────────────────────
+        # ── step 6: tier selection ────────────────────────────────────────────
         tier = select_tier(estimated)
 
-        if epk_out.decision == EPKDecision.DEGRADE:
+        if epk_out.decision == EPKDecision.DENY:
+            # Already handled above — guard only
+            pass
+        elif epk_out.decision == EPKDecision.DEGRADE:
             tier = Tier.FAST
-            logger.info("EPK DEGRADE: forcing FAST tier")
-        elif intent_result.intent in _HEAVY_INTENTS:
-            # code/math/analysis always get at least GENERAL
-            if tier == Tier.FAST:
-                tier = Tier.GENERAL
-                logger.info("Intent upgrade: FAST → GENERAL", extra={
-                    "intent": intent_result.intent,
-                })
+            logger.info("EPK DEGRADE → FAST tier")
+        elif intent_result.intent in _HEAVY_INTENTS and tier == Tier.FAST:
+            # Code / Math / Analysis always get at least GENERAL for quality
+            tier = Tier.GENERAL
+            logger.info(
+                "Intent upgrade FAST → GENERAL",
+                extra={"intent": intent_result.intent},
+            )
 
-        # ── step 7: reasoning strategy ────────────────────
+        # ── step 7: reasoning strategy ────────────────────────────────────────
         strategy = select_strategy(intent_result.intent, tier)
 
-        # ── step 8: agent plan ────────────────────────────
+        # ── step 8: agent plan ────────────────────────────────────────────────
         plan = plan_agents(intent_result.intent, tier, strategy)
 
-        # ── step 9: build prompt ──────────────────────────
-        # inject tool output into context if available
-        retrieved_context = request.retrieved_context
+        # ── step 9: prompt construction ───────────────────────────────────────
+        # Inject tool output into context if available
+        retrieved_context = request.retrieved_context or ""
         if tool_output:
             retrieved_context = (
                 f"{tool_output}\n\n{retrieved_context}".strip()
@@ -220,61 +296,62 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
                 else tool_output
             )
 
-        # for tool-only intents (weather/search) skip LLM if tool succeeded
+        # Tool-only intents: skip LLM entirely when tool succeeded
         if intent_result.intent in _TOOL_INTENTS and tool_output:
-            logger.info("Tool-only response, skipping LLM")
+            logger.info("Tool-only path — skipping LLM", extra={"intent": intent_result.intent})
             synthesis = synthesize(SynthesisInput(
                 raw_text=tool_output,
                 intent=intent_result.intent,
                 tier=tier,
-                lang=request.lang,
+                lang=lang,
             ))
             return OrchestratorResult(
                 text=synthesis.text,
                 tier=tier,
                 model="tool",
                 epk_decision=epk_out.decision,
-                usage=UsageRecord(
-                    input_tokens=request.input_tokens,
-                    output_tokens=0,
-                    embedding_tokens=request.embedding_tokens,
-                    rerank_tokens=request.rerank_tokens,
-                    tier=tier,
-                    embedding_type=request.embedding_type,
-                    cost_usd=0.0,
-                ),
-                lang=request.lang,
+                usage=_empty_usage(request, tier),
+                lang=lang,
             )
 
+        # Use the language-aware system prompt from intent_engine
+        system_prompt = request.system_prompt or intent_result.system_prompt
+
+        user_message_for_prompt = (
+            f"{strategy.instruction_prefix} {request.user_message}".strip()
+            if strategy.instruction_prefix
+            else request.user_message
+        )
+
         messages = build_messages(PromptContext(
-            user_message=(
-                f"{strategy.instruction_prefix} {request.user_message}".strip()
-                if strategy.instruction_prefix
-                else request.user_message
-            ),
-            system_prompt=request.system_prompt or intent_result.system_prompt,
+            user_message=user_message_for_prompt,
+            system_prompt=system_prompt,
             retrieved_context=retrieved_context,
             conversation_history=request.conversation_history,
         ))
 
-        logger.info("Messages built", extra={"message_count": len(messages)})
+        logger.debug("Prompt built", extra={"message_count": len(messages)})
 
-        # ── step 10: agent execution ──────────────────────
+        # ── step 10: agent coordination ───────────────────────────────────────
         coordination: CoordinationResult = await coordinate(
             plan=plan,
             messages=messages,
             user_message=request.user_message,
         )
 
-        logger.info("Coordination done", extra={
+        logger.info("Coordination", extra={
             "blocked": coordination.blocked,
+            "block_reason": coordination.block_reason,
             "text_len": len(coordination.text),
+            "model": coordination.model,
         })
 
+        # Forward the actual block_reason from coordinator (not hardcoded)
         if coordination.blocked:
+            block_reason = coordination.block_reason or "default_deny"
             return _denied_result(
-                reason="default_deny",
-                lang=request.lang,
+                reason=block_reason,
+                lang=lang,
                 tier=tier,
                 input_tokens=request.input_tokens,
                 embedding_tokens=request.embedding_tokens,
@@ -283,7 +360,7 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
                 epk_decision=epk_out.decision,
             )
 
-        # ── step 11: actual cost ──────────────────────────
+        # ── step 11: actual cost ──────────────────────────────────────────────
         cost = actual_cost(
             input_tokens=coordination.input_tokens,
             output_tokens=coordination.output_tokens,
@@ -303,19 +380,19 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             cost_usd=cost,
         )
 
-        # ── step 12: synthesize ───────────────────────────
+        # ── step 12: synthesis (final output authority) ───────────────────────
         synthesis = synthesize(SynthesisInput(
             raw_text=coordination.text,
             intent=intent_result.intent,
             tier=tier,
-            lang=request.lang,
+            lang=lang,
         ))
 
         logger.info("Orchestrator complete", extra={
             "tier": tier,
             "model": coordination.model,
-            "cost_usd": cost,
-            "output_tokens": coordination.output_tokens,
+            "cost_usd": f"{cost:.6f}",
+            "output_len": len(synthesis.text),
         })
 
         return OrchestratorResult(
@@ -324,10 +401,11 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             model=coordination.model,
             epk_decision=epk_out.decision,
             usage=usage,
-            lang=request.lang,
+            lang=lang,
         )
 
     except Exception as exc:
+        # Catch-all: orchestrator must never crash silently
         logger.error("Orchestrator crashed", extra={"error": str(exc)}, exc_info=True)
         synthesis = synthesize(SynthesisInput(
             raw_text="",
@@ -335,23 +413,15 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             tier=Tier.FAST,
             denied=True,
             deny_reason="default_deny",
-            lang=request.lang,
+            lang=lang,
         ))
         return OrchestratorResult(
             text=synthesis.text,
             tier=Tier.FAST,
             model="",
             epk_decision=EPKDecision.DENY,
-            usage=UsageRecord(
-                input_tokens=request.input_tokens,
-                output_tokens=0,
-                embedding_tokens=request.embedding_tokens,
-                rerank_tokens=request.rerank_tokens,
-                tier=Tier.FAST,
-                embedding_type=request.embedding_type,
-                cost_usd=0.0,
-            ),
+            usage=_empty_usage(request),
             denied=True,
             deny_reason="internal_error",
-            lang=request.lang,
+            lang=lang,
         )
