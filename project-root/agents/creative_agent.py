@@ -9,7 +9,7 @@ from llm.fallback_handler import complete_with_fallback
 logger = logging.getLogger(__name__)
 
 
-async def run(messages: list[dict]) -> AgentResult:
+async def run(messages: list[dict], temperature: float = 0.9) -> AgentResult:
     """
     Creative agent — GENERAL tier, high temperature for creativity.
     Used for: creative writing, storytelling, poetry.
@@ -19,7 +19,7 @@ async def run(messages: list[dict]) -> AgentResult:
         response = await complete_with_fallback(
             tier=Tier.GENERAL,
             messages=messages,
-            temperature=0.9,
+            temperature=temperature,
         )
         return AgentResult(
             text=response.text,
