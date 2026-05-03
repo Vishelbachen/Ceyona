@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 from dataclasses import dataclass
 
@@ -5,14 +7,43 @@ from supabase import Client
 
 logger = logging.getLogger(__name__)
 
-_TABLE = "conversation_history"   # ← исправлено
+_TABLE = "conversation_history"
 _MAX_HISTORY = 20
+
+# Safe token budget for history — leaves room for system prompt + user message + output
+# llama-3.1-8b-instant TPM limit: 6000
+# Budget: 6000 - 512 (max output) - 500 (system prompt) - 200 (user message) = ~4800
+_MAX_HISTORY_TOKENS = 4800
 
 
 @dataclass
 class ConversationTurn:
     role: str
     content: str
+
+
+def _estimate_tokens(text: str) -> int:
+    return max(1, len(text) // 4)
+
+
+def _trim_history_to_budget(
+    turns: list[dict],
+    token_budget: int = _MAX_HISTORY_TOKENS,
+) -> list[dict]:
+    """
+    Trim history from the oldest end to fit within token budget.
+    Always keeps the most recent turns.
+    """
+    total = sum(_estimate_tokens(t["content"]) for t in turns)
+    if total <= token_budget:
+        return turns
+
+    # Drop oldest turns until we fit
+    while turns and total > token_budget:
+        dropped = turns.pop(0)
+        total -= _estimate_tokens(dropped["content"])
+
+    return turns
 
 
 class ConversationHistory:
@@ -22,7 +53,7 @@ class ConversationHistory:
     async def append(self, user_id: int, role: str, content: str) -> bool:
         try:
             self._db.table(_TABLE).insert({
-                "user_id": str(user_id),  # text в БД
+                "user_id": str(user_id),
                 "role": role,
                 "content": content,
             }).execute()
@@ -42,14 +73,22 @@ class ConversationHistory:
             result = (
                 self._db.table(_TABLE)
                 .select("role, content, created_at")
-                .eq("user_id", str(user_id))  # text в БД
+                .eq("user_id", str(user_id))
                 .order("created_at", desc=True)
                 .limit(limit)
                 .execute()
             )
             rows = result.data or []
             rows.reverse()
-            return [{"role": r["role"], "content": r["content"]} for r in rows]
+            turns = [{"role": r["role"], "content": r["content"]} for r in rows]
+            trimmed = _trim_history_to_budget(turns)
+            if len(trimmed) < len(turns):
+                logger.info("History trimmed", extra={
+                    "user_id": user_id,
+                    "original": len(turns),
+                    "trimmed": len(trimmed),
+                })
+            return trimmed
         except Exception as exc:
             logger.error("ConversationHistory.get_history failed", extra={
                 "user_id": user_id, "error": str(exc),
