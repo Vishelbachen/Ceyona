@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 from groq import AsyncGroq
@@ -23,12 +25,14 @@ class GroqClient:
         messages: list[dict],
         max_tokens: int = 1200,
         temperature: float = 0.7,
+        **extra_params,
     ) -> LLMResponse:
         response = await self._client.chat.completions.create(
             model=model,
             messages=messages,
             max_tokens=max_tokens,
             temperature=temperature,
+            **extra_params,
         )
 
         choice = response.choices[0]
