@@ -1,25 +1,3 @@
-"""
-meta/analysis.py
-
-ROLE: Pre-reasoning DAG step. Runs automatically BEFORE intent_engine.
-      Produces non-binding structural hints about the incoming message.
-
-POSITION IN DAG:
-  Memory Retrieval → Embedding → Reranker → [analysis.py] → intent_engine
-
-INVARIANTS:
-  - NOT called by Orchestrator directly — automatic pipeline step
-  - Output = hints only (zero authority, non-binding)
-  - NEVER affects EPK
-  - NEVER makes routing or policy decisions
-  - NEVER calls LLM
-  - ACTIVE on ALLOW / HEAVY_REQUIRED → full mode
-  - ACTIVE on DEGRADED_MODE       → lightweight mode
-  - SKIP on DENY                  → call skipped entirely
-
-  META ≠ COGNITION: this file observes structure, does not reason about meaning.
-"""
-
 from __future__ import annotations
 
 import re
