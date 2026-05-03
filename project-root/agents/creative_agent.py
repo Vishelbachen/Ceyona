@@ -1,33 +1,24 @@
-import logging
-from dataclasses import dataclass
+from __future__ import annotations
 
-from llm.groq_client import groq_client
-from llm.model_router import route_model, route_max_tokens
+import logging
+
+from agents.fast_agent import AgentResult
 from contracts.shared_types import Tier
+from llm.fallback_handler import complete_with_fallback
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(frozen=True)
-class AgentResult:
-    text: str
-    model: str
-    input_tokens: int
-    output_tokens: int
-    success: bool
-    error: str = ""
 
 
 async def run(messages: list[dict]) -> AgentResult:
     """
     Creative agent — GENERAL tier, high temperature for creativity.
     Used for: creative writing, storytelling, poetry.
+    Resilient across all GENERAL tier models via fallback_handler.
     """
     try:
-        response = await groq_client.complete(
-            model=route_model(Tier.GENERAL),
+        response = await complete_with_fallback(
+            tier=Tier.GENERAL,
             messages=messages,
-            max_tokens=route_max_tokens(Tier.GENERAL),
             temperature=0.9,
         )
         return AgentResult(
