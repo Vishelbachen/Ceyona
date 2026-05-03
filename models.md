@@ -689,4 +689,4 @@ safety_agent → deterministic cascade ❌
 heavy_input_shaper → self-gated utility ✅
 heavy_input_shaper → ONLY on HEAVY_REQUIRED ✅
 heavy_input_shaper → ALWAYS CALLED on HEAVY_REQUIRED ✅
-heavy_input_shaper → internal N
+heavy_input_shaper → internal 
