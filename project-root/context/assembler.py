@@ -10,9 +10,6 @@ logger = logging.getLogger(__name__)
 
 # Intents that MUST have grounded data — no context = block
 _STRICT_INTENTS = {
-    Intent.QUESTION,
-    Intent.ANALYSIS,
-    Intent.MATH,
     Intent.SEARCH,
     Intent.WEATHER,
     Intent.MAPS,
