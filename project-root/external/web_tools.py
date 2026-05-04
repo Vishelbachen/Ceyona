@@ -1,8 +1,10 @@
+from __future__ import annotations
+
 import logging
 
-from external.weather import weather_service
 from external.maps import maps_service
 from external.search import search_service
+from external.weather import weather_service
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +27,6 @@ async def run_tool(
             if not city:
                 logger.warning("Weather: empty city")
                 return None
-
             data = await weather_service.get_current(city=city, lang=lang)
             if not data:
                 logger.warning("Weather: no data", extra={"city": city})
@@ -36,7 +37,7 @@ async def run_tool(
             import re
             city = params.get("city", "")
             city = re.sub(r"[^\w\s\-]", "", city).strip()
-            cnt = int(params.get("cnt", 5))
+            cnt  = int(params.get("cnt", 5))
             if not city:
                 return None
             data = await weather_service.get_forecast(city=city, lang=lang, cnt=cnt)
@@ -45,27 +46,36 @@ async def run_tool(
             items = data.get("list", [])[:cnt]
             lines = []
             for item in items:
-                dt = item.get("dt_txt", "")
+                dt   = item.get("dt_txt", "")
                 temp = item.get("main", {}).get("temp", "?")
                 desc = ""
-                w = item.get("weather", [])
+                w    = item.get("weather", [])
                 if w:
                     desc = w[0].get("description", "")
                 lines.append(f"{dt}: {temp}°C, {desc}")
             return "\n".join(lines) if lines else None
 
-        elif tool_name == "geocode":
-            query = params.get("query", "")
+        elif tool_name == "maps":
+            query = params.get("query", "").strip()
             if not query:
                 return None
             feature = await maps_service.geocode(query=query, lang=lang)
             if not feature:
+                return maps_service.format_not_found(lang)
+            return maps_service.format_geocode(feature, lang=lang)
+
+        elif tool_name == "geocode":
+            query = params.get("query", "").strip()
+            if not query:
                 return None
+            feature = await maps_service.geocode(query=query, lang=lang)
+            if not feature:
+                return maps_service.format_not_found(lang)
             return maps_service.format_geocode(feature, lang=lang)
 
         elif tool_name == "search":
-            query = params.get("query", "")
-            num = int(params.get("num", 5))
+            query = params.get("query", "").strip()
+            num   = int(params.get("num", 5))
             if not query:
                 return None
             results = await search_service.search(query=query, lang=lang, num=num)
