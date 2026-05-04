@@ -134,7 +134,7 @@ _BASE_PROMPTS: dict[Intent, str] = {
 
 def build_system_prompt(intent: Intent, lang: str) -> str:
     directive = _lang_directive(lang)
-    base = _BASE_PROMPTS[intent]
+    base = _BASE_PROMPTS.get(intent, _BASE_PROMPTS[Intent.UNKNOWN])
     return directive + base
 
 
@@ -251,298 +251,376 @@ _SEARCH_SIGNALS: tuple[str, ...] = (
     "кто такой", "расскажи о", "информация о", "последние новости",
 )
 
+# ─── MAPS SIGNALS ─────────────────────────────────────────────────────────────
+#
+# RULE: every signal must be a phrase, not an isolated noun.
+# Bare nouns like "координаты", "адрес", "address" are BANNED here —
+# they fire on rhetorical questions ("координаты дать не можешь?")
+# and unrelated sentences ("address the issue").
+#
+# Each entry must anchor the noun to a geographic verb or preposition
+# so the classifier requires INTENT + OBJECT, not just the object alone.
+
 _MAPS_SIGNALS: tuple[str, ...] = (
-    # English
-    "where is", "location of", "address of", "coordinates of",
-    "how to get to", "directions to", "navigate to", "find on map",
-    "show on map", "show me on map", "map of", "locate",
-    # Russian
-    "где находится", "где находятся", "адрес", "координаты",
-    "как добраться", "как проехать", "как пройти", "покажи на карте",
-    "найди на карте", "местоположение", "покажи местоположение",
-    "расположение", "где это", "где магазин", "где находится магазин",
-    # Georgian
-    "სად არის", "მდებარეობა", "კოორდინატები", "რუკაზე",
-    # German
-    "wo ist", "wo befindet sich", "adresse von", "koordinaten",
-    "wie komme ich", "auf der karte",
-    # French
-    "où est", "où se trouve", "adresse de", "coordonnées",
-    "comment aller", "sur la carte",
-    # Spanish
-    "dónde está", "dónde queda", "dirección de", "coordenadas",
-    "cómo llegar", "en el mapa",
-    # Turkish
-    "nerede", "konumu", "adres", "koordinatlar", "haritada",
-    # Arabic
-    "أين يقع", "موقع", "عنوان", "إحداثيات", "على الخريطة",
-    # Chinese
-    "在哪里", "位置", "地址", "坐标", "地图",
-    # Japanese
-    "どこにある", "場所", "住所", "座標", "地図",
-    # Korean
-    "어디에", "위치", "주소", "좌표", "지도",
-    # Hindi
-    "कहाँ है", "स्थान", "पता", "निर्देशांक", "नक्शे पर",
+    # ── English ───────────────────────────────────────────────────────────────
+    "where is",                 # "where is the Eiffel Tower"
+    "where are",                # "where are the pyramids"
+    "location of",              # "location of Big Ben"
+    "address of",               # "address of the Kremlin"
+    "coordinates of",           # "coordinates of Mount Everest"
+    "how to get to",            # "how to get to the airport"
+    "directions to",            # "directions to Central Park"
+    "navigate to",              # "navigate to Times Square"
+    "find on map",
+    "show on map",
+    "show me on map",
+    "map of",                   # "map of Berlin"
+    "locate",                   # "locate the nearest hospital"
+    "get directions",
+    "route to",
+    "nearest ",                 # "nearest pharmacy"
+    "closest ",                 # "closest subway station"
+
+    # ── Russian ───────────────────────────────────────────────────────────────
+    "где находится",            # "где находится вокзал"
+    "где находятся",
+    "где расположен",
+    "где расположена",
+    "адрес магазина",           # anchored: адрес + object
+    "адрес кафе",
+    "адрес ресторана",
+    "адрес аптеки",
+    "адрес больницы",
+    "адрес офиса",
+    "адрес отеля",
+    "адрес гостиницы",
+    "покажи адрес",
+    "координаты места",         # anchored: координаты + места/города/etc.
+    "координаты города",
+    "координаты страны",
+    "координаты острова",
+    "координаты горы",
+    "как добраться",
+    "как доехать",
+    "как дойти",
+    "как проехать",
+    "как пройти до",
+    "покажи на карте",
+    "найди на карте",
+    "местоположение",           # standalone — specific enough
+    "покажи местоположение",
+    "расположение на карте",
+    "где это находится",
+    "где это",
+    "где магазин",
+    "где аптека",
+    "где больница",
+    "где метро",
+    "где вокзал",
+    "где аэропорт",
+    "где отель",
+    "ближайший ",               # "ближайший банкомат"
+    "ближайшая ",               # "ближайшая аптека"
+    "маршрут до",
+    "маршрут к",
+    "дорога до",
+    "путь до",
+    "навигация до",
+    "построй маршрут",
+
+    # ── Georgian ──────────────────────────────────────────────────────────────
+    "სად არის",
+    "მდებარეობა",
+    "კოორდინატები",             # Georgian — no rhetorical use pattern
+    "რუკაზე",
+    "მარშრუტი",
+    "როგორ მივიდე",
+
+    # ── German ────────────────────────────────────────────────────────────────
+    "wo ist",
+    "wo befindet sich",
+    "wo liegt",
+    "adresse von",
+    "koordinaten von",
+    "wie komme ich",
+    "weg nach",
+    "route nach",
+    "auf der karte",
+    "nächste ",                 # "nächste Apotheke"
+
+    # ── French ────────────────────────────────────────────────────────────────
+    "où est",
+    "où se trouve",
+    "adresse de",
+    "coordonnées de",
+    "comment aller",
+    "itinéraire vers",
+    "sur la carte",
+    "le plus proche",           # "le plus proche hôpital"
+
+    # ── Spanish ───────────────────────────────────────────────────────────────
+    "dónde está",
+    "dónde queda",
+    "dónde se encuentra",
+    "dirección de",
+    "coordenadas de",
+    "cómo llegar",
+    "ruta hacia",
+    "en el mapa",
+    "más cercano",
+
+    # ── Portuguese ────────────────────────────────────────────────────────────
+    "onde fica",
+    "onde está",
+    "endereço de",
+    "coordenadas de",
+    "como chegar",
+    "rota para",
+    "no mapa",
+    "mais próximo",
+
+    # ── Italian ───────────────────────────────────────────────────────────────
+    "dove si trova",
+    "dove è",
+    "indirizzo di",
+    "coordinate di",
+    "come arrivare",
+    "percorso per",
+    "sulla mappa",
+    "più vicino",
+
+    # ── Turkish ───────────────────────────────────────────────────────────────
+    "nerede",                   # standalone — unambiguous in Turkish
+    "nereye",
+    "konumu nedir",
+    "adresi nedir",
+    "koordinatları",            # anchored by Turkish plural/possessive suffix
+    "haritada göster",
+    "yol tarifi",
+    "en yakın ",
+
+    # ── Arabic ────────────────────────────────────────────────────────────────
+    "أين يقع",
+    "أين توجد",
+    "موقع ",                    # "موقع المطار" — anchored by following noun
+    "عنوان ",
+    "إحداثيات ",
+    "على الخريطة",
+    "كيف أصل",
+    "اتجاهات إلى",
+
+    # ── Chinese ───────────────────────────────────────────────────────────────
+    "在哪里",
+    "在哪儿",
+    "的位置",                   # "X的位置" — anchored
+    "的地址",                   # "X的地址"
+    "的坐标",                   # "X的坐标"
+    "怎么去",
+    "地图上",
+    "最近的",
+
+    # ── Japanese ──────────────────────────────────────────────────────────────
+    "どこにある",
+    "どこですか",
+    "の場所",                   # "Xの場所"
+    "の住所",                   # "Xの住所"
+    "の座標",                   # "Xの座標"
+    "行き方",
+    "地図で",
+    "一番近い",
+
+    # ── Korean ────────────────────────────────────────────────────────────────
+    "어디에 있",                # "어디에 있어요?"
+    "의 위치",                  # "X의 위치"
+    "의 주소",                  # "X의 주소"
+    "의 좌표",                  # "X의 좌표"
+    "가는 방법",
+    "지도에서",
+    "가장 가까운",
+
+    # ── Hindi ─────────────────────────────────────────────────────────────────
+    "कहाँ है",
+    "कहाँ स्थित",
+    "का स्थान",                 # "X का स्थान"
+    "का पता",                   # "X का पता"
+    "के निर्देशांक",            # "X के निर्देशांक"
+    "कैसे पहुंचें",
+    "नक्शे पर",
+    "सबसे नजदीक",
+
+    # ── Ukrainian ─────────────────────────────────────────────────────────────
+    "де знаходиться",
+    "де розташований",
+    "де розташована",
+    "адреса ",
+    "координати ",
+    "як дістатися",
+    "як проїхати",
+    "на карті",
+    "найближчий ",
+    "найближча ",
+
+    # ── Polish ────────────────────────────────────────────────────────────────
+    "gdzie jest",
+    "gdzie znajduje się",
+    "adres ",
+    "współrzędne ",
+    "jak dojechać",
+    "jak dojść",
+    "na mapie",
+    "najbliższy ",
+
+    # ── Dutch ─────────────────────────────────────────────────────────────────
+    "waar is",
+    "waar bevindt",
+    "adres van",
+    "coördinaten van",
+    "hoe kom ik",
+    "route naar",
+    "op de kaart",
+    "dichtstbijzijnde",
+
+    # ── Swedish ───────────────────────────────────────────────────────────────
+    "var är",
+    "var ligger",
+    "adress till",
+    "koordinater för",
+    "hur tar jag mig",
+    "på kartan",
+    "närmaste ",
+
+    # ── Norwegian ─────────────────────────────────────────────────────────────
+    "hvor er",
+    "hvor ligger",
+    "adresse til",
+    "koordinater for",
+    "hvordan kommer jeg",
+    "på kartet",
+    "nærmeste ",
+
+    # ── Danish ────────────────────────────────────────────────────────────────
+    "hvor er",
+    "hvor ligger",
+    "adressen på",
+    "koordinater for",
+    "hvordan kommer jeg",
+    "på kortet",
+    "nærmeste ",
+
+    # ── Finnish ───────────────────────────────────────────────────────────────
+    "missä on",
+    "missä sijaitsee",
+    "osoite ",
+    "koordinaatit ",
+    "miten pääsen",
+    "kartalla",
+    "lähin ",
+
+    # ── Czech / Slovak ────────────────────────────────────────────────────────
+    "kde je",
+    "kde se nachází",
+    "adresa ",
+    "souřadnice ",
+    "jak se dostat",
+    "na mapě",
+    "nejbližší ",
+
+    # ── Romanian ──────────────────────────────────────────────────────────────
+    "unde este",
+    "unde se află",
+    "adresa ",
+    "coordonate ",
+    "cum ajung",
+    "pe hartă",
+    "cel mai apropiat",
+
+    # ── Hungarian ─────────────────────────────────────────────────────────────
+    "hol van",
+    "hol található",
+    "cím ",
+    "koordináták ",
+    "hogyan jutok",
+    "a térképen",
+    "legközelebbi ",
+
+    # ── Hebrew ────────────────────────────────────────────────────────────────
+    "איפה נמצא",
+    "כתובת של",
+    "קואורדינטות של",
+    "איך מגיעים",
+    "על המפה",
+    "הקרוב ביותר",
+
+    # ── Vietnamese ────────────────────────────────────────────────────────────
+    "ở đâu",
+    "địa chỉ của",
+    "tọa độ của",
+    "làm thế nào để đến",
+    "trên bản đồ",
+    "gần nhất",
+
+    # ── Thai ──────────────────────────────────────────────────────────────────
+    "อยู่ที่ไหน",
+    "ที่อยู่ของ",
+    "พิกัดของ",
+    "วิธีไป",
+    "บนแผนที่",
+    "ที่ใกล้ที่สุด",
+
+    # ── Indonesian / Malay ────────────────────────────────────────────────────
+    "di mana",
+    "alamat dari",
+    "koordinat dari",
+    "cara ke",
+    "di peta",
+    "terdekat",
+
+    # ── Azerbaijani ───────────────────────────────────────────────────────────
+    "harada yerləşir",
+    "ünvanı nədir",
+    "xəritədə göstər",
+    "necə getmək",
+    "ən yaxın ",
+
+    # ── Kazakh ────────────────────────────────────────────────────────────────
+    "қайда орналасқан",
+    "мекенжайы",
+    "картада",
+    "қалай жетуге",
+    "жақын жердегі",
+
+    # ── Uzbek ─────────────────────────────────────────────────────────────────
+    "qayerda joylashgan",
+    "manzili",
+    "xaritada",
+    "qanday borish",
+    "eng yaqin ",
+
+    # ── Armenian ──────────────────────────────────────────────────────────────
+    "որտեղ է",
+    "հասցեն",
+    "կոորդինատները",
+    "ինչպես հասնել",
+    "քարտեզի վրա",
+
+    # ── Mongolian ─────────────────────────────────────────────────────────────
+    "хаана байдаг",
+    "хаяг нь",
+    "координат нь",
+    "хэрхэн очих",
+    "газрын зурагт",
 )
 
-_QUESTION_ENDS: tuple[str, ...] = ("?", "؟", "？", "?")
+# ─── MAPS NEGATIVE GUARDS ─────────────────────────────────────────────────────
+#
+# If ANY of these phrases appear in the text, the MAPS classifier is suppressed
+# even when a maps signal matched. These catch rhetorical questions, complaints,
+# and meta-questions about the bot that happen to contain maps vocabulary.
 
-
-# ─── CITY STOP WORDS ──────────────────────────────────────────────────────────
-# Particles, temporal markers, articles — never city names
-
-_CITY_STOP_WORDS: frozenset[str] = frozenset({
-    # Georgian
-    "ამ", "ახლა", "წუთას", "დღეს", "ახლახან", "რა", "არის", "სად",
-    # Russian
-    "сейчас", "сегодня", "прямо", "там", "здесь", "это", "какая", "какой",
-    "будет", "есть", "сейчас", "данный", "этот",
-    # English
-    "now", "today", "currently", "right", "there", "here",
-    "the", "a", "an", "is", "what", "how",
-    # Turkish
-    "şu", "an", "şimdi", "bugün", "orada", "nasıl", "ne",
-    # Arabic
-    "الآن", "اليوم", "هناك", "في", "هذا", "ما", "كيف",
-    # Hindi
-    "अभी", "आज", "वहाँ", "यहाँ", "क्या", "कैसा",
-    # French
-    "maintenant", "aujourd", "hui", "là", "ce", "cette", "quel", "quelle",
-    # German
-    "jetzt", "heute", "dort", "hier", "das", "die", "der", "wie", "was",
-    # Spanish / Portuguese
-    "ahora", "hoy", "allí", "aquí", "agora", "hoje", "lá", "qué", "cual",
-    # Italian
-    "adesso", "oggi", "là", "qui", "che",
-    # Polish / Ukrainian
-    "teraz", "dziś", "там", "тут", "зараз", "сьогодні", "яка", "який",
-    # Indonesian / Malay
-    "sekarang", "hari", "ini", "di", "sana", "apa", "bagaimana",
-    # Japanese
-    "今", "現在", "そこ", "の", "は", "が",
-    # Korean
-    "지금", "오늘", "거기", "의", "는", "가",
-    # Chinese
-    "现在", "今天", "那里", "這裡", "的", "什么", "怎么",
-    # Hebrew
-    "עכשיו", "היום", "שם", "מה", "איך",
-    # Thai
-    "ตอนนี้", "วันนี้", "ที่นั่น",
-    # Vietnamese
-    "bây", "giờ", "hôm", "nay", "đó", "thế", "nào",
-})
-
-
-# ─── CITY MARKERS ─────────────────────────────────────────────────────────────
-
-_CITY_MARKERS: tuple[str, ...] = (
-    # English
-    "weather in ", "forecast for ", "temperature in ", "in ",
-    # Russian
-    "погода в ", "прогноз для ", "температура в ", "в ",
-    # European
-    "wetter in ", "météo à ", "clima en ", "weer in ",
-    "väder i ", "vädret i ", "vejr i ", "sää ",
-    # Turkish
-    "hava durumu ", "hava ",
-    # Arabic
-    "طقس في ", "في ",
-    # Chinese
-    "天气 ", "的天气",
-    # Japanese
-    "の天気", "天気 ",
-    # Korean
-    "날씨 ", "의 날씨",
-    # Hindi
-    "का मौसम", "में मौसम", "में ",
-    # Georgian
-    "ამინდი ", "ამინდია ",
-    # Armenian
-    "եղանակը ",
-    # Indonesian / Malay
-    "cuaca di ", "di ",
-)
-
-
-def _extract_city(text: str) -> str:
-    """
-    Extract city name from weather query.
-
-    Strategy:
-      1. Georgian postposition -ში: word ending in ში, len > 4, not a stop word
-      2. Marker-based: find marker, scan following words, skip stop words
-      3. Fallback: last non-trivial non-stop word in text
-    """
-    lower = text.lower()
-
-    # ── Georgian postposition -ში ─────────────────────────────────────────────
-    if "ში" in text:
-        words = text.split()
-        for word in words:
-            if word.endswith("ში") and len(word) > 4:
-                city = word[:-2].rstrip("?.!,")
-                if len(city) > 2 and city.lower() not in _CITY_STOP_WORDS:
-                    return city
-
-    # ── marker-based extraction ───────────────────────────────────────────────
-    for marker in _CITY_MARKERS:
-        idx = lower.find(marker)
-        if idx != -1:
-            rest = text[idx + len(marker):].strip()
-            words = rest.split()
-            for word in words:
-                candidate = word.rstrip("?.!,'-")
-                if len(candidate) > 1 and candidate.lower() not in _CITY_STOP_WORDS:
-                    return candidate
-
-    # ── fallback: last non-trivial non-stop word ──────────────────────────────
-    words = text.strip().rstrip("?.!,").split()
-    candidates = [
-        w.rstrip("?.!,'-") for w in words
-        if len(w) > 2 and w.lower() not in _CITY_STOP_WORDS
-    ]
-    return candidates[-1] if candidates else ""
-
-
-# ─── CORE CLASSIFY ────────────────────────────────────────────────────────────
-
-def classify(text: str, lang: str = "en") -> IntentResult:
-    """
-    Classify user intent from text.
-    Pure function. No I/O. Never raises.
-    Always returns a valid IntentResult with a language-aware system prompt.
-
-    Priority order:
-      weather → code → math → creative → analysis →
-      instruction → search → question (ends with ?) → greeting → unknown
-    """
-    lower = text.lower().strip()
-
-    if any(s in lower for s in _WEATHER_SIGNALS):
-        city = _extract_city(text)
-        return _make(
-            intent=Intent.WEATHER,
-            confidence=0.90,
-            lang=lang,
-            requires_retrieval=False,
-            requires_tools=True,
-            tool_name="weather",
-            tool_params={"city": city, "lang": lang} if city else {"lang": lang},
-        )
-
-    if any(s in lower for s in _MAPS_SIGNALS):
-        return _make(
-            intent=Intent.MAPS,
-            confidence=0.88,
-            lang=lang,
-            requires_retrieval=False,
-            requires_tools=True,
-            tool_name="maps",
-            tool_params={"query": text, "lang": lang},
-    )
-
-    if any(s in text for s in ("```", "    ")) or any(s in lower for s in _CODE_SIGNALS):
-        return _make(
-            intent=Intent.CODE,
-            confidence=0.90,
-            lang=lang,
-            requires_retrieval=False,
-            requires_tools=False,
-        )
-
-    if any(s in lower for s in _MATH_SIGNALS):
-        if not any(s in lower for s in _SEARCH_SIGNALS):
-            return _make(
-                intent=Intent.MATH,
-                confidence=0.85,
-                lang=lang,
-                requires_retrieval=False,
-                requires_tools=False,
-            )
-
-    if any(s in lower for s in _CREATIVE_SIGNALS):
-        return _make(
-            intent=Intent.CREATIVE,
-            confidence=0.88,
-            lang=lang,
-            requires_retrieval=False,
-            requires_tools=False,
-        )
-
-    if any(s in lower for s in _ANALYSIS_SIGNALS):
-        return _make(
-            intent=Intent.ANALYSIS,
-            confidence=0.85,
-            lang=lang,
-            requires_retrieval=True,
-            requires_tools=False,
-        )
-
-    if any(s in lower for s in _INSTRUCTION_SIGNALS):
-        return _make(
-            intent=Intent.INSTRUCTION,
-            confidence=0.85,
-            lang=lang,
-            requires_retrieval=True,
-            requires_tools=False,
-        )
-
-    if any(s in lower for s in _SEARCH_SIGNALS):
-        return _make(
-            intent=Intent.SEARCH,
-            confidence=0.80,
-            lang=lang,
-            requires_retrieval=False,
-            requires_tools=True,
-            tool_name="search",
-            tool_params={"query": text, "num": 5, "lang": lang},
-        )
-
-    if any(lower.endswith(e) for e in _QUESTION_ENDS):
-        return _make(
-            intent=Intent.QUESTION,
-            confidence=0.80,
-            lang=lang,
-            requires_retrieval=True,
-            requires_tools=False,
-        )
-
-    if any(s in lower for s in _GREETING_SIGNALS) or len(lower.split()) <= 3:
-        return _make(
-            intent=Intent.CONVERSATION,
-            confidence=0.88,
-            lang=lang,
-            requires_retrieval=False,
-            requires_tools=False,
-        )
-
-    return _make(
-        intent=Intent.UNKNOWN,
-        confidence=0.50,
-        lang=lang,
-        requires_retrieval=True,
-        requires_tools=False,
-    )
-
-
-# ─── INTERNAL FACTORY ─────────────────────────────────────────────────────────
-
-def _make(
-    intent: Intent,
-    confidence: float,
-    lang: str,
-    requires_retrieval: bool,
-    requires_tools: bool,
-    tool_name: str = "",
-    tool_params: dict | None = None,
-) -> IntentResult:
-    return IntentResult(
-        intent=intent,
-        confidence=confidence,
-        system_prompt=build_system_prompt(intent, lang),
-        requires_retrieval=requires_retrieval,
-        requires_tools=requires_tools,
-        tool_name=tool_name,
-        tool_params=tool_params or {},
-    )
+_MAPS_NEGATIVE_GUARDS: tuple[str, ...] = (
+    # Russian rhetorical / complaint patterns
+    "не можешь",        # "координаты дать не можешь?"
+    "не можете",
+    "не умеешь",
+    "не умеете",
+    "в смысле",         # "в смысле? координаты дать не можешь?"
