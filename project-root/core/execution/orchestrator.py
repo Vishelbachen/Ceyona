@@ -119,6 +119,8 @@ def _empty_usage(
 
 _TOOL_INTENTS = {Intent.WEATHER, Intent.SEARCH}
 
+_TOOL_INTENTS = {Intent.WEATHER, Intent.SEARCH, Intent.MAPS}
+
 
 async def _run_tool(intent_result, lang: str) -> str | None:
     if not intent_result.requires_tools or not intent_result.tool_name:
