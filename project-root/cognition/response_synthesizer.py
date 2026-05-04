@@ -12,55 +12,275 @@ logger = logging.getLogger(__name__)
 
 _TELEGRAM_MAX_CHARS = 4096
 
+# ─── TON WALLET ───────────────────────────────────────────────────────────────
+
+_TON_WALLET = "UQA78muNWF-tW4bhePG8GMdXzj1RuByOtf1XAwZ9VDOBElSA"
+
 # ─── SUPPORTED LANGUAGES ──────────────────────────────────────────────────────
-# Covers ~98% of Telegram's user base.
-# Add new langs here — system messages below are the only touch point.
 
 _SUPPORTED_LANGS = {
     "en", "ru", "de", "fr", "es", "pt", "it", "tr", "ar",
     "zh", "ja", "ko", "pl", "uk", "fa", "nl", "sv", "no",
     "da", "fi", "cs", "sk", "ro", "hu", "bg", "hr", "sr",
     "he", "vi", "th", "id", "ms", "hi", "bn", "ur",
-    "az", "kk", "uz",
+    "az", "kk", "uz", "ka", "hy", "mn", "sw", "am",
 }
 
 # ─── SYSTEM MESSAGES ──────────────────────────────────────────────────────────
-# Keys map to deny_reason or explicit UI states.
-# Rule: every key MUST have "en" as the guaranteed fallback.
 
 _MESSAGES: dict[str, dict[str, str]] = {
 
     # ── balance ───────────────────────────────────────────────────────────────
     "insufficient_balance": {
-        "en": "⚠️ *Insufficient balance.*\nPlease top up to continue.",
-        "ru": "⚠️ *Недостаточно средств.*\nПополните баланс, чтобы продолжить.",
-        "de": "⚠️ *Unzureichendes Guthaben.*\nBitte aufladen, um fortzufahren.",
-        "fr": "⚠️ *Solde insuffisant.*\nVeuillez recharger pour continuer.",
-        "es": "⚠️ *Saldo insuficiente.*\nPor favor recarga para continuar.",
-        "pt": "⚠️ *Saldo insuficiente.*\nPor favor recarregue para continuar.",
-        "it": "⚠️ *Saldo insufficiente.*\nRicarica per continuare.",
-        "tr": "⚠️ *Yetersiz bakiye.*\nDevam etmek için lütfen bakiye yükleyin.",
-        "ar": "⚠️ *رصيد غير كافٍ.*\nيرجى إعادة الشحن للمتابعة.",
-        "zh": "⚠️ *余额不足。*\n请充值以继续。",
-        "ja": "⚠️ *残高不足です。*\n続けるにはチャージしてください。",
-        "ko": "⚠️ *잔액이 부족합니다.*\n계속하려면 충전해 주세요。",
-        "pl": "⚠️ *Niewystarczające środki.*\nProszę doładować, aby kontynuować.",
-        "uk": "⚠️ *Недостатньо коштів.*\nПоповніть баланс, щоб продовжити.",
-        "fa": "⚠️ *موجودی کافی نیست.*\nلطفاً برای ادامه شارژ کنید.",
-        "nl": "⚠️ *Onvoldoende saldo.*\nGelieve op te laden om door te gaan.",
-        "sv": "⚠️ *Otillräckligt saldo.*\nVänligen fyll på för att fortsätta.",
-        "no": "⚠️ *Utilstrekkelig saldo.*\nVennligst fyll på for å fortsette.",
-        "da": "⚠️ *Utilstrækkelig saldo.*\nVenligst optank for at fortsætte.",
-        "fi": "⚠️ *Saldo ei riitä.*\nLisää saldoa jatkaaksesi.",
-        "he": "⚠️ *יתרה לא מספיקה.*\nאנא טען כדי להמשיך.",
-        "hi": "⚠️ *अपर्याप्त शेष।*\nजारी रखने के लिए कृपया राशि जोड़ें।",
-        "id": "⚠️ *Saldo tidak mencukupi.*\nSilakan isi ulang untuk melanjutkan.",
-        "az": "⚠️ *Balans kifayət deyil.*\nDavam etmək üçün zəhmət olmasa yükləyin.",
-        "kk": "⚠️ *Баланс жеткіліксіз.*\nЖалғастыру үшін балансты толтырыңыз.",
-        "uz": "⚠️ *Balans yetarli emas.*\nDavom etish uchun iltimos to'ldiring.",
+        "en": (
+            "⚠️ *Insufficient balance.*\n\n"
+            "To continue, please top up your account via TON:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "After sending, your balance will be updated automatically."
+        ),
+        "ru": (
+            "⚠️ *Недостаточно средств.*\n\n"
+            "Для продолжения пополните счёт через TON:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "После перевода баланс обновится автоматически."
+        ),
+        "de": (
+            "⚠️ *Unzureichendes Guthaben.*\n\n"
+            "Bitte lade dein Konto über TON auf:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "Nach der Überweisung wird dein Guthaben automatisch aktualisiert."
+        ),
+        "fr": (
+            "⚠️ *Solde insuffisant.*\n\n"
+            "Veuillez recharger votre compte via TON :\n"
+            f"`{_TON_WALLET}`\n\n"
+            "Après le virement, votre solde sera mis à jour automatiquement."
+        ),
+        "es": (
+            "⚠️ *Saldo insuficiente.*\n\n"
+            "Por favor recarga tu cuenta vía TON:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "Tras el envío, tu saldo se actualizará automáticamente."
+        ),
+        "pt": (
+            "⚠️ *Saldo insuficiente.*\n\n"
+            "Por favor recarregue sua conta via TON:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "Após o envio, seu saldo será atualizado automaticamente."
+        ),
+        "it": (
+            "⚠️ *Saldo insufficiente.*\n\n"
+            "Ricarica il tuo account tramite TON:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "Dopo il trasferimento il saldo verrà aggiornato automaticamente."
+        ),
+        "tr": (
+            "⚠️ *Yetersiz bakiye.*\n\n"
+            "Lütfen TON aracılığıyla hesabınızı doldurun:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "Gönderdikten sonra bakiyeniz otomatik olarak güncellenecektir."
+        ),
+        "ar": (
+            "⚠️ *رصيد غير كافٍ.*\n\n"
+            "يرجى شحن حسابك عبر TON:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "بعد الإرسال سيتم تحديث رصيدك تلقائياً."
+        ),
+        "zh": (
+            "⚠️ *余额不足。*\n\n"
+            "请通过 TON 充值您的账户：\n"
+            f"`{_TON_WALLET}`\n\n"
+            "转账后余额将自动更新。"
+        ),
+        "ja": (
+            "⚠️ *残高不足です。*\n\n"
+            "TON でアカウントをチャージしてください：\n"
+            f"`{_TON_WALLET}`\n\n"
+            "送金後、残高は自動的に更新されます。"
+        ),
+        "ko": (
+            "⚠️ *잔액이 부족합니다.*\n\n"
+            "TON을 통해 계정을 충전해 주세요:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "전송 후 잔액이 자동으로 업데이트됩니다."
+        ),
+        "pl": (
+            "⚠️ *Niewystarczające środki.*\n\n"
+            "Doładuj konto przez TON:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "Po przelewie saldo zostanie automatycznie zaktualizowane."
+        ),
+        "uk": (
+            "⚠️ *Недостатньо коштів.*\n\n"
+            "Поповніть рахунок через TON:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "Після переказу баланс оновиться автоматично."
+        ),
+        "fa": (
+            "⚠️ *موجودی کافی نیست.*\n\n"
+            "لطفاً حساب خود را از طریق TON شارژ کنید:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "پس از ارسال، موجودی شما به‌صورت خودکار به‌روز می‌شود."
+        ),
+        "nl": (
+            "⚠️ *Onvoldoende saldo.*\n\n"
+            "Laad uw account op via TON:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "Na de overschrijving wordt uw saldo automatisch bijgewerkt."
+        ),
+        "sv": (
+            "⚠️ *Otillräckligt saldo.*\n\n"
+            "Fyll på ditt konto via TON:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "Efter överföringen uppdateras ditt saldo automatiskt."
+        ),
+        "no": (
+            "⚠️ *Utilstrekkelig saldo.*\n\n"
+            "Fyll på kontoen din via TON:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "Etter overføringen oppdateres saldoen automatisk."
+        ),
+        "da": (
+            "⚠️ *Utilstrækkelig saldo.*\n\n"
+            "Optank din konto via TON:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "Efter overførslen opdateres din saldo automatisk."
+        ),
+        "fi": (
+            "⚠️ *Saldo ei riitä.*\n\n"
+            "Lataa tilisi TON:n kautta:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "Siirron jälkeen saldosi päivittyy automaattisesti."
+        ),
+        "he": (
+            "⚠️ *יתרה לא מספיקה.*\n\n"
+            "אנא טען את החשבון שלך דרך TON:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "לאחר ההעברה היתרה תתעדכן אוטומטית."
+        ),
+        "hi": (
+            "⚠️ *अपर्याप्त शेष।*\n\n"
+            "कृपया TON के माध्यम से अपना खाता टॉप अप करें:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "भेजने के बाद आपका बैलेंस अपने आप अपडेट हो जाएगा।"
+        ),
+        "id": (
+            "⚠️ *Saldo tidak mencukupi.*\n\n"
+            "Silakan isi ulang akun Anda melalui TON:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "Setelah pengiriman, saldo Anda akan diperbarui secara otomatis."
+        ),
+        "az": (
+            "⚠️ *Balans kifayət deyil.*\n\n"
+            "Zəhmət olmasa TON vasitəsilə hesabınızı doldurun:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "Göndərdikdən sonra balansınız avtomatik yenilənəcək."
+        ),
+        "kk": (
+            "⚠️ *Баланс жеткіліксіз.*\n\n"
+            "TON арқылы шотыңызды толтырыңыз:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "Жібергеннен кейін баланс автоматты түрде жаңартылады."
+        ),
+        "uz": (
+            "⚠️ *Balans yetarli emas.*\n\n"
+            "Iltimos, TON orqali hisobingizni to'ldiring:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "Yuborilgandan so'ng balans avtomatik yangilanadi."
+        ),
+        "ka": (
+            "⚠️ *არასაკმარისი ბალანსი.*\n\n"
+            "გთხოვთ შეავსოთ ანგარიში TON-ის მეშვეობით:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "გადარიცხვის შემდეგ ბალანსი ავტომატურად განახლდება."
+        ),
+        "hy": (
+            "⚠️ *Անբավարար մնացորդ։*\n\n"
+            "Խնդրում ենք համալրել հաշիվը TON-ի միջոցով:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "Ուղարկելուց հետո մնացորդը ավտոմատ կթարմացվի:"
+        ),
+        "cs": (
+            "⚠️ *Nedostatečný zůstatek.*\n\n"
+            "Prosím dobijte svůj účet přes TON:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "Po převodu bude váš zůstatek automaticky aktualizován."
+        ),
+        "ro": (
+            "⚠️ *Sold insuficient.*\n\n"
+            "Vă rugăm să reîncărcați contul prin TON:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "După transfer, soldul se va actualiza automat."
+        ),
+        "hu": (
+            "⚠️ *Elégtelen egyenleg.*\n\n"
+            "Kérjük, töltse fel fiókját TON-on keresztül:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "Az átutalás után az egyenleg automatikusan frissül."
+        ),
+        "th": (
+            "⚠️ *ยอดเงินไม่เพียงพอ*\n\n"
+            "กรุณาเติมเงินในบัญชีผ่าน TON:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "หลังจากส่งแล้ว ยอดเงินจะอัปเดตโดยอัตโนมัติ"
+        ),
+        "vi": (
+            "⚠️ *Số dư không đủ.*\n\n"
+            "Vui lòng nạp tiền vào tài khoản qua TON:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "Sau khi gửi, số dư sẽ được cập nhật tự động."
+        ),
+        "ms": (
+            "⚠️ *Baki tidak mencukupi.*\n\n"
+            "Sila tambah nilai akaun anda melalui TON:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "Selepas penghantaran, baki anda akan dikemas kini secara automatik."
+        ),
+        "bn": (
+            "⚠️ *অপর্যাপ্ত ব্যালেন্স।*\n\n"
+            "অনুগ্রহ করে TON এর মাধ্যমে আপনার অ্যাকাউন্ট টপ আপ করুন:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "পাঠানোর পরে আপনার ব্যালেন্স স্বয়ংক্রিয়ভাবে আপডেট হবে।"
+        ),
+        "ur": (
+            "⚠️ *ناکافی بیلنس۔*\n\n"
+            "براہ کرم TON کے ذریعے اپنا اکاؤنٹ ٹاپ اپ کریں:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "بھیجنے کے بعد آپ کا بیلنس خود بخود اپ ڈیٹ ہو جائے گا۔"
+        ),
+        "bg": (
+            "⚠️ *Недостатъчен баланс.*\n\n"
+            "Моля, заредете акаунта си чрез TON:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "След превода балансът ще се актуализира автоматично."
+        ),
+        "hr": (
+            "⚠️ *Nedovoljan saldo.*\n\n"
+            "Molimo dopunite račun putem TON-a:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "Nakon prijenosa saldo će se automatski ažurirati."
+        ),
+        "sr": (
+            "⚠️ *Недовољан салдо.*\n\n"
+            "Молимо допуните налог преко TON-а:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "Након преноса салдо ће се аутоматски ажурирати."
+        ),
+        "sk": (
+            "⚠️ *Nedostatočný zostatok.*\n\n"
+            "Prosím dobite si účet cez TON:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "Po prevode bude váš zostatok automaticky aktualizovaný."
+        ),
+        "mn": (
+            "⚠️ *Үлдэгдэл хүрэлцэхгүй байна.*\n\n"
+            "TON-оор дансаа цэнэглэнэ үү:\n"
+            f"`{_TON_WALLET}`\n\n"
+            "Илгээсний дараа үлдэгдэл автоматаар шинэчлэгдэнэ."
+        ),
     },
 
-    # ── no LLM response received ───────────────────────────────────────────────
+    # ── no LLM response received ──────────────────────────────────────────────
     "no_response": {
         "en": "⚠️ No response received. Please try again.",
         "ru": "⚠️ Не удалось получить ответ. Попробуйте ещё раз.",
@@ -88,6 +308,9 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "az": "⚠️ Cavab alınmadı. Zəhmət olmasa yenidən cəhd edin.",
         "kk": "⚠️ Жауап алынбады. Қайталап көріңіз.",
         "uz": "⚠️ Javob olinmadi. Iltimos qayta urinib ko'ring.",
+        "ka": "⚠️ პასუხი არ მიღებულა. გთხოვთ სცადოთ თავიდან.",
+        "hy": "⚠️ Պատասխան չստացվեց: Խնդրում ենք կրկին փորձել:",
+        "mn": "⚠️ Хариу ирсэнгүй. Дахин оролдоно уу.",
     },
 
     # ── generic deny ──────────────────────────────────────────────────────────
@@ -118,6 +341,9 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "az": "⚠️ Bu sorğu işlənə bilmədi. Zəhmət olmasa yenidən ifadə edin.",
         "kk": "⚠️ Сұранысты өңдеу мүмкін болмады. Қайта тұжырымдап көріңіз.",
         "uz": "⚠️ Bu so'rovni qayta ishlash imkoni bo'lmadi. Iltimos qayta ifodalang.",
+        "ka": "⚠️ მოთხოვნის დამუშავება ვერ მოხერხდა. გთხოვთ სხვაგვარად ჩამოაყალიბოთ.",
+        "hy": "⚠️ Հնարավոր չեղավ մշակել հարցումը: Խնդրում ենք վերաձևակերպել:",
+        "mn": "⚠️ Хүсэлтийг боловсруулах боломжгүй байна. Өөрөөр найруулна уу.",
     },
 
     # ── safety block ──────────────────────────────────────────────────────────
@@ -148,6 +374,9 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "az": "🚫 Bu sorğu qaydalarıma ziddir. Zəhmət olmasa başqa şey sınayın.",
         "kk": "🚫 Бұл сұраныс ережелерімді бұзады. Басқа нәрсе сынап көріңіз.",
         "uz": "🚫 Bu so'rov qoidalarimga zid. Iltimos boshqa narsa sinab ko'ring.",
+        "ka": "🚫 ეს მოთხოვნა ჩემს წესებს ეწინააღმდეგება. გთხოვთ სხვა რამ სცადოთ.",
+        "hy": "🚫 Այս հարցումը հակասում է իմ կանոններին: Խնդրում ենք փորձել մեկ այլ բան:",
+        "mn": "🚫 Энэ хүсэлт миний дүрмийг зөрчиж байна. Өөр зүйл туршина уу.",
     },
 
     # ── rate limiting ─────────────────────────────────────────────────────────
@@ -178,9 +407,12 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "az": "⏳ Siz mesajları çox sürətli göndərirsiniz. Zəhmət olmasa bir az gözləyin.",
         "kk": "⏳ Сіз хабарларды тым жылдам жіберіп жатырсыз. Біраз күте тұрыңыз.",
         "uz": "⏳ Xabarlarni juda tez yuboryapsiz. Iltimos bir oz kuting.",
+        "ka": "⏳ თქვენ ძალიან სწრაფად აგზავნით შეტყობინებებს. გთხოვთ დაიცადოთ.",
+        "hy": "⏳ Դուք շատ արագ եք ուղարկում հաղորդագրություններ: Խնդրում ենք սպասել:",
+        "mn": "⏳ Та хэт хурдан мессеж илгээж байна. Түр хүлээнэ үү.",
     },
 
-    # ── truncation suffix (appended when response is cut) ────────────────────
+    # ── truncation suffix ─────────────────────────────────────────────────────
     "truncation_suffix": {
         "en": "\n\n_…response truncated_",
         "ru": "\n\n_…ответ сокращён_",
@@ -207,251 +439,4 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "id": "\n\n_…respons dipotong_",
         "az": "\n\n_…cavab qısaldıldı_",
         "kk": "\n\n_…жауап қысқартылды_",
-        "uz": "\n\n_…javob qisqartirildi_",
-    },
-
-    # ── help text ─────────────────────────────────────────────────────────────
-    "help_display": {
-        "en": (
-            "ℹ️ *Help*\n\n"
-            "I'm your AI assistant. You can:\n"
-            "• Ask me anything\n"
-            "• Request code, analysis, or creative writing\n"
-            "• Ask for weather or web searches\n"
-            "• Check your balance with /balance\n\n"
-            "I reply in your language automatically."
-        ),
-        "ru": (
-            "ℹ️ *Помощь*\n\n"
-            "Я ваш ИИ-ассистент. Вы можете:\n"
-            "• Задать любой вопрос\n"
-            "• Попросить код, анализ или текст\n"
-            "• Узнать погоду или сделать поиск\n"
-            "• Проверить баланс через /balance\n\n"
-            "Я отвечаю на вашем языке автоматически."
-        ),
-        "de": (
-            "ℹ️ *Hilfe*\n\n"
-            "Ich bin dein KI-Assistent. Du kannst:\n"
-            "• Alles fragen\n"
-            "• Code, Analysen oder kreative Texte anfordern\n"
-            "• Wetter oder Websuche anfragen\n"
-            "• Mit /balance dein Guthaben prüfen\n\n"
-            "Ich antworte automatisch in deiner Sprache."
-        ),
-        "fr": (
-            "ℹ️ *Aide*\n\n"
-            "Je suis votre assistant IA. Vous pouvez :\n"
-            "• Poser n'importe quelle question\n"
-            "• Demander du code, une analyse ou un texte créatif\n"
-            "• Demander la météo ou une recherche web\n"
-            "• Vérifier votre solde avec /balance\n\n"
-            "Je réponds automatiquement dans votre langue."
-        ),
-        "es": (
-            "ℹ️ *Ayuda*\n\n"
-            "Soy tu asistente de IA. Puedes:\n"
-            "• Preguntar lo que quieras\n"
-            "• Pedir código, análisis o escritura creativa\n"
-            "• Consultar el clima o buscar en la web\n"
-            "• Ver tu saldo con /balance\n\n"
-            "Respondo automáticamente en tu idioma."
-        ),
-        "ar": (
-            "ℹ️ *مساعدة*\n\n"
-            "أنا مساعدك الذكي. يمكنك:\n"
-            "• السؤال عن أي شيء\n"
-            "• طلب كود أو تحليل أو كتابة إبداعية\n"
-            "• الاستفسار عن الطقس أو البحث على الويب\n"
-            "• التحقق من رصيدك بـ /balance\n\n"
-            "أرد تلقائياً بلغتك."
-        ),
-        "zh": (
-            "ℹ️ *帮助*\n\n"
-            "我是您的AI助手。您可以：\n"
-            "• 问我任何问题\n"
-            "• 请求代码、分析或创意写作\n"
-            "• 查询天气或搜索网页\n"
-            "• 用 /balance 查看余额\n\n"
-            "我会自动用您的语言回复。"
-        ),
-    },
-
-    # ── balance display ───────────────────────────────────────────────────────
-    "balance_display": {
-        "en": "💰 Balance: ${amount}",
-        "ru": "💰 Баланс: ${amount}",
-        "de": "💰 Guthaben: ${amount}",
-        "fr": "💰 Solde : ${amount}",
-        "es": "💰 Saldo: ${amount}",
-        "pt": "💰 Saldo: ${amount}",
-        "it": "💰 Saldo: ${amount}",
-        "tr": "💰 Bakiye: ${amount}",
-        "ar": "💰 الرصيد: ${amount}",
-        "zh": "💰 余额：${amount}",
-        "ja": "💰 残高：${amount}",
-        "ko": "💰 잔액: ${amount}",
-        "pl": "💰 Saldo: ${amount}",
-        "uk": "💰 Баланс: ${amount}",
-        "fa": "💰 موجودی: ${amount}",
-    },
-
-    # ── callback / UI states ──────────────────────────────────────────────────
-    "cancelled": {
-        "en": "✅ Cancelled.",
-        "ru": "✅ Отменено.",
-        "de": "✅ Abgebrochen.",
-        "fr": "✅ Annulé.",
-        "es": "✅ Cancelado.",
-        "pt": "✅ Cancelado.",
-        "it": "✅ Annullato.",
-        "tr": "✅ İptal edildi.",
-        "ar": "✅ تم الإلغاء.",
-        "zh": "✅ 已取消。",
-        "ja": "✅ キャンセルしました。",
-        "ko": "✅ 취소됨.",
-        "pl": "✅ Anulowano.",
-        "uk": "✅ Скасовано.",
-        "fa": "✅ لغو شد.",
-    },
-
-    # ── silent keys — no message sent ─────────────────────────────────────────
-    "empty_message":  {"_silent": "true"},
-    "no_user_id":     {"_silent": "true"},
-}
-
-# Keys that intentionally produce no output
-_SILENT_KEYS: frozenset[str] = frozenset({"empty_message", "no_user_id"})
-
-# ─── PUBLIC API: LOCALISED MESSAGE LOOKUP ─────────────────────────────────────
-
-def get_system_message(key: str, lang: str) -> str:
-    """
-    Return a localised system message for the given key and language.
-    Falls back to English if lang not available.
-    Returns "" for silent keys.
-    """
-    if key in _SILENT_KEYS:
-        return ""
-    bucket = _MESSAGES.get(key, {})
-    return bucket.get(lang) or bucket.get("en", "⚠️ An error occurred.")
-
-
-def format_balance_message(balance: float, lang: str) -> str:
-    """Return a localised balance string with the amount substituted."""
-    template = get_system_message("balance_display", lang)
-    return template.replace("${amount}", f"{balance:.2f}")
-
-
-# ─── I/O CONTRACTS ────────────────────────────────────────────────────────────
-
-@dataclass(frozen=True)
-class SynthesisInput:
-    raw_text: str
-    intent: "Intent | None"
-    tier: Tier
-    denied: bool = False
-    deny_reason: str = ""
-    lang: str = "en"
-
-
-@dataclass(frozen=True)
-class SynthesisResult:
-    text: str
-    truncated: bool = False
-
-
-# ─── INTERNAL PIPELINE ────────────────────────────────────────────────────────
-
-def _assemble(raw: str) -> str:
-    """Step 1: take raw LLM output as-is."""
-    return raw
-
-
-def _structure(text: str, intent: "Intent | None") -> str:
-    """Step 2: intent-aware light structuring (currently a passthrough)."""
-    # Future: add intent-specific post-processing (e.g., code block wrapping)
-    return text
-
-
-def _format(text: str) -> str:
-    """Step 3: normalise whitespace, strip leading/trailing blank lines."""
-    lines = text.splitlines()
-    # Remove excessive blank lines (max 2 consecutive)
-    cleaned: list[str] = []
-    blank_run = 0
-    for line in lines:
-        if line.strip() == "":
-            blank_run += 1
-            if blank_run <= 2:
-                cleaned.append(line)
-        else:
-            blank_run = 0
-            cleaned.append(line)
-    return "\n".join(cleaned).strip()
-
-
-def _apply_correction(text: str) -> str:
-    """
-    Step 4: apply meta/correction.py.
-    correction.py is owned by meta/ but executed here — it has NO authority.
-    It may clean up formatting or fix minor issues; it cannot change meaning.
-    If correction raises, we silently skip it (synthesizer intent preserved).
-    """
-    try:
-        from meta.correction import apply
-        corrected = apply(text)
-        # Safety: if correction returns empty, discard and keep original
-        return corrected if corrected and corrected.strip() else text
-    except Exception:
-        return text
-
-
-def _truncate(text: str, lang: str) -> tuple[str, bool]:
-    """Step 5a: enforce Telegram 4096-char limit."""
-    if len(text) <= _TELEGRAM_MAX_CHARS:
-        return text, False
-    suffix = get_system_message("truncation_suffix", lang)
-    cut = _TELEGRAM_MAX_CHARS - len(suffix)
-    return text[:cut] + suffix, True
-
-
-def _finalize(text: str, lang: str) -> tuple[str, bool]:
-    """Step 5: truncate and return."""
-    return _truncate(text, lang)
-
-
-# ─── MAIN SYNTHESIZER ─────────────────────────────────────────────────────────
-
-def synthesize(inp: SynthesisInput) -> SynthesisResult:
-    """
-    Convert raw LLM output into the final user-facing message.
-
-    Pipeline:
-      1. assemble     — accept raw text
-      2. structure    — intent-aware shaping
-      3. format       — whitespace normalisation
-      4. correction   — meta/correction
-      5. finalize     — truncate to Telegram limit
-    """
-    lang = inp.lang if inp.lang in _SUPPORTED_LANGS else "en"
-
-    # ── DENY path ─────────────────────────────────────────────────────────────
-    if inp.denied:
-        key = inp.deny_reason if inp.deny_reason in _MESSAGES else "default_deny"
-        if key in _SILENT_KEYS:
-            return SynthesisResult(text="")
-        return SynthesisResult(text=get_system_message(key, lang))
-
-    # ── no LLM response ───────────────────────────────────────────────────────
-    if not inp.raw_text or not inp.raw_text.strip():
-        return SynthesisResult(text=get_system_message("no_response", lang))
-
-    # ── normal pipeline ───────────────────────────────────────────────────────
-    text = _assemble(inp.raw_text)
-    text = _structure(text, inp.intent)
-    text = _format(text)
-    text = _apply_correction(text)
-    text, truncated = _finalize(text, lang)
-
-    return SynthesisResult(text=text, truncated=truncated)
+    
