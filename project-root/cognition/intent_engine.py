@@ -17,6 +17,7 @@ class Intent(str, Enum):
     WEATHER      = "weather"
     SEARCH       = "search"
     MAPS         = "maps"
+    MAPS_POI     = "maps_poi"   # points of interest: hours, ratings, contacts
     UNKNOWN      = "unknown"
 
 
@@ -122,6 +123,12 @@ _BASE_PROMPTS: dict[Intent, str] = {
         "You are a helpful location assistant. "
         "Provide coordinates, addresses, and location information clearly. "
         "Be concise and precise."
+    ),
+    Intent.MAPS_POI: (
+        "You are a helpful location assistant specialising in points of interest. "
+        "Provide details about specific places: opening hours, ratings, "
+        "contact information, website, and address. "
+        "Be concise, structured, and precise."
     ),
     Intent.UNKNOWN: (
         "You are a helpful, versatile assistant. "
@@ -251,6 +258,237 @@ _SEARCH_SIGNALS: tuple[str, ...] = (
     "кто такой", "расскажи о", "информация о", "последние новости",
 )
 
+# ─── MAPS POI SIGNALS ─────────────────────────────────────────────────────────
+#
+# RULE: signals must anchor to POI-specific attributes — hours, ratings,
+# phone numbers, reviews, website. Generic location queries go to MAPS.
+# MAPS_POI fires when the user asks ABOUT a place, not WHERE a place is.
+
+_MAPS_POI_SIGNALS: tuple[str, ...] = (
+    # ── English ───────────────────────────────────────────────────────────────
+    "opening hours",            # "opening hours of the museum"
+    "opening times",
+    "what time does",           # "what time does the pharmacy open"
+    "what time do",
+    "is it open",               # "is it open now"
+    "is open now",
+    "closes at",
+    "opens at",
+    "hours of operation",
+    "business hours",
+    "phone number of",          # "phone number of the clinic"
+    "contact number",
+    "phone number",
+    "rating of",                # "rating of this restaurant"
+    "reviews of",
+    "review of",
+    "how good is",
+    "is it worth",
+    "website of",               # "website of the hotel"
+    "official website",
+    "menu of",                  # "menu of the cafe"
+    "price of",                 # "price of entry"
+    "admission fee",
+    "entry fee",
+    "ticket price",
+    "how much does it cost to enter",
+    "how much to get in",
+
+    # ── Russian ───────────────────────────────────────────────────────────────
+    "часы работы",              # "часы работы музея"
+    "режим работы",
+    "когда открывается",
+    "когда закрывается",
+    "во сколько открывается",
+    "во сколько закрывается",
+    "сейчас открыто",
+    "сейчас работает",
+    "работает сейчас",
+    "открыто сейчас",
+    "телефон ",                 # "телефон аптеки"
+    "номер телефона",
+    "контакты ",
+    "как позвонить",
+    "рейтинг ",                 # "рейтинг ресторана"
+    "отзывы о",
+    "отзывы на",
+    "стоит ли идти",
+    "стоит посетить",
+    "сайт ",                    # "сайт отеля"
+    "официальный сайт",
+    "меню ",                    # "меню кафе"
+    "цена входа",
+    "стоимость билета",
+    "сколько стоит вход",
+    "сколько стоит посещение",
+    "стоимость посещения",
+
+    # ── German ────────────────────────────────────────────────────────────────
+    "öffnungszeiten",
+    "wann öffnet",
+    "wann schließt",
+    "ist geöffnet",
+    "telefonnummer",
+    "bewertung von",
+    "rezensionen",
+    "webseite von",
+    "eintrittspreise",
+
+    # ── French ────────────────────────────────────────────────────────────────
+    "heures d'ouverture",
+    "horaires",
+    "est ouvert",
+    "numéro de téléphone",
+    "avis sur",
+    "site web de",
+    "prix d'entrée",
+    "tarifs",
+
+    # ── Spanish ───────────────────────────────────────────────────────────────
+    "horario de",
+    "a qué hora abre",
+    "a qué hora cierra",
+    "está abierto",
+    "número de teléfono",
+    "reseñas de",
+    "sitio web de",
+    "precio de entrada",
+
+    # ── Portuguese ────────────────────────────────────────────────────────────
+    "horário de funcionamento",
+    "que horas abre",
+    "que horas fecha",
+    "está aberto",
+    "número de telefone",
+    "avaliações de",
+    "site de",
+    "preço de entrada",
+
+    # ── Italian ───────────────────────────────────────────────────────────────
+    "orari di apertura",
+    "a che ora apre",
+    "a che ora chiude",
+    "è aperto",
+    "numero di telefono",
+    "recensioni di",
+    "sito web di",
+    "prezzo di ingresso",
+
+    # ── Turkish ───────────────────────────────────────────────────────────────
+    "çalışma saatleri",
+    "kaçta açılıyor",
+    "kaçta kapanıyor",
+    "açık mı",
+    "telefon numarası",
+    "yorumlar",
+    "web sitesi",
+    "giriş ücreti",
+
+    # ── Arabic ────────────────────────────────────────────────────────────────
+    "ساعات العمل",
+    "متى يفتح",
+    "متى يغلق",
+    "هل مفتوح",
+    "رقم الهاتف",
+    "تقييم ",
+    "مراجعات",
+    "الموقع الرسمي",
+    "سعر الدخول",
+
+    # ── Chinese ───────────────────────────────────────────────────────────────
+    "营业时间",
+    "几点开门",
+    "几点关门",
+    "现在开放吗",
+    "电话号码",
+    "评分",
+    "评价",
+    "官方网站",
+    "入场费",
+
+    # ── Japanese ──────────────────────────────────────────────────────────────
+    "営業時間",
+    "何時に開く",
+    "何時に閉まる",
+    "今開いている",
+    "電話番号",
+    "評価",
+    "口コミ",
+    "公式サイト",
+    "入場料",
+
+    # ── Korean ────────────────────────────────────────────────────────────────
+    "영업시간",
+    "몇 시에 열어",
+    "몇 시에 닫아",
+    "지금 열려있나",
+    "전화번호",
+    "평점",
+    "리뷰",
+    "공식 웹사이트",
+    "입장료",
+
+    # ── Georgian ──────────────────────────────────────────────────────────────
+    "სამუშაო საათები",
+    "როდის იხსნება",
+    "ახლა ღიაა",
+    "ტელეფონის ნომერი",
+    "შეფასება",
+    "ვებსაიტი",
+    "შესასვლელის ფასი",
+
+    # ── Armenian ──────────────────────────────────────────────────────────────
+    "աշխատանքային ժամեր",
+    "երբ է բացվում",
+    "հեռախոսահամար",
+    "գնահատական",
+    "կայք",
+
+    # ── Ukrainian ─────────────────────────────────────────────────────────────
+    "години роботи",
+    "коли відкривається",
+    "коли закривається",
+    "зараз відкрито",
+    "номер телефону",
+    "відгуки про",
+    "офіційний сайт",
+    "ціна входу",
+
+    # ── Polish ────────────────────────────────────────────────────────────────
+    "godziny otwarcia",
+    "o której otwierają",
+    "czy jest otwarte",
+    "numer telefonu",
+    "opinie o",
+    "strona internetowa",
+    "cena wejścia",
+
+    # ── Hindi ─────────────────────────────────────────────────────────────────
+    "खुलने का समय",
+    "कब खुलता है",
+    "अभी खुला है",
+    "फोन नंबर",
+    "रेटिंग",
+    "समीक्षा",
+    "आधिकारिक वेबसाइट",
+    "प्रवेश शुल्क",
+)
+
+# ─── MAPS POI NEGATIVE GUARDS ─────────────────────────────────────────────────
+#
+# Suppresses MAPS_POI when signals fire in rhetorical or unrelated context.
+
+_MAPS_POI_NEGATIVE_GUARDS: tuple[str, ...] = (
+    "не можешь",
+    "не можете",
+    "не умеешь",
+    "в смысле",
+    "can't you",
+    "cannot you",
+    "do you even",
+    "why don't you",
+)
+
 # ─── MAPS SIGNALS ─────────────────────────────────────────────────────────────
 #
 # RULE: every signal must be a phrase, not an isolated noun.
@@ -263,30 +501,30 @@ _SEARCH_SIGNALS: tuple[str, ...] = (
 
 _MAPS_SIGNALS: tuple[str, ...] = (
     # ── English ───────────────────────────────────────────────────────────────
-    "where is",                 # "where is the Eiffel Tower"
-    "where are",                # "where are the pyramids"
-    "location of",              # "location of Big Ben"
-    "address of",               # "address of the Kremlin"
-    "coordinates of",           # "coordinates of Mount Everest"
-    "how to get to",            # "how to get to the airport"
-    "directions to",            # "directions to Central Park"
-    "navigate to",              # "navigate to Times Square"
+    "where is",
+    "where are",
+    "location of",
+    "address of",
+    "coordinates of",
+    "how to get to",
+    "directions to",
+    "navigate to",
     "find on map",
     "show on map",
     "show me on map",
-    "map of",                   # "map of Berlin"
-    "locate",                   # "locate the nearest hospital"
+    "map of",
+    "locate",
     "get directions",
     "route to",
-    "nearest ",                 # "nearest pharmacy"
-    "closest ",                 # "closest subway station"
+    "nearest ",
+    "closest ",
 
     # ── Russian ───────────────────────────────────────────────────────────────
-    "где находится",            # "где находится вокзал"
+    "где находится",
     "где находятся",
     "где расположен",
     "где расположена",
-    "адрес магазина",           # anchored: адрес + object
+    "адрес магазина",
     "адрес кафе",
     "адрес ресторана",
     "адрес аптеки",
@@ -295,7 +533,7 @@ _MAPS_SIGNALS: tuple[str, ...] = (
     "адрес отеля",
     "адрес гостиницы",
     "покажи адрес",
-    "координаты места",         # anchored: координаты + места/города/etc.
+    "координаты места",
     "координаты города",
     "координаты страны",
     "координаты острова",
@@ -307,7 +545,7 @@ _MAPS_SIGNALS: tuple[str, ...] = (
     "как пройти до",
     "покажи на карте",
     "найди на карте",
-    "местоположение",           # standalone — specific enough
+    "местоположение",
     "покажи местоположение",
     "расположение на карте",
     "где это находится",
@@ -319,8 +557,8 @@ _MAPS_SIGNALS: tuple[str, ...] = (
     "где вокзал",
     "где аэропорт",
     "где отель",
-    "ближайший ",               # "ближайший банкомат"
-    "ближайшая ",               # "ближайшая аптека"
+    "ближайший ",
+    "ближайшая ",
     "маршрут до",
     "маршрут к",
     "дорога до",
@@ -331,7 +569,7 @@ _MAPS_SIGNALS: tuple[str, ...] = (
     # ── Georgian ──────────────────────────────────────────────────────────────
     "სად არის",
     "მდებარეობა",
-    "კოორდინატები",             # Georgian — no rhetorical use pattern
+    "კოორდინატები",
     "რუკაზე",
     "მარშრუტი",
     "როგორ მივიდე",
@@ -346,7 +584,7 @@ _MAPS_SIGNALS: tuple[str, ...] = (
     "weg nach",
     "route nach",
     "auf der karte",
-    "nächste ",                 # "nächste Apotheke"
+    "nächste ",
 
     # ── French ────────────────────────────────────────────────────────────────
     "où est",
@@ -356,7 +594,7 @@ _MAPS_SIGNALS: tuple[str, ...] = (
     "comment aller",
     "itinéraire vers",
     "sur la carte",
-    "le plus proche",           # "le plus proche hôpital"
+    "le plus proche",
 
     # ── Spanish ───────────────────────────────────────────────────────────────
     "dónde está",
@@ -373,7 +611,6 @@ _MAPS_SIGNALS: tuple[str, ...] = (
     "onde fica",
     "onde está",
     "endereço de",
-    "coordenadas de",
     "como chegar",
     "rota para",
     "no mapa",
@@ -390,11 +627,11 @@ _MAPS_SIGNALS: tuple[str, ...] = (
     "più vicino",
 
     # ── Turkish ───────────────────────────────────────────────────────────────
-    "nerede",                   # standalone — unambiguous in Turkish
+    "nerede",
     "nereye",
     "konumu nedir",
     "adresi nedir",
-    "koordinatları",            # anchored by Turkish plural/possessive suffix
+    "koordinatları",
     "haritada göster",
     "yol tarifi",
     "en yakın ",
@@ -402,7 +639,7 @@ _MAPS_SIGNALS: tuple[str, ...] = (
     # ── Arabic ────────────────────────────────────────────────────────────────
     "أين يقع",
     "أين توجد",
-    "موقع ",                    # "موقع المطار" — anchored by following noun
+    "موقع ",
     "عنوان ",
     "إحداثيات ",
     "على الخريطة",
@@ -412,9 +649,9 @@ _MAPS_SIGNALS: tuple[str, ...] = (
     # ── Chinese ───────────────────────────────────────────────────────────────
     "在哪里",
     "在哪儿",
-    "的位置",                   # "X的位置" — anchored
-    "的地址",                   # "X的地址"
-    "的坐标",                   # "X的坐标"
+    "的位置",
+    "的地址",
+    "的坐标",
     "怎么去",
     "地图上",
     "最近的",
@@ -422,18 +659,18 @@ _MAPS_SIGNALS: tuple[str, ...] = (
     # ── Japanese ──────────────────────────────────────────────────────────────
     "どこにある",
     "どこですか",
-    "の場所",                   # "Xの場所"
-    "の住所",                   # "Xの住所"
-    "の座標",                   # "Xの座標"
+    "の場所",
+    "の住所",
+    "の座標",
     "行き方",
     "地図で",
     "一番近い",
 
     # ── Korean ────────────────────────────────────────────────────────────────
-    "어디에 있",                # "어디에 있어요?"
-    "의 위치",                  # "X의 위치"
-    "의 주소",                  # "X의 주소"
-    "의 좌표",                  # "X의 좌표"
+    "어디에 있",
+    "의 위치",
+    "의 주소",
+    "의 좌표",
     "가는 방법",
     "지도에서",
     "가장 가까운",
@@ -441,9 +678,9 @@ _MAPS_SIGNALS: tuple[str, ...] = (
     # ── Hindi ─────────────────────────────────────────────────────────────────
     "कहाँ है",
     "कहाँ स्थित",
-    "का स्थान",                 # "X का स्थान"
-    "का पता",                   # "X का पता"
-    "के निर्देशांक",            # "X के निर्देशांक"
+    "का स्थान",
+    "का पता",
+    "के निर्देशांक",
     "कैसे पहुंचें",
     "नक्शे पर",
     "सबसे नजदीक",
@@ -499,13 +736,8 @@ _MAPS_SIGNALS: tuple[str, ...] = (
     "nærmeste ",
 
     # ── Danish ────────────────────────────────────────────────────────────────
-    "hvor er",
-    "hvor ligger",
     "adressen på",
-    "koordinater for",
-    "hvordan kommer jeg",
     "på kortet",
-    "nærmeste ",
 
     # ── Finnish ───────────────────────────────────────────────────────────────
     "missä on",
@@ -528,7 +760,6 @@ _MAPS_SIGNALS: tuple[str, ...] = (
     # ── Romanian ──────────────────────────────────────────────────────────────
     "unde este",
     "unde se află",
-    "adresa ",
     "coordonate ",
     "cum ajung",
     "pe hartă",
@@ -614,311 +845,173 @@ _MAPS_SIGNALS: tuple[str, ...] = (
 # ─── MAPS NEGATIVE GUARDS ─────────────────────────────────────────────────────
 #
 # If ANY of these phrases appear in the text, the MAPS classifier is suppressed
-# even when a maps signal matched. These catch rhetorical questions, complaints,
-# and meta-questions about the bot that happen to contain maps vocabulary.
+# even when a maps signal matched.
 
 _MAPS_NEGATIVE_GUARDS: tuple[str, ...] = (
     # Russian rhetorical / complaint patterns
-    "не можешь",        # "координаты дать не можешь?"
+    "не можешь",
     "не можете",
     "не умеешь",
     "не умеете",
-    "в смысле",         # "в смысле? координаты дать не можешь?"
-    "что за",           # "что за координаты?"
-    "зачем мне",
-    "на что мне",
-    "почему не",
-    "ты что",
-    "ты вообще",
-    "это что",
-    "серьёзно",
-    "серьезно",
-    "издеваешься",
-    # English rhetorical / complaint patterns
+    "в смысле",
+    # English rhetorical patterns
     "can't you",
     "cannot you",
-    "why can't",
-    "why can you",
-    "what do you mean",
-    "are you serious",
-    "you can't even",
-    "you don't even",
-    # Generic frustration signals (multilingual)
-    "seriously",
-    "что происходит",
-    "что случилось",
-    "wtf",
-    "смысле",           # catches "в смысле" even without "в"
+    "do you even",
+    "why don't you",
+    "address the issue",
+    "address the problem",
+    "address this",
+    "address that",
+    "address your",
+    # Generic "address" as verb (not location)
+    "address concerns",
+    "address questions",
 )
 
 
-def _is_maps_rhetorical(lower: str) -> bool:
-    """Return True if the text looks like a rhetorical/complaint sentence
-    that happens to contain a maps keyword — should NOT trigger geocoding."""
-    return any(guard in lower for guard in _MAPS_NEGATIVE_GUARDS)
+# ─── CLASSIFY ─────────────────────────────────────────────────────────────────
 
-
-_QUESTION_ENDS: tuple[str, ...] = ("?", "؟", "？", "?")
-
-
-# ─── CITY STOP WORDS ──────────────────────────────────────────────────────────
-
-_CITY_STOP_WORDS: frozenset[str] = frozenset({
-    # Georgian
-    "ამ", "ახლა", "წუთას", "დღეს", "ახლახან", "რა", "არის", "სად",
-    # Russian
-    "сейчас", "сегодня", "прямо", "там", "здесь", "это", "какая", "какой",
-    "будет", "есть", "данный", "этот",
-    # English
-    "now", "today", "currently", "right", "there", "here",
-    "the", "a", "an", "is", "what", "how",
-    # Turkish
-    "şu", "an", "şimdi", "bugün", "orada", "nasıl", "ne",
-    # Arabic
-    "الآن", "اليوم", "هناك", "في", "هذا", "ما", "كيف",
-    # Hindi
-    "अभी", "आज", "वहाँ", "यहाँ", "क्या", "कैसा",
-    # French
-    "maintenant", "aujourd", "hui", "là", "ce", "cette", "quel", "quelle",
-    # German
-    "jetzt", "heute", "dort", "hier", "das", "die", "der", "wie", "was",
-    # Spanish / Portuguese
-    "ahora", "hoy", "allí", "aquí", "agora", "hoje", "lá", "qué", "cual",
-    # Italian
-    "adesso", "oggi", "là", "qui", "che",
-    # Polish / Ukrainian
-    "teraz", "dziś", "там", "тут", "зараз", "сьогодні", "яка", "який",
-    # Indonesian / Malay
-    "sekarang", "hari", "ini", "di", "sana", "apa", "bagaimana",
-    # Japanese
-    "今", "現在", "そこ", "の", "は", "が",
-    # Korean
-    "지금", "오늘", "거기", "의", "는", "가",
-    # Chinese
-    "现在", "今天", "那里", "這裡", "的", "什么", "怎么",
-    # Hebrew
-    "עכשיו", "היום", "שם", "מה", "איך",
-    # Thai
-    "ตอนนี้", "วันนี้", "ที่นั่น",
-    # Vietnamese
-    "bây", "giờ", "hôm", "nay", "đó", "thế", "nào",
-})
-
-
-# ─── CITY MARKERS ─────────────────────────────────────────────────────────────
-
-_CITY_MARKERS: tuple[str, ...] = (
-    # English
-    "weather in ", "forecast for ", "temperature in ", "in ",
-    # Russian
-    "погода в ", "прогноз для ", "температура в ", "в ",
-    # European
-    "wetter in ", "météo à ", "clima en ", "weer in ",
-    "väder i ", "vädret i ", "vejr i ", "sää ",
-    # Turkish
-    "hava durumu ", "hava ",
-    # Arabic
-    "طقس في ", "في ",
-    # Chinese
-    "天气 ", "的天气",
-    # Japanese
-    "の天気", "天気 ",
-    # Korean
-    "날씨 ", "의 날씨",
-    # Hindi
-    "का मौसम", "में मौसम", "में ",
-    # Georgian
-    "ამინდი ", "ამინდია ",
-    # Armenian
-    "եղանակը ",
-    # Indonesian / Malay
-    "cuaca di ", "di ",
-)
-
-
-def _extract_city(text: str) -> str:
-    lower = text.lower()
-
-    if "ში" in text:
-        words = text.split()
-        for word in words:
-            if word.endswith("ში") and len(word) > 4:
-                city = word[:-2].rstrip("?.!,")
-                if len(city) > 2 and city.lower() not in _CITY_STOP_WORDS:
-                    return city
-
-    for marker in _CITY_MARKERS:
-        idx = lower.find(marker)
-        if idx != -1:
-            rest = text[idx + len(marker):].strip()
-            words = rest.split()
-            for word in words:
-                candidate = word.rstrip("?.!,'-")
-                if len(candidate) > 1 and candidate.lower() not in _CITY_STOP_WORDS:
-                    return candidate
-
-    words = text.strip().rstrip("?.!,").split()
-    candidates = [
-        w.rstrip("?.!,'-") for w in words
-        if len(w) > 2 and w.lower() not in _CITY_STOP_WORDS
-    ]
-    return candidates[-1] if candidates else ""
-
-
-# ─── CORE CLASSIFY ────────────────────────────────────────────────────────────
-
-def classify(text: str, lang: str = "en") -> IntentResult:
+def classify(
+    text: str,
+    lang: str = "en",
+    conversation_history: list[dict] | None = None,
+) -> IntentResult:
     """
     Classify user intent from text.
-    Pure function. No I/O. Never raises.
-    Always returns a valid IntentResult with a language-aware system prompt.
 
     Priority order:
-      weather → maps → code → math → creative → analysis →
-      instruction → search → question (ends with ?) → greeting → unknown
-
-    MAPS guard: rhetorical/complaint sentences that contain maps vocabulary
-    are suppressed by _MAPS_NEGATIVE_GUARDS and fall through to QUESTION
-    or CONVERSATION.
+      1. MAPS_POI  (hours, ratings, contacts — fires before MAPS)
+      2. MAPS      (location, directions)
+      3. WEATHER
+      4. SEARCH
+      5. CODE
+      6. MATH
+      7. ANALYSIS
+      8. CREATIVE
+      9. INSTRUCTION
+      10. CONVERSATION (greetings)
+      11. QUESTION (default)
     """
-    lower = text.lower().strip()
+    lower = text.lower()
 
-    # ── weather ───────────────────────────────────────────────────────────────
-    if any(s in lower for s in _WEATHER_SIGNALS):
-        city = _extract_city(text)
-        return _make(
+    # ── MAPS_POI (check before MAPS — more specific) ──────────────────────────
+    poi_negative = any(guard in lower for guard in _MAPS_POI_NEGATIVE_GUARDS)
+    if not poi_negative:
+        if any(signal in lower for signal in _MAPS_POI_SIGNALS):
+            return IntentResult(
+                intent=Intent.MAPS_POI,
+                confidence=0.90,
+                system_prompt=build_system_prompt(Intent.MAPS_POI, lang),
+                requires_retrieval=False,
+                requires_tools=True,
+                tool_name="maps_poi",
+                tool_params={"query": text, "lang": lang},
+            )
+
+    # ── MAPS ──────────────────────────────────────────────────────────────────
+    maps_negative = any(guard in lower for guard in _MAPS_NEGATIVE_GUARDS)
+    if not maps_negative:
+        if any(signal in lower for signal in _MAPS_SIGNALS):
+            return IntentResult(
+                intent=Intent.MAPS,
+                confidence=0.90,
+                system_prompt=build_system_prompt(Intent.MAPS, lang),
+                requires_retrieval=False,
+                requires_tools=True,
+                tool_name="maps",
+                tool_params={"query": text, "lang": lang},
+            )
+
+    # ── WEATHER ───────────────────────────────────────────────────────────────
+    if any(signal in lower for signal in _WEATHER_SIGNALS):
+        return IntentResult(
             intent=Intent.WEATHER,
             confidence=0.90,
-            lang=lang,
+            system_prompt=build_system_prompt(Intent.WEATHER, lang),
             requires_retrieval=False,
             requires_tools=True,
             tool_name="weather",
-            tool_params={"city": city, "lang": lang} if city else {"lang": lang},
-        )
-
-    # ── maps ──────────────────────────────────────────────────────────────────
-    # Negative guard runs first: rhetorical sentences must not trigger geocoding.
-    if any(s in lower for s in _MAPS_SIGNALS) and not _is_maps_rhetorical(lower):
-        return _make(
-            intent=Intent.MAPS,
-            confidence=0.88,
-            lang=lang,
-            requires_retrieval=False,
-            requires_tools=True,
-            tool_name="maps",
             tool_params={"query": text, "lang": lang},
         )
 
-    # ── code ──────────────────────────────────────────────────────────────────
-    if any(s in text for s in ("```", "    ")) or any(s in lower for s in _CODE_SIGNALS):
-        return _make(
-            intent=Intent.CODE,
-            confidence=0.90,
-            lang=lang,
-            requires_retrieval=False,
-            requires_tools=False,
-        )
-
-    # ── math ──────────────────────────────────────────────────────────────────
-    if any(s in lower for s in _MATH_SIGNALS):
-        if not any(s in lower for s in _SEARCH_SIGNALS):
-            return _make(
-                intent=Intent.MATH,
-                confidence=0.85,
-                lang=lang,
-                requires_retrieval=False,
-                requires_tools=False,
-            )
-
-    # ── creative ──────────────────────────────────────────────────────────────
-    if any(s in lower for s in _CREATIVE_SIGNALS):
-        return _make(
-            intent=Intent.CREATIVE,
-            confidence=0.88,
-            lang=lang,
-            requires_retrieval=False,
-            requires_tools=False,
-        )
-
-    # ── analysis ──────────────────────────────────────────────────────────────
-    if any(s in lower for s in _ANALYSIS_SIGNALS):
-        return _make(
-            intent=Intent.ANALYSIS,
-            confidence=0.85,
-            lang=lang,
-            requires_retrieval=True,
-            requires_tools=False,
-        )
-
-    # ── instruction ───────────────────────────────────────────────────────────
-    if any(s in lower for s in _INSTRUCTION_SIGNALS):
-        return _make(
-            intent=Intent.INSTRUCTION,
-            confidence=0.85,
-            lang=lang,
-            requires_retrieval=True,
-            requires_tools=False,
-        )
-
-    # ── search ────────────────────────────────────────────────────────────────
-    if any(s in lower for s in _SEARCH_SIGNALS):
-        return _make(
+    # ── SEARCH ────────────────────────────────────────────────────────────────
+    if any(signal in lower for signal in _SEARCH_SIGNALS):
+        return IntentResult(
             intent=Intent.SEARCH,
-            confidence=0.80,
-            lang=lang,
+            confidence=0.85,
+            system_prompt=build_system_prompt(Intent.SEARCH, lang),
             requires_retrieval=False,
             requires_tools=True,
             tool_name="search",
-            tool_params={"query": text, "num": 5, "lang": lang},
+            tool_params={"query": text, "lang": lang},
         )
 
-    # ── question ──────────────────────────────────────────────────────────────
-    if any(lower.endswith(e) for e in _QUESTION_ENDS):
-        return _make(
-            intent=Intent.QUESTION,
-            confidence=0.80,
-            lang=lang,
-            requires_retrieval=True,
-            requires_tools=False,
-        )
-
-    # ── greeting / short ──────────────────────────────────────────────────────
-    if any(s in lower for s in _GREETING_SIGNALS) or len(lower.split()) <= 3:
-        return _make(
-            intent=Intent.CONVERSATION,
-            confidence=0.88,
-            lang=lang,
+    # ── CODE ──────────────────────────────────────────────────────────────────
+    if any(signal in lower for signal in _CODE_SIGNALS):
+        return IntentResult(
+            intent=Intent.CODE,
+            confidence=0.90,
+            system_prompt=build_system_prompt(Intent.CODE, lang),
             requires_retrieval=False,
             requires_tools=False,
         )
 
-    # ── unknown ───────────────────────────────────────────────────────────────
-    return _make(
-        intent=Intent.UNKNOWN,
-        confidence=0.50,
-        lang=lang,
+    # ── MATH ──────────────────────────────────────────────────────────────────
+    if any(signal in lower for signal in _MATH_SIGNALS):
+        return IntentResult(
+            intent=Intent.MATH,
+            confidence=0.88,
+            system_prompt=build_system_prompt(Intent.MATH, lang),
+            requires_retrieval=False,
+            requires_tools=False,
+        )
+
+    # ── ANALYSIS ──────────────────────────────────────────────────────────────
+    if any(signal in lower for signal in _ANALYSIS_SIGNALS):
+        return IntentResult(
+            intent=Intent.ANALYSIS,
+            confidence=0.85,
+            system_prompt=build_system_prompt(Intent.ANALYSIS, lang),
+            requires_retrieval=True,
+            requires_tools=False,
+        )
+
+    # ── CREATIVE ──────────────────────────────────────────────────────────────
+    if any(signal in lower for signal in _CREATIVE_SIGNALS):
+        return IntentResult(
+            intent=Intent.CREATIVE,
+            confidence=0.88,
+            system_prompt=build_system_prompt(Intent.CREATIVE, lang),
+            requires_retrieval=False,
+            requires_tools=False,
+        )
+
+    # ── INSTRUCTION ───────────────────────────────────────────────────────────
+    if any(signal in lower for signal in _INSTRUCTION_SIGNALS):
+        return IntentResult(
+            intent=Intent.INSTRUCTION,
+            confidence=0.85,
+            system_prompt=build_system_prompt(Intent.INSTRUCTION, lang),
+            requires_retrieval=True,
+            requires_tools=False,
+        )
+
+    # ── CONVERSATION (greetings / small talk) ─────────────────────────────────
+    if any(signal in lower for signal in _GREETING_SIGNALS):
+        return IntentResult(
+            intent=Intent.CONVERSATION,
+            confidence=0.92,
+            system_prompt=build_system_prompt(Intent.CONVERSATION, lang),
+            requires_retrieval=False,
+            requires_tools=False,
+        )
+
+    # ── QUESTION (default) ────────────────────────────────────────────────────
+    return IntentResult(
+        intent=Intent.QUESTION,
+        confidence=0.70,
+        system_prompt=build_system_prompt(Intent.QUESTION, lang),
         requires_retrieval=True,
         requires_tools=False,
-    )
-
-
-# ─── INTERNAL FACTORY ─────────────────────────────────────────────────────────
-
-def _make(
-    intent: Intent,
-    confidence: float,
-    lang: str,
-    requires_retrieval: bool,
-    requires_tools: bool,
-    tool_name: str = "",
-    tool_params: dict | None = None,
-) -> IntentResult:
-    return IntentResult(
-        intent=intent,
-        confidence=confidence,
-        system_prompt=build_system_prompt(intent, lang),
-        requires_retrieval=requires_retrieval,
-        requires_tools=requires_tools,
-        tool_name=tool_name,
-        tool_params=tool_params or {},
     )
