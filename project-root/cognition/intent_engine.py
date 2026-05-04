@@ -35,48 +35,20 @@ class IntentResult:
 # ─── LANGUAGE INSTRUCTION ─────────────────────────────────────────────────────
 
 _LANG_NAMES: dict[str, str] = {
-    "ru": "Russian",
-    "en": "English",
-    "de": "German",
-    "fr": "French",
-    "es": "Spanish",
-    "pt": "Portuguese",
-    "it": "Italian",
-    "tr": "Turkish",
-    "ar": "Arabic",
-    "zh": "Chinese",
-    "ja": "Japanese",
-    "ko": "Korean",
-    "pl": "Polish",
-    "uk": "Ukrainian",
-    "fa": "Persian (Farsi)",
-    "nl": "Dutch",
-    "sv": "Swedish",
-    "no": "Norwegian",
-    "da": "Danish",
-    "fi": "Finnish",
-    "cs": "Czech",
-    "sk": "Slovak",
-    "ro": "Romanian",
-    "hu": "Hungarian",
-    "bg": "Bulgarian",
-    "hr": "Croatian",
-    "sr": "Serbian",
-    "he": "Hebrew",
-    "vi": "Vietnamese",
-    "th": "Thai",
-    "id": "Indonesian",
-    "ms": "Malay",
-    "hi": "Hindi",
-    "bn": "Bengali",
-    "ur": "Urdu",
-    "az": "Azerbaijani",
-    "kk": "Kazakh",
-    "uz": "Uzbek",
-    "ka": "Georgian",
-    "hy": "Armenian",
-    "mn": "Mongolian",
-    "sw": "Swahili",
+    "ru": "Russian",       "en": "English",        "de": "German",
+    "fr": "French",        "es": "Spanish",         "pt": "Portuguese",
+    "it": "Italian",       "tr": "Turkish",         "ar": "Arabic",
+    "zh": "Chinese",       "ja": "Japanese",        "ko": "Korean",
+    "pl": "Polish",        "uk": "Ukrainian",       "fa": "Persian (Farsi)",
+    "nl": "Dutch",         "sv": "Swedish",         "no": "Norwegian",
+    "da": "Danish",        "fi": "Finnish",         "cs": "Czech",
+    "sk": "Slovak",        "ro": "Romanian",        "hu": "Hungarian",
+    "bg": "Bulgarian",     "hr": "Croatian",        "sr": "Serbian",
+    "he": "Hebrew",        "vi": "Vietnamese",      "th": "Thai",
+    "id": "Indonesian",    "ms": "Malay",           "hi": "Hindi",
+    "bn": "Bengali",       "ur": "Urdu",            "az": "Azerbaijani",
+    "kk": "Kazakh",        "uz": "Uzbek",           "ka": "Georgian",
+    "hy": "Armenian",      "mn": "Mongolian",       "sw": "Swahili",
     "am": "Amharic",
 }
 
@@ -219,9 +191,7 @@ _GREETING_SIGNALS: tuple[str, ...] = (
     "доброе утро", "спасибо", "пока", "до свидания", "salut", "bonjour",
     "hola", "gracias", "ciao", "danke", "merci", "naber", "merhaba",
     "こんにちは", "안녕", "你好", "سلام", "مرحبا",
-    # Georgian
     "გამარჯობა", "მადლობა", "ნახვამდის",
-    # Armenian
     "բարև", "շնորհակալություն",
 )
 
@@ -278,7 +248,52 @@ _SEARCH_SIGNALS: tuple[str, ...] = (
 _QUESTION_ENDS: tuple[str, ...] = ("?", "؟", "？", "?")
 
 
-# ─── CITY EXTRACTOR ───────────────────────────────────────────────────────────
+# ─── CITY STOP WORDS ──────────────────────────────────────────────────────────
+# Particles, temporal markers, articles — never city names
+
+_CITY_STOP_WORDS: frozenset[str] = frozenset({
+    # Georgian
+    "ამ", "ახლა", "წუთას", "დღეს", "ახლახან", "რა", "არის", "სად",
+    # Russian
+    "сейчас", "сегодня", "прямо", "там", "здесь", "это", "какая", "какой",
+    "будет", "есть", "сейчас", "данный", "этот",
+    # English
+    "now", "today", "currently", "right", "there", "here",
+    "the", "a", "an", "is", "what", "how",
+    # Turkish
+    "şu", "an", "şimdi", "bugün", "orada", "nasıl", "ne",
+    # Arabic
+    "الآن", "اليوم", "هناك", "في", "هذا", "ما", "كيف",
+    # Hindi
+    "अभी", "आज", "वहाँ", "यहाँ", "क्या", "कैसा",
+    # French
+    "maintenant", "aujourd", "hui", "là", "ce", "cette", "quel", "quelle",
+    # German
+    "jetzt", "heute", "dort", "hier", "das", "die", "der", "wie", "was",
+    # Spanish / Portuguese
+    "ahora", "hoy", "allí", "aquí", "agora", "hoje", "lá", "qué", "cual",
+    # Italian
+    "adesso", "oggi", "là", "qui", "che",
+    # Polish / Ukrainian
+    "teraz", "dziś", "там", "тут", "зараз", "сьогодні", "яка", "який",
+    # Indonesian / Malay
+    "sekarang", "hari", "ini", "di", "sana", "apa", "bagaimana",
+    # Japanese
+    "今", "現在", "そこ", "の", "は", "が",
+    # Korean
+    "지금", "오늘", "거기", "의", "는", "가",
+    # Chinese
+    "现在", "今天", "那里", "這裡", "的", "什么", "怎么",
+    # Hebrew
+    "עכשיו", "היום", "שם", "מה", "איך",
+    # Thai
+    "ตอนนี้", "วันนี้", "ที่นั่น",
+    # Vietnamese
+    "bây", "giờ", "hôm", "nay", "đó", "thế", "nào",
+})
+
+
+# ─── CITY MARKERS ─────────────────────────────────────────────────────────────
 
 _CITY_MARKERS: tuple[str, ...] = (
     # English
@@ -300,8 +315,7 @@ _CITY_MARKERS: tuple[str, ...] = (
     "날씨 ", "의 날씨",
     # Hindi
     "का मौसम", "में मौसम", "में ",
-    # Georgian — postposition -ში (in) attached to city name
-    # Georgian uses postpositions, city name comes before ამინდი
+    # Georgian
     "ამინდი ", "ამინდია ",
     # Armenian
     "եղանակը ",
@@ -313,34 +327,40 @@ _CITY_MARKERS: tuple[str, ...] = (
 def _extract_city(text: str) -> str:
     """
     Extract city name from weather query.
-    Handles both prepositional (EN/RU) and postpositional (KA/HY) structures.
+
+    Strategy:
+      1. Georgian postposition -ში: word ending in ში, len > 4, not a stop word
+      2. Marker-based: find marker, scan following words, skip stop words
+      3. Fallback: last non-trivial non-stop word in text
     """
     lower = text.lower()
 
-    # Georgian special case: city name has suffix -ში (-shi = "in")
-    # e.g. "მოსკოვში" → "მოსკოვ" (strip -ში)
+    # ── Georgian postposition -ში ─────────────────────────────────────────────
     if "ში" in text:
         words = text.split()
         for word in words:
-            if word.endswith("ში") and len(word) > 3:
+            if word.endswith("ში") and len(word) > 4:
                 city = word[:-2].rstrip("?.!,")
-                if len(city) > 1:
+                if len(city) > 2 and city.lower() not in _CITY_STOP_WORDS:
                     return city
 
-    # Standard marker-based extraction
+    # ── marker-based extraction ───────────────────────────────────────────────
     for marker in _CITY_MARKERS:
         idx = lower.find(marker)
         if idx != -1:
             rest = text[idx + len(marker):].strip()
             words = rest.split()
-            if words:
-                city = words[0].rstrip("?.!,")
-                if len(city) > 1:
-                    return city
+            for word in words:
+                candidate = word.rstrip("?.!,'-")
+                if len(candidate) > 1 and candidate.lower() not in _CITY_STOP_WORDS:
+                    return candidate
 
-    # Fallback: last non-trivial word
+    # ── fallback: last non-trivial non-stop word ──────────────────────────────
     words = text.strip().rstrip("?.!,").split()
-    candidates = [w for w in words if len(w) > 2]
+    candidates = [
+        w.rstrip("?.!,'-") for w in words
+        if len(w) > 2 and w.lower() not in _CITY_STOP_WORDS
+    ]
     return candidates[-1] if candidates else ""
 
 
@@ -352,13 +372,12 @@ def classify(text: str, lang: str = "en") -> IntentResult:
     Pure function. No I/O. Never raises.
     Always returns a valid IntentResult with a language-aware system prompt.
 
-    Priority order (highest specificity first):
+    Priority order:
       weather → code → math → creative → analysis →
       instruction → search → question (ends with ?) → greeting → unknown
     """
     lower = text.lower().strip()
 
-    # ── weather ──────────────────────────────────────────────────────────────
     if any(s in lower for s in _WEATHER_SIGNALS):
         city = _extract_city(text)
         return _make(
@@ -371,7 +390,6 @@ def classify(text: str, lang: str = "en") -> IntentResult:
             tool_params={"city": city, "lang": lang} if city else {"lang": lang},
         )
 
-    # ── code ─────────────────────────────────────────────────────────────────
     if any(s in text for s in ("```", "    ")) or any(s in lower for s in _CODE_SIGNALS):
         return _make(
             intent=Intent.CODE,
@@ -381,7 +399,6 @@ def classify(text: str, lang: str = "en") -> IntentResult:
             requires_tools=False,
         )
 
-    # ── math ─────────────────────────────────────────────────────────────────
     if any(s in lower for s in _MATH_SIGNALS):
         if not any(s in lower for s in _SEARCH_SIGNALS):
             return _make(
@@ -392,7 +409,6 @@ def classify(text: str, lang: str = "en") -> IntentResult:
                 requires_tools=False,
             )
 
-    # ── creative ─────────────────────────────────────────────────────────────
     if any(s in lower for s in _CREATIVE_SIGNALS):
         return _make(
             intent=Intent.CREATIVE,
@@ -402,7 +418,6 @@ def classify(text: str, lang: str = "en") -> IntentResult:
             requires_tools=False,
         )
 
-    # ── analysis ─────────────────────────────────────────────────────────────
     if any(s in lower for s in _ANALYSIS_SIGNALS):
         return _make(
             intent=Intent.ANALYSIS,
@@ -412,7 +427,6 @@ def classify(text: str, lang: str = "en") -> IntentResult:
             requires_tools=False,
         )
 
-    # ── instruction ──────────────────────────────────────────────────────────
     if any(s in lower for s in _INSTRUCTION_SIGNALS):
         return _make(
             intent=Intent.INSTRUCTION,
@@ -422,7 +436,6 @@ def classify(text: str, lang: str = "en") -> IntentResult:
             requires_tools=False,
         )
 
-    # ── search ───────────────────────────────────────────────────────────────
     if any(s in lower for s in _SEARCH_SIGNALS):
         return _make(
             intent=Intent.SEARCH,
@@ -434,7 +447,6 @@ def classify(text: str, lang: str = "en") -> IntentResult:
             tool_params={"query": text, "num": 5, "lang": lang},
         )
 
-    # ── question (ends with ?) ────────────────────────────────────────────────
     if any(lower.endswith(e) for e in _QUESTION_ENDS):
         return _make(
             intent=Intent.QUESTION,
@@ -444,7 +456,6 @@ def classify(text: str, lang: str = "en") -> IntentResult:
             requires_tools=False,
         )
 
-    # ── greeting / short social ───────────────────────────────────────────────
     if any(s in lower for s in _GREETING_SIGNALS) or len(lower.split()) <= 3:
         return _make(
             intent=Intent.CONVERSATION,
@@ -454,7 +465,6 @@ def classify(text: str, lang: str = "en") -> IntentResult:
             requires_tools=False,
         )
 
-    # ── unknown ───────────────────────────────────────────────────────────────
     return _make(
         intent=Intent.UNKNOWN,
         confidence=0.50,
