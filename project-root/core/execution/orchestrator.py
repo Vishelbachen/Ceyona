@@ -117,9 +117,8 @@ def _empty_usage(
 
 # ─── TOOL RUNNER ──────────────────────────────────────────────────────────────
 
-_TOOL_INTENTS = {Intent.WEATHER, Intent.SEARCH}
-
-_TOOL_INTENTS = {Intent.WEATHER, Intent.SEARCH, Intent.MAPS}
+# Intents whose tool output is the FINAL answer — skip LLM entirely.
+_TOOL_INTENTS = {Intent.WEATHER, Intent.SEARCH, Intent.MAPS, Intent.MAPS_POI}
 
 
 async def _run_tool(intent_result, lang: str) -> str | None:
@@ -303,7 +302,6 @@ async def _run_heavy(
     tier = Tier.HEAVY
     strategy = select_strategy(intent_result.intent, tier)
 
-    # heavy_input_shaper: always called, self-gated internally
     shaper_result = shape(ShaperInput(
         text=request.user_message,
         token_count=request.input_tokens,
@@ -405,8 +403,12 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
     })
 
     try:
-        # ── intent classification (lang-aware) ────────────────────────────────
-        intent_result = classify(request.user_message, lang=lang)
+        # ── intent classification (lang-aware, history-aware) ──────────────────
+        intent_result = classify(
+            request.user_message,
+            lang=lang,
+            conversation_history=request.conversation_history,
+        )
         logger.info("Intent", extra={
             "intent": intent_result.intent,
             "confidence": intent_result.confidence,
