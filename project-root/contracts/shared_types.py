@@ -22,6 +22,6 @@ class EPKDecision(str, Enum):
 
 
 class TruthMode(str, Enum):
-    STRICT     = "strict"      
-    HYBRID     = "hybrid"     
-    GENERATIVE = "generative"
+    STRICT     = "strict"      # только факты из context — без context = блок
+    HYBRID     = "hybrid"      # LLM может дополнять, но context приоритетен
+    GENERATIVE = "generative"  # свободная генерация (creative, conversation)
