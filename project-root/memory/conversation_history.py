@@ -11,9 +11,10 @@ _TABLE = "conversation_history"
 _MAX_HISTORY = 20
 
 # Safe token budget for history — leaves room for system prompt + user message + output
-# llama-3.1-8b-instant TPM limit: 6000
-# Budget: 6000 - 512 (max output) - 500 (system prompt) - 200 (user message) = ~4800
-_MAX_HISTORY_TOKENS = 4800
+# llama-3.1-8b-instant TPM: 6000
+# 512 output + 800 system prompt + 300 user message + 500 buffer = 2012
+# history budget: 6000 - 2012 = ~3500, берём с запасом
+_MAX_HISTORY_TOKENS = 2000
 
 
 @dataclass
