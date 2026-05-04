@@ -16,6 +16,7 @@ class Intent(str, Enum):
     INSTRUCTION  = "instruction"
     WEATHER      = "weather"
     SEARCH       = "search"
+    MAPS         = "maps"
     UNKNOWN      = "unknown"
 
 
