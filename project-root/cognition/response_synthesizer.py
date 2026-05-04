@@ -439,4 +439,249 @@ _MESSAGES: dict[str, dict[str, str]] = {
         "id": "\n\n_…respons dipotong_",
         "az": "\n\n_…cavab qısaldıldı_",
         "kk": "\n\n_…жауап қысқартылды_",
-    
+        "uz": "\n\n_…javob qisqartirildi_",
+        "ka": "\n\n_…პასუხი შეკვეცილია_",
+        "hy": "\n\n_…պատասխանը կրճատված է_",
+        "mn": "\n\n_…хариу таслагдсан_",
+    },
+
+    # ── help text ─────────────────────────────────────────────────────────────
+    "help_display": {
+        "en": (
+            "ℹ️ *Help*\n\n"
+            "I'm your AI assistant. You can:\n"
+            "• Ask me anything\n"
+            "• Request code, analysis, or creative writing\n"
+            "• Ask for weather or web searches\n"
+            "• Check your balance with /balance\n\n"
+            "I reply in your language automatically."
+        ),
+        "ru": (
+            "ℹ️ *Помощь*\n\n"
+            "Я ваш ИИ-ассистент. Вы можете:\n"
+            "• Задать любой вопрос\n"
+            "• Попросить код, анализ или текст\n"
+            "• Узнать погоду или сделать поиск\n"
+            "• Проверить баланс через /balance\n\n"
+            "Я отвечаю на вашем языке автоматически."
+        ),
+        "de": (
+            "ℹ️ *Hilfe*\n\n"
+            "Ich bin dein KI-Assistent. Du kannst:\n"
+            "• Alles fragen\n"
+            "• Code, Analysen oder kreative Texte anfordern\n"
+            "• Wetter oder Websuche anfragen\n"
+            "• Mit /balance dein Guthaben prüfen\n\n"
+            "Ich antworte automatisch in deiner Sprache."
+        ),
+        "fr": (
+            "ℹ️ *Aide*\n\n"
+            "Je suis votre assistant IA. Vous pouvez :\n"
+            "• Poser n'importe quelle question\n"
+            "• Demander du code, une analyse ou un texte créatif\n"
+            "• Demander la météo ou une recherche web\n"
+            "• Vérifier votre solde avec /balance\n\n"
+            "Je réponds automatiquement dans votre langue."
+        ),
+        "es": (
+            "ℹ️ *Ayuda*\n\n"
+            "Soy tu asistente de IA. Puedes:\n"
+            "• Preguntar lo que quieras\n"
+            "• Pedir código, análisis o escritura creativa\n"
+            "• Consultar el clima o buscar en la web\n"
+            "• Ver tu saldo con /balance\n\n"
+            "Respondo automáticamente en tu idioma."
+        ),
+        "ar": (
+            "ℹ️ *مساعدة*\n\n"
+            "أنا مساعدك الذكي. يمكنك:\n"
+            "• السؤال عن أي شيء\n"
+            "• طلب كود أو تحليل أو كتابة إبداعية\n"
+            "• الاستفسار عن الطقس أو البحث على الويب\n"
+            "• التحقق من رصيدك بـ /balance\n\n"
+            "أرد تلقائياً بلغتك."
+        ),
+        "zh": (
+            "ℹ️ *帮助*\n\n"
+            "我是您的AI助手。您可以：\n"
+            "• 问我任何问题\n"
+            "• 请求代码、分析或创意写作\n"
+            "• 查询天气或搜索网页\n"
+            "• 用 /balance 查看余额\n\n"
+            "我会自动用您的语言回复。"
+        ),
+        "ka": (
+            "ℹ️ *დახმარება*\n\n"
+            "მე ვარ თქვენი AI ასისტენტი. შეგიძლიათ:\n"
+            "• დამისვათ ნებისმიერი კითხვა\n"
+            "• მოითხოვოთ კოდი, ანალიზი ან შემოქმედებითი წერა\n"
+            "• ჰკითხოთ ამინდი ან ვებ ძიება\n"
+            "• შეამოწმოთ ბალანსი /balance-ით\n\n"
+            "ავტომატურად ვპასუხობ თქვენს ენაზე."
+        ),
+    },
+
+    # ── balance display ───────────────────────────────────────────────────────
+    "balance_display": {
+        "en": "💰 Balance: ${amount}",
+        "ru": "💰 Баланс: ${amount}",
+        "de": "💰 Guthaben: ${amount}",
+        "fr": "💰 Solde : ${amount}",
+        "es": "💰 Saldo: ${amount}",
+        "pt": "💰 Saldo: ${amount}",
+        "it": "💰 Saldo: ${amount}",
+        "tr": "💰 Bakiye: ${amount}",
+        "ar": "💰 الرصيد: ${amount}",
+        "zh": "💰 余额：${amount}",
+        "ja": "💰 残高：${amount}",
+        "ko": "💰 잔액: ${amount}",
+        "pl": "💰 Saldo: ${amount}",
+        "uk": "💰 Баланс: ${amount}",
+        "fa": "💰 موجودی: ${amount}",
+        "ka": "💰 ბალანსი: ${amount}",
+        "hy": "💰 Մնացորդ: ${amount}",
+        "mn": "💰 Үлдэгдэл: ${amount}",
+    },
+
+    # ── callback / UI states ──────────────────────────────────────────────────
+    "cancelled": {
+        "en": "✅ Cancelled.",
+        "ru": "✅ Отменено.",
+        "de": "✅ Abgebrochen.",
+        "fr": "✅ Annulé.",
+        "es": "✅ Cancelado.",
+        "pt": "✅ Cancelado.",
+        "it": "✅ Annullato.",
+        "tr": "✅ İptal edildi.",
+        "ar": "✅ تم الإلغاء.",
+        "zh": "✅ 已取消。",
+        "ja": "✅ キャンセルしました。",
+        "ko": "✅ 취소됨.",
+        "pl": "✅ Anulowano.",
+        "uk": "✅ Скасовано.",
+        "fa": "✅ لغو شد.",
+        "ka": "✅ გაუქმებულია.",
+        "hy": "✅ Չեղարկված է:",
+        "mn": "✅ Цуцлагдсан.",
+    },
+
+    # ── silent keys ───────────────────────────────────────────────────────────
+    "empty_message": {"_silent": "true"},
+    "no_user_id":    {"_silent": "true"},
+}
+
+_SILENT_KEYS: frozenset[str] = frozenset({"empty_message", "no_user_id"})
+
+
+# ─── PUBLIC API ───────────────────────────────────────────────────────────────
+
+def get_system_message(key: str, lang: str) -> str:
+    if key in _SILENT_KEYS:
+        return ""
+    bucket = _MESSAGES.get(key, {})
+    return bucket.get(lang) or bucket.get("en", "⚠️ An error occurred.")
+
+
+def format_balance_message(balance: float, lang: str) -> str:
+    template = get_system_message("balance_display", lang)
+    return template.replace("${amount}", f"{balance:.2f}")
+
+
+# ─── I/O CONTRACTS ────────────────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class SynthesisInput:
+    raw_text: str
+    intent: "Intent | None"
+    tier: Tier
+    denied: bool = False
+    deny_reason: str = ""
+    lang: str = "en"
+
+
+@dataclass(frozen=True)
+class SynthesisResult:
+    text: str
+    truncated: bool = False
+
+
+# ─── INTERNAL PIPELINE ────────────────────────────────────────────────────────
+
+def _assemble(raw: str) -> str:
+    return raw
+
+
+def _structure(text: str, intent: "Intent | None") -> str:
+    return text
+
+
+def _format(text: str) -> str:
+    lines = text.splitlines()
+    cleaned: list[str] = []
+    blank_run = 0
+    for line in lines:
+        if line.strip() == "":
+            blank_run += 1
+            if blank_run <= 2:
+                cleaned.append(line)
+        else:
+            blank_run = 0
+            cleaned.append(line)
+    return "\n".join(cleaned).strip()
+
+
+def _apply_correction(text: str) -> str:
+    try:
+        from meta.correction import apply
+        corrected = apply(text)
+        return corrected if corrected and corrected.strip() else text
+    except Exception:
+        return text
+
+
+def _truncate(text: str, lang: str) -> tuple[str, bool]:
+    if len(text) <= _TELEGRAM_MAX_CHARS:
+        return text, False
+    suffix = get_system_message("truncation_suffix", lang)
+    cut = _TELEGRAM_MAX_CHARS - len(suffix)
+    return text[:cut] + suffix, True
+
+
+def _finalize(text: str, lang: str) -> tuple[str, bool]:
+    return _truncate(text, lang)
+
+
+# ─── MAIN SYNTHESIZER ─────────────────────────────────────────────────────────
+
+def synthesize(inp: SynthesisInput) -> SynthesisResult:
+    """
+    Convert raw LLM output into the final user-facing message.
+
+    Pipeline:
+      1. assemble     — accept raw text
+      2. structure    — intent-aware shaping
+      3. format       — whitespace normalisation
+      4. correction   — meta/correction
+      5. finalize     — truncate to Telegram limit
+    """
+    lang = inp.lang if inp.lang in _SUPPORTED_LANGS else "en"
+
+    # ── DENY path ─────────────────────────────────────────────────────────────
+    if inp.denied:
+        key = inp.deny_reason if inp.deny_reason in _MESSAGES else "default_deny"
+        if key in _SILENT_KEYS:
+            return SynthesisResult(text="")
+        return SynthesisResult(text=get_system_message(key, lang))
+
+    # ── no LLM response ───────────────────────────────────────────────────────
+    if not inp.raw_text or not inp.raw_text.strip():
+        return SynthesisResult(text=get_system_message("no_response", lang))
+
+    # ── normal pipeline ───────────────────────────────────────────────────────
+    text = _assemble(inp.raw_text)
+    text = _structure(text, inp.intent)
+    text = _format(text)
+    text = _apply_correction(text)
+    text, truncated = _finalize(text, lang)
+
+    return SynthesisResult(text=text, truncated=truncated)
