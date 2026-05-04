@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from external.maps import maps_service
 from external.search import search_service
@@ -20,10 +21,9 @@ async def run_tool(
     None → orchestrator falls back to LLM.
     """
     try:
+        # ── weather (current) ─────────────────────────────────────────────────
         if tool_name == "weather":
-            import re
-            city = params.get("city", "")
-            city = re.sub(r"[^\w\s\-]", "", city).strip()
+            city = re.sub(r"[^\w\s\-]", "", params.get("city", "")).strip()
             if not city:
                 logger.warning("Weather: empty city")
                 return None
@@ -33,10 +33,9 @@ async def run_tool(
                 return None
             return weather_service.format_current(data, lang=lang)
 
+        # ── weather (forecast) ────────────────────────────────────────────────
         elif tool_name == "weather_forecast":
-            import re
-            city = params.get("city", "")
-            city = re.sub(r"[^\w\s\-]", "", city).strip()
+            city = re.sub(r"[^\w\s\-]", "", params.get("city", "")).strip()
             cnt  = int(params.get("cnt", 5))
             if not city:
                 return None
@@ -55,7 +54,8 @@ async def run_tool(
                 lines.append(f"{dt}: {temp}°C, {desc}")
             return "\n".join(lines) if lines else None
 
-        elif tool_name == "maps":
+        # ── maps (geocode — toponym / address lookup) ─────────────────────────
+        elif tool_name in ("maps", "geocode"):
             query = params.get("query", "").strip()
             if not query:
                 return None
@@ -64,15 +64,29 @@ async def run_tool(
                 return maps_service.format_not_found(lang)
             return maps_service.format_geocode(feature, lang=lang)
 
-        elif tool_name == "geocode":
-            query = params.get("query", "").strip()
-            if not query:
-                return None
-            feature = await maps_service.geocode(query=query, lang=lang)
-            if not feature:
-                return maps_service.format_not_found(lang)
-            return maps_service.format_geocode(feature, lang=lang)
+        # ── maps_poi (nearest place by category) ─────────────────────────────
+        elif tool_name == "maps_poi":
+            category = params.get("category", "").strip()
+            location = params.get("location", "").strip()
 
+            if not category:
+                logger.warning("maps_poi: empty category", extra={"params": params})
+                return None
+
+            feature = await maps_service.search_poi(
+                category=category,
+                location=location,
+                lang=lang,
+            )
+            if not feature:
+                return maps_service.format_poi_not_found(
+                    category=category,
+                    location=location,
+                    lang=lang,
+                )
+            return maps_service.format_poi(feature, lang=lang)
+
+        # ── search ────────────────────────────────────────────────────────────
         elif tool_name == "search":
             query = params.get("query", "").strip()
             num   = int(params.get("num", 5))
