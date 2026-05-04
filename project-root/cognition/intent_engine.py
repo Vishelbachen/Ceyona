@@ -246,6 +246,41 @@ _SEARCH_SIGNALS: tuple[str, ...] = (
     "кто такой", "расскажи о", "информация о", "последние новости",
 )
 
+_MAPS_SIGNALS: tuple[str, ...] = (
+    # English
+    "where is", "location of", "address of", "coordinates of",
+    "how to get to", "directions to", "navigate to", "find on map",
+    "show on map", "show me on map", "map of", "locate",
+    # Russian
+    "где находится", "где находятся", "адрес", "координаты",
+    "как добраться", "как проехать", "как пройти", "покажи на карте",
+    "найди на карте", "местоположение", "покажи местоположение",
+    "расположение", "где это", "где магазин", "где находится магазин",
+    # Georgian
+    "სად არის", "მდებარეობა", "კოორდინატები", "რუკაზე",
+    # German
+    "wo ist", "wo befindet sich", "adresse von", "koordinaten",
+    "wie komme ich", "auf der karte",
+    # French
+    "où est", "où se trouve", "adresse de", "coordonnées",
+    "comment aller", "sur la carte",
+    # Spanish
+    "dónde está", "dónde queda", "dirección de", "coordenadas",
+    "cómo llegar", "en el mapa",
+    # Turkish
+    "nerede", "konumu", "adres", "koordinatlar", "haritada",
+    # Arabic
+    "أين يقع", "موقع", "عنوان", "إحداثيات", "على الخريطة",
+    # Chinese
+    "在哪里", "位置", "地址", "坐标", "地图",
+    # Japanese
+    "どこにある", "場所", "住所", "座標", "地図",
+    # Korean
+    "어디에", "위치", "주소", "좌표", "지도",
+    # Hindi
+    "कहाँ है", "स्थान", "पता", "निर्देशांक", "नक्शे पर",
+)
+
 _QUESTION_ENDS: tuple[str, ...] = ("?", "؟", "？", "?")
 
 
