@@ -19,3 +19,9 @@ class EPKDecision(str, Enum):
     DENY           = "DENY"
     DEGRADED_MODE  = "DEGRADED_MODE"
     HEAVY_REQUIRED = "HEAVY_REQUIRED"
+
+
+class TruthMode(str, Enum):
+    STRICT     = "strict"      # только факты из context — без context = блок
+    HYBRID     = "hybrid"      # LLM может дополнять, но context приоритетен
+    GENERATIVE = "generative"  # свободная генерация (creative, conversation)
