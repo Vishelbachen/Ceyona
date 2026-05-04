@@ -426,6 +426,17 @@ def classify(text: str, lang: str = "en") -> IntentResult:
             tool_params={"city": city, "lang": lang} if city else {"lang": lang},
         )
 
+    if any(s in lower for s in _MAPS_SIGNALS):
+        return _make(
+            intent=Intent.MAPS,
+            confidence=0.88,
+            lang=lang,
+            requires_retrieval=False,
+            requires_tools=True,
+            tool_name="maps",
+            tool_params={"query": text, "lang": lang},
+    )
+
     if any(s in text for s in ("```", "    ")) or any(s in lower for s in _CODE_SIGNALS):
         return _make(
             intent=Intent.CODE,
