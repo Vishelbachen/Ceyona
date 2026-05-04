@@ -83,10 +83,10 @@ async def handle_message(
             logger.error("History load failed", extra={"error": str(exc)})
             conversation_history = None
 
-    # ── token estimation (message + history) ──────────────────────────────────
-    message_tokens  = _estimate_tokens(text)
-    history_tokens  = _estimate_history_tokens(conversation_history)
-    input_tokens    = message_tokens + history_tokens
+    # ── token estimation ──────────────────────────────────────────────────────
+    message_tokens = _estimate_tokens(text)
+    history_tokens = _estimate_history_tokens(conversation_history)
+    input_tokens   = message_tokens + history_tokens
 
     logger.info("Handling message", extra={
         "user_id":        user_id,
@@ -97,6 +97,80 @@ async def handle_message(
         "lang":           lang,
     })
 
+    # ── retrieval ─────────────────────────────────────────────────────────────
+    retrieved_context = ""
+    embedding_tokens  = 0
+    rerank_tokens     = 0
+
+    if supabase is not None:
+        try:
+            from redis.asyncio import Redis
+            from retrieval.retrieval_engine import RetrievalEngine
+            from retrieval.cache.embedding_cache import EmbeddingCache
+            from retrieval.cache.query_cache import QueryCache
+            from retrieval.cache.rerank_cache import RerankCache
+            from memory.supabase_store import SupabaseStore
+            from contracts.retrieval_contracts import RetrievalQuery
+
+            # ── get redis from app state via supabase side-channel ────────────
+            # redis передаётся отдельно — получаем из bootstrap через app.state
+            # здесь используем lazy import чтобы не создавать новые клиенты
+            from app.settings import settings
+            from redis.asyncio import from_url as redis_from_url
+
+            _redis = redis_from_url(
+                settings.redis_url,
+                encoding="utf-8",
+                decode_responses=True,
+            )
+
+            store          = SupabaseStore(supabase)
+            emb_cache      = EmbeddingCache(_redis)
+            q_cache        = QueryCache(_redis)
+            rerank_cache   = RerankCache(_redis)
+
+            engine = RetrievalEngine(
+                supabase_store=store,
+                query_cache=q_cache,
+                embedding_cache=emb_cache,
+                rerank_cache=rerank_cache,
+            )
+
+            result = await engine.retrieve(RetrievalQuery(
+                text=text,
+                user_id=str(user_id),
+                top_k=5,
+                threshold=0.65,
+                use_reranker=True,
+            ))
+
+            if result.documents:
+                retrieved_context = "\n\n".join(
+                    d.content for d in result.documents if d.content
+                )
+                # estimate tokens for billing
+                embedding_tokens = _estimate_tokens(text)
+                if result.reranked:
+                    rerank_tokens = len(result.documents) * 10
+
+            logger.info("Retrieval done", extra={
+                "user_id":   user_id,
+                "docs":      len(result.documents),
+                "reranked":  result.reranked,
+                "cached":    result.cached,
+                "chars":     len(retrieved_context),
+            })
+
+            await _redis.aclose()
+
+        except Exception as exc:
+            logger.warning("Retrieval failed, continuing without context", extra={
+                "error": str(exc),
+            })
+            retrieved_context = ""
+            embedding_tokens  = 0
+            rerank_tokens     = 0
+
     request = OrchestratorRequest(
         user_message=text,
         user_balance=user_balance,
@@ -104,6 +178,9 @@ async def handle_message(
         complexity=complexity,
         lang=lang,
         conversation_history=conversation_history,
+        retrieved_context=retrieved_context,
+        embedding_tokens=embedding_tokens,
+        rerank_tokens=rerank_tokens,
     )
 
     result = await run(request)
