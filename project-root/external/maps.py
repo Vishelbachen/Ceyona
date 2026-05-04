@@ -176,6 +176,65 @@ _NOT_FOUND: dict[str, str] = {
     "mn": "📍 Байршил олдсонгүй. Илүү тодорхой нэр ашиглана уу.",
 }
 
+# POI not-found messages
+_POI_NOT_FOUND: dict[str, str] = {
+    "en": "📍 No {category} found near {location}. Try a different area or category.",
+    "ru": "📍 Рядом с {location} не найдено: {category}. Попробуйте другой район или категорию.",
+    "de": "📍 Kein {category} in der Nähe von {location} gefunden.",
+    "fr": "📍 Aucun {category} trouvé près de {location}.",
+    "es": "📍 No se encontró {category} cerca de {location}.",
+    "pt": "📍 Nenhum {category} encontrado perto de {location}.",
+    "it": "📍 Nessun {category} trovato vicino a {location}.",
+    "tr": "📍 {location} yakınında {category} bulunamadı.",
+    "ar": "📍 لا يوجد {category} بالقرب من {location}.",
+    "zh": "📍 在{location}附近未找到{category}。",
+    "ja": "📍 {location}の近くに{category}が見つかりませんでした。",
+    "ko": "📍 {location} 근처에서 {category}을(를) 찾을 수 없습니다.",
+    "pl": "📍 Nie znaleziono {category} w pobliżu {location}.",
+    "uk": "📍 Поряд з {location} не знайдено: {category}.",
+    "ka": "📍 {location}-ის მახლობლად {category} ვერ მოიძებნა.",
+    "hy": "📍 {location}-ի մոտ {category} չի գտնվել:",
+}
+
+# POI result format
+_POI_RESULT: dict[str, str] = {
+    "en": "📍 *{name}*\n{address}\nCoordinates: {lat}, {lon}",
+    "ru": "📍 *{name}*\n{address}\nКоординаты: {lat}, {lon}",
+    "de": "📍 *{name}*\n{address}\nKoordinaten: {lat}, {lon}",
+    "fr": "📍 *{name}*\n{address}\nCoordonnées : {lat}, {lon}",
+    "es": "📍 *{name}*\n{address}\nCoordenadas: {lat}, {lon}",
+    "pt": "📍 *{name}*\n{address}\nCoordenadas: {lat}, {lon}",
+    "it": "📍 *{name}*\n{address}\nCoordinate: {lat}, {lon}",
+    "tr": "📍 *{name}*\n{address}\nKoordinatlar: {lat}, {lon}",
+    "ar": "📍 *{name}*\n{address}\nالإحداثيات: {lat}, {lon}",
+    "zh": "📍 *{name}*\n{address}\n坐标：{lat}, {lon}",
+    "ja": "📍 *{name}*\n{address}\n座標：{lat}, {lon}",
+    "ko": "📍 *{name}*\n{address}\n좌표: {lat}, {lon}",
+    "pl": "📍 *{name}*\n{address}\nWspółrzędne: {lat}, {lon}",
+    "uk": "📍 *{name}*\n{address}\nКоординати: {lat}, {lon}",
+    "nl": "📍 *{name}*\n{address}\nCoördinaten: {lat}, {lon}",
+    "sv": "📍 *{name}*\n{address}\nKoordinater: {lat}, {lon}",
+    "da": "📍 *{name}*\n{address}\nKoordinater: {lat}, {lon}",
+    "fi": "📍 *{name}*\n{address}\nKoordinaatit: {lat}, {lon}",
+    "cs": "📍 *{name}*\n{address}\nSouřadnice: {lat}, {lon}",
+    "ro": "📍 *{name}*\n{address}\nCoordonate: {lat}, {lon}",
+    "hu": "📍 *{name}*\n{address}\nKoordináták: {lat}, {lon}",
+    "he": "📍 *{name}*\n{address}\nקואורדינטות: {lat}, {lon}",
+    "vi": "📍 *{name}*\n{address}\nTọa độ: {lat}, {lon}",
+    "th": "📍 *{name}*\n{address}\nพิกัด: {lat}, {lon}",
+    "id": "📍 *{name}*\n{address}\nKoordinat: {lat}, {lon}",
+    "ms": "📍 *{name}*\n{address}\nKoordinat: {lat}, {lon}",
+    "ka": "📍 *{name}*\n{address}\nკოორდინატები: {lat}, {lon}",
+    "hy": "📍 *{name}*\n{address}\nՀամակարգային կոորդինատներ: {lat}, {lon}",
+    "az": "📍 *{name}*\n{address}\nKoordinatlar: {lat}, {lon}",
+    "kk": "📍 *{name}*\n{address}\nКоординаттар: {lat}, {lon}",
+    "uz": "📍 *{name}*\n{address}\nKoordinatalar: {lat}, {lon}",
+    "hi": "📍 *{name}*\n{address}\nनिर्देशांक: {lat}, {lon}",
+    "fa": "📍 *{name}*\n{address}\nمختصات: {lat}, {lon}",
+    "mn": "📍 *{name}*\n{address}\nКоординат: {lat}, {lon}",
+    "sw": "📍 *{name}*\n{address}\nUratibu: {lat}, {lon}",
+}
+
 
 def _format_coord(template: str, name: str, lat: float, lon: float) -> str:
     return template.format(name=name, lat=f"{lat:.5f}", lon=f"{lon:.5f}")
@@ -319,6 +378,140 @@ class MapsService:
     def format_not_found(self, lang: str = "en") -> str:
         return _NOT_FOUND.get(lang) or _NOT_FOUND["en"]
 
+    async def search_poi(
+        self,
+        category: str,
+        location: str,
+        lang: str = "en",
+    ) -> dict | None:
+        """
+        POI search: find a place by category near a location.
 
+        Strategy:
+          1. Geocode the location string to get coordinates (lon, lat).
+          2. Search Mapbox with the category query + proximity coordinates
+             and types=poi to get the nearest matching place.
+
+        Returns the first Mapbox feature or None.
+        """
+        if not self._token:
+            logger.warning("Mapbox token not set")
+            return None
+
+        if not category:
+            logger.warning("search_poi: empty category")
+            return None
+
+        params_base = {
+            "access_token": self._token,
+            "limit": 1,
+            "language": _mb_lang(lang),
+            "types": "poi",
+        }
+
+        # ── Step 1: resolve location to coordinates ───────────────────────────
+        proximity: str | None = None
+        if location:
+            if not _validate_query(location):
+                logger.warning("search_poi: invalid location string", extra={"location": location[:80]})
+            else:
+                try:
+                    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                        response = await client.get(
+                            f"{_BASE_URL}/{location}.json",
+                            params={
+                                "access_token": self._token,
+                                "limit": 1,
+                                "language": _mb_lang(lang),
+                            },
+                        )
+                        response.raise_for_status()
+                        data     = response.json()
+                        features = data.get("features", [])
+                        if features:
+                            center   = features[0].get("center", [])
+                            if len(center) >= 2:
+                                proximity = f"{center[0]},{center[1]}"
+                                logger.info(
+                                    "search_poi: resolved location",
+                                    extra={"location": location[:50], "proximity": proximity},
+                                )
+                except Exception as exc:
+                    logger.warning(
+                        "search_poi: failed to resolve location",
+                        extra={"location": location[:50], "error": str(exc)},
+                    )
+
+        # ── Step 2: search for POI ────────────────────────────────────────────
+        params = dict(params_base)
+        if proximity:
+            params["proximity"] = proximity
+
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                response = await client.get(
+                    f"{_BASE_URL}/{category}.json",
+                    params=params,
+                )
+                response.raise_for_status()
+                data     = response.json()
+                features = data.get("features", [])
+                if not features:
+                    logger.warning(
+                        "search_poi: no results",
+                        extra={"category": category, "location": location[:50]},
+                    )
+                    return None
+                logger.info(
+                    "search_poi: success",
+                    extra={"category": category, "location": location[:50]},
+                )
+                return features[0]
+        except Exception as exc:
+            logger.error(
+                "MapsService.search_poi failed",
+                extra={"category": category, "error": str(exc)},
+            )
+            return None
+
+    def format_poi(
+        self,
+        feature: dict,
+        lang: str = "en",
+    ) -> str:
+        """Format POI search result into localised Telegram-ready string."""
+        try:
+            name    = feature.get("text", "") or feature.get("place_name", "Unknown")
+            address = feature.get("place_name", "")
+            center  = feature.get("center", [])
+
+            if not center or len(center) < 2:
+                return f"📍 *{name}*\n{address}"
+
+            lon, lat = center[0], center[1]
+            template = _POI_RESULT.get(lang) or _POI_RESULT["en"]
+            return template.format(
+                name=name,
+                address=address,
+                lat=f"{lat:.5f}",
+                lon=f"{lon:.5f}",
+            )
+        except Exception as exc:
+            logger.error("format_poi failed", extra={"error": str(exc)})
+            return "📍 Could not format location."
+
+    def format_poi_not_found(
+        self,
+        category: str,
+        location: str,
+        lang: str = "en",
+    ) -> str:
+        template = _POI_NOT_FOUND.get(lang) or _POI_NOT_FOUND["en"]
+        return template.format(
+            category=category or "place",
+            location=location or "that area",
+        )
+ 
+ 
 # Singleton
 maps_service = MapsService()
