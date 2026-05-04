@@ -7,7 +7,8 @@ from cognition.intent_engine import Intent, classify
 from cognition.multi_agent_coordinator import CoordinationResult, coordinate, plan_agents
 from cognition.reasoning_engine import select_strategy
 from cognition.response_synthesizer import SynthesisInput, synthesize
-from contracts.shared_types import Complexity, EPKDecision, Tier
+from context.assembler import resolve_truth_mode
+from contracts.shared_types import Complexity, EPKDecision, Tier, TruthMode
 from core.kernel.cost_model import actual_cost, estimate_cost, estimate_output_tokens
 from core.kernel.decision_matrix import select_tier
 from core.kernel.execution_policy_kernel import EPKInput, evaluate
@@ -15,6 +16,26 @@ from llm.heavy_input_shaper import ShaperInput, shape
 from llm.prompt_engine import PromptContext, build_messages
 
 logger = logging.getLogger(__name__)
+
+# ─── TRUTH ENFORCEMENT ────────────────────────────────────────────────────────
+
+# Intents that MUST have retrieved context — no context = don't call LLM
+_STRICT_INTENTS = {
+    Intent.QUESTION,
+    Intent.ANALYSIS,
+    Intent.MATH,
+    Intent.SEARCH,
+    Intent.WEATHER,
+    Intent.MAPS,
+    Intent.MAPS_POI,
+}
+
+# No-data fallback message key (goes to synthesizer)
+_NO_GROUNDED_DATA = "no_grounded_data"
+
+
+def _needs_grounding(intent: Intent | None) -> bool:
+    return intent in _STRICT_INTENTS
 
 
 # ─── REQUEST / RESULT CONTRACTS ───────────────────────────────────────────────
@@ -117,7 +138,6 @@ def _empty_usage(
 
 # ─── TOOL RUNNER ──────────────────────────────────────────────────────────────
 
-# Intents whose tool output is the FINAL answer — skip LLM entirely.
 _TOOL_INTENTS = {Intent.WEATHER, Intent.SEARCH, Intent.MAPS, Intent.MAPS_POI}
 
 
@@ -144,6 +164,29 @@ async def _run_tool(intent_result, lang: str) -> str | None:
         return None
 
 
+# ─── PROMPT BUILDER (truth-aware) ────────────────────────────────────────────
+
+def _build_messages(
+    request: OrchestratorRequest,
+    intent_result,
+    retrieved_context: str,
+    truth_mode: TruthMode,
+) -> list[dict]:
+    strategy = select_strategy(intent_result.intent, Tier.GENERAL)
+    user_msg = (
+        f"{strategy.instruction_prefix} {request.user_message}".strip()
+        if strategy.instruction_prefix
+        else request.user_message
+    )
+    return build_messages(PromptContext(
+        user_message=user_msg,
+        system_prompt=request.system_prompt or intent_result.system_prompt,
+        retrieved_context=retrieved_context,
+        conversation_history=request.conversation_history,
+        truth_mode=truth_mode,
+    ))
+
+
 # ─── EXECUTION PATHS ──────────────────────────────────────────────────────────
 
 async def _run_allow(
@@ -154,10 +197,6 @@ async def _run_allow(
     epk_decision: EPKDecision,
     lang: str,
 ) -> OrchestratorResult:
-    """
-    ALLOW path: Fast → General → Agents → safety_agent → Consensus.
-    Orchestrator executes EPK signal only — no routing decisions.
-    """
     strategy = select_strategy(intent_result.intent, tier)
     plan = plan_agents(intent_result.intent, tier, strategy)
 
@@ -221,11 +260,6 @@ async def _run_degraded(
     epk_decision: EPKDecision,
     lang: str,
 ) -> OrchestratorResult:
-    """
-    DEGRADED_MODE path: Fast Tier only → Response Synthesizer directly.
-    Skips: Reasoning / Coordinator / General / Agents / safety_agent /
-           heavy_input_shaper / Heavy / Consensus.
-    """
     tier = Tier.FAST
     strategy = select_strategy(intent_result.intent, tier)
     plan = plan_agents(intent_result.intent, tier, strategy)
@@ -290,15 +324,6 @@ async def _run_heavy(
     epk_decision: EPKDecision,
     lang: str,
 ) -> OrchestratorResult:
-    """
-    HEAVY_REQUIRED path:
-      Skip Fast, skip General.
-      heavy_input_shaper (ALWAYS called, self-gated).
-      Heavy Tier mandatory.
-      safety_agent mandatory.
-      Skip Consensus (mutex).
-      Response Synthesizer aggregates directly.
-    """
     tier = Tier.HEAVY
     strategy = select_strategy(intent_result.intent, tier)
 
@@ -314,12 +339,13 @@ async def _run_heavy(
         logger.info("heavy_input_shaper shaped input", extra={
             "operation": shaper_result.operation,
         })
-        retrieved_context = request.retrieved_context or ""
+        truth_mode = resolve_truth_mode(intent_result.intent)
         messages = build_messages(PromptContext(
             user_message=shaper_result.text,
             system_prompt=request.system_prompt or intent_result.system_prompt,
-            retrieved_context=retrieved_context,
+            retrieved_context=request.retrieved_context or "",
             conversation_history=request.conversation_history,
+            truth_mode=truth_mode,
         ))
 
     plan = plan_agents(intent_result.intent, tier, strategy)
@@ -381,17 +407,6 @@ async def _run_heavy(
 # ─── MAIN PIPELINE ────────────────────────────────────────────────────────────
 
 async def run(request: OrchestratorRequest) -> OrchestratorResult:
-    """
-    EPK signal execution only.
-    NO policy generation. NO routing decisions. NO Heavy Tier self-activation.
-
-    DAG:
-      Intent → Tool? → Estimate → EPK →
-        DENY           → exit
-        ALLOW          → _run_allow
-        DEGRADED_MODE  → _run_degraded
-        HEAVY_REQUIRED → _run_heavy
-    """
     lang = request.lang or "en"
 
     logger.info("Orchestrator start", extra={
@@ -403,7 +418,7 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
     })
 
     try:
-        # ── intent classification (lang-aware, history-aware) ──────────────────
+        # ── intent ───────────────────────────────────────────────────────────
         intent_result = classify(
             request.user_message,
             lang=lang,
@@ -414,19 +429,40 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             "confidence": intent_result.confidence,
         })
 
-        # ── tool execution ────────────────────────────────────────────────────
+        # ── truth mode ───────────────────────────────────────────────────────
+        truth_mode = resolve_truth_mode(intent_result.intent)
+
+        # ── STRICT: block if no context and no tool output available yet ─────
+        # (tool output comes next — we check after tool execution below)
+
+        # ── tool execution ───────────────────────────────────────────────────
         tool_output: str | None = None
         if intent_result.requires_tools:
             tool_output = await _run_tool(intent_result, lang)
 
-        # ── estimate output tokens ────────────────────────────────────────────
+        # ── STRICT truth gate ─────────────────────────────────────────────────
+        # For STRICT intents: if no retrieved context AND no tool output → block
+        has_grounding = bool(request.retrieved_context) or bool(tool_output)
+        if truth_mode == TruthMode.STRICT and not has_grounding:
+            logger.info("Truth gate: STRICT intent with no grounding data", extra={
+                "intent": intent_result.intent,
+            })
+            return _denied_result(
+                reason="no_grounded_data",
+                lang=lang,
+                input_tokens=request.input_tokens,
+                embedding_tokens=request.embedding_tokens,
+                rerank_tokens=request.rerank_tokens,
+                embedding_type=request.embedding_type,
+                epk_decision=EPKDecision.DENY,
+            )
+
+        # ── estimate ─────────────────────────────────────────────────────────
         estimated_output = estimate_output_tokens(
             request.input_tokens,
             request.complexity,
             Tier.GENERAL,
         )
-
-        # ── estimate cost ─────────────────────────────────────────────────────
         estimated = estimate_cost(
             input_tokens=request.input_tokens,
             estimated_output_tokens=estimated_output,
@@ -436,7 +472,7 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             embedding_type=request.embedding_type,
         )
 
-        # ── EPK: SOLE POLICY AUTHORITY ────────────────────────────────────────
+        # ── EPK ──────────────────────────────────────────────────────────────
         epk_out = evaluate(EPKInput(
             estimated_cost=estimated,
             user_balance=request.user_balance,
@@ -458,7 +494,7 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
                 epk_decision=EPKDecision.DENY,
             )
 
-        # ── tier selection ────────────────────────────────────────────────────
+        # ── tier ─────────────────────────────────────────────────────────────
         tier = select_tier(estimated)
 
         # ── tool-only path ────────────────────────────────────────────────────
@@ -479,7 +515,7 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
                 lang=lang,
             )
 
-        # ── prompt construction ───────────────────────────────────────────────
+        # ── assemble retrieved context ────────────────────────────────────────
         retrieved_context = request.retrieved_context or ""
         if tool_output:
             retrieved_context = (
@@ -488,20 +524,13 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
                 else tool_output
             )
 
-        strategy = select_strategy(intent_result.intent, tier)
+        # ── build messages with truth mode ────────────────────────────────────
+        messages = _build_messages(request, intent_result, retrieved_context, truth_mode)
 
-        user_message_for_prompt = (
-            f"{strategy.instruction_prefix} {request.user_message}".strip()
-            if strategy.instruction_prefix
-            else request.user_message
-        )
-
-        messages = build_messages(PromptContext(
-            user_message=user_message_for_prompt,
-            system_prompt=request.system_prompt or intent_result.system_prompt,
-            retrieved_context=retrieved_context,
-            conversation_history=request.conversation_history,
-        ))
+        logger.info("Truth mode", extra={
+            "mode": truth_mode,
+            "has_context": bool(retrieved_context),
+        })
 
         # ── EPK signal execution ──────────────────────────────────────────────
         if epk_out.decision == EPKDecision.HEAVY_REQUIRED:
