@@ -118,6 +118,11 @@ _BASE_PROMPTS: dict[Intent, str] = {
         "Summarise search results clearly and concisely. "
         "Cite sources where possible."
     ),
+    Intent.MAPS: (
+        "You are a helpful location assistant. "
+        "Provide coordinates, addresses, and location information clearly. "
+        "Be concise and precise."
+    ),
     Intent.UNKNOWN: (
         "You are a helpful, versatile assistant. "
         "Carefully read the user's message and respond as helpfully as possible. "
