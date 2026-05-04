@@ -40,6 +40,7 @@ async def handle_message(
     user_balance: float,
     lang: str = "en",
     supabase=None,
+    redis=None,
 ) -> OrchestratorResult:
     text = extract_text(update)
 
@@ -102,9 +103,8 @@ async def handle_message(
     embedding_tokens  = 0
     rerank_tokens     = 0
 
-    if supabase is not None:
+    if supabase is not None and redis is not None:
         try:
-            from redis.asyncio import Redis
             from retrieval.retrieval_engine import RetrievalEngine
             from retrieval.cache.embedding_cache import EmbeddingCache
             from retrieval.cache.query_cache import QueryCache
@@ -112,31 +112,14 @@ async def handle_message(
             from memory.supabase_store import SupabaseStore
             from contracts.retrieval_contracts import RetrievalQuery
 
-            # ── get redis from app state via supabase side-channel ────────────
-            # redis передаётся отдельно — получаем из bootstrap через app.state
-            # здесь используем lazy import чтобы не создавать новые клиенты
-            from app.settings import settings
-            from redis.asyncio import from_url as redis_from_url
-
-            _redis = redis_from_url(
-                settings.redis_url,
-                encoding="utf-8",
-                decode_responses=True,
-            )
-
-            store          = SupabaseStore(supabase)
-            emb_cache      = EmbeddingCache(_redis)
-            q_cache        = QueryCache(_redis)
-            rerank_cache   = RerankCache(_redis)
-
             engine = RetrievalEngine(
-                supabase_store=store,
-                query_cache=q_cache,
-                embedding_cache=emb_cache,
-                rerank_cache=rerank_cache,
+                supabase_store=SupabaseStore(supabase),
+                query_cache=QueryCache(redis),
+                embedding_cache=EmbeddingCache(redis),
+                rerank_cache=RerankCache(redis),
             )
 
-            result = await engine.retrieve(RetrievalQuery(
+            retrieval_result = await engine.retrieve(RetrievalQuery(
                 text=text,
                 user_id=str(user_id),
                 top_k=5,
@@ -144,24 +127,21 @@ async def handle_message(
                 use_reranker=True,
             ))
 
-            if result.documents:
+            if retrieval_result.documents:
                 retrieved_context = "\n\n".join(
-                    d.content for d in result.documents if d.content
+                    d.content for d in retrieval_result.documents if d.content
                 )
-                # estimate tokens for billing
                 embedding_tokens = _estimate_tokens(text)
-                if result.reranked:
-                    rerank_tokens = len(result.documents) * 10
+                if retrieval_result.reranked:
+                    rerank_tokens = len(retrieval_result.documents) * 10
 
             logger.info("Retrieval done", extra={
-                "user_id":   user_id,
-                "docs":      len(result.documents),
-                "reranked":  result.reranked,
-                "cached":    result.cached,
-                "chars":     len(retrieved_context),
+                "user_id":  user_id,
+                "docs":     len(retrieval_result.documents),
+                "reranked": retrieval_result.reranked,
+                "cached":   retrieval_result.cached,
+                "chars":    len(retrieved_context),
             })
-
-            await _redis.aclose()
 
         except Exception as exc:
             logger.warning("Retrieval failed, continuing without context", extra={
