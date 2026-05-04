@@ -1,5 +1,27 @@
 from dataclasses import dataclass
 
+from contracts.shared_types import TruthMode
+
+# ─── TRUTH ENFORCEMENT PROMPTS ───────────────────────────────────────────────
+
+_TRUTH_STRICT = """
+CRITICAL RULES — follow without exception:
+- Answer ONLY using information from the CONTEXT section below.
+- If the context does not contain enough information to answer — say exactly:
+  "I could not find reliable information on this."
+- Do NOT invent, assume, or extrapolate any facts.
+- Do NOT use your training knowledge for factual claims.
+- Do NOT make up names, dates, numbers, events, or statistics.
+""".strip()
+
+_TRUTH_HYBRID = """
+RULES:
+- Prioritize information from the CONTEXT section below.
+- You may use your general knowledge only to explain or clarify context data.
+- Do NOT invent specific facts, numbers, dates, or names not present in context.
+- If unsure — say so explicitly.
+""".strip()
+
 
 @dataclass(frozen=True)
 class PromptContext:
@@ -7,23 +29,37 @@ class PromptContext:
     system_prompt: str = ""
     retrieved_context: str = ""
     conversation_history: list[dict] | None = None
+    truth_mode: TruthMode = TruthMode.HYBRID
 
 
 def build_messages(ctx: PromptContext) -> list[dict]:
     """
     Assemble messages array for LLM from prompt context.
     Format: [system, ...history, user]
+    Injects truth enforcement rules based on TruthMode.
     """
     messages: list[dict] = []
 
-    # ── system prompt ────────────────────────────────────
-    system = ctx.system_prompt
-    if ctx.retrieved_context:
-        system = (
-            f"{system}\n\n"
-            f"## Relevant context\n{ctx.retrieved_context}"
-        ).strip()
+    # ── base system prompt ───────────────────────────────
+    system_parts: list[str] = []
 
+    if ctx.system_prompt:
+        system_parts.append(ctx.system_prompt)
+
+    # ── truth enforcement injection ──────────────────────
+    if ctx.truth_mode == TruthMode.STRICT:
+        system_parts.append(_TRUTH_STRICT)
+    elif ctx.truth_mode == TruthMode.HYBRID:
+        system_parts.append(_TRUTH_HYBRID)
+    # GENERATIVE → no injection
+
+    # ── retrieved context ────────────────────────────────
+    if ctx.retrieved_context:
+        system_parts.append(
+            f"## CONTEXT\n{ctx.retrieved_context}"
+        )
+
+    system = "\n\n".join(system_parts).strip()
     if system:
         messages.append({"role": "system", "content": system})
 
@@ -38,17 +74,10 @@ def build_messages(ctx: PromptContext) -> list[dict]:
 
 
 def build_system_prompt(persona: str = "", rules: list[str] | None = None) -> str:
-    """
-    Build a system prompt string from persona and rules.
-    Optional helper — use when you need structured system prompts.
-    """
     parts: list[str] = []
-
     if persona:
         parts.append(persona)
-
     if rules:
         rules_text = "\n".join(f"- {r}" for r in rules)
         parts.append(f"## Rules\n{rules_text}")
-
     return "\n\n".join(parts)
