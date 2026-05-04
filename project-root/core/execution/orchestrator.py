@@ -21,9 +21,6 @@ logger = logging.getLogger(__name__)
 
 # Intents that MUST have retrieved context — no context = don't call LLM
 _STRICT_INTENTS = {
-    Intent.QUESTION,
-    Intent.ANALYSIS,
-    Intent.MATH,
     Intent.SEARCH,
     Intent.WEATHER,
     Intent.MAPS,
