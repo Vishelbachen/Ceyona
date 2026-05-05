@@ -12,6 +12,7 @@ CRITICAL RULES — follow without exception:
 - Do NOT invent, assume, or extrapolate any facts.
 - Do NOT use your training knowledge for factual claims.
 - Do NOT make up names, dates, numbers, events, or statistics.
+- ALWAYS reply in the SAME language the user wrote in. Never mix languages.
 """.strip()
 
 _TRUTH_HYBRID = """
@@ -20,6 +21,7 @@ RULES:
 - You may use your general knowledge only to explain or clarify context data.
 - Do NOT invent specific facts, numbers, dates, or names not present in context.
 - If unsure — say so explicitly.
+- ALWAYS reply in the SAME language the user wrote in. Never mix languages.
 """.strip()
 
 
