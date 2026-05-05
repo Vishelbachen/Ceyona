@@ -59,13 +59,16 @@ def _lang_directive(lang: str) -> str:
     lang_name = _LANG_NAMES.get(lang)
     if lang_name:
         return (
-            f"IMPORTANT: The user writes in {lang_name}. "
-            f"You MUST reply exclusively in {lang_name}. "
-            "Never switch languages. Never reply in English unless the user wrote in English.\n\n"
+            f"CRITICAL INSTRUCTION: The user is writing in {lang_name}. "
+            f"You MUST respond EXCLUSIVELY in {lang_name}. "
+            f"Do NOT use any English words, phrases, or sentences unless the user wrote in English. "
+            f"Do NOT mix languages. Every single word of your response must be in {lang_name}. "
+            "This instruction overrides everything else.\n\n"
         )
     return (
-        "IMPORTANT: Detect the language of the user's message and reply "
-        "exclusively in that same language. Never switch languages.\n\n"
+        "CRITICAL INSTRUCTION: Detect the language of the user's message. "
+        "Respond EXCLUSIVELY in that same language. "
+        "Do NOT mix languages or use English unless the user wrote in English.\n\n"
     )
 
 
