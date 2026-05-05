@@ -3,231 +3,280 @@ from __future__ import annotations
 import logging
 import re
 
-from external.maps import maps_service
-from external.search import search_service
-from external.weather import weather_service
+import httpx
+
+from app.settings import settings
 
 logger = logging.getLogger(__name__)
 
-
-# ─── MAPS POI QUERY PARSER ────────────────────────────────────────────────────
-
-# Maps common POI attribute keywords to category strings for the maps service.
-# The parser strips these keywords from the query to extract the place name.
-
-_POI_ATTRIBUTE_PATTERNS: tuple[tuple[re.Pattern, str], ...] = (
-    # hours / open
-    (re.compile(
-        r"\b(opening hours?|opening times?|hours? of operation|business hours?|"
-        r"what time does|what time do|is it open|is open now|opens? at|closes? at|"
-        r"часы работы|режим работы|когда открывается|когда закрывается|"
-        r"во сколько открывается|во сколько закрывается|"
-        r"сейчас открыто|сейчас работает|работает сейчас|открыто сейчас|"
-        r"öffnungszeiten|heures d.ouverture|horarios?|"
-        r"orari di apertura|çalışma saatleri|ساعات العمل|营业时间|営業時間|영업시간)\b",
-        re.IGNORECASE,
-    ), "hours"),
-    # phone / contact
-    (re.compile(
-        r"\b(phone number(?: of)?|contact number|номер телефона|как позвонить|"
-        r"telefonnummer|numéro de téléphone|número de teléfono|"
-        r"numero di telefono|telefon numarası|رقم الهاتف|电话号码|電話番号|전화번호)\b",
-        re.IGNORECASE,
-    ), "phone"),
-    # rating / reviews
-    (re.compile(
-        r"\b(rating(?: of)?|reviews? of|how good is|is it worth|"
-        r"рейтинг|отзывы|стоит ли идти|стоит посетить|"
-        r"bewertung|rezensionen|avis sur|reseñas?|recensioni|yorumlar|"
-        r"تقييم|مراجعات|评分|評分|評価|口コミ|평점|리뷰)\b",
-        re.IGNORECASE,
-    ), "rating"),
-    # website
-    (re.compile(
-        r"\b(website(?: of)?|official website|офиц(?:иальный)? сайт|"
-        r"webseite|site web|sitio web|sito web|web sitesi|الموقع الرسمي|官方网站|公式サイト|공식 웹사이트)\b",
-        re.IGNORECASE,
-    ), "website"),
-    # price / admission
-    (re.compile(
-        r"\b(admission fee|entry fee|ticket price|price(?: of)?|"
-        r"how much (?:does it cost|to get in)|"
-        r"цена входа|стоимость билета|сколько стоит вход|стоимость посещения|"
-        r"eintrittspreise|prix d.entr.e|precio de entrada|preço de entrada|"
-        r"prezzo di ingresso|giriş ücreti|سعر الدخول|入场费|入場料|입장료)\b",
-        re.IGNORECASE,
-    ), "price"),
-)
-
-_POI_STRIP_PATTERNS: tuple[re.Pattern, ...] = tuple(
-    p for p, _ in _POI_ATTRIBUTE_PATTERNS
-)
+_TIMEOUT = 15.0
+_MAX_CHARS = 5000
 
 
-def _parse_poi_params(query: str, lang: str) -> dict:
-    """
-    Extract category and location from a free-form POI query.
+# ─── INDIVIDUAL TOOL IMPLEMENTATIONS ─────────────────────────────────────────
 
-    Strategy:
-      1. Detect which attribute is being asked about (hours/phone/rating/etc.)
-      2. Strip attribute keywords from query to get the place name / location
-      3. Return {query, category, location, lang} for maps_service.search_poi
-    """
-    cleaned = query
-    detected_category = "place"  # default
+async def _weather(query: str, lang: str = "en") -> str:
+    """Fetch real weather data from OpenWeatherMap."""
+    if not settings.openweather_api_key:
+        return ""
 
-    for pattern, category in _POI_ATTRIBUTE_PATTERNS:
-        if pattern.search(cleaned):
-            detected_category = category
-            cleaned = pattern.sub("", cleaned)
-            break  # first match wins
+    # extract city name from query
+    city = _extract_city(query)
+    if not city:
+        return ""
 
-    # Strip common filler words
-    filler = re.compile(
-        r"\b(of|the|a|an|its|their|this|that|в|о|об|на|для|это|тот|та)\b",
-        re.IGNORECASE,
-    )
-    cleaned = filler.sub(" ", cleaned).strip()
-    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" ?,.")
-
-    location = cleaned if cleaned else query
-
-    return {
-        "query": query,
-        "category": detected_category,
-        "location": location,
-        "lang": lang,
-    }
-
-
-# ─── TOOL RUNNER ──────────────────────────────────────────────────────────────
-
-async def run_tool(
-    tool_name: str,
-    params: dict,
-    lang: str = "en",
-) -> str | None:
-    """
-    Dispatch to external tool.
-    Returns result string or None on failure.
-    None → orchestrator falls back to LLM.
-    """
     try:
-        # ── weather (current) ─────────────────────────────────────────────────
-        if tool_name == "weather":
-            # Support both explicit city param and full query string
-            city = params.get("city", "").strip()
-            if not city:
-                # Extract city from query if city not explicitly provided
-                query = params.get("query", "").strip()
-                city = re.sub(
-                    r"(weather|погода|прогноз|forecast|temperatura|температура"
-                    r"|wetter|météo|clima|meteo|hava durumu|الطقس|天气|天氣|天気|날씨"
-                    r"|ამინდი|եղանակ|ob-havo|ауа райы|yağış)\s*",
-                    "", query, flags=re.IGNORECASE,
-                ).strip(" ?,.")
-            city = re.sub(r"[^\w\s\-]", "", city).strip()
-            if not city:
-                logger.warning("Weather: empty city")
-                return None
-            data = await weather_service.get_current(city=city, lang=lang)
-            if not data:
-                logger.warning("Weather: no data", extra={"city": city})
-                return None
-            return weather_service.format_current(data, lang=lang)
-
-        # ── weather (forecast) ────────────────────────────────────────────────
-        elif tool_name == "weather_forecast":
-            city = params.get("city", "").strip()
-            cnt  = int(params.get("cnt", 5))
-            if not city:
-                query = params.get("query", "").strip()
-                city = re.sub(
-                    r"(forecast|прогноз на|погода на)\s*", "", query,
-                    flags=re.IGNORECASE,
-                ).strip()
-            city = re.sub(r"[^\w\s\-]", "", city).strip()
-            if not city:
-                return None
-            data = await weather_service.get_forecast(city=city, lang=lang, cnt=cnt)
-            if not data:
-                return None
-            items = data.get("list", [])[:cnt]
-            lines = []
-            for item in items:
-                dt   = item.get("dt_txt", "")
-                temp = item.get("main", {}).get("temp", "?")
-                desc = ""
-                w    = item.get("weather", [])
-                if w:
-                    desc = w[0].get("description", "")
-                lines.append(f"{dt}: {temp}°C, {desc}")
-            return "\n".join(lines) if lines else None
-
-        # ── maps (geocode) ────────────────────────────────────────────────────
-        elif tool_name in ("maps", "geocode"):
-            query = params.get("query", "").strip()
-            if not query:
-                return None
-            feature = await maps_service.geocode(query=query, lang=lang)
-            if not feature:
-                return maps_service.format_not_found(lang)
-            return maps_service.format_geocode(feature, lang=lang)
-
-        # ── maps_poi ──────────────────────────────────────────────────────────
-        elif tool_name == "maps_poi":
-            # Support both pre-parsed params and raw query
-            category = params.get("category", "").strip()
-            location = params.get("location", "").strip()
-
-            # If intent_engine passed raw query, parse it here
-            if not category:
-                raw_query = params.get("query", "").strip()
-                if not raw_query:
-                    logger.warning("maps_poi: no query or category", extra={"params": params})
-                    return None
-                parsed = _parse_poi_params(raw_query, lang)
-                category = parsed["category"]
-                location = parsed["location"]
-
-            if not category:
-                logger.warning("maps_poi: empty category after parsing", extra={"params": params})
-                return None
-
-            logger.info("maps_poi dispatch", extra={
-                "category": category,
-                "location": location,
-            })
-
-            feature = await maps_service.search_poi(
-                category=category,
-                location=location,
-                lang=lang,
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            r = await client.get(
+                "https://api.openweathermap.org/data/2.5/weather",
+                params={
+                    "q": city,
+                    "appid": settings.openweather_api_key,
+                    "units": "metric",
+                    "lang": lang,
+                },
             )
-            if not feature:
-                return maps_service.format_poi_not_found(
-                    category=category,
-                    location=location,
-                    lang=lang,
-                )
-            return maps_service.format_poi(feature, lang=lang)
+            r.raise_for_status()
+            d = r.json()
 
-        # ── search ────────────────────────────────────────────────────────────
-        elif tool_name == "search":
-            query = params.get("query", "").strip()
-            num   = int(params.get("num", 5))
-            if not query:
-                return None
-            results = await search_service.search(query=query, lang=lang, num=num)
-            if not results:
-                return None
-            return search_service.format_results(results, lang=lang)
+            name    = d.get("name", city)
+            country = d.get("sys", {}).get("country", "")
+            temp    = d["main"]["temp"]
+            feels   = d["main"]["feels_like"]
+            desc    = d["weather"][0]["description"]
+            humid   = d["main"]["humidity"]
+            wind    = d["wind"]["speed"]
 
-        else:
-            logger.warning("Unknown tool", extra={"tool_name": tool_name})
-            return None
+            return (
+                f"Weather in {name}, {country}:\n"
+                f"Temperature: {temp:.1f}°C (feels like {feels:.1f}°C)\n"
+                f"Conditions: {desc}\n"
+                f"Humidity: {humid}%\n"
+                f"Wind: {wind} m/s"
+            )
+    except Exception as exc:
+        logger.error("Weather API failed", extra={"city": city, "error": str(exc)})
+        return ""
+
+
+async def _search(query: str, lang: str = "en") -> str:
+    """Search the web via SerpAPI."""
+    if not settings.serpapi_key:
+        return ""
+
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            r = await client.get(
+                "https://serpapi.com/search",
+                params={
+                    "q": query,
+                    "api_key": settings.serpapi_key,
+                    "num": 5,
+                    "engine": "google",
+                    "hl": lang,
+                },
+            )
+            r.raise_for_status()
+            data = r.json()
+
+            results = []
+
+            # answer box (direct answer)
+            ab = data.get("answer_box", {})
+            if ab.get("answer"):
+                results.append(f"Direct answer: {ab['answer']}")
+            elif ab.get("snippet"):
+                results.append(f"Direct answer: {ab['snippet']}")
+
+            # knowledge graph
+            kg = data.get("knowledge_graph", {})
+            if kg.get("description"):
+                results.append(f"Summary: {kg['description']}")
+
+            # organic results
+            for item in data.get("organic_results", [])[:5]:
+                title   = item.get("title", "")
+                snippet = item.get("snippet", "")
+                link    = item.get("link", "")
+                if snippet:
+                    results.append(f"{title}: {snippet}\nSource: {link}")
+
+            return "\n\n".join(results)[:_MAX_CHARS]
 
     except Exception as exc:
-        import traceback
-        logger.error("run_tool failed: %s\n%s", str(exc), traceback.format_exc())
-        return None
+        logger.error("Search API failed", extra={"query": query, "error": str(exc)})
+        return ""
+
+
+async def _maps(query: str, lang: str = "en") -> str:
+    """Geocode a location via Mapbox."""
+    if not settings.mapbox_token:
+        return ""
+
+    location = _extract_location(query)
+    if not location:
+        location = query
+
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            r = await client.get(
+                f"https://api.mapbox.com/geocoding/v5/mapbox.places/{location}.json",
+                params={
+                    "access_token": settings.mapbox_token,
+                    "limit": 1,
+                    "language": lang,
+                },
+            )
+            r.raise_for_status()
+            features = r.json().get("features", [])
+            if not features:
+                return ""
+
+            f    = features[0]
+            name = f.get("place_name", location)
+            lon  = f["geometry"]["coordinates"][0]
+            lat  = f["geometry"]["coordinates"][1]
+
+            return (
+                f"Location: {name}\n"
+                f"Coordinates: {lat:.6f}°N, {lon:.6f}°E\n"
+                f"Google Maps: https://maps.google.com/?q={lat},{lon}"
+            )
+    except Exception as exc:
+        logger.error("Maps API failed", extra={"query": query, "error": str(exc)})
+        return ""
+
+
+async def _maps_poi(query: str, lang: str = "en") -> str:
+    """Search points of interest via SerpAPI Google Maps."""
+    if not settings.serpapi_key:
+        return ""
+
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            r = await client.get(
+                "https://serpapi.com/search",
+                params={
+                    "engine": "google_maps",
+                    "q": query,
+                    "api_key": settings.serpapi_key,
+                    "hl": lang,
+                },
+            )
+            r.raise_for_status()
+            data = r.json()
+
+            results = []
+            for place in data.get("local_results", [])[:3]:
+                name    = place.get("title", "")
+                address = place.get("address", "")
+                rating  = place.get("rating", "")
+                hours   = place.get("hours", "")
+                phone   = place.get("phone", "")
+                website = place.get("website", "")
+
+                parts = [name]
+                if address: parts.append(f"Address: {address}")
+                if rating:  parts.append(f"Rating: {rating}★")
+                if hours:   parts.append(f"Hours: {hours}")
+                if phone:   parts.append(f"Phone: {phone}")
+                if website: parts.append(f"Website: {website}")
+                results.append("\n".join(parts))
+
+            return "\n\n".join(results)
+
+    except Exception as exc:
+        logger.error("Maps POI API failed", extra={"query": query, "error": str(exc)})
+        return ""
+
+
+async def _web_search_fallback(query: str, lang: str = "en") -> str:
+    """
+    Generic web search for QUESTION intent when retrieval has no data.
+    Same as _search but used as grounding fallback.
+    """
+    return await _search(query, lang)
+
+
+async def fetch_page(url: str) -> str:
+    """Fetch raw text content from a URL."""
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True) as client:
+            r = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
+            r.raise_for_status()
+            return r.text[:_MAX_CHARS]
+    except Exception as exc:
+        logger.error("Page fetch failed", extra={"url": url, "error": str(exc)})
+        return ""
+
+
+# ─── CITY / LOCATION EXTRACTION ──────────────────────────────────────────────
+
+_WEATHER_PREPS = (
+    "in ", "в ", "для ", "for ", "at ", "dans ", "en ", "in ",
+    "für ", "для города ", "city ", "город ",
+)
+
+
+def _extract_city(query: str) -> str:
+    """Extract city name from weather query."""
+    lower = query.lower()
+    for prep in _WEATHER_PREPS:
+        idx = lower.find(prep)
+        if idx != -1:
+            city = query[idx + len(prep):].strip()
+            city = re.split(r"[?,\n]", city)[0].strip()
+            if city:
+                return city
+    # fallback: last word(s)
+    words = query.strip().split()
+    return " ".join(words[-2:]) if len(words) >= 2 else query.strip()
+
+
+def _extract_location(query: str) -> str:
+    """Extract location from maps query."""
+    lower = query.lower()
+    for kw in ("where is", "location of", "address of", "where are",
+               "где находится", "адрес", "покажи на карте",
+               "como llegar a", "wo ist", "où est"):
+        idx = lower.find(kw)
+        if idx != -1:
+            loc = query[idx + len(kw):].strip()
+            loc = re.split(r"[?,\n]", loc)[0].strip()
+            if loc:
+                return loc
+    return query.strip()
+
+
+# ─── MAIN DISPATCHER ─────────────────────────────────────────────────────────
+
+_TOOL_MAP = {
+    "weather":   _weather,
+    "search":    _search,
+    "maps":      _maps,
+    "maps_poi":  _maps_poi,
+    "web_search": _web_search_fallback,
+}
+
+
+async def run_tool(tool_name: str, params: dict, lang: str = "en") -> str:
+    """
+    Main entry point called by orchestrator._run_tool().
+    Dispatches to the correct tool implementation.
+    Returns empty string on failure — orchestrator handles fallback.
+    """
+    fn = _TOOL_MAP.get(tool_name)
+    if fn is None:
+        logger.warning("Unknown tool", extra={"tool": tool_name})
+        return ""
+
+    query = params.get("query", "")
+    lang  = params.get("lang", lang)
+
+    logger.info("Running tool", extra={"tool": tool_name, "query": query[:80]})
+    result = await fn(query, lang)
+
+    if not result:
+        logger.warning("Tool returned empty result", extra={"tool": tool_name})
+
+    return result
