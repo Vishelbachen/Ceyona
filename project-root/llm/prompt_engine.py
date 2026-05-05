@@ -35,12 +35,37 @@ class PromptContext:
 
 
 def build_messages(ctx: PromptContext) -> list[dict]:
-    """
-    Assemble messages array for LLM from prompt context.
-    Format: [system, ...history, user]
-    Injects truth enforcement rules based on TruthMode.
-    """
     messages: list[dict] = []
+
+    system_parts: list[str] = []
+
+    # ── language instruction (always first) ──────────────
+    system_parts.append(
+        f"You MUST reply in the same language the user writes in. "
+        f"Never mix languages. Never use English words inside non-English sentences."
+    )
+
+    if ctx.system_prompt:
+        system_parts.append(ctx.system_prompt)
+
+    if ctx.truth_mode == TruthMode.STRICT:
+        system_parts.append(_TRUTH_STRICT)
+    elif ctx.truth_mode == TruthMode.HYBRID:
+        system_parts.append(_TRUTH_HYBRID)
+
+    if ctx.retrieved_context:
+        system_parts.append(f"## CONTEXT\n{ctx.retrieved_context}")
+
+    system = "\n\n".join(system_parts).strip()
+    if system:
+        messages.append({"role": "system", "content": system})
+
+    if ctx.conversation_history:
+        messages.extend(ctx.conversation_history)
+
+    messages.append({"role": "user", "content": ctx.user_message})
+
+    return messages
 
     # ── base system prompt ───────────────────────────────
     system_parts: list[str] = []
