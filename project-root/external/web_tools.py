@@ -9,58 +9,319 @@ from app.settings import settings
 
 logger = logging.getLogger(__name__)
 
-_TIMEOUT = 15.0
+_TIMEOUT  = 15.0
 _MAX_CHARS = 5000
 
+# ─── RUSSIAN CASE NORMALIZATION ───────────────────────────────────────────────
+# OpenWeather accepts nominative case only.
+# Strip common Russian locative/genitive suffixes to recover base form.
 
-# ─── INDIVIDUAL TOOL IMPLEMENTATIONS ─────────────────────────────────────────
+_RU_SUFFIX_MAP: tuple[tuple[str, str], ...] = (
+    # Locative suffixes (в Москве → Москва, в Воронеже → Воронеж)
+    ("ове", "ов"),   # Воронеже → Воронеж (intermediate step)
+    ("же",  ""),     # Воронеже → Воронеж
+    ("не",  "н"),    # Казани → Казань (handled below)
+    ("ни",  "нь"),   # Казани → Казань
+    ("ве",  "в"),    # Москве → Москв → need special
+    ("ге",  "г"),    # Риге → Риг
+    ("ке",  "к"),    # Риге → Риг
+    ("ле",  "ль"),   # Сочи special
+    ("ре",  "рь"),
+    ("пе",  "пь"),
+    ("бе",  "бь"),
+    ("те",  "ть"),
+    ("де",  "дь"),
+    ("зе",  "зь"),
+    ("се",  "сь"),
+    ("це",  "ць"),
+    ("ие",  "ий"),   # Новосибирске → Новосибирский? No — handled differently
+    ("ске", "ск"),   # Новосибирске → Новосибирск ✓
+    ("рге", "рг"),   # Петербурге → Петербург ✓
+    ("рге", "рг"),
+    ("нге", "нг"),
+    ("бурге", "бург"),  # Екатеринбурге → Екатеринбург ✓
+    ("граде", "град"),  # Волгограде → Волгоград ✓
+    ("горе", "гор"),    # Белгоре → Белгор? No — Белгороде → Белгород
+    ("роде", "род"),    # Белгороде → Белгород ✓
+    ("воде", "вод"),    # Краснодаре special
+    ("даре", "дар"),    # Краснодаре → Краснодар ✓
+    ("оде",  "од"),     # Нижнем Новгороде → Нижний Новгород (partial)
+    ("нске", "нск"),    # Барнаулске → Барнаульск? No — Новосибирске → Новосибирск ✓
+    ("льске","льск"),
+    ("вске", "вск"),
+    ("йске", "йск"),
+    ("ске",  "ск"),
+)
+
+# Direct known-city overrides — most common Russian cities in locative
+_RU_CITY_OVERRIDES: dict[str, str] = {
+    "москве":          "Moscow",
+    "санкт-петербурге": "Saint Petersburg",
+    "петербурге":      "Saint Petersburg",
+    "питере":          "Saint Petersburg",
+    "новосибирске":    "Novosibirsk",
+    "екатеринбурге":   "Yekaterinburg",
+    "казани":          "Kazan",
+    "нижнем новгороде": "Nizhny Novgorod",
+    "челябинске":      "Chelyabinsk",
+    "омске":           "Omsk",
+    "самаре":          "Samara",
+    "ростове-на-дону": "Rostov-on-Don",
+    "ростове":         "Rostov-on-Don",
+    "уфе":             "Ufa",
+    "красноярске":     "Krasnoyarsk",
+    "перми":           "Perm",
+    "воронеже":        "Voronezh",
+    "волгограде":      "Volgograd",
+    "краснодаре":      "Krasnodar",
+    "саратове":        "Saratov",
+    "тюмени":          "Tyumen",
+    "тольятти":        "Tolyatti",
+    "ижевске":         "Izhevsk",
+    "барнауле":        "Barnaul",
+    "ульяновске":      "Ulyanovsk",
+    "владивостоке":    "Vladivostok",
+    "хабаровске":      "Khabarovsk",
+    "иркутске":        "Irkutsk",
+    "ярославле":       "Yaroslavl",
+    "махачкале":       "Makhachkala",
+    "томске":          "Tomsk",
+    "оренбурге":       "Orenburg",
+    "кемерове":        "Kemerovo",
+    "новокузнецке":    "Novokuznetsk",
+    "рязани":          "Ryazan",
+    "астрахани":       "Astrakhan",
+    "набережных челнах": "Naberezhnye Chelny",
+    "пензе":           "Penza",
+    "липецке":         "Lipetsk",
+    "кирове":          "Kirov",
+    "чебоксарах":      "Cheboksary",
+    "калининграде":    "Kaliningrad",
+    "тбилиси":         "Tbilisi",
+    "киеве":           "Kyiv",
+    "харькове":        "Kharkiv",
+    "одессе":          "Odessa",
+    "минске":          "Minsk",
+    "алматы":          "Almaty",
+    "ташкенте":        "Tashkent",
+    "баку":            "Baku",
+    "ереване":         "Yerevan",
+    "бишкеке":         "Bishkek",
+    "душанбе":         "Dushanbe",
+    "ашхабаде":        "Ashgabat",
+}
+
+# Georgian postposition -ში → strip it
+def _normalize_georgian_city(word: str) -> str:
+    if word.endswith("ში") and len(word) > 4:
+        return word[:-2]
+    return word
+
+# Stop words — never a city name
+_CITY_STOP_WORDS: frozenset[str] = frozenset({
+    "сейчас", "сегодня", "прямо", "там", "здесь", "это", "какая", "какой",
+    "будет", "есть", "данный", "этот", "реальная", "реальный", "актуальная",
+    "now", "today", "currently", "right", "there", "here", "the", "a", "an",
+    "real", "current", "actual", "latest",
+    "ამ", "ახლა", "წუთას", "დღეს", "რა", "არის",
+    "şu", "an", "şimdi", "bugün",
+    "الآن", "اليوم", "هناك", "في",
+    "अभी", "आज", "वहाँ",
+})
+
+_WEATHER_PREPS = (
+    # Russian — order matters: longer first
+    "погода в ", "температура в ", "прогноз для ", "погоду в ",
+    "погода для города ", "для города ",
+    # Georgian postposition handled separately
+    # English
+    "weather in ", "temperature in ", "forecast for ", "in ",
+    # Other
+    "für ", "dans ", "en ", "para ",
+)
+
+
+def _normalize_ru_city(city: str) -> str:
+    """Convert Russian locative/genitive form to nominative for OpenWeather."""
+    lower = city.lower().strip()
+
+    # Direct override — most accurate
+    if lower in _RU_CITY_OVERRIDES:
+        return _RU_CITY_OVERRIDES[lower]
+
+    # Try suffix stripping (longest suffix first)
+    for suffix, replacement in sorted(_RU_SUFFIX_MAP, key=lambda x: -len(x[0])):
+        if lower.endswith(suffix) and len(lower) > len(suffix) + 2:
+            base = lower[: -len(suffix)] + replacement
+            # Capitalize properly
+            return base.capitalize()
+
+    return city.strip()
+
+
+def _extract_city(query: str) -> str:
+    """Extract and normalize city name from weather query."""
+    lower = query.lower()
+
+    # Georgian: word ending in -ში
+    if "ში" in query:
+        for word in query.split():
+            if word.endswith("ში") and len(word) > 4:
+                city = word[:-2].rstrip("?.!,")
+                if city.lower() not in _CITY_STOP_WORDS and len(city) > 2:
+                    return city
+
+    # Prep-based extraction
+    for prep in _WEATHER_PREPS:
+        idx = lower.find(prep)
+        if idx != -1:
+            rest = query[idx + len(prep):].strip()
+            city = re.split(r"[?,\n]", rest)[0].strip()
+            # Remove trailing stop words
+            words = city.split()
+            while words and words[-1].lower() in _CITY_STOP_WORDS:
+                words.pop()
+            city = " ".join(words).rstrip("?.!,")
+            if city and city.lower() not in _CITY_STOP_WORDS and len(city) > 1:
+                return _normalize_ru_city(city)
+
+    # Fallback: last meaningful word(s)
+    words = query.strip().rstrip("?.!,").split()
+    candidates = [w for w in words if w.lower() not in _CITY_STOP_WORDS and len(w) > 2]
+    if candidates:
+        city = candidates[-1]
+        return _normalize_ru_city(city)
+
+    return query.strip()
+
+
+def _extract_location(query: str) -> str:
+    """Extract location from maps query."""
+    lower = query.lower()
+    for kw in (
+        "где находится", "где находятся", "местоположение", "адрес",
+        "покажи на карте", "координаты", "покажи местоположение",
+        "where is", "location of", "address of", "where are",
+        "show on map", "coordinates of",
+        "wo ist", "où est", "dónde está",
+    ):
+        idx = lower.find(kw)
+        if idx != -1:
+            loc = query[idx + len(kw):].strip()
+            loc = re.split(r"[?,\n]", loc)[0].strip()
+            if loc:
+                return loc
+    return query.strip()
+
+
+# ─── WEATHER OUTPUT ───────────────────────────────────────────────────────────
+
+_OW_LANG_MAP: dict[str, str] = {
+    "en": "en", "ru": "ru", "de": "de", "fr": "fr", "es": "es",
+    "pt": "pt", "it": "it", "tr": "tr", "ar": "ar", "zh": "zh_cn",
+    "ja": "ja", "ko": "ko", "pl": "pl", "uk": "uk", "fa": "fa",
+    "nl": "nl", "sv": "sv", "no": "no", "da": "da", "fi": "fi",
+    "cs": "cs", "sk": "sk", "ro": "ro", "hu": "hu", "bg": "bg",
+    "hr": "hr", "sr": "sr", "he": "he", "vi": "vi", "th": "th",
+    "id": "id", "ms": "ms",
+}
+
+_WEATHER_ICON_MAP: dict[str, str] = {
+    "01d": "☀️",  "01n": "🌙",  "02d": "🌤️", "02n": "🌤️",
+    "03d": "⛅",  "03n": "⛅",  "04d": "☁️",  "04n": "☁️",
+    "09d": "🌧️", "09n": "🌧️", "10d": "🌦️", "10n": "🌦️",
+    "11d": "⛈",  "11n": "⛈",  "13d": "❄️",  "13n": "❄️",
+    "50d": "🌫️", "50n": "🌫️",
+}
+
+_FEELS_LIKE: dict[str, str] = {
+    "en": "feels like", "ru": "ощущается как", "de": "gefühlt",
+    "fr": "ressenti",   "es": "sensación",      "pt": "sensação",
+    "it": "percepito",  "tr": "hissedilen",     "ar": "يبدو كأنه",
+    "zh": "体感",        "ja": "体感",            "ko": "체감",
+    "pl": "odczuwalna", "uk": "відчувається як","fa": "احساس می‌شود",
+    "nl": "voelt als",  "sv": "känns som",      "no": "føles som",
+    "da": "føles som",  "fi": "tuntuu kuin",    "he": "מורגש כ",
+    "ka": "feels like", "hy": "feels like",
+}
+
+_HUMIDITY: dict[str, str] = {
+    "en": "Humidity",        "ru": "Влажность",      "de": "Luftfeuchtigkeit",
+    "fr": "Humidité",        "es": "Humedad",         "pt": "Umidade",
+    "it": "Umidità",         "tr": "Nem",             "ar": "الرطوبة",
+    "zh": "湿度",             "ja": "湿度",             "ko": "습도",
+    "pl": "Wilgotność",      "uk": "Вологість",       "fa": "رطوبت",
+    "nl": "Vochtigheid",     "sv": "Luftfuktighet",   "no": "Luftfuktighet",
+    "da": "Luftfugtighed",   "fi": "Kosteus",         "he": "לחות",
+    "ka": "Humidity",        "hy": "Humidity",
+}
+
+_WIND: dict[str, str] = {
+    "en": "Wind",   "ru": "Ветер",  "de": "Wind",  "fr": "Vent",
+    "es": "Viento", "pt": "Vento",  "it": "Vento", "tr": "Rüzgar",
+    "ar": "الرياح", "zh": "风速",    "ja": "風速",   "ko": "바람",
+    "pl": "Wiatr",  "uk": "Вітер",  "fa": "باد",   "nl": "Wind",
+    "sv": "Vind",   "no": "Vind",   "da": "Vind",  "fi": "Tuuli",
+    "he": "רוח",    "ka": "Wind",   "hy": "Wind",
+}
+
+
+def _format_weather(d: dict, lang: str) -> str:
+    city    = d.get("name", "")
+    country = d.get("sys", {}).get("country", "")
+    temp    = d["main"]["temp"]
+    feels   = d["main"]["feels_like"]
+    humid   = d["main"]["humidity"]
+    desc    = d["weather"][0]["description"].capitalize()
+    wind    = d["wind"]["speed"]
+    icon    = d["weather"][0].get("icon", "")
+    emoji   = _WEATHER_ICON_MAP.get(icon, "🌤️")
+    loc     = f"{city}, {country}" if country else city
+
+    fl  = _FEELS_LIKE.get(lang, _FEELS_LIKE["en"])
+    hum = _HUMIDITY.get(lang, _HUMIDITY["en"])
+    wnd = _WIND.get(lang, _WIND["en"])
+
+    return (
+        f"{emoji} {loc}\n"
+        f"{desc}\n"
+        f"🌡 {temp:.0f}°C ({fl} {feels:.0f}°C)\n"
+        f"💧 {hum}: {humid}%\n"
+        f"💨 {wnd}: {wind} m/s"
+    )
+
+
+# ─── TOOL IMPLEMENTATIONS ─────────────────────────────────────────────────────
 
 async def _weather(query: str, lang: str = "en") -> str:
-    """Fetch real weather data from OpenWeatherMap."""
     if not settings.openweather_api_key:
         return ""
 
-    # extract city name from query
     city = _extract_city(query)
     if not city:
         return ""
+
+    ow_lang = _OW_LANG_MAP.get(lang, "en")
 
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             r = await client.get(
                 "https://api.openweathermap.org/data/2.5/weather",
                 params={
-                    "q": city,
+                    "q":     city,
                     "appid": settings.openweather_api_key,
                     "units": "metric",
-                    "lang": lang,
+                    "lang":  ow_lang,
                 },
             )
             r.raise_for_status()
-            d = r.json()
-
-            name    = d.get("name", city)
-            country = d.get("sys", {}).get("country", "")
-            temp    = d["main"]["temp"]
-            feels   = d["main"]["feels_like"]
-            desc    = d["weather"][0]["description"]
-            humid   = d["main"]["humidity"]
-            wind    = d["wind"]["speed"]
-
-            return (
-                f"Weather in {name}, {country}:\n"
-                f"Temperature: {temp:.1f}°C (feels like {feels:.1f}°C)\n"
-                f"Conditions: {desc}\n"
-                f"Humidity: {humid}%\n"
-                f"Wind: {wind} m/s"
-            )
+            return _format_weather(r.json(), lang)
     except Exception as exc:
         logger.error("Weather API failed", extra={"city": city, "error": str(exc)})
         return ""
 
 
 async def _search(query: str, lang: str = "en") -> str:
-    """Search the web via SerpAPI."""
     if not settings.serpapi_key:
         return ""
 
@@ -69,11 +330,11 @@ async def _search(query: str, lang: str = "en") -> str:
             r = await client.get(
                 "https://serpapi.com/search",
                 params={
-                    "q": query,
+                    "q":       query,
                     "api_key": settings.serpapi_key,
-                    "num": 5,
-                    "engine": "google",
-                    "hl": lang,
+                    "num":     5,
+                    "engine":  "google",
+                    "hl":      lang,
                 },
             )
             r.raise_for_status()
@@ -81,19 +342,16 @@ async def _search(query: str, lang: str = "en") -> str:
 
             results = []
 
-            # answer box (direct answer)
             ab = data.get("answer_box", {})
             if ab.get("answer"):
                 results.append(f"Direct answer: {ab['answer']}")
             elif ab.get("snippet"):
                 results.append(f"Direct answer: {ab['snippet']}")
 
-            # knowledge graph
             kg = data.get("knowledge_graph", {})
             if kg.get("description"):
                 results.append(f"Summary: {kg['description']}")
 
-            # organic results
             for item in data.get("organic_results", [])[:5]:
                 title   = item.get("title", "")
                 snippet = item.get("snippet", "")
@@ -104,12 +362,11 @@ async def _search(query: str, lang: str = "en") -> str:
             return "\n\n".join(results)[:_MAX_CHARS]
 
     except Exception as exc:
-        logger.error("Search API failed", extra={"query": query, "error": str(exc)})
+        logger.error("Search API failed", extra={"query": query[:50], "error": str(exc)})
         return ""
 
 
 async def _maps(query: str, lang: str = "en") -> str:
-    """Geocode a location via Mapbox."""
     if not settings.mapbox_token:
         return ""
 
@@ -123,8 +380,8 @@ async def _maps(query: str, lang: str = "en") -> str:
                 f"https://api.mapbox.com/geocoding/v5/mapbox.places/{location}.json",
                 params={
                     "access_token": settings.mapbox_token,
-                    "limit": 1,
-                    "language": lang,
+                    "limit":        1,
+                    "language":     lang,
                 },
             )
             r.raise_for_status()
@@ -138,17 +395,16 @@ async def _maps(query: str, lang: str = "en") -> str:
             lat  = f["geometry"]["coordinates"][1]
 
             return (
-                f"Location: {name}\n"
-                f"Coordinates: {lat:.6f}°N, {lon:.6f}°E\n"
+                f"📍 {name}\n"
+                f"Координаты: {lat:.5f}, {lon:.5f}\n"
                 f"Google Maps: https://maps.google.com/?q={lat},{lon}"
             )
     except Exception as exc:
-        logger.error("Maps API failed", extra={"query": query, "error": str(exc)})
+        logger.error("Maps API failed", extra={"query": query[:50], "error": str(exc)})
         return ""
 
 
 async def _maps_poi(query: str, lang: str = "en") -> str:
-    """Search points of interest via SerpAPI Google Maps."""
     if not settings.serpapi_key:
         return ""
 
@@ -157,10 +413,10 @@ async def _maps_poi(query: str, lang: str = "en") -> str:
             r = await client.get(
                 "https://serpapi.com/search",
                 params={
-                    "engine": "google_maps",
-                    "q": query,
+                    "engine":  "google_maps",
+                    "q":       query,
                     "api_key": settings.serpapi_key,
-                    "hl": lang,
+                    "hl":      lang,
                 },
             )
             r.raise_for_status()
@@ -175,7 +431,7 @@ async def _maps_poi(query: str, lang: str = "en") -> str:
                 phone   = place.get("phone", "")
                 website = place.get("website", "")
 
-                parts = [name]
+                parts = [f"📍 {name}"]
                 if address: parts.append(f"Address: {address}")
                 if rating:  parts.append(f"Rating: {rating}★")
                 if hours:   parts.append(f"Hours: {hours}")
@@ -183,23 +439,18 @@ async def _maps_poi(query: str, lang: str = "en") -> str:
                 if website: parts.append(f"Website: {website}")
                 results.append("\n".join(parts))
 
-            return "\n\n".join(results)
+            return "\n\n---\n\n".join(results)
 
     except Exception as exc:
-        logger.error("Maps POI API failed", extra={"query": query, "error": str(exc)})
+        logger.error("Maps POI API failed", extra={"query": query[:50], "error": str(exc)})
         return ""
 
 
 async def _web_search_fallback(query: str, lang: str = "en") -> str:
-    """
-    Generic web search for QUESTION intent when retrieval has no data.
-    Same as _search but used as grounding fallback.
-    """
     return await _search(query, lang)
 
 
 async def fetch_page(url: str) -> str:
-    """Fetch raw text content from a URL."""
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True) as client:
             r = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -210,61 +461,19 @@ async def fetch_page(url: str) -> str:
         return ""
 
 
-# ─── CITY / LOCATION EXTRACTION ──────────────────────────────────────────────
-
-_WEATHER_PREPS = (
-    "in ", "в ", "для ", "for ", "at ", "dans ", "en ", "in ",
-    "für ", "для города ", "city ", "город ",
-)
-
-
-def _extract_city(query: str) -> str:
-    """Extract city name from weather query."""
-    lower = query.lower()
-    for prep in _WEATHER_PREPS:
-        idx = lower.find(prep)
-        if idx != -1:
-            city = query[idx + len(prep):].strip()
-            city = re.split(r"[?,\n]", city)[0].strip()
-            if city:
-                return city
-    # fallback: last word(s)
-    words = query.strip().split()
-    return " ".join(words[-2:]) if len(words) >= 2 else query.strip()
-
-
-def _extract_location(query: str) -> str:
-    """Extract location from maps query."""
-    lower = query.lower()
-    for kw in ("where is", "location of", "address of", "where are",
-               "где находится", "адрес", "покажи на карте",
-               "como llegar a", "wo ist", "où est"):
-        idx = lower.find(kw)
-        if idx != -1:
-            loc = query[idx + len(kw):].strip()
-            loc = re.split(r"[?,\n]", loc)[0].strip()
-            if loc:
-                return loc
-    return query.strip()
-
-
-# ─── MAIN DISPATCHER ─────────────────────────────────────────────────────────
+# ─── DISPATCHER ───────────────────────────────────────────────────────────────
 
 _TOOL_MAP = {
-    "weather":   _weather,
-    "search":    _search,
-    "maps":      _maps,
-    "maps_poi":  _maps_poi,
-    "web_search": _web_search_fallback,
+    "weather":        _weather,
+    "search":         _search,
+    "maps":           _maps,
+    "maps_poi":       _maps_poi,
+    "web_search":     _web_search_fallback,
+    "web_search_fallback": _web_search_fallback,
 }
 
 
 async def run_tool(tool_name: str, params: dict, lang: str = "en") -> str:
-    """
-    Main entry point called by orchestrator._run_tool().
-    Dispatches to the correct tool implementation.
-    Returns empty string on failure — orchestrator handles fallback.
-    """
     fn = _TOOL_MAP.get(tool_name)
     if fn is None:
         logger.warning("Unknown tool", extra={"tool": tool_name})
