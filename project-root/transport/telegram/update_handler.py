@@ -8,6 +8,9 @@ from transport.telegram.message_router import UpdateType, extract_text
 
 logger = logging.getLogger(__name__)
 
+# Intents that generate freely — no web search needed
+_NO_SEARCH_INTENTS = {"creative", "conversation", "code", "math"}
+
 
 def _estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
@@ -98,7 +101,7 @@ async def handle_message(
         "lang":           lang,
     })
 
-    # ── retrieval ─────────────────────────────────────────────────────────────
+    # ── retrieval (vector search in Supabase memory) ──────────────────────────
     retrieved_context = ""
     embedding_tokens  = 0
     rerank_tokens     = 0
@@ -147,9 +150,44 @@ async def handle_message(
             logger.warning("Retrieval failed, continuing without context", extra={
                 "error": str(exc),
             })
-            retrieved_context = ""
-            embedding_tokens  = 0
-            rerank_tokens     = 0
+
+    # ── web search fallback (when retrieval has no data) ──────────────────────
+    # Runs for QUESTION, ANALYSIS, INSTRUCTION, SEARCH, UNKNOWN
+    # Skipped for CREATIVE, CONVERSATION, CODE, MATH — they don't need grounding
+    if not retrieved_context:
+        try:
+            from cognition.intent_engine import classify
+            from external.web_tools import run_tool
+
+            quick_intent = classify(text, lang=lang)
+            intent_value = quick_intent.intent.value
+
+            if intent_value not in _NO_SEARCH_INTENTS:
+                # tool intents (weather/maps) already handled in orchestrator
+                # for everything else — do a web search
+                if intent_value in ("weather", "maps", "maps_poi"):
+                    web_result = await run_tool(
+                        tool_name=intent_value,
+                        params={"query": text, "lang": lang},
+                        lang=lang,
+                    )
+                else:
+                    web_result = await run_tool(
+                        tool_name="search",
+                        params={"query": text, "lang": lang},
+                        lang=lang,
+                    )
+
+                if web_result:
+                    retrieved_context = web_result
+                    logger.info("Web search fallback used", extra={
+                        "user_id": user_id,
+                        "intent":  intent_value,
+                        "chars":   len(web_result),
+                    })
+
+        except Exception as exc:
+            logger.warning("Web search fallback failed", extra={"error": str(exc)})
 
     request = OrchestratorRequest(
         user_message=text,
