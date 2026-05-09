@@ -32,6 +32,33 @@ def extract_text(update: dict) -> str:
     return ""
 
 
+def extract_photo(update: dict) -> dict | None:
+    """
+    Extract photo metadata from a message update.
+    Returns the largest available photo file_id dict, or None.
+    Telegram sends photos as array of sizes — we pick the last (largest).
+    """
+    for key in ("message", "edited_message"):
+        msg = update.get(key, {})
+        photos = msg.get("photo")
+        if photos:
+            # Telegram provides multiple resolutions; last = highest quality
+            best = photos[-1]
+            return {
+                "file_id": best.get("file_id", ""),
+                "file_unique_id": best.get("file_unique_id", ""),
+                "width": best.get("width", 0),
+                "height": best.get("height", 0),
+                "caption": msg.get("caption", ""),
+            }
+    return None
+
+
+def has_photo(update: dict) -> bool:
+    """Return True if this update contains a photo."""
+    return extract_photo(update) is not None
+
+
 def extract_callback_data(update: dict) -> str:
     """Extract callback_data from callback_query update."""
     return update.get("callback_query", {}).get("data", "")
