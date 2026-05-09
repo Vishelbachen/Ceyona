@@ -660,6 +660,21 @@ def _structure(text: str, intent: "Intent | None") -> str:
     return text
 
 
+def _normalize_for_telegram(text: str) -> str:
+    """Strip LaTeX math delimiters and Markdown formatting that Telegram cannot render."""
+    import re
+    # Remove block-level LaTeX: $$...$$
+    text = re.sub(r"\$\$(.*?)\$\$", r"\1", text, flags=re.DOTALL)
+    # Remove inline LaTeX: $...$
+    text = re.sub(r"\$(.*?)\$", r"\1", text)
+    # Remove Markdown headings (### Title → Title)
+    text = re.sub(r"^#{1,6}\s*", "", text, flags=re.MULTILINE)
+    # Remove bold/italic markers **text** and *text*
+    text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
+    text = re.sub(r"\*(.*?)\*", r"\1", text)
+    return text
+
+
 def _format(text: str) -> str:
     lines = text.splitlines()
     cleaned: list[str] = []
@@ -724,6 +739,7 @@ def synthesize(inp: SynthesisInput) -> SynthesisResult:
 
     # ── normal pipeline ───────────────────────────────────────────────────────
     text = _assemble(inp.raw_text)
+    text = _normalize_for_telegram(text)
     text = _structure(text, inp.intent)
     text = _format(text)
     text = _apply_correction(text)
