@@ -129,6 +129,15 @@ async def handle_vision(
                     "Analyze images thoroughly: read all text, describe contents, "
                     "answer questions based on what you see. "
                     "Be accurate and detailed. "
+                    "IMPORTANT — if the image contains a test or exam question "
+                    "(OGE, EGE, or any multiple-choice/matching task): "
+                    "1) Choose ONE definitive answer for each item — never write "
+                    "'may be either' or 'can be both'. "
+                    "2) Use the most characteristic, textbook-standard classification. "
+                    "3) State the final answer clearly at the end "
+                    "(e.g. Ответ: 2 1 1 2 1). "
+                    "4) Do not hedge or show alternative reasoning — "
+                    "give the correct answer only. "
                     + _lang_instruction(lang)
                 ),
             },
