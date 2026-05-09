@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import traceback
 
 from contracts.shared_types import Complexity, EPKDecision, Tier
 from core.execution.orchestrator import OrchestratorRequest, OrchestratorResult, UsageRecord, run
@@ -66,23 +67,23 @@ async def handle_message(
                 lang=lang,
             )
         except Exception as exc:
-            logger.error("Vision handler crashed", extra={"error": str(exc)})
+            tb = traceback.format_exc()
+            logger.error(f"Vision handler crashed: {exc!r}\n{tb}")
             vision_text = "❌ Image processing error."
 
-        # Return as OrchestratorResult so webhook pipeline stays uniform
         return OrchestratorResult(
             text=vision_text,
             tier=Tier.GENERAL,
             model="meta-llama/llama-4-maverick-17b-128e-instruct",
             epk_decision=EPKDecision.ALLOW,
             usage=UsageRecord(
-                input_tokens=_estimate_tokens(caption) + 500,  # rough image token estimate
+                input_tokens=_estimate_tokens(caption) + 500,
                 output_tokens=_estimate_tokens(vision_text),
                 embedding_tokens=0,
                 rerank_tokens=0,
                 tier=Tier.GENERAL,
                 embedding_type="large",
-                cost_usd=0.001,  # minimal cost placeholder
+                cost_usd=0.001,
             ),
             denied=False,
             deny_reason="",
@@ -196,10 +197,7 @@ async def handle_message(
                 "error": str(exc),
             })
 
-    # ── web search (always runs for non-generative intents) ───────────────────
-    # Runs for QUESTION, ANALYSIS, INSTRUCTION, SEARCH, UNKNOWN — always fetches
-    # live data so the bot NEVER says "my data may be outdated".
-    # Skipped for CREATIVE, CONVERSATION, CODE, MATH — no grounding needed.
+    # ── web search ────────────────────────────────────────────────────────────
     if not retrieved_context:
         try:
             from cognition.intent_engine import classify
@@ -216,7 +214,6 @@ async def handle_message(
                         lang=lang,
                     )
                 else:
-                    # Always do a web search — guarantees current information
                     web_result = await run_tool(
                         tool_name="search",
                         params={"query": text, "lang": lang},
