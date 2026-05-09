@@ -12,7 +12,7 @@ from app.settings import settings
 
 logger = logging.getLogger(__name__)
 
-_VISION_MODEL = "meta-llama/llama-4-maverick-17b-128e-instruct"
+_VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 _GROQ_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
 _TIMEOUT = 30.0
 
