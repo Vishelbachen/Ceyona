@@ -1,10 +1,10 @@
-# vision_handler.py
 # Downloads a Telegram photo and sends it to a Groq vision model.
 # Uses raw httpx to call Groq REST API directly (avoids SDK Pydantic issues).
 from __future__ import annotations
 
 import base64
 import logging
+import re
 
 import httpx
 
@@ -49,6 +49,16 @@ async def _download_image(url: str) -> bytes | None:
     except Exception as exc:
         logger.error("Image download failed", extra={"url": url[:80], "error": str(exc)})
         return None
+
+
+def _normalize_for_telegram(text: str) -> str:
+    """Strip LaTeX math delimiters and Markdown that Telegram cannot render."""
+    text = re.sub(r"\$\$(.*?)\$\$", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"\$(.*?)\$", r"\1", text)
+    text = re.sub(r"^#{1,6}\s*", "", text, flags=re.MULTILINE)
+    text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
+    text = re.sub(r"\*(.*?)\*", r"\1", text)
+    return text.strip()
 
 
 def _lang_instruction(lang: str) -> str:
@@ -161,6 +171,8 @@ async def handle_vision(
             if not result_text:
                 logger.error("Groq vision returned empty content", extra={"data": str(data)[:200]})
                 return err
+
+            result_text = _normalize_for_telegram(result_text)
 
             logger.info("Vision analysis complete", extra={
                 "lang": lang,
