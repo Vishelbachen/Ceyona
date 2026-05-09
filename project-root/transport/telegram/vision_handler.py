@@ -1,3 +1,4 @@
+# vision_handler.py
 # Downloads a Telegram photo and sends it to a Groq vision model.
 # Uses raw httpx to call Groq REST API directly (avoids SDK Pydantic issues).
 from __future__ import annotations
