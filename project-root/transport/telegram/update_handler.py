@@ -4,7 +4,7 @@ import logging
 
 from contracts.shared_types import Complexity, EPKDecision, Tier
 from core.execution.orchestrator import OrchestratorRequest, OrchestratorResult, UsageRecord, run
-from transport.telegram.message_router import UpdateType, extract_text
+from transport.telegram.message_router import UpdateType, extract_text, extract_photo, has_photo
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +45,51 @@ async def handle_message(
     supabase=None,
     redis=None,
 ) -> OrchestratorResult:
+
+    # ── photo handling ────────────────────────────────────────────────────────
+    if has_photo(update):
+        photo_meta = extract_photo(update)
+        file_id = photo_meta["file_id"]
+        caption = photo_meta.get("caption", "")
+
+        logger.info("Photo message received", extra={
+            "user_id": user_id,
+            "file_id": file_id[:20],
+            "caption": caption[:50],
+        })
+
+        try:
+            from transport.telegram.vision_handler import handle_vision
+            vision_text = await handle_vision(
+                file_id=file_id,
+                caption=caption,
+                lang=lang,
+            )
+        except Exception as exc:
+            logger.error("Vision handler crashed", extra={"error": str(exc)})
+            vision_text = "❌ Image processing error."
+
+        # Return as OrchestratorResult so webhook pipeline stays uniform
+        return OrchestratorResult(
+            text=vision_text,
+            tier=Tier.GENERAL,
+            model="meta-llama/llama-4-maverick-17b-128e-instruct",
+            epk_decision=EPKDecision.ALLOW,
+            usage=UsageRecord(
+                input_tokens=_estimate_tokens(caption) + 500,  # rough image token estimate
+                output_tokens=_estimate_tokens(vision_text),
+                embedding_tokens=0,
+                rerank_tokens=0,
+                tier=Tier.GENERAL,
+                embedding_type="large",
+                cost_usd=0.001,  # minimal cost placeholder
+            ),
+            denied=False,
+            deny_reason="",
+            lang=lang,
+        )
+
+    # ── text handling (original flow) ─────────────────────────────────────────
     text = extract_text(update)
 
     if not text:
@@ -151,9 +196,10 @@ async def handle_message(
                 "error": str(exc),
             })
 
-    # ── web search fallback (when retrieval has no data) ──────────────────────
-    # Runs for QUESTION, ANALYSIS, INSTRUCTION, SEARCH, UNKNOWN
-    # Skipped for CREATIVE, CONVERSATION, CODE, MATH — they don't need grounding
+    # ── web search (always runs for non-generative intents) ───────────────────
+    # Runs for QUESTION, ANALYSIS, INSTRUCTION, SEARCH, UNKNOWN — always fetches
+    # live data so the bot NEVER says "my data may be outdated".
+    # Skipped for CREATIVE, CONVERSATION, CODE, MATH — no grounding needed.
     if not retrieved_context:
         try:
             from cognition.intent_engine import classify
@@ -163,8 +209,6 @@ async def handle_message(
             intent_value = quick_intent.intent.value
 
             if intent_value not in _NO_SEARCH_INTENTS:
-                # tool intents (weather/maps) already handled in orchestrator
-                # for everything else — do a web search
                 if intent_value in ("weather", "maps", "maps_poi"):
                     web_result = await run_tool(
                         tool_name=intent_value,
@@ -172,6 +216,7 @@ async def handle_message(
                         lang=lang,
                     )
                 else:
+                    # Always do a web search — guarantees current information
                     web_result = await run_tool(
                         tool_name="search",
                         params={"query": text, "lang": lang},
@@ -180,14 +225,14 @@ async def handle_message(
 
                 if web_result:
                     retrieved_context = web_result
-                    logger.info("Web search fallback used", extra={
+                    logger.info("Web search used", extra={
                         "user_id": user_id,
                         "intent":  intent_value,
                         "chars":   len(web_result),
                     })
 
         except Exception as exc:
-            logger.warning("Web search fallback failed", extra={"error": str(exc)})
+            logger.warning("Web search failed", extra={"error": str(exc)})
 
     request = OrchestratorRequest(
         user_message=text,
