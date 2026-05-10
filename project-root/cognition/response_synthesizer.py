@@ -5,46 +5,21 @@ from dataclasses import dataclass
 
 from cognition.intent_engine import Intent
 from contracts.shared_types import Tier
+from i18n.strings import t as _t, normalize_lang, _SILENT_KEYS
 
 logger = logging.getLogger(__name__)
 
-# ─── TELEGRAM LIMITS ──────────────────────────────────────────────────────────
-
 _TELEGRAM_MAX_CHARS = 4096
 
-# ─── TON WALLET ───────────────────────────────────────────────────────────────
-
-_TON_WALLET = "UQA78muNWF-tW4bhePG8GMdXzj1RuByOtf1XAwZ9VDOBElSA"
-
-# ─── SUPPORTED LANGUAGES ──────────────────────────────────────────────────────
-
-_SUPPORTED_LANGS = {
-    "en", "ru", "de", "fr", "es", "pt", "it", "tr", "ar",
-    "zh", "ja", "ko", "pl", "uk", "fa", "nl", "sv", "no",
-    "da", "fi", "cs", "sk", "ro", "hu", "bg", "hr", "sr",
-    "he", "vi", "th", "id", "ms", "hi", "bn", "ur",
-    "az", "kk", "uz", "ka", "hy", "mn", "sw", "am",
-}
-
-# ─── SYSTEM MESSAGES ──────────────────────────────────────────────────────────
-
-# ─── STRINGS: delegated to i18n.strings ─────────────────────────────────────
-# All user-facing strings now live in i18n/strings.py.
-# This block is kept minimal for backward compatibility.
-from i18n.strings import _STRINGS as _MESSAGES, _SILENT_KEYS, normalize_lang
-
-# ─── PUBLIC API ───
 
 # ─── PUBLIC API ───────────────────────────────────────────────────────────────
 
 def get_system_message(key: str, lang: str) -> str:
-    from i18n.strings import t
-    return t(key, lang) or "⚠️ An error occurred."
+    return _t(key, lang) or "⚠️ An error occurred."
 
 
 def format_balance_message(balance: float, lang: str) -> str:
-    from i18n.strings import t
-    return t("balance_display", lang, amount=f"{balance:.2f}")
+    return _t("balance_display", lang, amount=f"{balance:.2f}")
 
 
 # ─── I/O CONTRACTS ────────────────────────────────────────────────────────────
@@ -78,13 +53,9 @@ def _structure(text: str, intent: "Intent | None") -> str:
 def _normalize_for_telegram(text: str) -> str:
     """Strip LaTeX math delimiters and Markdown formatting that Telegram cannot render."""
     import re
-    # Remove block-level LaTeX: $$...$$
     text = re.sub(r"\$\$(.*?)\$\$", r"\1", text, flags=re.DOTALL)
-    # Remove inline LaTeX: $...$
     text = re.sub(r"\$(.*?)\$", r"\1", text)
-    # Remove Markdown headings (### Title → Title)
     text = re.sub(r"^#{1,6}\s*", "", text, flags=re.MULTILINE)
-    # Remove bold/italic markers **text** and *text*
     text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
     text = re.sub(r"\*(.*?)\*", r"\1", text)
     return text
@@ -117,7 +88,7 @@ def _apply_correction(text: str) -> str:
 def _truncate(text: str, lang: str) -> tuple[str, bool]:
     if len(text) <= _TELEGRAM_MAX_CHARS:
         return text, False
-    suffix = get_system_message("truncation_suffix", lang)
+    suffix = _t("truncation_suffix", lang)
     cut = _TELEGRAM_MAX_CHARS - len(suffix)
     return text[:cut] + suffix, True
 
@@ -135,26 +106,30 @@ def synthesize(inp: SynthesisInput) -> SynthesisResult:
     Pipeline:
       1. assemble     — accept raw text
       2. structure    — intent-aware shaping
-      3. format       — whitespace normalisation
-      4. correction   — meta/correction
-      5. finalize     — truncate to Telegram limit
+      3. normalize    — strip LaTeX/Markdown Telegram can't render
+      4. format       — whitespace normalisation
+      5. correction   — meta/correction
+      6. finalize     — truncate to Telegram limit
     """
     lang = normalize_lang(inp.lang)
 
     # ── DENY path ─────────────────────────────────────────────────────────────
     if inp.denied:
-        key = inp.deny_reason if inp.deny_reason in _STRINGS else "default_deny"
-        if key in _SILENT_KEYS:
+        # Use deny_reason as key if it's a known silent key, else look up message
+        if inp.deny_reason in _SILENT_KEYS:
             return SynthesisResult(text="")
-        return SynthesisResult(text=get_system_message(key, lang))
+        # Try deny_reason as a string key; fall back to default_deny
+        msg = _t(inp.deny_reason, lang)
+        if not msg:
+            msg = _t("default_deny", lang)
+        return SynthesisResult(text=msg)
 
     # ── no LLM response ───────────────────────────────────────────────────────
     if not inp.raw_text or not inp.raw_text.strip():
-        # For emotional reactions use a warm fallback instead of a cold error.
         from cognition.intent_engine import Intent as _Intent
         if inp.intent == _Intent.EMOTIONAL:
-            return SynthesisResult(text=get_system_message("emotional_fallback", lang))
-        return SynthesisResult(text=get_system_message("no_response", lang))
+            return SynthesisResult(text=_t("emotional_fallback", lang))
+        return SynthesisResult(text=_t("no_response", lang))
 
     # ── normal pipeline ───────────────────────────────────────────────────────
     text = _assemble(inp.raw_text)
