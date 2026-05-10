@@ -35,9 +35,13 @@ class VisionResult:
     text          — extracted image content (text, description, or error message).
     needs_pipeline — True  → forward `text` into the main orchestrator pipeline.
                     False → deliver `text` directly to the user.
+    intent_result  — pre-computed IntentResult; passed to OrchestratorRequest as
+                     forced_intent to avoid a second classify() call in the pipeline.
+                     None when needs_pipeline is False.
     """
     text: str
     needs_pipeline: bool
+    intent_result: object | None = None   # IntentResult — typed as object to avoid circular import
 
 
 # ─── TELEGRAM FILE HELPERS ────────────────────────────────────────────────────
@@ -189,6 +193,7 @@ async def handle_vision(
         else extracted
     )
 
+    intent_result  = None
     try:
         from cognition.intent_engine import classify, Intent
         intent_result  = classify(classify_input, lang=lang)
@@ -206,4 +211,8 @@ async def handle_vision(
         "needs_pipeline": needs_pipeline,
     })
 
-    return VisionResult(text=extracted, needs_pipeline=needs_pipeline)
+    return VisionResult(
+        text=extracted,
+        needs_pipeline=needs_pipeline,
+        intent_result=intent_result if needs_pipeline else None,
+    )
