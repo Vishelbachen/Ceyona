@@ -115,9 +115,8 @@ async def handle_vision(
       text           — extracted content or error message
       needs_pipeline — routing flag for update_handler
     """
-    from cognition.response_synthesizer import get_system_message
-
-    err_text = get_system_message("vision_error", lang)
+    from i18n.t import t
+    err_text = t("vision_error", lang)
 
     # ── download ──────────────────────────────────────────────────────────────
     file_url = await _get_file_url(file_id)
