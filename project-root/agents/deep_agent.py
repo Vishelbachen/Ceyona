@@ -3,8 +3,9 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from llm.groq_client import groq_client
+from llm.model_router import DEEP_AGENT_MODEL, route_max_tokens
 from contracts.shared_types import Tier
-from llm.fallback_handler import complete_with_fallback
 
 logger = logging.getLogger(__name__)
 
@@ -21,13 +22,19 @@ class AgentResult:
 
 async def run(messages: list[dict], temperature: float = 0.7) -> AgentResult:
     """
-    Deep agent — HEAVY tier, multi-step reasoning.
-    Used for: code, analysis, math, complex questions.
+    Deep agent — groq/compound (Agent Layer, models.md).
+
+    Role: tool selection authority, multi-step execution.
+    NOT a tier model — compound has tool-use capability beyond
+    what Heavy Tier models provide directly.
+
+    Used for: code, analysis, math, complex multi-step tasks.
     """
     try:
-        response = await complete_with_fallback(
-            tier=Tier.HEAVY,
+        response = await groq_client.complete(
+            model=DEEP_AGENT_MODEL,
             messages=messages,
+            max_tokens=route_max_tokens(Tier.HEAVY),
             temperature=temperature,
         )
         return AgentResult(
