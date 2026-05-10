@@ -1,1049 +1,497 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from enum import Enum
+import logging
+from dataclasses import dataclass
 
+from cognition.intent_engine import Intent, classify
+from cognition.multi_agent_coordinator import CoordinationResult, coordinate, plan_agents
+from cognition.reasoning_engine import select_strategy
+from cognition.response_synthesizer import SynthesisInput, synthesize
+from context.assembler import resolve_truth_mode
+from contracts.shared_types import Complexity, EPKDecision, Tier, TruthMode
+from core.kernel.cost_model import actual_cost, estimate_cost, estimate_output_tokens
+from core.kernel.decision_matrix import select_tier
+from core.kernel.execution_policy_kernel import EPKInput, evaluate
+from llm.heavy_input_shaper import ShaperInput, shape
+from llm.prompt_engine import PromptContext, build_messages
 
-# ─── INTENT TAXONOMY ──────────────────────────────────────────────────────────
+logger = logging.getLogger(__name__)
 
-class Intent(str, Enum):
-    QUESTION     = "question"
-    CODE         = "code"
-    ANALYSIS     = "analysis"
-    CREATIVE     = "creative"
-    CONVERSATION = "conversation"
-    MATH         = "math"
-    INSTRUCTION  = "instruction"
-    WEATHER      = "weather"
-    SEARCH       = "search"
-    MAPS         = "maps"
-    MAPS_POI     = "maps_poi"   # points of interest: hours, ratings, contacts
-    UNKNOWN      = "unknown"
+# ─── TRUTH ENFORCEMENT ────────────────────────────────────────────────────────
 
-
-# ─── RESULT CONTRACT ──────────────────────────────────────────────────────────
-
-@dataclass(frozen=True)
-class IntentResult:
-    intent: Intent
-    confidence: float
-    system_prompt: str
-    requires_retrieval: bool
-    requires_tools: bool
-    tool_name: str = ""
-    tool_params: dict = field(default_factory=dict)
-
-
-# ─── LANGUAGE INSTRUCTION ─────────────────────────────────────────────────────
-
-_LANG_NAMES: dict[str, str] = {
-    "ru": "Russian",       "en": "English",        "de": "German",
-    "fr": "French",        "es": "Spanish",         "pt": "Portuguese",
-    "it": "Italian",       "tr": "Turkish",         "ar": "Arabic",
-    "zh": "Chinese",       "ja": "Japanese",        "ko": "Korean",
-    "pl": "Polish",        "uk": "Ukrainian",       "fa": "Persian (Farsi)",
-    "nl": "Dutch",         "sv": "Swedish",         "no": "Norwegian",
-    "da": "Danish",        "fi": "Finnish",         "cs": "Czech",
-    "sk": "Slovak",        "ro": "Romanian",        "hu": "Hungarian",
-    "bg": "Bulgarian",     "hr": "Croatian",        "sr": "Serbian",
-    "he": "Hebrew",        "vi": "Vietnamese",      "th": "Thai",
-    "id": "Indonesian",    "ms": "Malay",           "hi": "Hindi",
-    "bn": "Bengali",       "ur": "Urdu",            "az": "Azerbaijani",
-    "kk": "Kazakh",        "uz": "Uzbek",           "ka": "Georgian",
-    "hy": "Armenian",      "mn": "Mongolian",       "sw": "Swahili",
-    "am": "Amharic",
+# Intents that MUST have retrieved context — no context = don't call LLM
+_STRICT_INTENTS = {
+    Intent.SEARCH,
+    Intent.WEATHER,
+    Intent.MAPS,
+    Intent.MAPS_POI,
 }
 
+# No-data fallback message key (goes to synthesizer)
+_NO_GROUNDED_DATA = "no_grounded_data"
 
-def _lang_directive(lang: str) -> str:
-    lang_name = _LANG_NAMES.get(lang)
-    if lang_name:
-        return (
-            f"CRITICAL INSTRUCTION: The user is writing in {lang_name}. "
-            f"You MUST respond EXCLUSIVELY in {lang_name}. "
-            f"Do NOT use any English words, phrases, or sentences unless the user wrote in English. "
-            f"Do NOT mix languages. Every single word of your response must be in {lang_name}. "
-            "This instruction overrides everything else.\n\n"
-        )
-    return (
-        "CRITICAL INSTRUCTION: Detect the language of the user's message. "
-        "Respond EXCLUSIVELY in that same language. "
-        "Do NOT mix languages or use English unless the user wrote in English.\n\n"
+
+def _needs_grounding(intent: Intent | None) -> bool:
+    return intent in _STRICT_INTENTS
+
+
+# ─── REQUEST / RESULT CONTRACTS ───────────────────────────────────────────────
+
+@dataclass
+class OrchestratorRequest:
+    user_message: str
+    user_balance: float
+    input_tokens: int
+    complexity: Complexity
+    system_prompt: str = ""
+    retrieved_context: str = ""
+    conversation_history: list[dict] | None = None
+    embedding_tokens: int = 0
+    rerank_tokens: int = 0
+    embedding_type: str = "large"
+    lang: str = "en"
+    has_code_block: bool = False
+    has_json_shape: bool = False
+    context_size: int = 0
+
+
+@dataclass
+class UsageRecord:
+    input_tokens: int
+    output_tokens: int
+    embedding_tokens: int
+    rerank_tokens: int
+    tier: Tier
+    embedding_type: str
+    cost_usd: float
+
+
+@dataclass
+class OrchestratorResult:
+    text: str
+    tier: Tier
+    model: str
+    epk_decision: EPKDecision
+    usage: UsageRecord
+    denied: bool = False
+    deny_reason: str = ""
+    lang: str = "en"
+
+
+# ─── INTERNAL HELPERS ─────────────────────────────────────────────────────────
+
+def _denied_result(
+    reason: str,
+    lang: str,
+    tier: Tier = Tier.FAST,
+    input_tokens: int = 0,
+    embedding_tokens: int = 0,
+    rerank_tokens: int = 0,
+    embedding_type: str = "large",
+    epk_decision: EPKDecision = EPKDecision.DENY,
+) -> OrchestratorResult:
+    synthesis = synthesize(SynthesisInput(
+        raw_text="",
+        intent=None,
+        tier=tier,
+        denied=True,
+        deny_reason=reason,
+        lang=lang,
+    ))
+    return OrchestratorResult(
+        text=synthesis.text,
+        tier=tier,
+        model="",
+        epk_decision=epk_decision,
+        usage=UsageRecord(
+            input_tokens=input_tokens,
+            output_tokens=0,
+            embedding_tokens=embedding_tokens,
+            rerank_tokens=rerank_tokens,
+            tier=tier,
+            embedding_type=embedding_type,
+            cost_usd=0.0,
+        ),
+        denied=True,
+        deny_reason=reason,
+        lang=lang,
     )
 
 
-# ─── BASE SYSTEM PROMPTS ──────────────────────────────────────────────────────
-
-# ─── NO-CUTOFF MANDATE ───────────────────────────────────────────────────────
-# Injected into every system prompt to absolutely forbid outdated-data disclaimers.
-_NO_CUTOFF = (
-    "ABSOLUTE RULE: You have access to live web search results fetched RIGHT NOW. "
-    "NEVER say your information is outdated, has a cutoff date, or may not be current. "
-    "NEVER use: 'as of my last update', 'I cannot access real-time data', "
-    "'my knowledge cutoff', 'this may have changed', 'I don't have current info'. "
-    "The CONTEXT section contains live data — treat it as fully current. "
-    "If context is present, use it. If absent, answer from general knowledge without disclaimers."
-)
-
-_BASE_PROMPTS: dict[Intent, str] = {
-    Intent.QUESTION: (
-        "You are a knowledgeable and direct assistant. "
-        "You have access to real-time web search results provided in the context. "
-        "Use the provided context to answer accurately. "
-        "If context is provided, base your answer on it — do not contradict it. "
-        "If you are unsure, say so explicitly. Do not pad answers with unnecessary preamble. "
-        + _NO_CUTOFF
-    ),
-    Intent.INSTRUCTION: (
-        "You are a helpful assistant specialising in step-by-step guidance. "
-        "Provide clear, numbered instructions. "
-        "Be complete but concise. Start directly with step 1. "
-        + _NO_CUTOFF
-    ),
-    Intent.CODE: (
-        "You are an expert software engineer. "
-        "Write clean, correct, well-commented code. "
-        "Always specify the programming language. "
-        "Briefly explain your approach before the code block. "
-        + _NO_CUTOFF
-    ),
-    Intent.ANALYSIS: (
-        "You are an analytical assistant with access to real-time web data provided in context. "
-        "Structure your analysis with key findings first. "
-        "Base your analysis on the provided context where available. "
-        "Be objective, evidence-based, and avoid filler. "
-        + _NO_CUTOFF
-    ),
-    Intent.CREATIVE: (
-        "You are a creative writing assistant. "
-        "Be imaginative, engaging, and original. "
-        "Match the tone, style, and format the user requests."
-    ),
-    Intent.CONVERSATION: (
-        "You are a friendly, warm, and helpful conversational assistant. "
-        "Keep responses natural, concise, and appropriately informal. "
-        "Engage genuinely — don't be robotic."
-    ),
-    Intent.MATH: (
-        "You are a precise mathematical assistant. "
-        "Show your work step by step. "
-        "State the final answer clearly and unambiguously."
-    ),
-    Intent.WEATHER: (
-        "You are a weather assistant. "
-        "The weather data in your context is LIVE and CURRENT — fetched right now from OpenWeatherMap API. "
-        "Present it clearly and confidently. "
-        "Format it nicely for the user. "
-        "NEVER say you cannot provide current weather. "
-        "NEVER say your information might be outdated. "
-        "The data IS current. " + _NO_CUTOFF
-    ),
-    Intent.SEARCH: (
-        "You are a research assistant with access to live web search results. "
-        "The search results in your context were fetched from the web RIGHT NOW. "
-        "Summarise them clearly, cite sources, and answer the user's question directly. "
-        "NEVER say you cannot search or that your data is outdated — you have live results. "
-        "NEVER make up information — only use what is in the context. "
-        + _NO_CUTOFF
-    ),
-    Intent.MAPS: (
-        "You are a location assistant with access to real-time geocoding data. "
-        "The location data in your context is current and accurate. "
-        "Present coordinates, addresses, and map links clearly. "
-        "NEVER say you cannot show maps or provide location data — you have it in context. "
-        + _NO_CUTOFF
-    ),
-    Intent.MAPS_POI: (
-        "You are a location assistant specialising in points of interest. "
-        "The place data in your context is current — fetched from Google Maps right now. "
-        "Present it clearly: name, address, rating, hours, contacts. "
-        "NEVER say you cannot find place information — you have it in context. "
-        + _NO_CUTOFF
-    ),
-    Intent.UNKNOWN: (
-        "You are a helpful, versatile assistant. "
-        "You have access to real-time web search results in your context. "
-        "Use the context to answer accurately. "
-        "If the request is ambiguous, make a reasonable interpretation and answer it. "
-        "Never refuse to respond — always try. "
-        + _NO_CUTOFF
-    ),
-}
-
-
-def build_system_prompt(intent: Intent, lang: str) -> str:
-    directive = _lang_directive(lang)
-    base = _BASE_PROMPTS.get(intent, _BASE_PROMPTS[Intent.UNKNOWN])
-    return directive + base
-
-
-# ─── SIGNAL TABLES ────────────────────────────────────────────────────────────
-
-_CODE_SIGNALS: tuple[str, ...] = (
-    "```", "def ", "class ", "import ", "return ", "function ",
-    "var ", "const ", "let ", "print(", "console.log", "#!/",
-    "write code", "write a script", "write a function", "write a program",
-    "fix this code", "fix the code", "fix my code", "refactor",
-    "debug this", "debug the", "implement", "unit test",
-    "напиши код", "напиши скрипт", "напиши функцию", "напиши программу",
-    "исправь код", "почини код", "отрефактори", "реализуй",
-    "дебаг", "отладь",
-    "schreib code", "code écrire", "escribe código",
-)
-
-_MATH_SIGNALS: tuple[str, ...] = (
-    "∑", "∫", "√", "²", "³", "π",
-    "calculate", "solve", "formula", "equation", "derivative",
-    "integral", "matrix", "determinant", "eigenvalue",
-    "вычисли", "посчитай", "реши", "сколько будет",
-    "производная", "матрица", "определитель",
-    "rechne", "berechne", "calculer", "calcule", "calcula",
-)
-
-_ANALYSIS_SIGNALS: tuple[str, ...] = (
-    "analyse", "analyze", "compare", "evaluate", "review",
-    "summarize", "summarise", "assess", "examine", "breakdown",
-    "pros and cons", "advantages", "disadvantages",
-    "проанализируй", "сравни", "оцени", "резюмируй",
-    "объясни почему", "разбери", "плюсы и минусы",
-    "analysiere", "analyser", "analysez", "analiza",
-)
-
-_CREATIVE_SIGNALS: tuple[str, ...] = (
-    "write a poem", "write me a poem", "write a story", "write me a story",
-    "write an essay", "write a letter", "write a song",
-    "poem", "poetry", "haiku", "limerick", "sonnet",
-    "create a story", "generate a story", "make up a story",
-    "напиши стихотворение", "напиши стих", "напиши рассказ",
-    "напиши сказку", "напиши песню", "напиши эссе", "напиши историю",
-    "сочини", "придумай историю", "придумай стихотворение",
-    "schreib ein gedicht", "écris un poème", "escribe un poema",
-)
-
-_INSTRUCTION_SIGNALS: tuple[str, ...] = (
-    "how to", "how do i", "how do you", "steps to", "guide to",
-    "explain how", "walk me through", "show me how", "tutorial",
-    "как сделать", "как установить", "как настроить", "как использовать",
-    "как ", "покажи как", "научи меня", "объясни как",
-    "wie man", "comment faire", "cómo hacer",
-)
-
-_GREETING_SIGNALS: tuple[str, ...] = (
-    "hello", "hi there", "hey there", "hey!", "hi!", "good morning",
-    "good evening", "good afternoon", "good night",
-    "thanks", "thank you", "thx", "ty", "bye", "goodbye", "see you",
-    "привет", "здравствуй", "здравствуйте", "добрый день", "добрый вечер",
-    "доброе утро", "спасибо", "пока", "до свидания", "salut", "bonjour",
-    "hola", "gracias", "ciao", "danke", "merci", "naber", "merhaba",
-    "こんにちは", "안녕", "你好", "سلام", "مرحبا",
-    "გამარჯობა", "მადლობა", "ნახვამდის",
-    "բարև", "շնորհակալություն",
-)
-
-_WEATHER_SIGNALS: tuple[str, ...] = (
-    # English
-    "weather", "forecast", "temperature", "rain", "snow", "sunny",
-    "cloudy", "humidity", "wind", "storm", "celsius", "fahrenheit",
-    # Russian
-    "погода", "прогноз погоды", "температура", "дождь", "снег",
-    "облачно", "ветер", "жарко", "холодно", "тепло", "прогноз",
-    # European
-    "météo", "wetter", "clima", "meteo", "weer", "väder",
-    "vädret", "vejr", "sää", "idő", "počasí", "vreme",
-    # Turkish
-    "hava durumu", "yağmur", "kar yağıyor",
-    # Arabic
-    "طقس", "الطقس", "حرارة", "مطر", "ثلج",
-    # Chinese
-    "天气", "温度", "下雨", "下雪", "天氣",
-    # Japanese
-    "天気", "気温", "雨", "雪", "晴れ",
-    # Korean
-    "날씨", "기온", "비", "눈",
-    # Hindi
-    "मौसम", "तापमान", "बारिश", "बर्फ",
-    # Georgian
-    "ამინდი", "ტემპერატურა", "წვიმა", "თოვლი", "ქარი",
-    # Armenian
-    "եղանակ", "ջերմաստիճան", "անձրև",
-    # Azerbaijani
-    "yağış", "qar", "külək",
-    # Kazakh
-    "ауа райы", "жаңбыр", "қар",
-    # Uzbek
-    "ob-havo", "yomg'ir", "qor",
-    # Hebrew
-    "מזג אוויר", "גשם", "שלג",
-    # Vietnamese
-    "thời tiết", "nhiệt độ", "mưa",
-    # Thai
-    "อากาศ", "ฝน", "หิมะ",
-    # Indonesian / Malay
-    "cuaca", "hujan", "salju", "suhu",
-)
-
-_SEARCH_SIGNALS: tuple[str, ...] = (
-    "search for", "look up", "find information", "find out",
-    "what happened", "latest news", "news about", "who is",
-    "tell me about", "what is the current",
-    "найди", "поищи", "найди информацию", "новости", "что произошло",
-    "кто такой", "расскажи о", "информация о", "последние новости",
-)
-
-# ─── MAPS POI SIGNALS ─────────────────────────────────────────────────────────
-#
-# RULE: signals must anchor to POI-specific attributes — hours, ratings,
-# phone numbers, reviews, website. Generic location queries go to MAPS.
-# MAPS_POI fires when the user asks ABOUT a place, not WHERE a place is.
-
-_MAPS_POI_SIGNALS: tuple[str, ...] = (
-    # ── English ───────────────────────────────────────────────────────────────
-    "opening hours",            # "opening hours of the museum"
-    "opening times",
-    "what time does",           # "what time does the pharmacy open"
-    "what time do",
-    "is it open",               # "is it open now"
-    "is open now",
-    "closes at",
-    "opens at",
-    "hours of operation",
-    "business hours",
-    "phone number of",          # "phone number of the clinic"
-    "contact number",
-    "phone number",
-    "rating of",                # "rating of this restaurant"
-    "reviews of",
-    "review of",
-    "how good is",
-    "is it worth",
-    "website of",               # "website of the hotel"
-    "official website",
-    "menu of",                  # "menu of the cafe"
-    "price of",                 # "price of entry"
-    "admission fee",
-    "entry fee",
-    "ticket price",
-    "how much does it cost to enter",
-    "how much to get in",
-
-    # ── Russian ───────────────────────────────────────────────────────────────
-    "часы работы",              # "часы работы музея"
-    "режим работы",
-    "когда открывается",
-    "когда закрывается",
-    "во сколько открывается",
-    "во сколько закрывается",
-    "сейчас открыто",
-    "сейчас работает",
-    "работает сейчас",
-    "открыто сейчас",
-    "телефон ",                 # "телефон аптеки"
-    "номер телефона",
-    "контакты ",
-    "как позвонить",
-    "рейтинг ",                 # "рейтинг ресторана"
-    "отзывы о",
-    "отзывы на",
-    "стоит ли идти",
-    "стоит посетить",
-    "сайт ",                    # "сайт отеля"
-    "официальный сайт",
-    "меню ",                    # "меню кафе"
-    "цена входа",
-    "стоимость билета",
-    "сколько стоит вход",
-    "сколько стоит посещение",
-    "стоимость посещения",
-
-    # ── German ────────────────────────────────────────────────────────────────
-    "öffnungszeiten",
-    "wann öffnet",
-    "wann schließt",
-    "ist geöffnet",
-    "telefonnummer",
-    "bewertung von",
-    "rezensionen",
-    "webseite von",
-    "eintrittspreise",
-
-    # ── French ────────────────────────────────────────────────────────────────
-    "heures d'ouverture",
-    "horaires",
-    "est ouvert",
-    "numéro de téléphone",
-    "avis sur",
-    "site web de",
-    "prix d'entrée",
-    "tarifs",
-
-    # ── Spanish ───────────────────────────────────────────────────────────────
-    "horario de",
-    "a qué hora abre",
-    "a qué hora cierra",
-    "está abierto",
-    "número de teléfono",
-    "reseñas de",
-    "sitio web de",
-    "precio de entrada",
-
-    # ── Portuguese ────────────────────────────────────────────────────────────
-    "horário de funcionamento",
-    "que horas abre",
-    "que horas fecha",
-    "está aberto",
-    "número de telefone",
-    "avaliações de",
-    "site de",
-    "preço de entrada",
-
-    # ── Italian ───────────────────────────────────────────────────────────────
-    "orari di apertura",
-    "a che ora apre",
-    "a che ora chiude",
-    "è aperto",
-    "numero di telefono",
-    "recensioni di",
-    "sito web di",
-    "prezzo di ingresso",
-
-    # ── Turkish ───────────────────────────────────────────────────────────────
-    "çalışma saatleri",
-    "kaçta açılıyor",
-    "kaçta kapanıyor",
-    "açık mı",
-    "telefon numarası",
-    "yorumlar",
-    "web sitesi",
-    "giriş ücreti",
-
-    # ── Arabic ────────────────────────────────────────────────────────────────
-    "ساعات العمل",
-    "متى يفتح",
-    "متى يغلق",
-    "هل مفتوح",
-    "رقم الهاتف",
-    "تقييم ",
-    "مراجعات",
-    "الموقع الرسمي",
-    "سعر الدخول",
-
-    # ── Chinese ───────────────────────────────────────────────────────────────
-    "营业时间",
-    "几点开门",
-    "几点关门",
-    "现在开放吗",
-    "电话号码",
-    "评分",
-    "评价",
-    "官方网站",
-    "入场费",
-
-    # ── Japanese ──────────────────────────────────────────────────────────────
-    "営業時間",
-    "何時に開く",
-    "何時に閉まる",
-    "今開いている",
-    "電話番号",
-    "評価",
-    "口コミ",
-    "公式サイト",
-    "入場料",
-
-    # ── Korean ────────────────────────────────────────────────────────────────
-    "영업시간",
-    "몇 시에 열어",
-    "몇 시에 닫아",
-    "지금 열려있나",
-    "전화번호",
-    "평점",
-    "리뷰",
-    "공식 웹사이트",
-    "입장료",
-
-    # ── Georgian ──────────────────────────────────────────────────────────────
-    "სამუშაო საათები",
-    "როდის იხსნება",
-    "ახლა ღიაა",
-    "ტელეფონის ნომერი",
-    "შეფასება",
-    "ვებსაიტი",
-    "შესასვლელის ფასი",
-
-    # ── Armenian ──────────────────────────────────────────────────────────────
-    "աշխատանքային ժամեր",
-    "երբ է բացվում",
-    "հեռախոսահամար",
-    "գնահատական",
-    "կայք",
-
-    # ── Ukrainian ─────────────────────────────────────────────────────────────
-    "години роботи",
-    "коли відкривається",
-    "коли закривається",
-    "зараз відкрито",
-    "номер телефону",
-    "відгуки про",
-    "офіційний сайт",
-    "ціна входу",
-
-    # ── Polish ────────────────────────────────────────────────────────────────
-    "godziny otwarcia",
-    "o której otwierają",
-    "czy jest otwarte",
-    "numer telefonu",
-    "opinie o",
-    "strona internetowa",
-    "cena wejścia",
-
-    # ── Hindi ─────────────────────────────────────────────────────────────────
-    "खुलने का समय",
-    "कब खुलता है",
-    "अभी खुला है",
-    "फोन नंबर",
-    "रेटिंग",
-    "समीक्षा",
-    "आधिकारिक वेबसाइट",
-    "प्रवेश शुल्क",
-)
-
-# ─── MAPS POI NEGATIVE GUARDS ─────────────────────────────────────────────────
-#
-# Suppresses MAPS_POI when signals fire in rhetorical or unrelated context.
-
-_MAPS_POI_NEGATIVE_GUARDS: tuple[str, ...] = (
-    "не можешь",
-    "не можете",
-    "не умеешь",
-    "в смысле",
-    "can't you",
-    "cannot you",
-    "do you even",
-    "why don't you",
-)
-
-# ─── MAPS SIGNALS ─────────────────────────────────────────────────────────────
-#
-# RULE: every signal must be a phrase, not an isolated noun.
-# Bare nouns like "координаты", "адрес", "address" are BANNED here —
-# they fire on rhetorical questions ("координаты дать не можешь?")
-# and unrelated sentences ("address the issue").
-#
-# Each entry must anchor the noun to a geographic verb or preposition
-# so the classifier requires INTENT + OBJECT, not just the object alone.
-
-_MAPS_SIGNALS: tuple[str, ...] = (
-    # ── English ───────────────────────────────────────────────────────────────
-    "where is",
-    "where are",
-    "location of",
-    "address of",
-    "coordinates of",
-    "how to get to",
-    "directions to",
-    "navigate to",
-    "find on map",
-    "show on map",
-    "show me on map",
-    "map of",
-    "locate",
-    "get directions",
-    "route to",
-    "nearest ",
-    "closest ",
-
-    # ── Russian ───────────────────────────────────────────────────────────────
-    "где находится",
-    "где находятся",
-    "где расположен",
-    "где расположена",
-    "адрес магазина",
-    "адрес кафе",
-    "адрес ресторана",
-    "адрес аптеки",
-    "адрес больницы",
-    "адрес офиса",
-    "адрес отеля",
-    "адрес гостиницы",
-    "покажи адрес",
-    "координаты места",
-    "координаты города",
-    "координаты страны",
-    "координаты острова",
-    "координаты горы",
-    "как добраться",
-    "как доехать",
-    "как дойти",
-    "как проехать",
-    "как пройти до",
-    "покажи на карте",
-    "найди на карте",
-    "местоположение",
-    "покажи местоположение",
-    "расположение на карте",
-    "где это находится",
-    "где это",
-    "где магазин",
-    "где аптека",
-    "где больница",
-    "где метро",
-    "где вокзал",
-    "где аэропорт",
-    "где отель",
-    "ближайший ",
-    "ближайшая ",
-    "маршрут до",
-    "маршрут к",
-    "дорога до",
-    "путь до",
-    "навигация до",
-    "построй маршрут",
-
-    # ── Georgian ──────────────────────────────────────────────────────────────
-    "სად არის",
-    "მდებარეობა",
-    "კოორდინატები",
-    "რუკაზე",
-    "მარშრუტი",
-    "როგორ მივიდე",
-
-    # ── German ────────────────────────────────────────────────────────────────
-    "wo ist",
-    "wo befindet sich",
-    "wo liegt",
-    "adresse von",
-    "koordinaten von",
-    "wie komme ich",
-    "weg nach",
-    "route nach",
-    "auf der karte",
-    "nächste ",
-
-    # ── French ────────────────────────────────────────────────────────────────
-    "où est",
-    "où se trouve",
-    "adresse de",
-    "coordonnées de",
-    "comment aller",
-    "itinéraire vers",
-    "sur la carte",
-    "le plus proche",
-
-    # ── Spanish ───────────────────────────────────────────────────────────────
-    "dónde está",
-    "dónde queda",
-    "dónde se encuentra",
-    "dirección de",
-    "coordenadas de",
-    "cómo llegar",
-    "ruta hacia",
-    "en el mapa",
-    "más cercano",
-
-    # ── Portuguese ────────────────────────────────────────────────────────────
-    "onde fica",
-    "onde está",
-    "endereço de",
-    "como chegar",
-    "rota para",
-    "no mapa",
-    "mais próximo",
-
-    # ── Italian ───────────────────────────────────────────────────────────────
-    "dove si trova",
-    "dove è",
-    "indirizzo di",
-    "coordinate di",
-    "come arrivare",
-    "percorso per",
-    "sulla mappa",
-    "più vicino",
-
-    # ── Turkish ───────────────────────────────────────────────────────────────
-    "nerede",
-    "nereye",
-    "konumu nedir",
-    "adresi nedir",
-    "koordinatları",
-    "haritada göster",
-    "yol tarifi",
-    "en yakın ",
-
-    # ── Arabic ────────────────────────────────────────────────────────────────
-    "أين يقع",
-    "أين توجد",
-    "موقع ",
-    "عنوان ",
-    "إحداثيات ",
-    "على الخريطة",
-    "كيف أصل",
-    "اتجاهات إلى",
-
-    # ── Chinese ───────────────────────────────────────────────────────────────
-    "在哪里",
-    "在哪儿",
-    "的位置",
-    "的地址",
-    "的坐标",
-    "怎么去",
-    "地图上",
-    "最近的",
-
-    # ── Japanese ──────────────────────────────────────────────────────────────
-    "どこにある",
-    "どこですか",
-    "の場所",
-    "の住所",
-    "の座標",
-    "行き方",
-    "地図で",
-    "一番近い",
-
-    # ── Korean ────────────────────────────────────────────────────────────────
-    "어디에 있",
-    "의 위치",
-    "의 주소",
-    "의 좌표",
-    "가는 방법",
-    "지도에서",
-    "가장 가까운",
-
-    # ── Hindi ─────────────────────────────────────────────────────────────────
-    "कहाँ है",
-    "कहाँ स्थित",
-    "का स्थान",
-    "का पता",
-    "के निर्देशांक",
-    "कैसे पहुंचें",
-    "नक्शे पर",
-    "सबसे नजदीक",
-
-    # ── Ukrainian ─────────────────────────────────────────────────────────────
-    "де знаходиться",
-    "де розташований",
-    "де розташована",
-    "адреса ",
-    "координати ",
-    "як дістатися",
-    "як проїхати",
-    "на карті",
-    "найближчий ",
-    "найближча ",
-
-    # ── Polish ────────────────────────────────────────────────────────────────
-    "gdzie jest",
-    "gdzie znajduje się",
-    "adres ",
-    "współrzędne ",
-    "jak dojechać",
-    "jak dojść",
-    "na mapie",
-    "najbliższy ",
-
-    # ── Dutch ─────────────────────────────────────────────────────────────────
-    "waar is",
-    "waar bevindt",
-    "adres van",
-    "coördinaten van",
-    "hoe kom ik",
-    "route naar",
-    "op de kaart",
-    "dichtstbijzijnde",
-
-    # ── Swedish ───────────────────────────────────────────────────────────────
-    "var är",
-    "var ligger",
-    "adress till",
-    "koordinater för",
-    "hur tar jag mig",
-    "på kartan",
-    "närmaste ",
-
-    # ── Norwegian ─────────────────────────────────────────────────────────────
-    "hvor er",
-    "hvor ligger",
-    "adresse til",
-    "koordinater for",
-    "hvordan kommer jeg",
-    "på kartet",
-    "nærmeste ",
-
-    # ── Danish ────────────────────────────────────────────────────────────────
-    "adressen på",
-    "på kortet",
-
-    # ── Finnish ───────────────────────────────────────────────────────────────
-    "missä on",
-    "missä sijaitsee",
-    "osoite ",
-    "koordinaatit ",
-    "miten pääsen",
-    "kartalla",
-    "lähin ",
-
-    # ── Czech / Slovak ────────────────────────────────────────────────────────
-    "kde je",
-    "kde se nachází",
-    "adresa ",
-    "souřadnice ",
-    "jak se dostat",
-    "na mapě",
-    "nejbližší ",
-
-    # ── Romanian ──────────────────────────────────────────────────────────────
-    "unde este",
-    "unde se află",
-    "coordonate ",
-    "cum ajung",
-    "pe hartă",
-    "cel mai apropiat",
-
-    # ── Hungarian ─────────────────────────────────────────────────────────────
-    "hol van",
-    "hol található",
-    "cím ",
-    "koordináták ",
-    "hogyan jutok",
-    "a térképen",
-    "legközelebbi ",
-
-    # ── Hebrew ────────────────────────────────────────────────────────────────
-    "איפה נמצא",
-    "כתובת של",
-    "קואורדינטות של",
-    "איך מגיעים",
-    "על המפה",
-    "הקרוב ביותר",
-
-    # ── Vietnamese ────────────────────────────────────────────────────────────
-    "ở đâu",
-    "địa chỉ của",
-    "tọa độ của",
-    "làm thế nào để đến",
-    "trên bản đồ",
-    "gần nhất",
-
-    # ── Thai ──────────────────────────────────────────────────────────────────
-    "อยู่ที่ไหน",
-    "ที่อยู่ของ",
-    "พิกัดของ",
-    "วิธีไป",
-    "บนแผนที่",
-    "ที่ใกล้ที่สุด",
-
-    # ── Indonesian / Malay ────────────────────────────────────────────────────
-    "di mana",
-    "alamat dari",
-    "koordinat dari",
-    "cara ke",
-    "di peta",
-    "terdekat",
-
-    # ── Azerbaijani ───────────────────────────────────────────────────────────
-    "harada yerləşir",
-    "ünvanı nədir",
-    "xəritədə göstər",
-    "necə getmək",
-    "ən yaxın ",
-
-    # ── Kazakh ────────────────────────────────────────────────────────────────
-    "қайда орналасқан",
-    "мекенжайы",
-    "картада",
-    "қалай жетуге",
-    "жақын жердегі",
-
-    # ── Uzbek ─────────────────────────────────────────────────────────────────
-    "qayerda joylashgan",
-    "manzili",
-    "xaritada",
-    "qanday borish",
-    "eng yaqin ",
-
-    # ── Armenian ──────────────────────────────────────────────────────────────
-    "որտեղ է",
-    "հասցեն",
-    "կոորդինատները",
-    "ինչպես հասնել",
-    "քարտեզի վրա",
-
-    # ── Mongolian ─────────────────────────────────────────────────────────────
-    "хаана байдаг",
-    "хаяг нь",
-    "координат нь",
-    "хэрхэн очих",
-    "газрын зурагт",
-)
-
-# ─── MAPS NEGATIVE GUARDS ─────────────────────────────────────────────────────
-#
-# If ANY of these phrases appear in the text, the MAPS classifier is suppressed
-# even when a maps signal matched.
-
-_MAPS_NEGATIVE_GUARDS: tuple[str, ...] = (
-    # Russian rhetorical / complaint patterns
-    "не можешь",
-    "не можете",
-    "не умеешь",
-    "не умеете",
-    "в смысле",
-    # English rhetorical patterns
-    "can't you",
-    "cannot you",
-    "do you even",
-    "why don't you",
-    "address the issue",
-    "address the problem",
-    "address this",
-    "address that",
-    "address your",
-    # Generic "address" as verb (not location)
-    "address concerns",
-    "address questions",
-)
-
-
-# ─── CLASSIFY ─────────────────────────────────────────────────────────────────
-
-def classify(
-    text: str,
-    lang: str = "en",
-    conversation_history: list[dict] | None = None,
-) -> IntentResult:
-    """
-    Classify user intent from text.
-
-    Priority order:
-      1. MAPS_POI  (hours, ratings, contacts — fires before MAPS)
-      2. MAPS      (location, directions)
-      3. WEATHER
-      4. SEARCH
-      5. CODE
-      6. MATH
-      7. ANALYSIS
-      8. CREATIVE
-      9. INSTRUCTION
-      10. CONVERSATION (greetings)
-      11. QUESTION (default)
-    """
-    lower = text.lower()
-
-    # ── MAPS_POI (check before MAPS — more specific) ──────────────────────────
-    poi_negative = any(guard in lower for guard in _MAPS_POI_NEGATIVE_GUARDS)
-    if not poi_negative:
-        if any(signal in lower for signal in _MAPS_POI_SIGNALS):
-            return IntentResult(
-                intent=Intent.MAPS_POI,
-                confidence=0.90,
-                system_prompt=build_system_prompt(Intent.MAPS_POI, lang),
-                requires_retrieval=False,
-                requires_tools=True,
-                tool_name="maps_poi",
-                tool_params={"query": text, "lang": lang},
-            )
-
-    # ── MAPS ──────────────────────────────────────────────────────────────────
-    maps_negative = any(guard in lower for guard in _MAPS_NEGATIVE_GUARDS)
-    if not maps_negative:
-        if any(signal in lower for signal in _MAPS_SIGNALS):
-            return IntentResult(
-                intent=Intent.MAPS,
-                confidence=0.90,
-                system_prompt=build_system_prompt(Intent.MAPS, lang),
-                requires_retrieval=False,
-                requires_tools=True,
-                tool_name="maps",
-                tool_params={"query": text, "lang": lang},
-            )
-
-    # ── WEATHER ───────────────────────────────────────────────────────────────
-    if any(signal in lower for signal in _WEATHER_SIGNALS):
-        return IntentResult(
-            intent=Intent.WEATHER,
-            confidence=0.90,
-            system_prompt=build_system_prompt(Intent.WEATHER, lang),
-            requires_retrieval=False,
-            requires_tools=True,
-            tool_name="weather",
-            tool_params={"query": text, "lang": lang},
-        )
-
-    # ── SEARCH ────────────────────────────────────────────────────────────────
-    if any(signal in lower for signal in _SEARCH_SIGNALS):
-        return IntentResult(
-            intent=Intent.SEARCH,
-            confidence=0.85,
-            system_prompt=build_system_prompt(Intent.SEARCH, lang),
-            requires_retrieval=False,
-            requires_tools=True,
-            tool_name="search",
-            tool_params={"query": text, "lang": lang},
-        )
-
-    # ── CODE ──────────────────────────────────────────────────────────────────
-    if any(signal in lower for signal in _CODE_SIGNALS):
-        return IntentResult(
-            intent=Intent.CODE,
-            confidence=0.90,
-            system_prompt=build_system_prompt(Intent.CODE, lang),
-            requires_retrieval=False,
-            requires_tools=False,
-        )
-
-    # ── MATH ──────────────────────────────────────────────────────────────────
-    if any(signal in lower for signal in _MATH_SIGNALS):
-        return IntentResult(
-            intent=Intent.MATH,
-            confidence=0.88,
-            system_prompt=build_system_prompt(Intent.MATH, lang),
-            requires_retrieval=False,
-            requires_tools=False,
-        )
-
-    # ── ANALYSIS ──────────────────────────────────────────────────────────────
-    if any(signal in lower for signal in _ANALYSIS_SIGNALS):
-        return IntentResult(
-            intent=Intent.ANALYSIS,
-            confidence=0.85,
-            system_prompt=build_system_prompt(Intent.ANALYSIS, lang),
-            requires_retrieval=True,
-            requires_tools=False,
-        )
-
-    # ── CREATIVE ──────────────────────────────────────────────────────────────
-    if any(signal in lower for signal in _CREATIVE_SIGNALS):
-        return IntentResult(
-            intent=Intent.CREATIVE,
-            confidence=0.88,
-            system_prompt=build_system_prompt(Intent.CREATIVE, lang),
-            requires_retrieval=False,
-            requires_tools=False,
-        )
-
-    # ── INSTRUCTION ───────────────────────────────────────────────────────────
-    if any(signal in lower for signal in _INSTRUCTION_SIGNALS):
-        return IntentResult(
-            intent=Intent.INSTRUCTION,
-            confidence=0.85,
-            system_prompt=build_system_prompt(Intent.INSTRUCTION, lang),
-            requires_retrieval=True,
-            requires_tools=False,
-        )
-
-    # ── CONVERSATION (greetings / small talk) ─────────────────────────────────
-    if any(signal in lower for signal in _GREETING_SIGNALS):
-        return IntentResult(
-            intent=Intent.CONVERSATION,
-            confidence=0.92,
-            system_prompt=build_system_prompt(Intent.CONVERSATION, lang),
-            requires_retrieval=False,
-            requires_tools=False,
-        )
-
-    # ── QUESTION (default) ────────────────────────────────────────────────────
-    return IntentResult(
-        intent=Intent.QUESTION,
-        confidence=0.70,
-        system_prompt=build_system_prompt(Intent.QUESTION, lang),
-        requires_retrieval=True,
-        requires_tools=False,
+def _empty_usage(
+    request: OrchestratorRequest,
+    tier: Tier = Tier.FAST,
+) -> UsageRecord:
+    return UsageRecord(
+        input_tokens=request.input_tokens,
+        output_tokens=0,
+        embedding_tokens=request.embedding_tokens,
+        rerank_tokens=request.rerank_tokens,
+        tier=tier,
+        embedding_type=request.embedding_type,
+        cost_usd=0.0,
     )
+
+
+# ─── TOOL RUNNER ──────────────────────────────────────────────────────────────
+
+_TOOL_INTENTS = {Intent.WEATHER, Intent.SEARCH, Intent.MAPS, Intent.MAPS_POI}
+
+
+async def _run_tool(intent_result, lang: str) -> str | None:
+    if not intent_result.requires_tools or not intent_result.tool_name:
+        return None
+    try:
+        from external.web_tools import run_tool
+        result = await run_tool(
+            tool_name=intent_result.tool_name,
+            params=intent_result.tool_params,
+            lang=lang,
+        )
+        logger.info("Tool executed", extra={
+            "tool": intent_result.tool_name,
+            "result_len": len(result) if result else 0,
+        })
+        return result
+    except Exception as exc:
+        logger.error("Tool execution failed", extra={
+            "tool": intent_result.tool_name,
+            "error": str(exc),
+        }, exc_info=True)
+        return None
+
+
+# ─── PROMPT BUILDER (truth-aware) ────────────────────────────────────────────
+
+def _build_messages(
+    request: OrchestratorRequest,
+    intent_result,
+    retrieved_context: str,
+    truth_mode: TruthMode,
+) -> list[dict]:
+    strategy = select_strategy(intent_result.intent, Tier.GENERAL)
+    user_msg = (
+        f"{strategy.instruction_prefix} {request.user_message}".strip()
+        if strategy.instruction_prefix
+        else request.user_message
+    )
+    return build_messages(PromptContext(
+        user_message=user_msg,
+        system_prompt=request.system_prompt or intent_result.system_prompt,
+        retrieved_context=retrieved_context,
+        conversation_history=request.conversation_history,
+        truth_mode=truth_mode,
+    ))
+
+
+# ─── EXECUTION PATHS ──────────────────────────────────────────────────────────
+
+async def _run_allow(
+    request: OrchestratorRequest,
+    intent_result,
+    messages: list[dict],
+    tier: Tier,
+    epk_decision: EPKDecision,
+    lang: str,
+) -> OrchestratorResult:
+    """Execute request at the given tier. Used for ALLOW and DEGRADED (FAST tier)."""
+    strategy = select_strategy(intent_result.intent, tier)
+    plan = plan_agents(intent_result.intent, tier, strategy)
+
+    coordination: CoordinationResult = await coordinate(
+        plan=plan,
+        messages=messages,
+        user_message=request.user_message,
+        temperature=strategy.temperature,
+    )
+
+    if coordination.blocked:
+        return _denied_result(
+            reason=coordination.block_reason or "default_deny",
+            lang=lang,
+            tier=tier,
+            input_tokens=request.input_tokens,
+            embedding_tokens=request.embedding_tokens,
+            rerank_tokens=request.rerank_tokens,
+            embedding_type=request.embedding_type,
+            epk_decision=epk_decision,
+        )
+
+    cost = actual_cost(
+        input_tokens=coordination.input_tokens,
+        output_tokens=coordination.output_tokens,
+        embedding_tokens=request.embedding_tokens,
+        rerank_tokens=request.rerank_tokens,
+        tier=tier,
+        embedding_type=request.embedding_type,
+    )
+
+    synthesis = synthesize(SynthesisInput(
+        raw_text=coordination.text,
+        intent=intent_result.intent,
+        tier=tier,
+        lang=lang,
+    ))
+
+    return OrchestratorResult(
+        text=synthesis.text,
+        tier=tier,
+        model=coordination.model,
+        epk_decision=epk_decision,
+        usage=UsageRecord(
+            input_tokens=coordination.input_tokens,
+            output_tokens=coordination.output_tokens,
+            embedding_tokens=request.embedding_tokens,
+            rerank_tokens=request.rerank_tokens,
+            tier=tier,
+            embedding_type=request.embedding_type,
+            cost_usd=cost,
+        ),
+        lang=lang,
+    )
+
+
+async def _run_heavy(
+    request: OrchestratorRequest,
+    intent_result,
+    messages: list[dict],
+    epk_decision: EPKDecision,
+    lang: str,
+) -> OrchestratorResult:
+    tier = Tier.HEAVY
+    strategy = select_strategy(intent_result.intent, tier)
+
+    shaper_result = shape(ShaperInput(
+        text=request.user_message,
+        token_count=request.input_tokens,
+        has_code_block=request.has_code_block,
+        has_json_shape=request.has_json_shape,
+        context_size=request.context_size,
+    ))
+
+    if shaper_result.was_shaped:
+        logger.info("heavy_input_shaper shaped input", extra={
+            "operation": shaper_result.operation,
+        })
+        truth_mode = resolve_truth_mode(intent_result.intent)
+        messages = build_messages(PromptContext(
+            user_message=shaper_result.text,
+            system_prompt=request.system_prompt or intent_result.system_prompt,
+            retrieved_context=request.retrieved_context or "",
+            conversation_history=request.conversation_history,
+            truth_mode=truth_mode,
+        ))
+
+    plan = plan_agents(intent_result.intent, tier, strategy)
+
+    coordination: CoordinationResult = await coordinate(
+        plan=plan,
+        messages=messages,
+        user_message=request.user_message,
+        reasoning_plan="",
+        temperature=strategy.temperature,
+    )
+
+    if coordination.blocked:
+        return _denied_result(
+            reason=coordination.block_reason or "default_deny",
+            lang=lang,
+            tier=tier,
+            input_tokens=request.input_tokens,
+            embedding_tokens=request.embedding_tokens,
+            rerank_tokens=request.rerank_tokens,
+            embedding_type=request.embedding_type,
+            epk_decision=epk_decision,
+        )
+
+    cost = actual_cost(
+        input_tokens=coordination.input_tokens,
+        output_tokens=coordination.output_tokens,
+        embedding_tokens=request.embedding_tokens,
+        rerank_tokens=request.rerank_tokens,
+        tier=tier,
+        embedding_type=request.embedding_type,
+    )
+
+    synthesis = synthesize(SynthesisInput(
+        raw_text=coordination.text,
+        intent=intent_result.intent,
+        tier=tier,
+        lang=lang,
+    ))
+
+    return OrchestratorResult(
+        text=synthesis.text,
+        tier=tier,
+        model=coordination.model,
+        epk_decision=epk_decision,
+        usage=UsageRecord(
+            input_tokens=coordination.input_tokens,
+            output_tokens=coordination.output_tokens,
+            embedding_tokens=request.embedding_tokens,
+            rerank_tokens=request.rerank_tokens,
+            tier=tier,
+            embedding_type=request.embedding_type,
+            cost_usd=cost,
+        ),
+        lang=lang,
+    )
+
+
+# ─── MAIN PIPELINE ────────────────────────────────────────────────────────────
+
+async def run(request: OrchestratorRequest) -> OrchestratorResult:
+    lang = request.lang or "en"
+
+    logger.info("Orchestrator start", extra={
+        "message_len": len(request.user_message),
+        "input_tokens": request.input_tokens,
+        "complexity": request.complexity,
+        "lang": lang,
+        "balance": request.user_balance,
+    })
+
+    try:
+        # ── intent ───────────────────────────────────────────────────────────
+        intent_result = classify(
+            request.user_message,
+            lang=lang,
+            conversation_history=request.conversation_history,
+        )
+        logger.info("Intent", extra={
+            "intent": intent_result.intent,
+            "confidence": intent_result.confidence,
+        })
+
+        # ── truth mode ───────────────────────────────────────────────────────
+        truth_mode = resolve_truth_mode(intent_result.intent)
+
+        # ── STRICT: block if no context and no tool output available yet ─────
+        # (tool output comes next — we check after tool execution below)
+
+        # ── tool execution ───────────────────────────────────────────────────
+        tool_output: str | None = None
+        if intent_result.requires_tools:
+            tool_output = await _run_tool(intent_result, lang)
+
+        # ── STRICT truth gate ─────────────────────────────────────────────────
+        # For STRICT intents: if no retrieved context AND no tool output → block
+        has_grounding = bool(request.retrieved_context) or bool(tool_output)
+        if truth_mode == TruthMode.STRICT and not has_grounding:
+            logger.info("Truth gate: STRICT intent with no grounding data", extra={
+                "intent": intent_result.intent,
+            })
+            return _denied_result(
+                reason="no_grounded_data",
+                lang=lang,
+                input_tokens=request.input_tokens,
+                embedding_tokens=request.embedding_tokens,
+                rerank_tokens=request.rerank_tokens,
+                embedding_type=request.embedding_type,
+                epk_decision=EPKDecision.DENY,
+            )
+
+        # ── estimate ─────────────────────────────────────────────────────────
+        estimated_output = estimate_output_tokens(
+            request.input_tokens,
+            request.complexity,
+            Tier.GENERAL,
+        )
+        estimated = estimate_cost(
+            input_tokens=request.input_tokens,
+            estimated_output_tokens=estimated_output,
+            embedding_tokens=request.embedding_tokens,
+            rerank_tokens=request.rerank_tokens,
+            tier=Tier.GENERAL,
+            embedding_type=request.embedding_type,
+        )
+
+        # ── EPK ──────────────────────────────────────────────────────────────
+        epk_out = evaluate(EPKInput(
+            estimated_cost=estimated,
+            user_balance=request.user_balance,
+        ))
+
+        logger.info("EPK", extra={
+            "decision": epk_out.decision,
+            "estimated_cost": f"{estimated:.6f}",
+        })
+
+        if epk_out.decision == EPKDecision.DENY:
+            return _denied_result(
+                reason="insufficient_balance",
+                lang=lang,
+                input_tokens=request.input_tokens,
+                embedding_tokens=request.embedding_tokens,
+                rerank_tokens=request.rerank_tokens,
+                embedding_type=request.embedding_type,
+                epk_decision=EPKDecision.DENY,
+            )
+
+        # ── tier ─────────────────────────────────────────────────────────────
+        tier = select_tier(estimated)
+
+        # ── tool-only path ────────────────────────────────────────────────────
+        if intent_result.intent in _TOOL_INTENTS and tool_output:
+            logger.info("Tool-only path", extra={"intent": intent_result.intent})
+            synthesis = synthesize(SynthesisInput(
+                raw_text=tool_output,
+                intent=intent_result.intent,
+                tier=tier,
+                lang=lang,
+            ))
+            return OrchestratorResult(
+                text=synthesis.text,
+                tier=tier,
+                model="tool",
+                epk_decision=epk_out.decision,
+                usage=_empty_usage(request, tier),
+                lang=lang,
+            )
+
+        # ── assemble retrieved context ────────────────────────────────────────
+        retrieved_context = request.retrieved_context or ""
+        if tool_output:
+            retrieved_context = (
+                f"{tool_output}\n\n{retrieved_context}".strip()
+                if retrieved_context
+                else tool_output
+            )
+
+        # ── build messages with truth mode ────────────────────────────────────
+        messages = _build_messages(request, intent_result, retrieved_context, truth_mode)
+
+        logger.info("Truth mode", extra={
+            "mode": truth_mode,
+            "has_context": bool(retrieved_context),
+        })
+
+        # ── EPK signal execution ──────────────────────────────────────────────
+        if epk_out.decision == EPKDecision.HEAVY_REQUIRED:
+            return await _run_heavy(request, intent_result, messages, epk_out.decision, lang)
+
+        if epk_out.decision == EPKDecision.DEGRADED_MODE:
+            return await _run_allow(request, intent_result, messages, Tier.FAST, epk_out.decision, lang)
+
+        return await _run_allow(request, intent_result, messages, tier, epk_out.decision, lang)
+
+    except Exception as exc:
+        logger.error("Orchestrator crashed", extra={"error": str(exc)}, exc_info=True)
+        synthesis = synthesize(SynthesisInput(
+            raw_text="",
+            intent=None,
+            tier=Tier.FAST,
+            denied=True,
+            deny_reason="default_deny",
+            lang=lang,
+        ))
+        return OrchestratorResult(
+            text=synthesis.text,
+            tier=Tier.FAST,
+            model="",
+            epk_decision=EPKDecision.DENY,
+            usage=_empty_usage(request),
+            denied=True,
+            deny_reason="internal_error",
+            lang=lang,
+        )
