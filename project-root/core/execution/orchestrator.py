@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from cognition.intent_engine import Intent, classify
+from cognition.intent_engine import Intent, IntentResult, classify
 from cognition.multi_agent_coordinator import CoordinationResult, coordinate, plan_agents
 from cognition.reasoning_engine import select_strategy
 from cognition.response_synthesizer import SynthesisInput, synthesize
@@ -53,6 +53,9 @@ class OrchestratorRequest:
     has_code_block: bool = False
     has_json_shape: bool = False
     context_size: int = 0
+    # Optional pre-computed intent (e.g. from vision_handler).
+    # When set, orchestrator skips classify() to avoid duplicate work.
+    forced_intent: IntentResult | None = None
 
 
 @dataclass
@@ -416,15 +419,24 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
 
     try:
         # ── intent ───────────────────────────────────────────────────────────
-        intent_result = classify(
-            request.user_message,
-            lang=lang,
-            conversation_history=request.conversation_history,
-        )
-        logger.info("Intent", extra={
-            "intent": intent_result.intent,
-            "confidence": intent_result.confidence,
-        })
+        # Use pre-computed intent when available (e.g. from vision pipeline)
+        # to avoid classifying the same text twice.
+        if request.forced_intent is not None:
+            intent_result = request.forced_intent
+            logger.info("Intent (forced)", extra={
+                "intent": intent_result.intent,
+                "confidence": intent_result.confidence,
+            })
+        else:
+            intent_result = classify(
+                request.user_message,
+                lang=lang,
+                conversation_history=request.conversation_history,
+            )
+            logger.info("Intent", extra={
+                "intent": intent_result.intent,
+                "confidence": intent_result.confidence,
+            })
 
         # ── truth mode ───────────────────────────────────────────────────────
         truth_mode = resolve_truth_mode(intent_result.intent)
