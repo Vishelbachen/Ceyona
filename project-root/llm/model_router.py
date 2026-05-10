@@ -40,6 +40,13 @@ _MAX_TOKENS: dict[Tier, int] = {
 # heavy_input_shaper uses llama-3.1-8b-instant NOT as Fast Tier
 SHAPER_MODEL    = "llama-3.1-8b-instant"
 
+# Agent Layer (models.md §AGENT LAYER) — tool-use execution fabric.
+# These are NOT tier models — they have tool selection authority.
+# compound      → deep_agent.py  (multi-step, deep reasoning)
+# compound-mini → fast_agent.py  (lightweight, single-step)
+FAST_AGENT_MODEL = "groq/compound-mini"
+DEEP_AGENT_MODEL = "groq/compound"
+
 # Consensus arbiter — only active when Heavy Tier is NOT active (mutex)
 CONSENSUS_MODEL = "openai/gpt-oss-120b"
 
