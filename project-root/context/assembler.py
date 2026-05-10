@@ -26,6 +26,7 @@ _HYBRID_INTENTS = {
 _GENERATIVE_INTENTS = {
     Intent.CREATIVE,
     Intent.CONVERSATION,
+    Intent.EMOTIONAL,
     Intent.UNKNOWN,
 }
 
