@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 _VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 # Intents that generate freely — no web search needed
-_NO_SEARCH_INTENTS = {"creative", "conversation", "code", "math"}
+_NO_SEARCH_INTENTS = {"creative", "conversation", "emotional", "code", "math"}
 
 
 def _estimate_tokens(text: str) -> int:
