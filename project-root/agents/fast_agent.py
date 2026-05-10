@@ -3,8 +3,9 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from llm.groq_client import groq_client
+from llm.model_router import FAST_AGENT_MODEL, route_max_tokens
 from contracts.shared_types import Tier
-from llm.fallback_handler import complete_with_fallback
 
 logger = logging.getLogger(__name__)
 
@@ -21,13 +22,19 @@ class AgentResult:
 
 async def run(messages: list[dict], temperature: float = 0.7) -> AgentResult:
     """
-    Fast agent — single LLM call, FAST tier, no overhead.
+    Fast agent — groq/compound-mini (Agent Layer, models.md).
+
+    Role: tool selection authority, lightweight single-step execution.
+    NOT a tier model — compound-mini has tool-use capability that
+    plain Fast Tier (llama-3.1-8b-instant) does not.
+
     Used for: conversation, simple questions, low-cost tasks.
     """
     try:
-        response = await complete_with_fallback(
-            tier=Tier.FAST,
+        response = await groq_client.complete(
+            model=FAST_AGENT_MODEL,
             messages=messages,
+            max_tokens=route_max_tokens(Tier.FAST),
             temperature=temperature,
         )
         return AgentResult(
