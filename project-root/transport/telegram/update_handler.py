@@ -9,6 +9,10 @@ from transport.telegram.message_router import UpdateType, extract_text, extract_
 
 logger = logging.getLogger(__name__)
 
+# Model label used when vision fast-path returns a direct response.
+# Matches the extraction model defined in vision_handler.py.
+_VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+
 # Intents that generate freely — no web search needed
 _NO_SEARCH_INTENTS = {"creative", "conversation", "code", "math"}
 
@@ -50,8 +54,8 @@ async def handle_message(
     # ── photo handling ────────────────────────────────────────────────────────
     if has_photo(update):
         photo_meta = extract_photo(update)
-        file_id = photo_meta["file_id"]
-        caption = photo_meta.get("caption", "")
+        file_id    = photo_meta["file_id"]
+        caption    = photo_meta.get("caption", "")
 
         logger.info("Photo message received", extra={
             "user_id": user_id,
@@ -61,7 +65,7 @@ async def handle_message(
 
         try:
             from transport.telegram.vision_handler import handle_vision
-            vision_text = await handle_vision(
+            vision_result = await handle_vision(
                 file_id=file_id,
                 caption=caption,
                 lang=lang,
@@ -69,29 +73,60 @@ async def handle_message(
         except Exception as exc:
             tb = traceback.format_exc()
             logger.error(f"Vision handler crashed: {exc!r}\n{tb}")
-            vision_text = "❌ Image processing error."
+            from cognition.response_synthesizer import get_system_message
+            error_text = get_system_message("vision_error", lang)
+            return OrchestratorResult(
+                text=error_text,
+                tier=Tier.FAST,
+                model="",
+                epk_decision=EPKDecision.DENY,
+                usage=UsageRecord(
+                    input_tokens=0,
+                    output_tokens=0,
+                    embedding_tokens=0,
+                    rerank_tokens=0,
+                    tier=Tier.FAST,
+                    embedding_type="large",
+                    cost_usd=0.0,
+                ),
+                denied=True,
+                deny_reason="vision_error",
+                lang=lang,
+            )
 
-        return OrchestratorResult(
-            text=vision_text,
-            tier=Tier.GENERAL,
-            model="meta-llama/llama-4-maverick-17b-128e-instruct",
-            epk_decision=EPKDecision.ALLOW,
-            usage=UsageRecord(
-                input_tokens=_estimate_tokens(caption) + 500,
-                output_tokens=_estimate_tokens(vision_text),
-                embedding_tokens=0,
-                rerank_tokens=0,
+        # ── CASE 1: descriptive / conversational — direct response ────────────
+        if not vision_result.needs_pipeline:
+            logger.info("Vision fast-path: direct response", extra={"user_id": user_id})
+            return OrchestratorResult(
+                text=vision_result.text,
                 tier=Tier.GENERAL,
-                embedding_type="large",
-                cost_usd=0.001,
-            ),
-            denied=False,
-            deny_reason="",
-            lang=lang,
-        )
+                model=_VISION_MODEL,
+                epk_decision=EPKDecision.ALLOW,
+                usage=UsageRecord(
+                    input_tokens=_estimate_tokens(caption) + 500,
+                    output_tokens=_estimate_tokens(vision_result.text),
+                    embedding_tokens=0,
+                    rerank_tokens=0,
+                    tier=Tier.GENERAL,
+                    embedding_type="large",
+                    cost_usd=0.001,
+                ),
+                denied=False,
+                deny_reason="",
+                lang=lang,
+            )
+
+        # ── CASE 2: analytical / task — forward extracted text into pipeline ──
+        logger.info("Vision pipeline-path: forwarding to orchestrator", extra={"user_id": user_id})
+        # Fall through to the standard text pipeline below,
+        # using the extracted vision text as the user message.
+        update = dict(update)   # shallow copy — do not mutate the original
+        _vision_text_override = vision_result.text
 
     # ── text handling (original flow) ─────────────────────────────────────────
-    text = extract_text(update)
+    # If vision pipeline-path set an override, use extracted image text;
+    # otherwise extract text from the Telegram update as normal.
+    text = locals().get("_vision_text_override") or extract_text(update)
 
     if not text:
         logger.info("Empty text update ignored", extra={"user_id": user_id})
