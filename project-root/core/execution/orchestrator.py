@@ -205,6 +205,8 @@ async def _run_allow(
         messages=messages,
         user_message=request.user_message,
         temperature=strategy.temperature,
+        intent=intent_result.intent,
+        lang=lang,
     )
 
     if coordination.blocked:
@@ -269,6 +271,8 @@ async def _run_degraded(
         messages=messages,
         user_message=request.user_message,
         temperature=strategy.temperature,
+        intent=intent_result.intent,
+        lang=lang,
     )
 
     if coordination.blocked:
@@ -356,6 +360,8 @@ async def _run_heavy(
         user_message=request.user_message,
         reasoning_plan="",
         temperature=strategy.temperature,
+        intent=intent_result.intent,
+        lang=lang,
     )
 
     if coordination.blocked:
