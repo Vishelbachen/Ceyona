@@ -5,72 +5,27 @@ import logging
 import httpx
 
 from app.settings import settings
+from i18n.strings import t as _i18n, ow_lang as _ow_lang_fn
 
 logger = logging.getLogger(__name__)
 
 _BASE_URL = "https://api.openweathermap.org/data/2.5"
 _TIMEOUT = 10.0
 
-_OW_LANG_MAP: dict[str, str] = {
-    "en": "en", "ru": "ru", "de": "de", "fr": "fr",
-    "es": "es", "pt": "pt", "it": "it", "tr": "tr",
-    "ar": "ar", "zh": "zh_cn", "ja": "ja", "ko": "ko",
-    "pl": "pl", "uk": "uk", "fa": "fa", "nl": "nl",
-    "sv": "sv", "no": "no", "da": "da", "fi": "fi",
-    "cs": "cs", "sk": "sk", "ro": "ro", "hu": "hu",
-    "bg": "bg", "hr": "hr", "sr": "sr", "he": "he",
-    "vi": "vi", "th": "th", "id": "id", "ms": "ms",
-    # unsupported by OpenWeather → neutral English fallback
-    "hi": "en", "bn": "en", "ur": "en", "az": "en",
-    "kk": "en", "uz": "en", "ka": "en", "hy": "en",
-    "mn": "en", "si": "en", "km": "en", "lo": "en",
-    "my": "en", "am": "en", "sw": "en",
-}
-
-_LABELS: dict[str, dict[str, str]] = {
-    "feels_like": {
-        "en": "feels like", "ru": "ощущается как", "de": "gefühlt",
-        "fr": "ressenti", "es": "sensación", "pt": "sensação",
-        "it": "percepito", "tr": "hissedilen", "ar": "يبدو كأنه",
-        "zh": "体感", "ja": "体感", "ko": "체감",
-        "pl": "odczuwalna", "uk": "відчувається як", "fa": "احساس می‌شود",
-        "nl": "gevoelstemperatuur", "sv": "känns som", "no": "føles som",
-        "da": "føles som", "fi": "tuntuu kuin", "he": "מורגש כ",
-        "hi": "feels like", "id": "terasa", "az": "hiss olunur",
-        "kk": "сезіледі", "uz": "seziladi", "ka": "feels like",
-    },
-    "humidity": {
-        "en": "Humidity", "ru": "Влажность", "de": "Luftfeuchtigkeit",
-        "fr": "Humidité", "es": "Humedad", "pt": "Umidade",
-        "it": "Umidità", "tr": "Nem", "ar": "الرطوبة",
-        "zh": "湿度", "ja": "湿度", "ko": "습도",
-        "pl": "Wilgotność", "uk": "Вологість", "fa": "رطوبت",
-        "nl": "Vochtigheid", "sv": "Luftfuktighet", "no": "Luftfuktighet",
-        "da": "Luftfugtighed", "fi": "Kosteus", "he": "לחות",
-        "hi": "Humidity", "id": "Kelembaban", "az": "Rütubət",
-        "kk": "Ылғалдылық", "uz": "Namlik", "ka": "Humidity",
-    },
-    "wind": {
-        "en": "Wind", "ru": "Ветер", "de": "Wind",
-        "fr": "Vent", "es": "Viento", "pt": "Vento",
-        "it": "Vento", "tr": "Rüzgar", "ar": "الرياح",
-        "zh": "风速", "ja": "風速", "ko": "바람",
-        "pl": "Wiatr", "uk": "Вітер", "fa": "باد",
-        "nl": "Wind", "sv": "Vind", "no": "Vind",
-        "da": "Vind", "fi": "Tuuli", "he": "רוח",
-        "hi": "Wind", "id": "Angin", "az": "Külək",
-        "kk": "Жел", "uz": "Shamol", "ka": "Wind",
-    },
-}
 
 
 def _ow_lang(lang: str) -> str:
-    return _OW_LANG_MAP.get(lang, "en")
+    return _ow_lang_fn(lang)
 
 
 def _label(key: str, lang: str) -> str:
-    bucket = _LABELS.get(key, {})
-    return bucket.get(lang) or bucket.get("en", key)
+    mapping = {
+        "feels_like": "weather_feels_like",
+        "humidity": "weather_humidity",
+        "wind": "weather_wind",
+    }
+    i18n_key = mapping.get(key, key)
+    return _i18n(i18n_key, lang) or key
 
 
 def _weather_icon(icon_code: str) -> str:
