@@ -646,6 +646,54 @@ _MESSAGES: dict[str, dict[str, str]] = {
     # ── silent keys ───────────────────────────────────────────────────────────
     "empty_message": {"_silent": "true"},
     "no_user_id":    {"_silent": "true"},
+
+    # ── emotional fallback — when LLM unavailable for a pure emotional reaction ─
+    # Used by synthesize() as last resort before no_response.
+    "emotional_fallback": {
+        "ru": "Понимаю, это неприятно. Расскажи, что случилось — постараюсь помочь.",
+        "en": "That sounds rough. Want to tell me more about what happened?",
+        "de": "Das klingt wirklich frustrierend. Erzähl mir, was passiert ist.",
+        "fr": "Ça a l'air difficile. Dis-moi ce qui s'est passé.",
+        "es": "Entiendo, eso es difícil. Cuéntame qué pasó.",
+        "pt": "Entendo, isso é difícil. Me conta o que aconteceu.",
+        "it": "Capisco, sembra brutto. Dimmi cosa è successo.",
+        "tr": "Anlıyorum, bu zor. Ne olduğunu anlatır mısın?",
+        "ar": "أفهم ذلك، يبدو صعباً. أخبرني ماذا حدث.",
+        "zh": "听起来很糟。跟我说说发生了什么？",
+        "ja": "それは大変だったね。何があったか話してみて。",
+        "ko": "힘들었겠네요. 무슨 일이 있었는지 얘기해줄래요?",
+        "pl": "Rozumiem, to musi być frustrujące. Opowiedz, co się stało.",
+        "uk": "Розумію, це неприємно. Розкажи, що сталося.",
+        "fa": "می‌فهمم، این سخته. بگو چی شده.",
+        "nl": "Dat klinkt vervelend. Vertel me wat er is gebeurd.",
+        "sv": "Det låter jobbigt. Berätta vad som hände.",
+        "no": "Det høres tøft ut. Fortell meg hva som skjedde.",
+        "da": "Det lyder svært. Fortæl mig hvad der skete.",
+        "fi": "Kuulostaa raskaalta. Kerro mitä tapahtui.",
+        "he": "נשמע קשה. ספר לי מה קרה.",
+        "hi": "समझ सकता हूँ, यह मुश्किल है। बताओ क्या हुआ।",
+        "id": "Kedengarannya berat. Ceritakan apa yang terjadi.",
+        "az": "Anlayıram, bu çətindir. De görüm nə baş verdi.",
+        "kk": "Түсінемін, бұл ауыр. Не болғанын айтшы.",
+        "uz": "Tushunaman, bu qiyin. Nima bo'lganini ayt.",
+        "ka": "მესმის, ეს ძნელია. მიამბე, რა მოხდა.",
+        "hy": "Հասկանում եմ, դա ծանր է: Պատմիր՝ ինչ եղավ:",
+        "mn": "Ойлгож байна, энэ хэцүү. Юу болсноо хэлж өгнө үү.",
+        "sw": "Naelewa, ni vigumu. Niambie kilichotokea.",
+        "am": "እረዳለሁ፣ ይህ ከባድ ነው። ምን እንደሆነ ንገረኝ።",
+        "bg": "Разбирам, това е неприятно. Разкажи ми какво се е случило.",
+        "hr": "Razumijem, to zvuči teško. Ispričaj mi što se dogodilo.",
+        "sr": "Разумем, то звучи тешко. Причај ми шта се догодило.",
+        "cs": "Chápu, to musí být nepříjemné. Řekni mi, co se stalo.",
+        "sk": "Chápem, musí to byť nepríjemné. Povedz mi, čo sa stalo.",
+        "ro": "Înțeleg, sună greu. Spune-mi ce s-a întâmplat.",
+        "hu": "Értem, ez nehéz lehet. Mesélj, mi történt.",
+        "vi": "Nghe có vẻ khó khăn. Kể cho tôi nghe chuyện gì đã xảy ra.",
+        "th": "ฟังดูยากเลย บอกฉันหน่อยได้ไหมว่าเกิดอะไรขึ้น?",
+        "ms": "Kedengarannya berat. Ceritakan apa yang berlaku.",
+        "bn": "বুঝতে পারছি, এটা কঠিন। কী হয়েছে বলো।",
+        "ur": "سمجھ سکتا ہوں، یہ مشکل ہے۔ بتاؤ کیا ہوا۔",
+    },
 }
 
 _SILENT_KEYS: frozenset[str] = frozenset({"empty_message", "no_user_id"})
@@ -768,6 +816,10 @@ def synthesize(inp: SynthesisInput) -> SynthesisResult:
 
     # ── no LLM response ───────────────────────────────────────────────────────
     if not inp.raw_text or not inp.raw_text.strip():
+        # For emotional reactions use a warm fallback instead of a cold error.
+        from cognition.intent_engine import Intent as _Intent
+        if inp.intent == _Intent.EMOTIONAL:
+            return SynthesisResult(text=get_system_message("emotional_fallback", lang))
         return SynthesisResult(text=get_system_message("no_response", lang))
 
     # ── normal pipeline ───────────────────────────────────────────────────────
