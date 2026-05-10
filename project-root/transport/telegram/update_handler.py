@@ -120,8 +120,9 @@ async def handle_message(
         logger.info("Vision pipeline-path: forwarding to orchestrator", extra={"user_id": user_id})
         # Fall through to the standard text pipeline below,
         # using the extracted vision text as the user message.
-        update = dict(update)   # shallow copy — do not mutate the original
-        _vision_text_override = vision_result.text
+        update = dict(update)           # shallow copy — do not mutate the original
+        _vision_text_override   = vision_result.text
+        _vision_intent_result   = vision_result.intent_result  # may be None if classify failed
 
     # ── text handling (original flow) ─────────────────────────────────────────
     # If vision pipeline-path set an override, use extracted image text;
@@ -233,13 +234,16 @@ async def handle_message(
             })
 
     # ── web search ────────────────────────────────────────────────────────────
+    # For vision pipeline-path, intent is already known — reuse it directly
+    # to avoid a redundant classify() call before the orchestrator does its own.
     if not retrieved_context:
         try:
             from cognition.intent_engine import classify
             from external.web_tools import run_tool
 
-            quick_intent = classify(text, lang=lang)
-            intent_value = quick_intent.intent.value
+            _pre_intent    = locals().get("_vision_intent_result")
+            quick_intent   = _pre_intent if _pre_intent is not None else classify(text, lang=lang)
+            intent_value   = quick_intent.intent.value
 
             if intent_value not in _NO_SEARCH_INTENTS:
                 if intent_value in ("weather", "maps", "maps_poi"):
@@ -266,6 +270,10 @@ async def handle_message(
         except Exception as exc:
             logger.warning("Web search failed", extra={"error": str(exc)})
 
+    # Pass pre-computed intent from vision pipeline when available.
+    # Orchestrator will skip classify() and use it directly.
+    _forced_intent = locals().get("_vision_intent_result")
+
     request = OrchestratorRequest(
         user_message=text,
         user_balance=user_balance,
@@ -276,6 +284,7 @@ async def handle_message(
         retrieved_context=retrieved_context,
         embedding_tokens=embedding_tokens,
         rerank_tokens=rerank_tokens,
+        forced_intent=_forced_intent,
     )
 
     result = await run(request)
