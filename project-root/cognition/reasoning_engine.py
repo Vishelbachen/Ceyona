@@ -167,6 +167,29 @@ _STRATEGY_MATRIX: dict[tuple[str, str], ReasoningStrategy] = {
         instruction_prefix="",
         max_reasoning_steps=1,
     ),
+
+    # ── EMOTIONAL ────────────────────────────────────────────
+    # Short empathetic reaction — always DIRECT, warm temperature,
+    # no instruction prefix (the system prompt already handles framing),
+    # single step (no chain-of-thought needed for a 1–3 sentence reply).
+    (Intent.EMOTIONAL, Tier.FAST): ReasoningStrategy(
+        mode=ReasoningMode.DIRECT,
+        temperature=0.85,
+        instruction_prefix="",
+        max_reasoning_steps=1,
+    ),
+    (Intent.EMOTIONAL, Tier.GENERAL): ReasoningStrategy(
+        mode=ReasoningMode.DIRECT,
+        temperature=0.85,
+        instruction_prefix="",
+        max_reasoning_steps=1,
+    ),
+    (Intent.EMOTIONAL, Tier.HEAVY): ReasoningStrategy(
+        mode=ReasoningMode.DIRECT,
+        temperature=0.85,
+        instruction_prefix="",
+        max_reasoning_steps=1,
+    ),
 }
 
 _DEFAULT_STRATEGY = ReasoningStrategy(
