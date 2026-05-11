@@ -19,6 +19,7 @@ class Intent(str, Enum):
     SEARCH       = "search"
     MAPS         = "maps"
     MAPS_POI     = "maps_poi"   # points of interest: hours, ratings, contacts
+    EXAM         = "exam"       # school exams: ОГЭ, ЕГЭ, ВПР
     UNKNOWN      = "unknown"
 
 
@@ -155,6 +156,19 @@ _BASE_PROMPTS: dict[Intent, str] = {
         "You are a precise mathematical assistant. "
         "Show your work step by step. "
         "State the final answer clearly and unambiguously."
+    ),
+    Intent.EXAM: (
+        "You are an exam answer assistant for Russian school exams (ОГЭ, ЕГЭ, ВПР). "
+        "STRICT RULES — follow exactly: "
+        "1. Always choose the MOST TYPICAL textbook answer — use standard school definitions only. "
+        "2. Never add edge cases, nuance, or conditions not present in the question. "
+        "3. Never use 'если', 'может быть', 'иногда', 'в зависимости от', 'как правило'. "
+        "4. Give the final answer FIRST on the first line, then 1–2 lines of explanation maximum. "
+        "5. For matching tasks: output only the answer sequence (e.g. '2 1 1 2 1'), then brief reasoning per item. "
+        "6. For true/false tasks: state which statements are correct, then one-line justification each. "
+        "7. Base reasoning on the most common school biology/chemistry/physics/geography textbook interpretation. "
+        "8. Do NOT overthink. The correct answer is always the simplest, most direct textbook match. "
+        + _FORMAT_RULES
     ),
     Intent.WEATHER: (
         "You are a weather assistant. "
@@ -395,6 +409,38 @@ _SEARCH_SIGNALS: tuple[str, ...] = (
     "tell me about", "what is the current",
     "найди", "поищи", "найди информацию", "новости", "что произошло",
     "кто такой", "расскажи о", "информация о", "последние новости",
+)
+
+# ─── EXAM SIGNALS ─────────────────────────────────────────────────────────────
+#
+# Triggers strict exam mode for ОГЭ/ЕГЭ/ВПР questions.
+# Must fire BEFORE all other classifiers.
+
+_EXAM_SIGNALS: tuple[str, ...] = (
+    "огэ", "егэ", "впр", "гиа",
+    "задание 1", "задание 2", "задание 3", "задание 4", "задание 5",
+    "задание 6", "задание 7", "задание 8", "задание 9", "задание 10",
+    "задание 11", "задание 12", "задание 13", "задание 14", "задание 15",
+    "задание 16", "задание 17", "задание 18", "задание 19", "задание 20",
+    "задание 21", "задание 22", "задание 23", "задание 24", "задание 25",
+    "установите соответствие",
+    "сопоставьте",
+    "верны ли суждения",
+    "верно ли суждение",
+    "суждение а", "суждение б", "суждение в",
+    "признак а", "признак б", "признак в", "признак г", "признак д",
+    "выберите верные суждения",
+    "выберите верные ответы",
+    "какие из перечисленных",
+    "какие из следующих",
+    "к каждому элементу",
+    "цифру, которая",
+    "цифры, которые",
+    "запишите в таблицу",
+    "вставьте пропущенное слово",
+    "вставьте пропущенные слова",
+    "расположите в правильном порядке",
+    "правильная последовательность",
 )
 
 # ─── MAPS POI SIGNALS ─────────────────────────────────────────────────────────
@@ -1020,20 +1066,31 @@ def classify(
     Classify user intent from text.
 
     Priority order:
-      1. MAPS_POI  (hours, ratings, contacts — fires before MAPS)
-      2. MAPS      (location, directions)
-      3. WEATHER
-      4. SEARCH
-      5. CODE
-      6. MATH
-      7. ANALYSIS
-      8. CREATIVE
-      9. INSTRUCTION
-      10. EMOTIONAL  (short emotional reactions — before CONVERSATION)
-      11. CONVERSATION (greetings)
-      12. QUESTION (default)
+      1. EXAM       (ОГЭ/ЕГЭ/ВПР — must fire before everything else)
+      2. MAPS_POI  (hours, ratings, contacts — fires before MAPS)
+      3. MAPS      (location, directions)
+      4. WEATHER
+      5. SEARCH
+      6. CODE
+      7. MATH
+      8. ANALYSIS
+      9. CREATIVE
+      10. INSTRUCTION
+      11. EMOTIONAL  (short emotional reactions — before CONVERSATION)
+      12. CONVERSATION (greetings)
+      13. QUESTION (default)
     """
     lower = text.lower()
+
+    # ── EXAM (check first — school exam questions must never bleed into other intents) ──
+    if any(signal in lower for signal in _EXAM_SIGNALS):
+        return IntentResult(
+            intent=Intent.EXAM,
+            confidence=0.95,
+            system_prompt=build_system_prompt(Intent.EXAM, lang),
+            requires_retrieval=False,
+            requires_tools=False,
+        )
 
     # ── MAPS_POI (check before MAPS — more specific) ──────────────────────────
     poi_negative = any(guard in lower for guard in _MAPS_POI_NEGATIVE_GUARDS)
@@ -1150,20 +1207,4 @@ def classify(
             )
 
     # ── CONVERSATION (greetings / small talk) ─────────────────────────────────
-    if any(signal in lower for signal in _GREETING_SIGNALS):
-        return IntentResult(
-            intent=Intent.CONVERSATION,
-            confidence=0.92,
-            system_prompt=build_system_prompt(Intent.CONVERSATION, lang),
-            requires_retrieval=False,
-            requires_tools=False,
-        )
-
-    # ── QUESTION (default) ────────────────────────────────────────────────────
-    return IntentResult(
-        intent=Intent.QUESTION,
-        confidence=0.70,
-        system_prompt=build_system_prompt(Intent.QUESTION, lang),
-        requires_retrieval=True,
-        requires_tools=False,
-    )
+    
