@@ -1,20 +1,31 @@
 from contracts.shared_types import Complexity, Tier
 
 # ─── PRICING TABLES ──────────────────────────────────────────────────────────
-# All rates in USD per 1M tokens
+# All rates in USD per 1M tokens — verified from Groq pricing page, May 2026.
+#
+# FAST    → llama-3.1-8b-instant:    $0.05 input / $0.08 output per 1M
+# GENERAL → llama-3.3-70b-versatile: $0.59 input / $0.79 output per 1M
+# HEAVY   → openai/gpt-oss-120b:     $0.15 input / $0.60 output per 1M
+#
+# Note: gpt-oss-120b is cheaper than 70B on output — MoE architecture.
+# llama-4-scout (HEAVY secondary):   $0.11 input / $0.34 output per 1M
 
 MODEL_RATES: dict[str, dict[str, float]] = {
-    Tier.FAST:    {"input": 0.25, "output": 0.9},
-    Tier.GENERAL: {"input": 2.5,  "output": 10.0},
-    Tier.HEAVY:   {"input": 8.0,  "output": 30.0},
+    Tier.FAST:    {"input": 0.05,  "output": 0.08},
+    Tier.GENERAL: {"input": 0.59,  "output": 0.79},
+    Tier.HEAVY:   {"input": 0.15,  "output": 0.60},
 }
 
+# HuggingFace Inference API — BGE embeddings
+# bge-large-en-v1.5: ~$0.10/1M tokens (HF serverless)
+# bge-small-en-v1.5: ~$0.02/1M tokens
 EMBEDDING_RATES: dict[str, float] = {
-    "large": 0.1,
+    "large": 0.10,
     "small": 0.02,
 }
 
-RERANK_RATE: float = 1.0
+# BGE reranker-large — HF serverless, conservative estimate
+RERANK_RATE: float = 0.10  # per 1M token-pairs (was 1.0 — 10x overestimate)
 
 # ─── OUTPUT ESTIMATION ───────────────────────────────────────────────────────
 
