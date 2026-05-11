@@ -51,13 +51,29 @@ def _structure(text: str, intent: "Intent | None") -> str:
 
 
 def _normalize_for_telegram(text: str) -> str:
-    """Strip LaTeX math delimiters and Markdown formatting that Telegram cannot render."""
+    """Strip LaTeX, Markdown tables, and formatting Telegram cannot render."""
     import re
+
+    # LaTeX math delimiters
     text = re.sub(r"\$\$(.*?)\$\$", r"\1", text, flags=re.DOTALL)
     text = re.sub(r"\$(.*?)\$", r"\1", text)
+
+    # Markdown headers
     text = re.sub(r"^#{1,6}\s*", "", text, flags=re.MULTILINE)
+
+    # Bold / italic
     text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
     text = re.sub(r"\*(.*?)\*", r"\1", text)
+
+    # Markdown tables: separator rows (|---|---|) and data rows (| a | b |)
+    text = re.sub(r"^\|[-:\s|]+\|\s*$", "", text, flags=re.MULTILINE)  # separator
+    text = re.sub(r"^\|(.+)\|\s*$", lambda m: "  ".join(
+        c.strip() for c in m.group(1).split("|") if c.strip()
+    ), text, flags=re.MULTILINE)
+
+    # Collapse multiple blank lines left by removed rows
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
     return text
 
 
