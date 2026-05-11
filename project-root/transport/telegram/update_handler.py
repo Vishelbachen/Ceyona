@@ -208,8 +208,6 @@ async def handle_message(
                 text=text,
                 user_id=str(user_id),
                 top_k=5,
-                threshold=0.65,
-                use_reranker=True,
             ))
 
             if retrieval_result.documents:
