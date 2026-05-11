@@ -25,3 +25,5 @@ class RetrievalResult:
     embedding_tokens: int
     rerank_tokens: int
     cache_hit: bool = False
+    reranked: bool = False   # True when cross-encoder reranking was applied
+    cached: bool = False     # True when result came from cache
