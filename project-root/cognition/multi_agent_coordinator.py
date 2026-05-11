@@ -107,7 +107,7 @@ def plan_agents(
             temperature=strategy.temperature,
         )
 
-    if intent in (Intent.CODE, Intent.MATH, Intent.ANALYSIS):
+    if intent in (Intent.CODE, Intent.MATH, Intent.ANALYSIS, Intent.QUESTION, Intent.INSTRUCTION):
         return AgentPlan(
             primary=AgentType.DEEP,
             fallback=AgentType.FAST,
@@ -126,7 +126,7 @@ def plan_agents(
             temperature=0.85,
         )
 
-    # default GENERAL
+    # default GENERAL — FAST for conversation, search results, etc.
     return AgentPlan(
         primary=AgentType.FAST,
         fallback=None,
