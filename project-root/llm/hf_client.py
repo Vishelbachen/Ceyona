@@ -2,7 +2,10 @@ import httpx
 
 from app.settings import settings
 
-_BASE_URL = "https://api-inference.huggingface.co/models"
+# HuggingFace migrated Inference API to the new router in 2024.
+# Old endpoint (returns 404): https://api-inference.huggingface.co/models/{model}
+# New endpoint:               https://router.huggingface.co/hf-inference/models/{model}
+_BASE_URL = "https://router.huggingface.co/hf-inference/models"
 _TIMEOUT = 30.0
 
 _HEADERS = {
