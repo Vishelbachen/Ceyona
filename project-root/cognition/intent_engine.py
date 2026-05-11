@@ -86,6 +86,16 @@ _NO_CUTOFF = (
     "If context is present, use it. If absent, answer from general knowledge without disclaimers."
 )
 
+_FORMAT_RULES = (
+    "FORMATTING — mandatory: "
+    "Never use Markdown tables (no | pipes |). "
+    "Never use Markdown headers (no ###, ##, #). "
+    "Never open with filler phrases like 'Of course!', 'Sure!', 'Great question!', "
+    "'Похоже', 'Давайте', 'Конечно!', 'Certainly!', 'Absolutely!'. "
+    "Go straight to the answer with no preamble. "
+    "Use plain text, numbered lists, or dashes only. "
+)
+
 _BASE_PROMPTS: dict[Intent, str] = {
     Intent.QUESTION: (
         "You are a knowledgeable and direct assistant. "
@@ -94,12 +104,14 @@ _BASE_PROMPTS: dict[Intent, str] = {
         "If context is provided, base your answer on it — do not contradict it. "
         "If you are unsure, say so explicitly. Do not pad answers with unnecessary preamble. "
         + _NO_CUTOFF
+        + _FORMAT_RULES
     ),
     Intent.INSTRUCTION: (
         "You are a helpful assistant specialising in step-by-step guidance. "
         "Provide clear, numbered instructions. "
         "Be complete but concise. Start directly with step 1. "
         + _NO_CUTOFF
+        + _FORMAT_RULES
     ),
     Intent.CODE: (
         "You are an expert software engineer. "
@@ -107,6 +119,7 @@ _BASE_PROMPTS: dict[Intent, str] = {
         "Always specify the programming language. "
         "Briefly explain your approach before the code block. "
         + _NO_CUTOFF
+        + _FORMAT_RULES
     ),
     Intent.ANALYSIS: (
         "You are an analytical assistant with access to real-time web data provided in context. "
@@ -114,6 +127,7 @@ _BASE_PROMPTS: dict[Intent, str] = {
         "Base your analysis on the provided context where available. "
         "Be objective, evidence-based, and avoid filler. "
         + _NO_CUTOFF
+        + _FORMAT_RULES
     ),
     Intent.CREATIVE: (
         "You are a creative writing assistant. "
@@ -150,6 +164,7 @@ _BASE_PROMPTS: dict[Intent, str] = {
         "NEVER say you cannot provide current weather. "
         "NEVER say your information might be outdated. "
         "The data IS current. " + _NO_CUTOFF
+        + _FORMAT_RULES
     ),
     Intent.SEARCH: (
         "You are a research assistant with access to live web search results. "
@@ -158,6 +173,7 @@ _BASE_PROMPTS: dict[Intent, str] = {
         "NEVER say you cannot search or that your data is outdated — you have live results. "
         "NEVER make up information — only use what is in the context. "
         + _NO_CUTOFF
+        + _FORMAT_RULES
     ),
     Intent.MAPS: (
         "You are a location assistant with access to real-time geocoding data. "
@@ -165,6 +181,7 @@ _BASE_PROMPTS: dict[Intent, str] = {
         "Present coordinates, addresses, and map links clearly. "
         "NEVER say you cannot show maps or provide location data — you have it in context. "
         + _NO_CUTOFF
+        + _FORMAT_RULES
     ),
     Intent.MAPS_POI: (
         "You are a location assistant specialising in points of interest. "
@@ -172,6 +189,7 @@ _BASE_PROMPTS: dict[Intent, str] = {
         "Present it clearly: name, address, rating, hours, contacts. "
         "NEVER say you cannot find place information — you have it in context. "
         + _NO_CUTOFF
+        + _FORMAT_RULES
     ),
     Intent.UNKNOWN: (
         "You are a helpful, versatile assistant. "
@@ -180,6 +198,7 @@ _BASE_PROMPTS: dict[Intent, str] = {
         "If the request is ambiguous, make a reasonable interpretation and answer it. "
         "Never refuse to respond — always try. "
         + _NO_CUTOFF
+        + _FORMAT_RULES
     ),
 }
 
@@ -473,259 +492,6 @@ _MAPS_POI_SIGNALS: tuple[str, ...] = (
     "reseñas de",
     "sitio web de",
     "precio de entrada",
-
-    # ── Portuguese ────────────────────────────────────────────────────────────
-    "horário de funcionamento",
-    "que horas abre",
-    "que horas fecha",
-    "está aberto",
-    "número de telefone",
-    "avaliações de",
-    "site de",
-    "preço de entrada",
-
-    # ── Italian ───────────────────────────────────────────────────────────────
-    "orari di apertura",
-    "a che ora apre",
-    "a che ora chiude",
-    "è aperto",
-    "numero di telefono",
-    "recensioni di",
-    "sito web di",
-    "prezzo di ingresso",
-
-    # ── Turkish ───────────────────────────────────────────────────────────────
-    "çalışma saatleri",
-    "kaçta açılıyor",
-    "kaçta kapanıyor",
-    "açık mı",
-    "telefon numarası",
-    "yorumlar",
-    "web sitesi",
-    "giriş ücreti",
-
-    # ── Arabic ────────────────────────────────────────────────────────────────
-    "ساعات العمل",
-    "متى يفتح",
-    "متى يغلق",
-    "هل مفتوح",
-    "رقم الهاتف",
-    "تقييم ",
-    "مراجعات",
-    "الموقع الرسمي",
-    "سعر الدخول",
-
-    # ── Chinese ───────────────────────────────────────────────────────────────
-    "营业时间",
-    "几点开门",
-    "几点关门",
-    "现在开放吗",
-    "电话号码",
-    "评分",
-    "评价",
-    "官方网站",
-    "入场费",
-
-    # ── Japanese ──────────────────────────────────────────────────────────────
-    "営業時間",
-    "何時に開く",
-    "何時に閉まる",
-    "今開いている",
-    "電話番号",
-    "評価",
-    "口コミ",
-    "公式サイト",
-    "入場料",
-
-    # ── Korean ────────────────────────────────────────────────────────────────
-    "영업시간",
-    "몇 시에 열어",
-    "몇 시에 닫아",
-    "지금 열려있나",
-    "전화번호",
-    "평점",
-    "리뷰",
-    "공식 웹사이트",
-    "입장료",
-
-    # ── Georgian ──────────────────────────────────────────────────────────────
-    "სამუშაო საათები",
-    "როდის იხსნება",
-    "ახლა ღიაა",
-    "ტელეფონის ნომერი",
-    "შეფასება",
-    "ვებსაიტი",
-    "შესასვლელის ფასი",
-
-    # ── Armenian ──────────────────────────────────────────────────────────────
-    "աշխատանքային ժամեր",
-    "երբ է բացվում",
-    "հեռախոսահամար",
-    "գնահատական",
-    "կայք",
-
-    # ── Ukrainian ─────────────────────────────────────────────────────────────
-    "години роботи",
-    "коли відкривається",
-    "коли закривається",
-    "зараз відкрито",
-    "номер телефону",
-    "відгуки про",
-    "офіційний сайт",
-    "ціна входу",
-
-    # ── Polish ────────────────────────────────────────────────────────────────
-    "godziny otwarcia",
-    "o której otwierają",
-    "czy jest otwarte",
-    "numer telefonu",
-    "opinie o",
-    "strona internetowa",
-    "cena wejścia",
-
-    # ── Hindi ─────────────────────────────────────────────────────────────────
-    "खुलने का समय",
-    "कब खुलता है",
-    "अभी खुला है",
-    "फोन नंबर",
-    "रेटिंग",
-    "समीक्षा",
-    "आधिकारिक वेबसाइट",
-    "प्रवेश शुल्क",
-)
-
-# ─── MAPS POI NEGATIVE GUARDS ─────────────────────────────────────────────────
-#
-# Suppresses MAPS_POI when signals fire in rhetorical or unrelated context.
-
-_MAPS_POI_NEGATIVE_GUARDS: tuple[str, ...] = (
-    "не можешь",
-    "не можете",
-    "не умеешь",
-    "в смысле",
-    "can't you",
-    "cannot you",
-    "do you even",
-    "why don't you",
-)
-
-# ─── MAPS SIGNALS ─────────────────────────────────────────────────────────────
-#
-# RULE: every signal must be a phrase, not an isolated noun.
-# Bare nouns like "координаты", "адрес", "address" are BANNED here —
-# they fire on rhetorical questions ("координаты дать не можешь?")
-# and unrelated sentences ("address the issue").
-#
-# Each entry must anchor the noun to a geographic verb or preposition
-# so the classifier requires INTENT + OBJECT, not just the object alone.
-
-_MAPS_SIGNALS: tuple[str, ...] = (
-    # ── English ───────────────────────────────────────────────────────────────
-    "where is",
-    "where are",
-    "location of",
-    "address of",
-    "coordinates of",
-    "how to get to",
-    "directions to",
-    "navigate to",
-    "find on map",
-    "show on map",
-    "show me on map",
-    "map of",
-    "locate",
-    "get directions",
-    "route to",
-    "nearest ",
-    "closest ",
-
-    # ── Russian ───────────────────────────────────────────────────────────────
-    "где находится",
-    "где находятся",
-    "где расположен",
-    "где расположена",
-    "адрес магазина",
-    "адрес кафе",
-    "адрес ресторана",
-    "адрес аптеки",
-    "адрес больницы",
-    "адрес офиса",
-    "адрес отеля",
-    "адрес гостиницы",
-    "покажи адрес",
-    "координаты места",
-    "координаты города",
-    "координаты страны",
-    "координаты острова",
-    "координаты горы",
-    "как добраться",
-    "как доехать",
-    "как дойти",
-    "как проехать",
-    "как пройти до",
-    "покажи на карте",
-    "найди на карте",
-    "местоположение",
-    "покажи местоположение",
-    "расположение на карте",
-    "где это находится",
-    "где это",
-    "где магазин",
-    "где аптека",
-    "где больница",
-    "где метро",
-    "где вокзал",
-    "где аэропорт",
-    "где отель",
-    "ближайший ",
-    "ближайшая ",
-    "маршрут до",
-    "маршрут к",
-    "дорога до",
-    "путь до",
-    "навигация до",
-    "построй маршрут",
-
-    # ── Georgian ──────────────────────────────────────────────────────────────
-    "სად არის",
-    "მდებარეობა",
-    "კოორდინატები",
-    "რუკაზე",
-    "მარშრუტი",
-    "როგორ მივიდე",
-
-    # ── German ────────────────────────────────────────────────────────────────
-    "wo ist",
-    "wo befindet sich",
-    "wo liegt",
-    "adresse von",
-    "koordinaten von",
-    "wie komme ich",
-    "weg nach",
-    "route nach",
-    "auf der karte",
-    "nächste ",
-
-    # ── French ────────────────────────────────────────────────────────────────
-    "où est",
-    "où se trouve",
-    "adresse de",
-    "coordonnées de",
-    "comment aller",
-    "itinéraire vers",
-    "sur la carte",
-    "le plus proche",
-
-    # ── Spanish ───────────────────────────────────────────────────────────────
-    "dónde está",
-    "dónde queda",
-    "dónde se encuentra",
-    "dirección de",
-    "coordenadas de",
-    "cómo llegar",
-    "ruta hacia",
-    "en el mapa",
-    "más cercano",
 
     # ── Portuguese ────────────────────────────────────────────────────────────
     "onde fica",
