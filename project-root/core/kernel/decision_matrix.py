@@ -3,7 +3,7 @@ from contracts.shared_types import Tier
 # ─── TIER THRESHOLDS (USD) ───────────────────────────────────────────────────
 
 _FAST_CEILING:    float = 0.05
-_GENERAL_CEILING: float = 0.10   # synced with EPK _DEGRADE_THRESHOLD
+_GENERAL_CEILING: float = 0.003  # synced with EPK _DEGRADE_THRESHOLD
 
 
 def select_tier(estimated_cost: float) -> Tier:
