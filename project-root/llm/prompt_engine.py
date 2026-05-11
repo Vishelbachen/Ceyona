@@ -52,6 +52,19 @@ def build_messages(ctx: PromptContext) -> list[dict]:
         "Never mix languages. Never use English words inside non-English sentences."
     )
 
+    # ── formatting rules (always injected, highest priority) ─────────────────
+    system_parts.append(
+        "OUTPUT FORMAT — non-negotiable:\n"
+        "- NEVER use Markdown tables (no | pipe | characters for tables).\n"
+        "- NEVER use Markdown headers (no #, ##, ###).\n"
+        "- NEVER use bold (**text**) or italic (*text*).\n"
+        "- NEVER start your reply with filler like 'Of course!', 'Sure!', "
+        "'Great question!', 'Certainly!', 'Похоже', 'Давайте', 'Конечно!'.\n"
+        "- Go straight to the answer. No preamble, no intro sentences.\n"
+        "- Use plain text only. For lists use dashes (-) or numbers (1. 2. 3.).\n"
+        "- For table-like data use plain aligned text, e.g.: А Б В Г Д / 2 1 1 2 1"
+    )
+
     # ── no-cutoff mandate (always injected) ───────────────────────────────────
     system_parts.append(
         "MANDATORY: You have access to live, real-time web search results in the ## CONTEXT section. "
