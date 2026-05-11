@@ -1207,4 +1207,20 @@ def classify(
             )
 
     # ── CONVERSATION (greetings / small talk) ─────────────────────────────────
-    
+    if any(signal in lower for signal in _GREETING_SIGNALS):
+        return IntentResult(
+            intent=Intent.CONVERSATION,
+            confidence=0.92,
+            system_prompt=build_system_prompt(Intent.CONVERSATION, lang),
+            requires_retrieval=False,
+            requires_tools=False,
+        )
+
+    # ── QUESTION (default) ────────────────────────────────────────────────────
+    return IntentResult(
+        intent=Intent.QUESTION,
+        confidence=0.70,
+        system_prompt=build_system_prompt(Intent.QUESTION, lang),
+        requires_retrieval=True,
+        requires_tools=False,
+    )
