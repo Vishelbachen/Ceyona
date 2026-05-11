@@ -2,10 +2,22 @@ from dataclasses import dataclass
 from contracts.shared_types import EPKDecision
 
 # ─── THRESHOLDS ───────────────────────────────────────────────────────────────
+# Calibrated to ACTUAL Groq prices (May 2026):
+#   FAST    llama-3.1-8b-instant:    $0.05 / $0.08  per 1M
+#   GENERAL llama-3.3-70b-versatile: $0.59 / $0.79  per 1M
+#   HEAVY   openai/gpt-oss-120b:     $0.15 / $0.60  per 1M
+#
+# Typical GENERAL request (500 in / 900 out) costs ~$0.001
+# Typical HEAVY   request (3000 in / 7500 out) costs ~$0.005
+#
+# DENY:    balance ≤ 0 OR cost > balance
+# DEGRADE: cost > $0.003  (≈ ~2000 input token GENERAL request)
+# HEAVY:   cost > $0.008  (≈ ~5000 input token GENERAL / 3000 HEAVY request)
+# ALLOW:   otherwise
 
-_DENY_THRESHOLD:    float = 0.001   # balance ≤ 0 or cost > balance → DENY
-_HEAVY_THRESHOLD:   float = 0.30    # cost > 0.30 AND balance sufficient → HEAVY_REQUIRED
-_DEGRADE_THRESHOLD: float = 0.10    # cost > 0.10 AND balance sufficient → DEGRADED_MODE
+_DENY_THRESHOLD:    float = 0.0001   # effectively zero balance check
+_HEAVY_THRESHOLD:   float = 0.008    # large multi-step tasks → gpt-oss-120b
+_DEGRADE_THRESHOLD: float = 0.003    # oversized requests → FAST only
 
 
 @dataclass(frozen=True)
