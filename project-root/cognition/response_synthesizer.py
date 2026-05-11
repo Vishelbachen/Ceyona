@@ -51,7 +51,7 @@ def _structure(text: str, intent: "Intent | None") -> str:
 
 
 def _normalize_for_telegram(text: str) -> str:
-    """Strip LaTeX, Markdown tables, and formatting Telegram cannot render."""
+    """Strip LaTeX, Markdown tables, headers, bold/italic — anything Telegram cannot render."""
     import re
 
     # LaTeX math delimiters
@@ -61,20 +61,42 @@ def _normalize_for_telegram(text: str) -> str:
     # Markdown headers
     text = re.sub(r"^#{1,6}\s*", "", text, flags=re.MULTILINE)
 
-    # Bold / italic
-    text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
+    # Bold and italic
+    text = re.sub(r"\*\*(.*?)\*\*", r"\1", text, flags=re.DOTALL)
     text = re.sub(r"\*(.*?)\*", r"\1", text)
+    text = re.sub(r"__(.*?)__", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"_(.*?)_", r"\1", text)
 
-    # Markdown tables: separator rows (|---|---|) and data rows (| a | b |)
-    text = re.sub(r"^\|[-:\s|]+\|\s*$", "", text, flags=re.MULTILINE)  # separator
-    text = re.sub(r"^\|(.+)\|\s*$", lambda m: "  ".join(
-        c.strip() for c in m.group(1).split("|") if c.strip()
-    ), text, flags=re.MULTILINE)
+    # Markdown table separator rows: |---|---| or |:--|:--:|
+    text = re.sub(r"^[ \t]*\|[ \t]*[-:]+[ \t]*(\|[ \t]*[-:]+[ \t]*)+\|?[ \t]*$", "", text, flags=re.MULTILINE)
 
-    # Collapse multiple blank lines left by removed rows
+    # Markdown table data rows: | cell | cell | → "cell  cell"
+    def flatten_row(m: re.Match) -> str:
+        inner = m.group(0)
+        cells = [c.strip() for c in inner.split("|") if c.strip()]
+        return "  ".join(cells)
+
+    text = re.sub(r"^[ \t]*\|.+\|[ \t]*$", flatten_row, text, flags=re.MULTILINE)
+
+    # Any remaining lone | characters used as table-like formatting
+    # Only strip lines that are mostly pipes (formatting artifacts)
+    def strip_pipe_lines(m: re.Match) -> str:
+        line = m.group(0)
+        pipe_count = line.count("|")
+        non_pipe = len(line.replace("|", "").strip())
+        # If pipes dominate (formatting line), strip pipes
+        if pipe_count > 0 and non_pipe < pipe_count * 4:
+            return line.replace("|", "  ").strip()
+        return line
+    text = re.sub(r"^.+\|.+$", strip_pipe_lines, text, flags=re.MULTILINE)
+
+    # Collapse 3+ blank lines → 2
     text = re.sub(r"\n{3,}", "\n\n", text)
 
-    return text
+    # Strip leading/trailing whitespace per line
+    text = "\n".join(line.rstrip() for line in text.splitlines())
+
+    return text.strip()
 
 
 def _format(text: str) -> str:
