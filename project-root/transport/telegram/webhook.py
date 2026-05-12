@@ -61,104 +61,117 @@ def _get_chat_id(update: dict) -> int | None:
 
 
 # ─── LINGUA ISO MAP ───────────────────────────────────────────────────────────
-# Maps lingua Language enum → ISO 639-1 code used by the rest of the system.
+# Only includes Language attributes that exist in lingua 2.x.
+# Full list verified against lingua-language-detector source.
+# Do NOT add languages without confirming they exist in the installed version.
 _LINGUA_ISO: dict[Language, str] = {
-    Language.ENGLISH: "en",       Language.RUSSIAN: "ru",
-    Language.GERMAN: "de",        Language.FRENCH: "fr",
-    Language.SPANISH: "es",       Language.PORTUGUESE: "pt",
-    Language.ITALIAN: "it",       Language.TURKISH: "tr",
-    Language.ARABIC: "ar",        Language.CHINESE: "zh",
-    Language.JAPANESE: "ja",      Language.KOREAN: "ko",
-    Language.POLISH: "pl",        Language.UKRAINIAN: "uk",
-    Language.PERSIAN: "fa",       Language.DUTCH: "nl",
-    Language.SWEDISH: "sv",       Language.BOKMAL: "no",
-    Language.NYNORSK: "no",
-    Language.DANISH: "da",        Language.FINNISH: "fi",
-    Language.CZECH: "cs",         Language.SLOVAK: "sk",
-    Language.ROMANIAN: "ro",      Language.HUNGARIAN: "hu",
-    Language.BULGARIAN: "bg",     Language.CROATIAN: "hr",
-    Language.SERBIAN: "sr",       Language.HEBREW: "he",
-    Language.VIETNAMESE: "vi",    Language.THAI: "th",
-    Language.INDONESIAN: "id",    Language.MALAY: "ms",
-    Language.HINDI: "hi",         Language.BENGALI: "bn",
-    Language.URDU: "ur",          Language.GEORGIAN: "ka",
-    Language.ARMENIAN: "hy",      Language.MONGOLIAN: "mn",
-    Language.SWAHILI: "sw",       Language.AFRIKAANS: "af",
-    Language.ALBANIAN: "sq",      Language.AZERBAIJANI: "az",
-    Language.BASQUE: "eu",        Language.BELARUSIAN: "be",
-    Language.BOSNIAN: "bs",       Language.CATALAN: "ca",
-    Language.ESTONIAN: "et",      Language.IRISH: "ga",
-    Language.ICELANDIC: "is",     Language.KAZAKH: "kk",
-    Language.LATVIAN: "lv",       Language.LITHUANIAN: "lt",
-    Language.MACEDONIAN: "mk",    Language.MALTESE: "mt",
-    Language.SLOVENIAN: "sl",     Language.TAGALOG: "tl",
-    Language.TAMIL: "ta",         Language.TELUGU: "te",
-    Language.UZBEK: "uz",         Language.WELSH: "cy",
-    Language.YORUBA: "yo",        Language.ZULU: "zu",
-    Language.LATIN: "la",         Language.ESPERANTO: "eo",
-    Language.SOMALI: "so",        Language.SHONA: "sn",
-    Language.XHOSA: "xh",        Language.TSONGA: "ts",
+    Language.ENGLISH:    "en",
+    Language.RUSSIAN:    "ru",
+    Language.GERMAN:     "de",
+    Language.FRENCH:     "fr",
+    Language.SPANISH:    "es",
+    Language.PORTUGUESE: "pt",
+    Language.ITALIAN:    "it",
+    Language.TURKISH:    "tr",
+    Language.ARABIC:     "ar",
+    Language.CHINESE:    "zh",
+    Language.JAPANESE:   "ja",
+    Language.KOREAN:     "ko",
+    Language.POLISH:     "pl",
+    Language.UKRAINIAN:  "uk",
+    Language.PERSIAN:    "fa",
+    Language.DUTCH:      "nl",
+    Language.SWEDISH:    "sv",
+    Language.BOKMAL:     "no",
+    Language.NYNORSK:    "no",
+    Language.DANISH:     "da",
+    Language.FINNISH:    "fi",
+    Language.CZECH:      "cs",
+    Language.SLOVAK:     "sk",
+    Language.ROMANIAN:   "ro",
+    Language.HUNGARIAN:  "hu",
+    Language.BULGARIAN:  "bg",
+    Language.CROATIAN:   "hr",
+    Language.SERBIAN:    "sr",
+    Language.HEBREW:     "he",
+    Language.VIETNAMESE: "vi",
+    Language.THAI:       "th",
+    Language.INDONESIAN: "id",
+    Language.MALAY:      "ms",
+    Language.HINDI:      "hi",
+    Language.BENGALI:    "bn",
+    Language.URDU:       "ur",
+    Language.GEORGIAN:   "ka",
+    Language.ARMENIAN:   "hy",
+    Language.MONGOLIAN:  "mn",
+    Language.SWAHILI:    "sw",
+    Language.AFRIKAANS:  "af",
+    Language.ALBANIAN:   "sq",
+    Language.AZERBAIJANI:"az",
+    Language.BASQUE:     "eu",
+    Language.BELARUSIAN: "be",
+    Language.BOSNIAN:    "bs",
+    Language.CATALAN:    "ca",
+    Language.ESTONIAN:   "et",
+    Language.IRISH:      "ga",
+    Language.ICELANDIC:  "is",
+    Language.KAZAKH:     "kk",
+    Language.LATVIAN:    "lv",
+    Language.LITHUANIAN: "lt",
+    Language.MACEDONIAN: "mk",
+    Language.SLOVENIAN:  "sl",
+    Language.TAGALOG:    "tl",
+    Language.TAMIL:      "ta",
+    Language.TELUGU:     "te",
+    Language.UZBEK:      "uz",
+    Language.WELSH:      "cy",
+    Language.YORUBA:     "yo",
+    Language.ZULU:       "zu",
+    Language.LATIN:      "la",
+    Language.SOMALI:     "so",
+    Language.SHONA:      "sn",
+    Language.XHOSA:      "xh",
 }
 
-
-
-def _detect_lang_from_script(text: str, profile_lang: str) -> str | None:
-    """
-    Detect language from message script.
-    Returns a lang code if the script is unambiguous, None otherwise.
-    """
-    if not text or len(text) < 3:
-        return None
-    # Count characters in each script range
-    counts: dict[str, int] = {}
-    for ch in text:
-        cp = ord(ch)
-        for char_range, lang in _SCRIPT_LANG_MAP:
-            if cp in char_range:
-                counts[lang] = counts.get(lang, 0) + 1
-                break
-    if not counts:
-        return None
-    dominant = max(counts, key=lambda k: counts[k])
-    dominant_count = counts[dominant]
-    # Require at least 40% of text chars to be in this script
-    if dominant_count < max(3, len(text) * 0.4):
-        return None
-    # Cyrillic is shared — defer to profile lang if it's a Cyrillic language
-    if dominant == "ru" and profile_lang in _CYRILLIC_LANGS:
-        return profile_lang
-    return dominant
+# Languages that use Cyrillic script — needed for script-based disambiguation
+_CYRILLIC_LANGS = frozenset({
+    "ru", "uk", "bg", "sr", "mk", "be", "kk", "mn", "ky", "tg",
+})
 
 
 def _detect_lang(update: dict) -> str:
-    # Step 1: get profile language from Telegram (user's app language)
-    profile_lang = "en"
+    """
+    Detect language of incoming message.
+
+    Priority:
+      1. lingua detection on message text (most accurate)
+      2. Telegram profile language_code (app language, not message language)
+      3. Fallback to "en"
+    """
     text = ""
+    profile_lang = "en"
+
     for key in ("message", "edited_message", "callback_query"):
         entry = update.get(key, {})
         user = entry.get("from") or {}
         code = user.get("language_code", "")
         if code:
             profile_lang = code.split("-")[0].lower()
-        # Also grab text to detect script
         if not text:
             text = (entry.get("text") or entry.get("caption") or "").strip()
 
-    # Step 2: detect language from message script (overrides profile for unambiguous scripts)
-    # Rationale: Telegram language_code = UI language of the app, not the message language.
-    # A Georgian user writing in Georgian may have ru/en as their app language.
-    script_lang = _detect_lang_from_script(text, profile_lang)
-    if script_lang:
-        return script_lang
+    if not text or len(text) < 3:
+        return profile_lang
 
-    # Step 3: keyword detection for Latin-script languages that Telegram may
-    # misreport (e.g. a Hausa speaker with app language set to English).
-    # Only fires when script detection returned None (pure Latin text).
-    if text:
-        lower_text = text.lower()
-        for lang_code, signals in _LATIN_LANG_SIGNALS:
-            if any(sig in lower_text for sig in signals):
-                return lang_code
+    # lingua detection — covers 75 languages reliably
+    try:
+        detected = _detector.detect_language_of(text)
+        if detected is not None:
+            iso = _LINGUA_ISO.get(detected)
+            if iso:
+                return iso
+    except Exception as exc:
+        logger.warning("lingua detection failed", extra={"error": str(exc)})
 
     return profile_lang
 
@@ -168,7 +181,7 @@ async def telegram_webhook(
     request: Request,
     x_telegram_bot_api_secret_token: str | None = Header(default=None),
 ) -> dict:
-    # ── secret token check (optional — skip if not sent) ──
+    # ── secret token check ────────────────────────────────────────────────────
     if x_telegram_bot_api_secret_token:
         if not verify_webhook_secret(x_telegram_bot_api_secret_token, _WEBHOOK_SECRET):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
@@ -195,7 +208,9 @@ async def telegram_webhook(
     supabase = request.app.state.supabase
     hf_client = request.app.state.hf_client
 
-    # ── rate limiting ─────────────────────────────────────
+    logger.info("Incoming message", extra={"user_id": user_id, "lang": lang})
+
+    # ── rate limiting ─────────────────────────────────────────────────────────
     from cognition.response_synthesizer import get_system_message
     from security.rate_limiter import get_rate_limiter
 
@@ -205,7 +220,7 @@ async def telegram_webhook(
             await _send_message(chat_id, get_system_message("rate_limited", lang))
         return {"ok": True}
 
-    # ── real balance ──────────────────────────────────────
+    # ── balance ───────────────────────────────────────────────────────────────
     user_balance = 0.0
     try:
         from payments.access_controller import AccessController
@@ -215,7 +230,7 @@ async def telegram_webhook(
     except Exception as exc:
         logger.error("Balance fetch failed", extra={"error": str(exc)})
 
-    # ── message handling ──────────────────────────────────
+    # ── message handling ──────────────────────────────────────────────────────
     if update_type in (UpdateType.MESSAGE, UpdateType.EDITED_MESSAGE):
         try:
             result = await handle_message(
@@ -237,7 +252,7 @@ async def telegram_webhook(
                 )
             return {"ok": True}
 
-        # ── billing ───────────────────────────────────────
+        # ── billing ───────────────────────────────────────────────────────────
         if not result.denied and result.usage.cost_usd > 0:
             try:
                 from payments.access_controller import AccessController
