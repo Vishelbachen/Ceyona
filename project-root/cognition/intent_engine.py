@@ -173,6 +173,9 @@ _BASE_PROMPTS: dict[Intent, str] = {
         "You are a location assistant with access to real-time geocoding data. "
         "The location data in your context is current and accurate. "
         "Present coordinates, addresses, and map links clearly. "
+        "STRICT: NEVER invent routes, bus numbers, transit stops, or directions. "
+        "If asked for a route or directions and no route data is in context — "
+        "say you can show the location but cannot build a route, and suggest Google Maps. "
         "NEVER say you cannot show maps or provide location data — you have it in context. "
         + _NO_CUTOFF + _FORMAT_RULES
     ),
@@ -220,62 +223,39 @@ def _build_result(
     )
 
 
-# ─── WEATHER PRE-SIGNAL PATTERNS ─────────────────────────────────────────────
-# Covers languages that pgvector may misroute (low-resource, non-Latin scripts).
-# Matched BEFORE embedding to prevent weather queries routing to maps/search.
-_WEATHER_PRE_SIGNALS: tuple[str, ...] = (
-    # Hausa
-    "yanayi", "ruwan sama", "zafi", "sanyi", "hadari",
-    # Hausa question starters for weather
-    "yaya yanayi", "menene yanayin",
-    # Swahili
-    "hali ya hewa", "mvua", "joto", "baridi", "upepo",
-    "jua", "dhoruba", "theluji", "hewa",
-    # Amharic
-    "የአየር ሁኔታ", "ዝናብ", "ሙቀት", "ቅዝቃዜ", "ነፋስ",
-    # Georgian locative stripping handled in web_tools — signal on root
-    "ამინდი", "ამინდია", "ამინდ",
-    "ტემპერატურ", "წვიმ", "თოვლ", "ქარ",
-    # Armenian
-    "եղանակ", "անձրև", "ջերմ", "ցուրտ", "քամի",
-    # Mongolian
-    "цаг агаар", "бороо", "цас", "салхи", "дулаан", "хүйтэн",
-    # Bengali
-    "আবহাওয়া", "বৃষ্টি", "গরম", "ঠান্ডা", "বাতাস",
-    # Urdu
-    "موسم", "بارش", "گرمی", "سردی", "ہوا",
-    # Kazakh
-    "ауа райы", "жаңбыр", "қар", "жел", "ыстық", "суық",
-    # Uzbek
-    "ob-havo", "yomg'ir", "qor", "shamol", "issiq", "sovuq",
-    # Azerbaijani
-    "hava", "yağış", "qar", "külək", "isti", "soyuq",
-    # Malay/Indonesian (supplement to existing)
-    "cuaca", "hujan", "panas", "dingin", "angin",
-    # Vietnamese
-    "thời tiết", "mưa", "nóng", "lạnh", "gió",
-    # Thai
-    "อากาศ", "ฝน", "ร้อน", "เย็น", "ลม",
+# ─── ROUTING / DIRECTIONS SIGNALS ────────────────────────────────────────────
+# "How do I get from A to B" queries — we have no Directions API.
+# These must go to SEARCH (SerpAPI finds real transport info),
+# NOT to MAPS (Mapbox only geocodes a point and model invents the route).
+_ROUTE_SIGNALS: tuple[str, ...] = (
+    # Russian
+    "маршрут", "как добраться", "как доехать", "как дойти", "как попасть",
+    "построй маршрут", "дорога от", "путь от", "путь до",
+    "от аэропорта", "до центра", "до аэропорта", "от вокзала", "до вокзала",
+    "на автобусе", "на метро", "на такси", "общественный транспорт",
+    # English
+    "route from", "route to", "directions from", "directions to",
+    "how to get from", "how to get to", "how do i get to",
+    "way from", "way to", "get from", "travel from", "travel to",
+    "from airport", "to airport", "from station", "to station",
+    "by bus", "by metro", "by subway", "by train", "by taxi",
+    "public transport", "public transit",
+    # German
+    "route von", "route nach", "wie komme ich", "wie kommt man",
+    "vom flughafen", "zum flughafen", "weg von", "weg nach",
+    # French
+    "itinéraire", "comment aller", "comment se rendre",
+    "depuis l'aéroport", "jusqu'au centre",
+    # Spanish
+    "ruta desde", "ruta hasta", "cómo llegar", "cómo ir",
+    "desde el aeropuerto", "hasta el centro",
+    # Turkish
+    "nasıl gidilir", "yol tarifi", "havalimanından", "merkeze",
+    # Georgian
+    "მარშრუტი", "როგორ მივიდე", "როგორ ჩავიდე", "აეროპორტიდან",
+    # Arabic
+    "كيف أصل", "طريق من", "طريق إلى", "من المطار", "إلى المركز",
 )
-
-_WEATHER_PRE_QUESTION_STARTERS: tuple[str, ...] = (
-    # Hausa — "how is the weather"
-    "yaya", "menene",
-    # Swahili
-    "hali ya", "je hali",
-    # Georgian — "what is the weather"
-    "რა ამინდ", "როგორია ამინდ",
-    # Armenian
-    "ինչ եղա", "ինչպիսի եղա",
-)
-
-
-def _pre_classify_weather(text: str, lang: str) -> bool:
-    """Return True if text is clearly a weather query (for low-resource langs)."""
-    lower = text.lower()
-    has_signal  = any(s in lower for s in _WEATHER_PRE_SIGNALS)
-    has_starter = any(lower.startswith(s) for s in _WEATHER_PRE_QUESTION_STARTERS)
-    return has_signal or has_starter
 
 
 async def classify(
@@ -295,10 +275,13 @@ async def classify(
     """
     fallback = _build_result(Intent.QUESTION, 0.70, lang, text)
 
-    # ── pre-embedding signal check ────────────────────────────────────────────
-    if _pre_classify_weather(text, lang):
-        logger.info("classify: weather pre-signal match", extra={"lang": lang})
-        return _build_result(Intent.WEATHER, 0.88, lang, text)
+    # ── routing pre-check ─────────────────────────────────────────────────────
+    # Route/directions queries go to SEARCH, not MAPS.
+    # We have no Directions API — MAPS only geocodes a point and the model
+    # would invent the route, causing hallucinations.
+    if any(s in text.lower() for s in _ROUTE_SIGNALS):
+        logger.info("classify: route pre-signal → SEARCH", extra={"lang": lang})
+        return _build_result(Intent.SEARCH, 0.87, lang, text)
 
     if supabase is None or hf_client is None:
         logger.warning("classify called without supabase/hf_client — using fallback")
