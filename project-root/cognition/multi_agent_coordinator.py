@@ -116,6 +116,26 @@ def plan_agents(
             temperature=strategy.temperature,
         )
 
+    # Tool-result synthesis intents — need DEEP to properly synthesise
+    # external data (search snippets, route data, weather) into a coherent answer.
+    # Previously fell through to default FAST with no fallback:
+    #   FAST agent (llama-3.1-8b, 512 tokens) received 5 search snippets +
+    #   system prompt → context overflow or empty response → coordinator blocked.
+    if intent in (
+        Intent.SEARCH,
+        Intent.WEATHER,
+        Intent.MAPS,
+        Intent.MAPS_POI,
+        Intent.MAPS_ROUTE,
+    ):
+        return AgentPlan(
+            primary=AgentType.DEEP,
+            fallback=AgentType.FAST,
+            use_consensus=False,
+            parallel_validators=[],
+            temperature=strategy.temperature,
+        )
+
     # EMOTIONAL — fast, warm, low temperature for natural empathetic tone
     if intent == Intent.EMOTIONAL:
         return AgentPlan(
