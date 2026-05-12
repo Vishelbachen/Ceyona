@@ -49,6 +49,7 @@ async def handle_message(
     lang: str = "en",
     supabase=None,
     redis=None,
+    hf_client=None,
 ) -> OrchestratorResult:
 
     # ── photo handling ────────────────────────────────────────────────────────
@@ -240,7 +241,7 @@ async def handle_message(
             from external.web_tools import run_tool
 
             _pre_intent    = locals().get("_vision_intent_result")
-            quick_intent   = _pre_intent if _pre_intent is not None else classify(text, lang=lang)
+            quick_intent   = _pre_intent if _pre_intent is not None else await classify(text, lang=lang, supabase=supabase, hf_client=hf_client)
             intent_value   = quick_intent.intent.value
 
             if intent_value not in _NO_SEARCH_INTENTS:
@@ -278,6 +279,8 @@ async def handle_message(
         input_tokens=input_tokens,
         complexity=complexity,
         lang=lang,
+        supabase=supabase,
+        hf_client=hf_client,
         conversation_history=conversation_history,
         retrieved_context=retrieved_context,
         embedding_tokens=embedding_tokens,
