@@ -63,12 +63,47 @@ def _is_junk_domain(url: str) -> bool:
         return False
 
 
+def _sanitize_url(url: str) -> str:
+    """
+    Normalize URLs that contain lookalike or subscript Unicode characters.
+    Example: hotel.tutu.ru/c\u1d63ussia → hotel.tutu.ru/crussia
+    SerpAPI occasionally returns URLs with Unicode variants of ASCII letters
+    (subscript, superscript, fullwidth). These break as clickable links in
+    Telegram and confuse the LLM when it tries to cite them.
+    """
+    if not url:
+        return url
+    # Unicode ranges that are lookalike ASCII letters in URLs:
+    # U+1D00–U+1DBF  Phonetic Extensions (subscript/superscript letters)
+    # U+FF01–U+FF5E  Fullwidth ASCII variants
+    # U+2070–U+209F  Superscript digits
+    import unicodedata
+    sanitized = []
+    for ch in url:
+        cp = ord(ch)
+        # Fullwidth ASCII: U+FF01–U+FF5E → subtract 0xFEE0 to get ASCII
+        if 0xFF01 <= cp <= 0xFF5E:
+            sanitized.append(chr(cp - 0xFEE0))
+        # Subscript/superscript phonetic: map to plain ASCII where possible
+        elif 0x1D00 <= cp <= 0x1DBF:
+            # Decompose to closest ASCII equivalent via NFKD
+            decomposed = unicodedata.normalize("NFKD", ch)
+            sanitized.append(decomposed if decomposed.isascii() else ch)
+        else:
+            sanitized.append(ch)
+    return "".join(sanitized)
+
+
 def _filter_results(results: list[dict]) -> list[dict]:
     """
-    Remove SEO junk domains and cap at 5 results sent to LLM.
+    Remove SEO junk domains, sanitize URLs, and cap at 5 results sent to LLM.
     Fewer, higher-quality sources produce better synthesised answers.
     """
-    filtered = [r for r in results if not _is_junk_domain(r.get("link", ""))]
+    sanitized = [
+        {**r, "link": _sanitize_url(r.get("link", ""))}
+        for r in results
+    ]
+    filtered = [r for r in sanitized if not _is_junk_domain(r.get("link", ""))]
     kept = filtered[:5]
 
     removed = len(results) - len(kept)
