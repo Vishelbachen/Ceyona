@@ -148,10 +148,15 @@ class SearchService:
         """
         Format search results into Telegram-ready text.
         Pure function. No I/O.
+
+        Returns "" when results is empty — NOT a localised placeholder string.
+        Reason: a non-empty placeholder fools the STRICT truth gate into thinking
+        the tool returned real data, so LLM gets a useless context and synthesizer
+        produces a generic error. Empty string → _run_tool returns None →
+        truth gate fires cleanly with no_grounded_data message.
         """
         if not results:
-            from i18n.t import t as _t
-            return _t("no_search_results", lang)
+            return ""
 
         lines: list[str] = []
         for i, r in enumerate(results, 1):
