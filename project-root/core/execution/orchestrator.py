@@ -140,7 +140,11 @@ def _empty_usage(
 
 # ─── TOOL RUNNER ──────────────────────────────────────────────────────────────
 
-_TOOL_INTENTS = {Intent.WEATHER, Intent.SEARCH, Intent.MAPS, Intent.MAPS_POI}
+# Intents whose tool output is returned directly to user WITHOUT LLM synthesis.
+# WEATHER and MAPS: structured data already formatted by the tool — no synthesis needed.
+# SEARCH is intentionally NOT here: raw search snippets must be synthesised by LLM.
+# MAPS_POI is intentionally NOT here: POI data needs LLM to present it coherently.
+_TOOL_INTENTS = {Intent.WEATHER, Intent.MAPS}
 
 
 async def _run_tool(intent_result, lang: str) -> str | None:
