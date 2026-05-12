@@ -31,7 +31,7 @@ _TIER_MODELS: dict[Tier, list[str]] = {
 
 # Max output tokens per tier
 _MAX_TOKENS: dict[Tier, int] = {
-    Tier.FAST:    512,
+    Tier.FAST:    800,    # raised from 512: FAST is also used as fallback for search synthesis
     Tier.GENERAL: 2048,
     Tier.HEAVY:   4096,
 }
