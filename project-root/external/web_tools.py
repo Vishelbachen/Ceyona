@@ -7,6 +7,9 @@ import httpx
 
 from app.settings import settings
 
+from i18n.t import ow_lang as _ow_lang_fn
+ow_lang = _ow_lang_fn(lang)
+
 logger = logging.getLogger(__name__)
 
 _TIMEOUT  = 15.0
