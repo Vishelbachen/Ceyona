@@ -180,6 +180,24 @@ INTENT_EXAMPLES: dict[str, list[str]] = {
         "Температура воздуха в Минске сегодня",
         "كيف الطقس في الرياض اليوم؟",
         "How hot is it in Sydney right now?",
+        # Hausa
+        "Yaya yanayi yake a San Francisco yanzu?",
+        "Yaya yanayi a Landan?",
+        "Yaya zafin rana a Najeriya yau?",
+        "Shin za a yi ruwa gobe a Abuja?",
+        "Yanayi a Dubai yanzu",
+        "Yaya yanayin yake a Moscow?",
+        # Georgian (additional)
+        "რა ამინდია ამ წუთას ლონდონში?",
+        "ამინდის პროგნოზი თბილისში ხვალ",
+        # Armenian
+        "Ինչ եղանակ է Փարիզում հիմա?",
+        # Azerbaijani
+        "Bakıda hava necədir?",
+        # Kazakh
+        "Алматыда ауа райы қандай?",
+        # Uzbek
+        "Toshkentda havo qanday?",
     ],
 
     "search": [
@@ -199,6 +217,26 @@ INTENT_EXAMPLES: dict[str, list[str]] = {
         "Find the best restaurants in Amsterdam",
         "Search for open source alternatives to Notion",
         "Latest research on cancer treatment",
+        # Hotels / accommodation
+        "Какие дешёвые отели есть в центре Воронежа?",
+        "Дешёвые гостиницы в Москве в центре",
+        "Где остановиться в Санкт-Петербурге недорого?",
+        "Хостелы в центре Казани",
+        "Бюджетные отели рядом с вокзалом",
+        "Cheap hotels in downtown London",
+        "Best budget hostels in Barcelona city centre",
+        "Affordable accommodation near Times Square",
+        "Where to stay in Tokyo cheap",
+        "Günstiges Hotel in Berlin Mitte",
+        "Hôtel pas cher à Paris centre",
+        "Hotel barato en el centro de Madrid",
+        # Routes / directions
+        "Как добраться от аэропорта Воронежа до центра?",
+        "Маршрут от Шереметьево до Красной площади",
+        "На каком транспорте доехать до центра из аэропорта?",
+        "How to get from Heathrow airport to central London",
+        "Best way from JFK to Manhattan",
+        "Public transport from airport to city centre",
     ],
 
     "maps": [
