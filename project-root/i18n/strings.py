@@ -445,7 +445,7 @@ _STRINGS: dict[str, dict[str, str]] = {
 
     # ── rate limiting ─────────────────────────────────────────────────────────
     "rate_limited": {
-    "en": "⏳ You're sending messages too fast. Please wait a moment.",
+        "en": "⏳ You're sending messages too fast. Please wait a moment.",
         "ru": "⏳ Вы отправляете сообщения слишком быстро. Подождите немного.",
         "de": "⏳ Du sendest Nachrichten zu schnell. Bitte kurz warten.",
         "fr": "⏳ Vous envoyez des messages trop vite. Patientez un instant.",
@@ -788,4 +788,4 @@ def is_supported(lang: str) -> bool:
 
 
 def normalize_lang(lang: str) -> str:
-    return lang if lang in SUPPORTED_LANGS else "en" 
+    return lang if lang in SUPPORTED_LANGS else "en"
