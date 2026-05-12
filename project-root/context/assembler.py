@@ -14,6 +14,7 @@ _STRICT_INTENTS = {
     Intent.WEATHER,
     Intent.MAPS,
     Intent.MAPS_POI,
+    Intent.MAPS_ROUTE,
 }
 
 # Intents that benefit from context but can generate freely
