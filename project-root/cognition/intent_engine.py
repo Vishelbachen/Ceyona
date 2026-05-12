@@ -4,6 +4,7 @@ import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
+from i18n.t import lang_instruction as _lang_directive
 
 logger = logging.getLogger(__name__)
 
@@ -59,11 +60,6 @@ class IntentResult:
     tool_name:          str  = ""
     tool_params:        dict = field(default_factory=dict)
 
-
-# ─── LANGUAGE LAYER ───────────────────────────────────────────────────────────
-
-from i18n.t import lang_instruction as _lang_directive
-)
 
 # ─── SYSTEM PROMPTS ───────────────────────────────────────────────────────────
 
