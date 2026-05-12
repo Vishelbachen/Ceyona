@@ -1,6 +1,3 @@
-"""
-external/web_tools.py
-
 Диспетчер внешних инструментов. Единственная точка входа для orchestrator
 и update_handler при вызове погоды, поиска, карт.
 
@@ -15,16 +12,17 @@ from __future__ import annotations
 
 import logging
 
-from external.maps import maps_service, _extract_location
-from external.search import search_service
-from external.weather import weather_service, _extract_city
-
 logger = logging.getLogger(__name__)
 
 
 # ─── TOOL IMPLEMENTATIONS ─────────────────────────────────────────────────────
+# Imports are lazy (inside each function) so that a startup failure in one
+# external service does NOT kill the entire tool dispatcher.
+# Previously top-level imports meant search.py crashing → web_tools.py dead →
+# ALL tools unavailable, not just search.
 
 async def _weather(query: str, lang: str = "en") -> str:
+    from external.weather import weather_service, _extract_city
     city = _extract_city(query)
     if not city:
         return ""
@@ -35,11 +33,13 @@ async def _weather(query: str, lang: str = "en") -> str:
 
 
 async def _search(query: str, lang: str = "en") -> str:
+    from external.search import search_service
     results = await search_service.search(query, lang=lang)
     return search_service.format_results(results, lang=lang)
 
 
 async def _maps(query: str, lang: str = "en") -> str:
+    from external.maps import maps_service, _extract_location
     location = _extract_location(query)
     feature = await maps_service.geocode(location or query, lang=lang)
     if not feature:
@@ -48,6 +48,7 @@ async def _maps(query: str, lang: str = "en") -> str:
 
 
 async def _maps_poi(query: str, lang: str = "en") -> str:
+    from external.maps import maps_service
     feature = await maps_service.search_poi(
         category=query,
         location=query,
