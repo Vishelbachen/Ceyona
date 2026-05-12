@@ -533,7 +533,117 @@ class MapsService:
             category=category or "place",
             location=location or "that area",
         )
- 
- 
+
+    async def get_route(
+        self,
+        origin: str,
+        destination: str,
+        lang: str = "en",
+    ) -> dict | None:
+        """
+        Geocode origin + destination, then get driving directions via Mapbox.
+
+        Returns a dict with keys:
+            origin_name, destination_name,
+            distance_km, duration_min, steps (list of str)
+        or None on any failure.
+        """
+        if not self._token:
+            logger.warning("get_route: Mapbox token not set")
+            return None
+
+        # ── geocode both endpoints ────────────────────────────────────────────
+        async def _geocode(place: str) -> tuple[float, float, str] | None:
+            try:
+                async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                    r = await client.get(
+                        f"{_BASE_URL}/{place}.json",
+                        params={
+                            "access_token": self._token,
+                            "limit": 1,
+                            "language": _mb_lang(lang),
+                        },
+                    )
+                    r.raise_for_status()
+                    features = r.json().get("features", [])
+                    if not features:
+                        return None
+                    f = features[0]
+                    lon, lat = f["center"]
+                    name = f.get("place_name", place)
+                    return lon, lat, name
+            except Exception as exc:
+                logger.error("get_route geocode failed", extra={"place": place, "error": str(exc)})
+                return None
+
+        origin_geo = await _geocode(origin)
+        dest_geo   = await _geocode(destination)
+
+        if not origin_geo or not dest_geo:
+            logger.warning("get_route: geocoding failed", extra={
+                "origin": origin, "destination": destination,
+            })
+            return None
+
+        o_lon, o_lat, o_name = origin_geo
+        d_lon, d_lat, d_name = dest_geo
+
+        # ── get directions ────────────────────────────────────────────────────
+        directions = await self.get_directions(
+            origin=(o_lon, o_lat),
+            destination=(d_lon, d_lat),
+            profile="driving",
+            lang=lang,
+        )
+
+        if not directions:
+            return None
+
+        try:
+            route = directions["routes"][0]
+            distance_km  = round(route["distance"] / 1000, 1)
+            duration_min = round(route["duration"] / 60)
+            return {
+                "origin_name":      o_name,
+                "destination_name": d_name,
+                "distance_km":      distance_km,
+                "duration_min":     duration_min,
+            }
+        except (KeyError, IndexError, TypeError) as exc:
+            logger.error("get_route: failed to parse directions", extra={"error": str(exc)})
+            return None
+
+    def format_route(self, route: dict, lang: str = "en") -> str:
+        """Format route result into Telegram-ready string."""
+        _TEMPLATES: dict[str, str] = {
+            "en": "🗺 Route: {origin} → {destination}\n📏 Distance: {dist} km\n⏱ Drive time: ~{dur} min",
+            "ru": "🗺 Маршрут: {origin} → {destination}\n📏 Расстояние: {dist} км\n⏱ Время в пути: ~{dur} мин",
+            "de": "🗺 Route: {origin} → {destination}\n📏 Entfernung: {dist} km\n⏱ Fahrzeit: ~{dur} Min.",
+            "fr": "🗺 Itinéraire: {origin} → {destination}\n📏 Distance: {dist} km\n⏱ Durée: ~{dur} min",
+            "es": "🗺 Ruta: {origin} → {destination}\n📏 Distancia: {dist} km\n⏱ Tiempo: ~{dur} min",
+            "tr": "🗺 Güzergah: {origin} → {destination}\n📏 Mesafe: {dist} km\n⏱ Süre: ~{dur} dak",
+            "uk": "🗺 Маршрут: {origin} → {destination}\n📏 Відстань: {dist} км\n⏱ Час у дорозі: ~{dur} хв",
+        }
+        tpl = _TEMPLATES.get(lang) or _TEMPLATES["en"]
+        return tpl.format(
+            origin=route["origin_name"],
+            destination=route["destination_name"],
+            dist=route["distance_km"],
+            dur=route["duration_min"],
+        )
+
+    def format_route_not_found(self, lang: str = "en") -> str:
+        _MSGS: dict[str, str] = {
+            "en": "🗺 Could not build a route. Check that both locations are correct.",
+            "ru": "🗺 Не удалось построить маршрут. Уточните названия мест.",
+            "de": "🗺 Route konnte nicht berechnet werden. Bitte Orte prüfen.",
+            "fr": "🗺 Impossible de calculer l'itinéraire. Vérifiez les lieux.",
+            "es": "🗺 No se pudo calcular la ruta. Comprueba los lugares.",
+            "tr": "🗺 Güzergah oluşturulamadı. Lütfen yerleri kontrol edin.",
+            "uk": "🗺 Не вдалося побудувати маршрут. Уточніть назви місць.",
+        }
+        return _MSGS.get(lang) or _MSGS["en"]
+
+
 # Singleton
 maps_service = MapsService()
