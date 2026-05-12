@@ -56,6 +56,8 @@ class OrchestratorRequest:
     # Optional pre-computed intent (e.g. from vision_handler).
     # When set, orchestrator skips classify() to avoid duplicate work.
     forced_intent: IntentResult | None = None
+    supabase: object = None
+    hf_client: object = None
 
 
 @dataclass
@@ -434,9 +436,11 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
                 "confidence": intent_result.confidence,
             })
         else:
-            intent_result = classify(
+            intent_result = await classify(
                 request.user_message,
                 lang=lang,
+                supabase=request.supabase,
+                hf_client=request.hf_client,
                 conversation_history=request.conversation_history,
             )
             logger.info("Intent", extra={
