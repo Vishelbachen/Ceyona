@@ -172,6 +172,21 @@ def _detect_lang(update: dict) -> str:
             iso = _LINGUA_ISO.get(detected)
             if iso:
                 return iso
+            # lingua recognised a language but we have no ISO mapping for it
+            # (e.g. GANDA/Luganda) — fall through to profile_lang below
+        else:
+            # lingua returned None: language is unrecognised (e.g. Inuktitut,
+            # Greenlandic, invented text).  For very short inputs there is a
+            # high risk of a wrong embedding-based intent match (e.g. MAPS),
+            # so we flag this by returning profile_lang.  The downstream
+            # intent classifier receives lang_uncertain=False (profile_lang
+            # is still a valid lang code), but classify() will apply a higher
+            # confidence threshold for short unrecognised texts — see
+            # cognition/intent_engine.py classify().
+            logger.info(
+                "lingua: language unrecognised, falling back to profile_lang",
+                extra={"text_preview": text[:30], "profile_lang": profile_lang},
+            )
     except Exception as exc:
         logger.warning("lingua detection failed", extra={"error": str(exc)})
 
