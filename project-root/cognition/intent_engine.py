@@ -164,9 +164,13 @@ _BASE_PROMPTS: dict[Intent, str] = {
     Intent.SEARCH: (
         "You are a research assistant with access to live web search results. "
         "The search results in your context were fetched from the web RIGHT NOW. "
-        "Summarise them clearly, cite sources, and answer the user's question directly. "
+        "STRICT RULES: "
+        "1. Base your answer ONLY on the search results in context. "
+        "2. NEVER add facts, figures, names, addresses, prices, or details "
+        "   that are not explicitly stated in the provided results. "
+        "3. If the results are insufficient to answer — say so and cite what you found. "
+        "4. Cite sources for specific claims. "
         "NEVER say you cannot search or that your data is outdated — you have live results. "
-        "NEVER make up information — only use what is in the context. "
         + _NO_CUTOFF + _FORMAT_RULES
     ),
     Intent.MAPS: (
@@ -178,8 +182,16 @@ _BASE_PROMPTS: dict[Intent, str] = {
     ),
     Intent.MAPS_POI: (
         "You are a location assistant specialising in points of interest. "
-        "The place data in your context is current — fetched from Google Maps right now. "
-        "Present it clearly: name, address, rating, hours, contacts. "
+        "The place data in your context is LIVE — fetched from Google Maps right now. "
+        "STRICT RULES — follow exactly: "
+        "1. Report ONLY what is explicitly present in the context data. "
+        "2. NEVER invent, estimate, or assume ANY detail not in the data: "
+        "   no prices, distances, metro stations, landmarks, or descriptions "
+        "   unless they appear verbatim in the context. "
+        "3. If a field (price, hours, phone) is absent from the data — omit it entirely. "
+        "   Do NOT write 'unknown', do NOT guess, do NOT fill in from memory. "
+        "4. Present what you have: name, address, rating, hours, contacts — as-is. "
+        "5. If the context is empty or contains no relevant places — say so honestly. "
         "NEVER say you cannot find place information — you have it in context. "
         + _NO_CUTOFF + _FORMAT_RULES
     ),
@@ -220,69 +232,6 @@ def _build_result(
     )
 
 
-# ─── PRE-EMBEDDING SIGNAL PATTERNS ──────────────────────────────────────────
-# These run BEFORE pgvector embedding to catch well-known task types that
-# the embedding model may mismatch as QUESTION (triggering unwanted retrieval).
-# Covers: math, genetics, chemistry, physics, exam tasks.
-
-_MATH_TASK_SIGNALS: tuple[str, ...] = (
-    # Arithmetic / algebra
-    "решите уравнение", "решить уравнение", "найдите корни", "вычислите",
-    "найдите значение", "упростите выражение", "разложите на множители",
-    "найдите производную", "интеграл", "solve the equation", "find the value",
-    "calculate", "simplify", "factorise", "factorize", "derivative",
-    "integral", "berechne", "résoudre", "calcule", "hitung",
-    # Geometry
-    "площадь", "периметр", "объём", "угол треугольника", "найдите длину",
-    "площадь фигуры", "area of", "perimeter of", "volume of", "find the angle",
-    # Probability / combinatorics
-    "вероятность", "probability", "комбинации", "перестановки",
-    "combinations", "permutations", "wahrscheinlichkeit",
-)
-
-_EXAM_TASK_SIGNALS: tuple[str, ...] = (
-    # Biology / genetics
-    "генотип", "фенотип", "хромосом", "аллель", "доминантн", "рецессивн",
-    "сцеплен с x", "сцеплен с у", "x-хромосом", "y-хромосом", "дальтонизм",
-    "гемофилия", "наследован", "скрещивание", "f1", "f2", "расщепление",
-    "genotype", "phenotype", "chromosome", "allele", "dominant", "recessive",
-    "x-linked", "y-linked", "inheritance", "hemophilia", "colorblind",
-    "punnett", "offspring", "gamete", "гамет",
-    # Chemistry
-    "молярная масса", "степень окисления", "валентность", "реакция",
-    "уравнение реакции", "химическая формула", "molar mass", "oxidation",
-    "valence", "chemical equation", "балансировать",
-    # Physics
-    "скорость", "ускорение", "сила тока", "напряжение", "сопротивление",
-    "закон ома", "мощность", "импульс", "кинетическая энергия",
-    "velocity", "acceleration", "current", "voltage", "resistance",
-    "ohm's law", "momentum", "kinetic energy",
-    # Exam keywords
-    "огэ", "егэ", "впр", "определите генотип", "определите вероятность",
-    "составьте схему", "запишите генотип", "укажите генотип",
-    "oge", "ege", "determine the genotype", "find the probability",
-)
-
-def _pre_classify(text: str, lang: str) -> IntentResult | None:
-    """
-    Signal-based pre-classifier that runs before pgvector embedding.
-    Returns an IntentResult if a strong match is found, None otherwise.
-
-    Purpose: prevent well-known task types (genetics, math, physics, chemistry)
-    from falling through to QUESTION + retrieval, which causes the model to
-    search the web instead of reasoning through the problem.
-    """
-    lower = text.lower()
-
-    if any(s in lower for s in _EXAM_TASK_SIGNALS):
-        return _build_result(Intent.EXAM, 0.85, lang, text)
-
-    if any(s in lower for s in _MATH_TASK_SIGNALS):
-        return _build_result(Intent.MATH, 0.85, lang, text)
-
-    return None
-
-
 async def classify(
     text: str,
     lang: str = "en",
@@ -299,17 +248,6 @@ async def classify(
       - no match above MIN_CONFIDENCE
     """
     fallback = _build_result(Intent.QUESTION, 0.70, lang, text)
-
-    # ── pre-embedding signal check ────────────────────────────────────────────
-    # Catches math/science/exam tasks BEFORE embedding to prevent them
-    # from being misclassified as QUESTION and triggering web retrieval.
-    pre = _pre_classify(text, lang)
-    if pre is not None:
-        logger.info("classify: pre-signal match", extra={
-            "intent": pre.intent.value,
-            "confidence": pre.confidence,
-        })
-        return pre
 
     if supabase is None or hf_client is None:
         logger.warning("classify called without supabase/hf_client — using fallback")
