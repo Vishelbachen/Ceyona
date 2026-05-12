@@ -1,13 +1,3 @@
-Диспетчер внешних инструментов. Единственная точка входа для orchestrator
-и update_handler при вызове погоды, поиска, карт.
-
-Роль: маршрутизация → делегирование сервисам из external/.
-Не содержит собственных реализаций API — только вызывает синглтоны.
-
-Импортируется:
-  - core/execution/orchestrator.py       → _run_tool()
-  - transport/telegram/update_handler.py → run_tool()
-"""
 from __future__ import annotations
 
 import logging
