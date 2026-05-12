@@ -314,7 +314,13 @@ async def _search(query: str, lang: str = "en") -> str:
                 if snippet:
                     results.append(f"{title}: {snippet}\nSource: {link}")
 
-            return "\n\n".join(results)[:_MAX_CHARS]
+            if not results:
+                return ""
+            header = (
+                "[DATA SOURCE: Live web search — base your answer ONLY on the results below. "
+                "Do NOT add facts or details absent from these results.]\n\n"
+            )
+            return (header + "\n\n".join(results))[:_MAX_CHARS]
 
     except Exception as exc:
         logger.error("Search API failed", extra={"query": query[:50], "error": str(exc)})
@@ -394,7 +400,14 @@ async def _maps_poi(query: str, lang: str = "en") -> str:
                 if website: parts.append(f"Website: {website}")
                 results.append("\n".join(parts))
 
-            return "\n\n---\n\n".join(results)
+            if not results:
+                return ""
+            header = (
+                "[DATA SOURCE: Google Maps — report ONLY what is listed below. "
+                "Do NOT add prices, distances, metro stations, or any detail "
+                "not explicitly present in this data.]\n\n"
+            )
+            return header + "\n\n---\n\n".join(results)
 
     except Exception as exc:
         logger.error("Maps POI API failed", extra={"query": query[:50], "error": str(exc)})
