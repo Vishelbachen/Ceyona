@@ -6,7 +6,6 @@ import re
 import httpx
 
 from app.settings import settings
-
 from i18n.t import ow_lang as _ow_lang_fn
 ow_lang = _ow_lang_fn(lang)
 
