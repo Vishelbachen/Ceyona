@@ -1,5 +1,4 @@
 import logging
-from urllib.parse import urlparse
 
 import httpx
 
@@ -28,39 +27,11 @@ _SERP_LANG_MAP: dict[str, str] = {
     "ku": "en", "ps": "en", "ug": "en", "tt": "en",
 }
 
-# ─── SEO JUNK DOMAIN FILTER ───────────────────────────────────────────────────
-# Domains that consistently return low-quality SEO aggregator content.
-# These appear in search results but provide no useful grounded data —
-# the LLM sees them and includes them in responses, causing bad outputs.
-# Add domains here as new junk sources are discovered in production.
-_JUNK_DOMAINS: frozenset[str] = frozenset({
-    # Route/transport SEO aggregators
-    "all-routes.ru",
-    "all-routes.com",
-    # Hotel SEO aggregators (use booking.com / hotels.com instead)
-    "101hotels.com",
-    # General Russian Q&A spam
-    "otvet.mail.ru",
-    "travelask.ru",
-    # Generic travel SEO farms
-    "tourister.ru",
-    "turpravda.com",
-    "votpusk.ru",
-    # Map/route spam
-    "mapbbcode.org",
-    "kartagoroda.ru",
-})
-
-
-def _is_junk_domain(url: str) -> bool:
-    """Return True if the URL's domain is in the junk list."""
-    try:
-        netloc = urlparse(url).netloc.lower()
-        # Strip www. prefix
-        domain = netloc[4:] if netloc.startswith("www.") else netloc
-        return domain in _JUNK_DOMAINS
-    except Exception:
-        return False
+# ─── SOURCE CREDIBILITY ───────────────────────────────────────────────────────
+# Domain trust evaluation is delegated to retrieval/source_credibility.py.
+# That module is the single source of truth for domain trust classification.
+# Do NOT add junk domains here — add them to retrieval/source_credibility.py.
+from retrieval.source_credibility import source_credibility as _credibility
 
 
 def _sanitize_url(url: str) -> str:
@@ -96,23 +67,14 @@ def _sanitize_url(url: str) -> str:
 
 def _filter_results(results: list[dict]) -> list[dict]:
     """
-    Remove SEO junk domains, sanitize URLs, and cap at 5 results sent to LLM.
-    Fewer, higher-quality sources produce better synthesised answers.
+    Sanitize URLs then delegate trust filtering to source_credibility.
+    source_credibility is the single source of truth for domain quality.
     """
     sanitized = [
         {**r, "link": _sanitize_url(r.get("link", ""))}
         for r in results
     ]
-    filtered = [r for r in sanitized if not _is_junk_domain(r.get("link", ""))]
-    kept = filtered[:5]
-
-    removed = len(results) - len(kept)
-    if removed > 0:
-        logger.info(
-            "Search filter: removed junk/excess results",
-            extra={"original": len(results), "kept": len(kept), "removed": removed},
-        )
-    return kept
+    return _credibility.filter_results(sanitized, max_results=5)
 
 
 class SearchService:
