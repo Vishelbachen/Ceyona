@@ -38,6 +38,8 @@ dependencies = [
 
     "opentelemetry-api>=1.26,<2.0",
     "opentelemetry-sdk>=1.26,<2.0",
+
+    "lingua-language-detector>=2.0,<3.0",
 ]
 
 [project.optional-dependencies]
