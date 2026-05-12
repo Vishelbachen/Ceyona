@@ -29,15 +29,17 @@ class Intent(str, Enum):
     SEARCH       = "search"
     MAPS         = "maps"
     MAPS_POI     = "maps_poi"
+    MAPS_ROUTE   = "maps_route"
     EXAM         = "exam"
     UNKNOWN      = "unknown"
 
 # Интенты, которые требуют инструментов
 _TOOL_MAP: dict[Intent, str] = {
-    Intent.WEATHER:  "weather",
-    Intent.SEARCH:   "search",
-    Intent.MAPS:     "maps",
-    Intent.MAPS_POI: "maps_poi",
+    Intent.WEATHER:     "weather",
+    Intent.SEARCH:      "search",
+    Intent.MAPS:        "maps",
+    Intent.MAPS_POI:    "maps_poi",
+    Intent.MAPS_ROUTE:  "maps_route",
 }
 
 # Интенты, которые требуют retrieval
@@ -211,6 +213,18 @@ _BASE_PROMPTS: dict[Intent, str] = {
         "NEVER say you cannot show maps or provide location data — you have it in context. "
         + _NO_CUTOFF + _FORMAT_RULES
     ),
+    Intent.MAPS_ROUTE: (
+        "You are a route assistant. You have real driving route data in your context — "
+        "distance and estimated drive time calculated right now via Mapbox. "
+        "Present the route clearly: origin, destination, distance, drive time. "
+        "Then add practical travel advice: mention that taxis (Yandex.Taxi) are usually "
+        "the fastest door-to-door option, and that public transport options can be checked "
+        "in Yandex.Transport or 2GIS. "
+        "STRICT: NEVER invent bus numbers, tram lines, metro stations, or specific stop names. "
+        "NEVER say you cannot build a route when route data is present in context. "
+        "If context is empty — say route data was unavailable and suggest Google Maps or 2GIS."
+        + _NO_CUTOFF + _FORMAT_RULES
+    ),
     Intent.UNKNOWN: (
         "You are a helpful, versatile assistant. "
         "You have access to real-time web search results in your context. "
@@ -301,12 +315,14 @@ async def classify(
     fallback = _build_result(Intent.QUESTION, 0.70, lang, text)
 
     # ── routing pre-check ─────────────────────────────────────────────────────
-    # Route/directions queries go to SEARCH, not MAPS.
-    # We have no Directions API — MAPS only geocodes a point and the model
-    # would invent the route, causing hallucinations.
+    # Route/directions queries go to MAPS_ROUTE (Mapbox Directions API).
+    # MAPS only geocodes a single point — it cannot build routes.
+    # SEARCH was used previously as a fallback, but returned SEO junk with
+    # invented bus numbers. MAPS_ROUTE uses real geodata and falls back
+    # to web search gracefully if endpoint extraction fails.
     if any(s in text.lower() for s in _ROUTE_SIGNALS):
-        logger.info("classify: route pre-signal → SEARCH", extra={"lang": lang})
-        return _build_result(Intent.SEARCH, 0.87, lang, text)
+        logger.info("classify: route pre-signal → MAPS_ROUTE", extra={"lang": lang})
+        return _build_result(Intent.MAPS_ROUTE, 0.87, lang, text)
 
     if supabase is None or hf_client is None:
         logger.warning("classify called without supabase/hf_client — using fallback")
