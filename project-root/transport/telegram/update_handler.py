@@ -9,11 +9,7 @@ from transport.telegram.message_router import UpdateType, extract_text, extract_
 
 logger = logging.getLogger(__name__)
 
-# Model label used when vision fast-path returns a direct response.
-# Matches the extraction model defined in vision_handler.py.
-_VISION_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
-
-# Intents that generate freely — no web search needed
+_VISION_MODEL      = "meta-llama/llama-4-scout-17b-16e-instruct"
 _NO_SEARCH_INTENTS = {"creative", "conversation", "emotional", "code", "math"}
 
 
@@ -30,8 +26,7 @@ def _estimate_history_tokens(history: list[dict] | None) -> int:
 def _classify_complexity(text: str) -> Complexity:
     has_code = "```" in text or "    " in text
     has_json = "{" in text and "}" in text
-    length = len(text)
-
+    length   = len(text)
     if has_code and has_json:
         return Complexity.CRITICAL
     if has_code or has_json:
@@ -72,30 +67,24 @@ async def handle_message(
                 lang=lang,
             )
         except Exception as exc:
-            tb = traceback.format_exc()
-            logger.error(f"Vision handler crashed: {exc!r}\n{tb}")
+            logger.error(f"Vision handler crashed: {exc!r}\n{traceback.format_exc()}")
             from cognition.response_synthesizer import get_system_message
-            error_text = get_system_message("vision_error", lang)
             return OrchestratorResult(
-                text=error_text,
+                text=get_system_message("vision_error", lang),
                 tier=Tier.FAST,
                 model="",
                 epk_decision=EPKDecision.DENY,
                 usage=UsageRecord(
-                    input_tokens=0,
-                    output_tokens=0,
-                    embedding_tokens=0,
-                    rerank_tokens=0,
-                    tier=Tier.FAST,
-                    embedding_type="large",
-                    cost_usd=0.0,
+                    input_tokens=0, output_tokens=0,
+                    embedding_tokens=0, rerank_tokens=0,
+                    tier=Tier.FAST, embedding_type="large", cost_usd=0.0,
                 ),
                 denied=True,
                 deny_reason="vision_error",
                 lang=lang,
             )
 
-        # ── CASE 1: descriptive / conversational — direct response ────────────
+        # ── CASE 1: descriptive — direct response, no pipeline ────────────────
         if not vision_result.needs_pipeline:
             logger.info("Vision fast-path: direct response", extra={"user_id": user_id})
             return OrchestratorResult(
@@ -106,28 +95,21 @@ async def handle_message(
                 usage=UsageRecord(
                     input_tokens=_estimate_tokens(caption) + 500,
                     output_tokens=_estimate_tokens(vision_result.text),
-                    embedding_tokens=0,
-                    rerank_tokens=0,
-                    tier=Tier.GENERAL,
-                    embedding_type="large",
-                    cost_usd=0.001,
+                    embedding_tokens=0, rerank_tokens=0,
+                    tier=Tier.GENERAL, embedding_type="large", cost_usd=0.001,
                 ),
                 denied=False,
                 deny_reason="",
                 lang=lang,
             )
 
-        # ── CASE 2: analytical / task — forward extracted text into pipeline ──
+        # ── CASE 2: analytical — forward into main pipeline ───────────────────
         logger.info("Vision pipeline-path: forwarding to orchestrator", extra={"user_id": user_id})
-        # Fall through to the standard text pipeline below,
-        # using the extracted vision text as the user message.
-        update = dict(update)           # shallow copy — do not mutate the original
-        _vision_text_override   = vision_result.text
-        _vision_intent_result   = vision_result.intent_result  # may be None if classify failed
+        update = dict(update)
+        _vision_text_override  = vision_result.text
+        _vision_intent_result  = vision_result.intent_result
 
-    # ── text handling (original flow) ─────────────────────────────────────────
-    # If vision pipeline-path set an override, use extracted image text;
-    # otherwise extract text from the Telegram update as normal.
+    # ── text handling ─────────────────────────────────────────────────────────
     text = locals().get("_vision_text_override") or extract_text(update)
 
     if not text:
@@ -138,13 +120,9 @@ async def handle_message(
             model="",
             epk_decision=EPKDecision.DENY,
             usage=UsageRecord(
-                input_tokens=0,
-                output_tokens=0,
-                embedding_tokens=0,
-                rerank_tokens=0,
-                tier=Tier.FAST,
-                embedding_type="large",
-                cost_usd=0.0,
+                input_tokens=0, output_tokens=0,
+                embedding_tokens=0, rerank_tokens=0,
+                tier=Tier.FAST, embedding_type="large", cost_usd=0.0,
             ),
             denied=True,
             deny_reason="empty_message",
@@ -153,7 +131,7 @@ async def handle_message(
 
     complexity = _classify_complexity(text)
 
-    # ── load conversation history ─────────────────────────────────────────────
+    # ── conversation history ──────────────────────────────────────────────────
     conversation_history: list[dict] | None = None
     history_store = None
 
@@ -164,7 +142,7 @@ async def handle_message(
             conversation_history = await history_store.get_history(user_id)
             logger.info("History loaded", extra={
                 "user_id": user_id,
-                "turns": len(conversation_history),
+                "turns":   len(conversation_history),
             })
         except Exception as exc:
             logger.error("History load failed", extra={"error": str(exc)})
@@ -184,19 +162,19 @@ async def handle_message(
         "lang":           lang,
     })
 
-    # ── retrieval (vector search in Supabase memory) ──────────────────────────
+    # ── retrieval ─────────────────────────────────────────────────────────────
     retrieved_context = ""
     embedding_tokens  = 0
     rerank_tokens     = 0
 
     if supabase is not None and redis is not None:
         try:
-            from retrieval.retrieval_engine import RetrievalEngine
+            from contracts.retrieval_contracts import RetrievalQuery
+            from memory.supabase_store import SupabaseStore
             from retrieval.cache.embedding_cache import EmbeddingCache
             from retrieval.cache.query_cache import QueryCache
             from retrieval.cache.rerank_cache import RerankCache
-            from memory.supabase_store import SupabaseStore
-            from contracts.retrieval_contracts import RetrievalQuery
+            from retrieval.retrieval_engine import RetrievalEngine
 
             engine = RetrievalEngine(
                 supabase_store=SupabaseStore(supabase),
@@ -232,32 +210,26 @@ async def handle_message(
                 "error": str(exc),
             })
 
-    # ── web search ────────────────────────────────────────────────────────────
-    # For vision pipeline-path, intent is already known — reuse it directly
-    # to avoid a redundant classify() call before the orchestrator does its own.
+    # ── web search fallback ───────────────────────────────────────────────────
     if not retrieved_context:
         try:
             from cognition.intent_engine import classify
             from external.web_tools import run_tool
 
-            _pre_intent    = locals().get("_vision_intent_result")
-            quick_intent   = _pre_intent if _pre_intent is not None else await classify(text, lang=lang, supabase=supabase, hf_client=hf_client)
-            intent_value   = quick_intent.intent.value
+            _pre_intent  = locals().get("_vision_intent_result")
+            quick_intent = (
+                _pre_intent if _pre_intent is not None
+                else await classify(text, lang=lang, supabase=supabase, hf_client=hf_client)
+            )
+            intent_value = quick_intent.intent.value
 
             if intent_value not in _NO_SEARCH_INTENTS:
-                if intent_value in ("weather", "maps", "maps_poi"):
-                    web_result = await run_tool(
-                        tool_name=intent_value,
-                        params={"query": text, "lang": lang},
-                        lang=lang,
-                    )
-                else:
-                    web_result = await run_tool(
-                        tool_name="search",
-                        params={"query": text, "lang": lang},
-                        lang=lang,
-                    )
-
+                tool = intent_value if intent_value in ("weather", "maps", "maps_poi") else "search"
+                web_result = await run_tool(
+                    tool_name=tool,
+                    params={"query": text, "lang": lang},
+                    lang=lang,
+                )
                 if web_result:
                     retrieved_context = web_result
                     logger.info("Web search used", extra={
@@ -269,8 +241,7 @@ async def handle_message(
         except Exception as exc:
             logger.warning("Web search failed", extra={"error": str(exc)})
 
-    # Pass pre-computed intent from vision pipeline when available.
-    # Orchestrator will skip classify() and use it directly.
+    # ── run pipeline ──────────────────────────────────────────────────────────
     _forced_intent = locals().get("_vision_intent_result")
 
     request = OrchestratorRequest(
@@ -290,18 +261,7 @@ async def handle_message(
 
     result = await run(request)
 
-    # ── save turns to history ─────────────────────────────────────────────────
-    if history_store is not None and not result.denied:
-        try:
-            await history_store.append(user_id, "user", text)
-            if result.text:
-                await history_store.append(user_id, "assistant", result.text)
-        except Exception as exc:
-            logger.error("History save failed", extra={"error": str(exc)})
-
-    return result
-
-# ── save history ──────────────────────────────────────────────────────────
+    # ── save history ──────────────────────────────────────────────────────────
     if history_store is not None and not result.denied:
         try:
             await history_store.append(user_id, "user", text)
@@ -313,13 +273,11 @@ async def handle_message(
     # ── meta layer: reflection + memory_audit (async side-channel) ────────────
     # Pure observability — never blocks the response, never raises.
     try:
-        import asyncio
         from meta.reflection import ReflectionInput, reflect
         from meta.memory_audit import MemorySnapshot, audit
 
-        # Build reflection input from result
         ref_input = ReflectionInput(
-            intent=str(result.epk_decision),  # use actual intent if available
+            intent=str(result.epk_decision),
             lang=lang,
             tier=str(result.tier),
             model=result.model or "",
@@ -333,7 +291,6 @@ async def handle_message(
         report = reflect(ref_input)
         logger.info("Reflection", extra=report.to_dict())
 
-        # Build memory snapshot for audit
         snap = MemorySnapshot(
             user_id=user_id,
             history_turn_count=len(conversation_history) if conversation_history else 0,
