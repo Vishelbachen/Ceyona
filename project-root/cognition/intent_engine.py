@@ -201,13 +201,6 @@ _BASE_PROMPTS: dict[Intent, str] = {
         "NEVER say you cannot show maps or provide location data — you have it in context. "
         + _NO_CUTOFF + _FORMAT_RULES
     ),
-    Intent.MAPS_POI: (
-        "You are a location assistant specialising in points of interest. "
-        "The place data in your context is current — fetched from Google Maps right now. "
-        "Present it clearly: name, address, rating, hours, contacts. "
-        "NEVER say you cannot find place information — you have it in context. "
-        + _NO_CUTOFF + _FORMAT_RULES
-    ),
     Intent.UNKNOWN: (
         "You are a helpful, versatile assistant. "
         "You have access to real-time web search results in your context. "
@@ -337,10 +330,19 @@ async def classify(
         best_intent_name = max(scores, key=lambda k: sum(scores[k]) / len(scores[k]))
         best_score = sum(scores[best_intent_name]) / len(scores[best_intent_name])
 
-        if best_score < _MIN_CONFIDENCE:
-            logger.info("classify: best score below MIN_CONFIDENCE", extra={
+        # For short texts (< 6 words) we require higher confidence to avoid
+        # spurious MAPS/WEATHER matches on unrecognised-language input.
+        # Example: "Rigami sila maanna qanoq ippa?" (Inuktitut) was scoring
+        # above 0.55 for MAPS due to accidental embedding similarity.
+        word_count = len(text.split())
+        effective_min = 0.75 if word_count < 6 else _MIN_CONFIDENCE
+
+        if best_score < effective_min:
+            logger.info("classify: best score below threshold", extra={
                 "intent": best_intent_name,
                 "score": f"{best_score:.3f}",
+                "threshold": effective_min,
+                "word_count": word_count,
             })
             return fallback
 
