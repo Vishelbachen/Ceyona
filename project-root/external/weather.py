@@ -1,51 +1,259 @@
+"""
+external/weather.py
+
+OpenWeatherMap API client + city name extractor.
+
+Роль:
+  - WeatherService: получение погоды по названию города
+  - _extract_city(): парсинг города из свободного текста запроса
+  - Синглтон weather_service используется через web_tools.py
+
+Импортируется:
+  - external/web_tools.py → weather_service, _extract_city
+"""
 from __future__ import annotations
 
 import logging
+import re
 
 import httpx
 
 from app.settings import settings
-from i18n.strings import t as _i18n, ow_lang as _ow_lang_fn
+from i18n.t import t as _t, ow_lang as _ow_lang_fn
 
 logger = logging.getLogger(__name__)
 
 _BASE_URL = "https://api.openweathermap.org/data/2.5"
-_TIMEOUT = 10.0
+_TIMEOUT  = 10.0
 
+
+# ─── RUSSIAN CASE NORMALIZATION ───────────────────────────────────────────────
+
+_RU_SUFFIX_MAP: tuple[tuple[str, str], ...] = (
+    ("бурге", "бург"),   ("граде", "град"),   ("роде",  "род"),
+    ("даре",  "дар"),    ("оде",   "од"),      ("льске", "льск"),
+    ("нске",  "нск"),    ("вске",  "вск"),     ("йске",  "йск"),
+    ("ске",   "ск"),     ("рге",   "рг"),      ("нге",   "нг"),
+    ("ове",   "ов"),     ("же",    ""),         ("ни",    "нь"),
+    ("ве",    "в"),      ("ге",    "г"),        ("ке",    "к"),
+    ("ле",    "ль"),     ("ре",    "рь"),       ("пе",    "пь"),
+    ("бе",    "бь"),     ("те",    "ть"),       ("де",    "дь"),
+    ("зе",    "зь"),     ("се",    "сь"),       ("це",    "ць"),
+    ("не",    "н"),      ("ие",    "ий"),
+)
+
+_RU_CITY_OVERRIDES: dict[str, str] = {
+    "москве":            "Moscow",
+    "санкт-петербурге":  "Saint Petersburg",
+    "петербурге":        "Saint Petersburg",
+    "питере":            "Saint Petersburg",
+    "новосибирске":      "Novosibirsk",
+    "екатеринбурге":     "Yekaterinburg",
+    "казани":            "Kazan",
+    "нижнем новгороде":  "Nizhny Novgorod",
+    "челябинске":        "Chelyabinsk",
+    "омске":             "Omsk",
+    "самаре":            "Samara",
+    "ростове-на-дону":   "Rostov-on-Don",
+    "ростове":           "Rostov-on-Don",
+    "уфе":               "Ufa",
+    "красноярске":       "Krasnoyarsk",
+    "перми":             "Perm",
+    "воронеже":          "Voronezh",
+    "волгограде":        "Volgograd",
+    "краснодаре":        "Krasnodar",
+    "саратове":          "Saratov",
+    "тюмени":            "Tyumen",
+    "тольятти":          "Tolyatti",
+    "ижевске":           "Izhevsk",
+    "барнауле":          "Barnaul",
+    "ульяновске":        "Ulyanovsk",
+    "владивостоке":      "Vladivostok",
+    "хабаровске":        "Khabarovsk",
+    "иркутске":          "Irkutsk",
+    "ярославле":         "Yaroslavl",
+    "махачкале":         "Makhachkala",
+    "томске":            "Tomsk",
+    "оренбурге":         "Orenburg",
+    "кемерове":          "Kemerovo",
+    "новокузнецке":      "Novokuznetsk",
+    "рязани":            "Ryazan",
+    "астрахани":         "Astrakhan",
+    "набережных челнах": "Naberezhnye Chelny",
+    "пензе":             "Penza",
+    "липецке":           "Lipetsk",
+    "кирове":            "Kirov",
+    "чебоксарах":        "Cheboksary",
+    "калининграде":      "Kaliningrad",
+    "тбилиси":           "Tbilisi",
+    "киеве":             "Kyiv",
+    "харькове":          "Kharkiv",
+    "одессе":            "Odessa",
+    "минске":            "Minsk",
+    "алматы":            "Almaty",
+    "ташкенте":          "Tashkent",
+    "баку":              "Baku",
+    "ереване":           "Yerevan",
+    "бишкеке":           "Bishkek",
+    "душанбе":           "Dushanbe",
+    "ашхабаде":          "Ashgabat",
+}
+
+_CITY_STOP_WORDS: frozenset[str] = frozenset({
+    # Russian
+    "сейчас", "сегодня", "прямо", "там", "здесь", "это", "какая", "какой",
+    "будет", "есть", "данный", "этот", "реальная", "реальный", "актуальная",
+    # English
+    "now", "today", "currently", "right", "there", "here", "the", "a", "an",
+    "real", "current", "actual", "latest", "like", "what", "is", "weather",
+    # Georgian
+    "ამ", "ახლა", "წუთას", "დღეს", "რა", "არის",
+    # Turkish
+    "şu", "an", "şimdi", "bugün", "hava",
+    # Arabic
+    "الآن", "اليوم", "هناك", "في",
+    # Hindi
+    "अभी", "आज", "वहाँ",
+    # Hausa
+    "yaya", "yake", "yanzu",
+    # Indonesian / Malay
+    "sekarang", "hari", "ini",
+    # Vietnamese
+    "bây", "giờ", "hôm", "nay",
+    # Swahili
+    "sasa", "leo", "hali",
+})
+
+_WEATHER_PREPS = (
+    "погода в ", "температура в ", "прогноз для ", "погоду в ",
+    "погода для города ", "для города ",
+    "weather in ", "temperature in ", "forecast for ", "in ",
+    "für ", "dans ", "en ", "para ",
+    "yanayi yake a ", "yanayi a ",
+    "de hava ", "hava durumu ", "hava ",
+    "الطقس في ", "في ",
+    "cuaca di ", "di ",
+    "thời tiết ở ", "ở ",
+    "hali ya hewa ya ", "hali ya hewa ",
+    "का मौसम ", "में मौसम ",
+    "날씨 ",
+)
+
+_LOCATIVE_SUFFIXES: tuple[tuple[str, str], ...] = (
+    ("ში",  ""),   ("ზე",  ""),   ("დან", ""),
+    ("ում",  ""),  ("ից",  ""),
+    ("'da",  ""),  ("'de",  ""),  ("'ta",  ""),  ("'te",  ""),
+    ("da",   ""),  ("de",   ""),
+)
+
+_LOCATIVE_CITY_OVERRIDES: dict[str, str] = {
+    "სიდნეიში":   "Sydney",    "სიდნეი":     "Sydney",
+    "ლონდონში":   "London",    "ლონდონი":    "London",
+    "პარიზში":    "Paris",     "პარიზი":     "Paris",
+    "ნიუ-იორკში": "New York",  "ნიუ-იორკი":  "New York",
+    "ბერლინში":   "Berlin",    "ბერლინი":    "Berlin",
+    "ტოკიოში":    "Tokyo",     "ტოკიო":      "Tokyo",
+    "დუბაიში":    "Dubai",     "დუბაი":      "Dubai",
+    "სტამბოლში":  "Istanbul",  "სტამბოლი":   "Istanbul",
+    "ბარსელონაში":"Barcelona", "ბარსელონა":  "Barcelona",
+    "რომში":      "Rome",      "რომი":       "Rome",
+    "ამსტერდამში":"Amsterdam", "ამსტერდამი": "Amsterdam",
+    "მოსკოვში":   "Moscow",    "მოსკოვი":    "Moscow",
+    "მადრიდში":   "Madrid",    "მადრიდი":    "Madrid",
+    "Սիդնեյում":  "Sydney",    "Լոնդոնում":  "London",
+    "Փարիզում":   "Paris",     "Բեռլինում":  "Berlin",
+    "Տոկիոյում":  "Tokyo",     "Դուբայում":  "Dubai",
+}
+
+
+def _strip_locative(city: str) -> str:
+    stripped = city.strip()
+    override = (
+        _LOCATIVE_CITY_OVERRIDES.get(stripped)
+        or _LOCATIVE_CITY_OVERRIDES.get(stripped.lower())
+    )
+    if override:
+        return override
+    for suffix, replacement in _LOCATIVE_SUFFIXES:
+        if stripped.endswith(suffix) and len(stripped) > len(suffix) + 2:
+            return stripped[: -len(suffix)] + replacement
+    return stripped
+
+
+def _extract_city_hausa(query: str) -> str | None:
+    m = re.search(r'\ba\s+([A-Z][\w\s]+?)(?:\s+yanzu|\s*\?|$)', query)
+    return m.group(1).strip() if m else None
+
+
+def _normalize_ru_city(city: str) -> str:
+    lower = city.lower().strip()
+    if lower in _RU_CITY_OVERRIDES:
+        return _RU_CITY_OVERRIDES[lower]
+    for suffix, replacement in sorted(_RU_SUFFIX_MAP, key=lambda x: -len(x[0])):
+        if lower.endswith(suffix) and len(lower) > len(suffix) + 2:
+            return (lower[: -len(suffix)] + replacement).capitalize()
+    return city.strip()
+
+
+def _extract_city(query: str) -> str:
+    """Extract city name from a weather query in any language."""
+    lower = query.lower()
+
+    if "ში" in query:
+        for word in query.split():
+            if word.endswith("ში") and len(word) > 4:
+                city = word[:-2].rstrip("?.!,")
+                if city.lower() not in _CITY_STOP_WORDS and len(city) > 2:
+                    return city
+
+    for prep in _WEATHER_PREPS:
+        idx = lower.find(prep)
+        if idx != -1:
+            rest = query[idx + len(prep):].strip()
+            city = re.split(r"[?,\n]", rest)[0].strip()
+            words = city.split()
+            while words and words[-1].lower() in _CITY_STOP_WORDS:
+                words.pop()
+            city = " ".join(words).rstrip("?.!,")
+            if city and city.lower() not in _CITY_STOP_WORDS and len(city) > 1:
+                return _strip_locative(_normalize_ru_city(city))
+
+    hausa_city = _extract_city_hausa(query)
+    if hausa_city:
+        return hausa_city
+
+    words = query.strip().rstrip("?.!,").split()
+    candidates = [w for w in words if w.lower() not in _CITY_STOP_WORDS and len(w) > 2]
+    if candidates:
+        return _strip_locative(_normalize_ru_city(candidates[-1]))
+
+    return query.strip()
+
+
+# ─── ICON MAP ─────────────────────────────────────────────────────────────────
+
+_WEATHER_ICON_MAP: dict[str, str] = {
+    "01d": "☀️",  "01n": "🌙",
+    "02d": "🌤️",  "02n": "🌤️",
+    "03d": "⛅",   "03n": "⛅",
+    "04d": "☁️",   "04n": "☁️",
+    "09d": "🌧️",  "09n": "🌧️",
+    "10d": "🌦️",  "10n": "🌦️",
+    "11d": "⛈️",  "11n": "⛈️",
+    "13d": "❄️",   "13n": "❄️",
+    "50d": "🌫️",  "50n": "🌫️",
+}
 
 
 def _ow_lang(lang: str) -> str:
     return _ow_lang_fn(lang)
 
 
-def _label(key: str, lang: str) -> str:
-    mapping = {
-        "feels_like": "weather_feels_like",
-        "humidity": "weather_humidity",
-        "wind": "weather_wind",
-    }
-    i18n_key = mapping.get(key, key)
-    return _i18n(i18n_key, lang) or key
-
-
-def _weather_icon(icon_code: str) -> str:
-    _MAP = {
-        "01d": "☀️",  "01n": "🌙",
-        "02d": "🌤️",  "02n": "🌤️",
-        "03d": "⛅",  "03n": "⛅",
-        "04d": "☁️",  "04n": "☁️",
-        "09d": "🌧️",  "09n": "🌧️",
-        "10d": "🌦️",  "10n": "🌦️",
-        "11d": "⛈️",  "11n": "⛈️",
-        "13d": "❄️",  "13n": "❄️",
-        "50d": "🌫️",  "50n": "🌫️",
-    }
-    return _MAP.get(icon_code, "🌤️")
-
+# ─── SERVICE ──────────────────────────────────────────────────────────────────
 
 class WeatherService:
     """
-    OpenWeather API client.
+    OpenWeatherMap API client.
     Read-only. No state. No business logic.
     """
 
@@ -62,20 +270,20 @@ class WeatherService:
             logger.warning("OpenWeather API key not set")
             return None
 
-        params = {
-            "q": city,
-            "appid": self._api_key,
-            "units": units,
-            "lang": _ow_lang(lang),
-        }
-
         try:
             async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-                response = await client.get(f"{_BASE_URL}/weather", params=params)
+                response = await client.get(
+                    f"{_BASE_URL}/weather",
+                    params={
+                        "q":     city,
+                        "appid": self._api_key,
+                        "units": units,
+                        "lang":  _ow_lang(lang),
+                    },
+                )
                 response.raise_for_status()
-                data = response.json()
                 logger.info("Weather fetched", extra={"city": city, "lang": lang})
-                return data
+                return response.json()
         except Exception as exc:
             logger.error("WeatherService.get_current failed", extra={
                 "city": city, "error": str(exc),
@@ -93,17 +301,18 @@ class WeatherService:
             logger.warning("OpenWeather API key not set")
             return None
 
-        params = {
-            "q": city,
-            "appid": self._api_key,
-            "units": units,
-            "lang": _ow_lang(lang),
-            "cnt": cnt,
-        }
-
         try:
             async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-                response = await client.get(f"{_BASE_URL}/forecast", params=params)
+                response = await client.get(
+                    f"{_BASE_URL}/forecast",
+                    params={
+                        "q":     city,
+                        "appid": self._api_key,
+                        "units": units,
+                        "lang":  _ow_lang(lang),
+                        "cnt":   cnt,
+                    },
+                )
                 response.raise_for_status()
                 return response.json()
         except Exception as exc:
@@ -124,14 +333,18 @@ class WeatherService:
             icon     = data["weather"][0].get("icon", "")
 
             location = f"{city}, {country}" if country else city
-            emoji    = _weather_icon(icon)
+            emoji    = _WEATHER_ICON_MAP.get(icon, "🌤️")
+
+            fl  = _t("weather_feels_like", lang) or "feels like"
+            hum = _t("weather_humidity",   lang) or "Humidity"
+            wnd = _t("weather_wind",       lang) or "Wind"
 
             return (
                 f"{emoji} {location}\n"
                 f"{desc}\n"
-                f"🌡 {temp:.0f}°C ({_label('feels_like', lang)} {feels:.0f}°C)\n"
-                f"💧 {_label('humidity', lang)}: {humidity}%\n"
-                f"💨 {_label('wind', lang)}: {wind} m/s"
+                f"🌡 {temp:.0f}°C ({fl} {feels:.0f}°C)\n"
+                f"💧 {hum}: {humidity}%\n"
+                f"💨 {wnd}: {wind} m/s"
             )
         except Exception as exc:
             logger.error("format_current failed", extra={"error": str(exc)})
@@ -141,7 +354,6 @@ class WeatherService:
         try:
             city  = data.get("city", {}).get("name", "Unknown")
             items = data.get("list", [])
-
             if not items:
                 return "⚠️ No forecast data available."
 
@@ -151,7 +363,7 @@ class WeatherService:
                 temp   = item["main"]["temp"]
                 desc   = item["weather"][0]["description"].capitalize()
                 icon   = item["weather"][0].get("icon", "")
-                emoji  = _weather_icon(icon)
+                emoji  = _WEATHER_ICON_MAP.get(icon, "🌤️")
                 lines.append(f"  {emoji} {dt_txt}: {temp:.0f}°C, {desc}")
 
             return "\n".join(lines)
