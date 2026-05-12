@@ -214,18 +214,6 @@ def _extract_location(query: str) -> str:
     return query.strip()
 
 
-# ─── WEATHER OUTPUT ───────────────────────────────────────────────────────────
-
-_OW_LANG_MAP: dict[str, str] = {
-    "en": "en", "ru": "ru", "de": "de", "fr": "fr", "es": "es",
-    "pt": "pt", "it": "it", "tr": "tr", "ar": "ar", "zh": "zh_cn",
-    "ja": "ja", "ko": "ko", "pl": "pl", "uk": "uk", "fa": "fa",
-    "nl": "nl", "sv": "sv", "no": "no", "da": "da", "fi": "fi",
-    "cs": "cs", "sk": "sk", "ro": "ro", "hu": "hu", "bg": "bg",
-    "hr": "hr", "sr": "sr", "he": "he", "vi": "vi", "th": "th",
-    "id": "id", "ms": "ms",
-}
-
 _WEATHER_ICON_MAP: dict[str, str] = {
     "01d": "☀️",  "01n": "🌙",  "02d": "🌤️", "02n": "🌤️",
     "03d": "⛅",  "03n": "⛅",  "04d": "☁️",  "04n": "☁️",
