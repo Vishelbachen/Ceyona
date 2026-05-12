@@ -50,11 +50,97 @@ def _structure(text: str, intent: "Intent | None") -> str:
     return text
 
 
+def _convert_latex_to_plaintext(text: str) -> str:
+    """
+    Convert LaTeX math expressions to readable Unicode plaintext.
+    Telegram does not render LaTeX — raw commands display as literal text.
+    Called before stripping delimiters so inner content is converted first.
+    """
+    import re
+
+    # ── superscripts / subscripts ─────────────────────────────────────────
+    # Full superscript map: digits, signs, letters with Unicode coverage
+    _SUP_MAP = {
+        "0":"⁰","1":"¹","2":"²","3":"³","4":"⁴","5":"⁵",
+        "6":"⁶","7":"⁷","8":"⁸","9":"⁹","+":"⁺","-":"⁻",
+        "=":"⁼","(":"⁽",")":"⁾","n":"ⁿ","i":"ⁱ",
+        # uppercase: use small-caps approximations
+        "A":"ᴬ","B":"ᴮ","D":"ᴰ","E":"ᴱ","G":"ᴳ","H":"ᴴ",
+        "I":"ᴵ","J":"ᴶ","K":"ᴷ","L":"ᴸ","M":"ᴹ","N":"ᴺ",
+        "O":"ᴼ","P":"ᴾ","R":"ᴿ","T":"ᵀ","U":"ᵁ","V":"ⱽ",
+        "W":"ᵂ",
+        # lowercase
+        "a":"ᵃ","b":"ᵇ","c":"ᶜ","d":"ᵈ","e":"ᵉ","f":"ᶠ",
+        "g":"ᵍ","h":"ʰ","j":"ʲ","k":"ᵏ","l":"ˡ","m":"ᵐ",
+        "o":"ᵒ","p":"ᵖ","r":"ʳ","s":"ˢ","t":"ᵗ","u":"ᵘ",
+        "v":"ᵛ","w":"ʷ","x":"ˣ","y":"ʸ","z":"ᶻ",
+    }
+    def _sup_char(c: str) -> str:
+        return _SUP_MAP.get(c, c)
+    _SUB = str.maketrans("0123456789+-=()aeinoruvx", "₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎ₐₑᵢₙₒᵣᵤᵥₓ")
+
+    def sup(m: re.Match) -> str:
+        inner = m.group(1).strip("{}")
+        return "".join(_sup_char(c) for c in inner)
+
+    def sub(m: re.Match) -> str:
+        inner = m.group(1).strip("{}")
+        return inner.translate(_SUB)
+
+    # ^{...} or ^x  — superscript
+    text = re.sub(r"\^\{([^}]*)\}", sup, text)
+    text = re.sub(r"\^([A-Za-z0-9])", lambda m: _sup_char(m.group(1)), text)
+
+    # _{...} or _x  — subscript
+    text = re.sub(r"_\{([^}]*)\}", sub, text)
+    text = re.sub(r"_([A-Za-z0-9])", lambda m: m.group(1).translate(_SUB), text)
+
+    # ── fractions: \frac{a}{b} → a/b ─────────────────────────────────────
+    text = re.sub(r"\\frac\{([^}]*)\}\{([^}]*)\}", r"\1/\2", text)
+
+    # ── Greek letters → Unicode ───────────────────────────────────────────
+    _GREEK = {
+        "alpha": "α", "beta": "β", "gamma": "γ", "delta": "δ",
+        "epsilon": "ε", "theta": "θ", "lambda": "λ", "mu": "μ",
+        "pi": "π", "sigma": "σ", "tau": "τ", "phi": "φ", "omega": "ω",
+        "Alpha": "Α", "Beta": "Β", "Gamma": "Γ", "Delta": "Δ",
+        "Theta": "Θ", "Lambda": "Λ", "Sigma": "Σ", "Omega": "Ω",
+    }
+    for name, sym in _GREEK.items():
+        text = text.replace(f"\\{name}", sym)
+
+    # ── common math symbols ───────────────────────────────────────────────
+    _SYMBOLS = [
+        (r"\\times", "×"), (r"\\cdot", "·"), (r"\\div", "÷"),
+        (r"\\pm", "±"),    (r"\\mp", "∓"),   (r"\\neq", "≠"),
+        (r"\\leq", "≤"),   (r"\\geq", "≥"),  (r"\\approx", "≈"),
+        (r"\\infty", "∞"), (r"\\sqrt", "√"), (r"\\sum", "Σ"),
+        (r"\\prod", "Π"),  (r"\\int", "∫"),  (r"\\partial", "∂"),
+        (r"\\in", "∈"),    (r"\\notin", "∉"), (r"\\subset", "⊂"),
+        (r"\\cup", "∪"),   (r"\\cap", "∩"),  (r"\\to", "→"),
+        (r"\\Rightarrow", "⇒"), (r"\\Leftrightarrow", "⟺"),
+        (r"\\ldots", "…"), (r"\\cdots", "⋯"),
+    ]
+    for pattern, sym in _SYMBOLS:
+        text = re.sub(pattern, sym, text)
+
+    # ── strip remaining \command braces: \text{abc} → abc ─────────────────
+    text = re.sub(r"\\[a-zA-Z]+\{([^}]*)\}", r"\1", text)
+
+    # ── strip lone braces left over ───────────────────────────────────────
+    text = re.sub(r"(?<!\\)[{}]", "", text)
+
+    return text
+
+
 def _normalize_for_telegram(text: str) -> str:
     """Strip LaTeX, Markdown tables, headers, bold/italic — anything Telegram cannot render."""
     import re
 
-    # LaTeX math delimiters
+    # Convert LaTeX math content to Unicode BEFORE stripping delimiters
+    text = _convert_latex_to_plaintext(text)
+
+    # LaTeX math delimiters (now just wrappers — content already converted)
     text = re.sub(r"\$\$(.*?)\$\$", r"\1", text, flags=re.DOTALL)
     text = re.sub(r"\$(.*?)\$", r"\1", text)
 
