@@ -63,7 +63,7 @@ class IntentResult:
 # ─── LANGUAGE LAYER ───────────────────────────────────────────────────────────
 
 from i18n.t import lang_instruction as _lang_directive
-
+)
 
 # ─── SYSTEM PROMPTS ───────────────────────────────────────────────────────────
 
