@@ -1,9 +1,3 @@
-# i18n/strings.py
-# Single source of truth for all user-facing strings and language config.
-# Usage:
-#   from i18n.t import t, lang_instruction, ow_lang
-#   t("vision_error", lang)
-#   t("balance_display", lang, amount="1.23")
 from __future__ import annotations
 
 # ─── SUPPORTED LANGUAGES ──────────────────────────────────────────────────────
@@ -14,6 +8,8 @@ SUPPORTED_LANGS = {
     "da", "fi", "cs", "sk", "ro", "hu", "bg", "hr", "sr",
     "he", "vi", "th", "id", "ms", "hi", "bn", "ur",
     "az", "kk", "uz", "ka", "hy", "mn", "sw", "am",
+    # Extended language support
+    "ha", "yo", "ig", "so", "ku", "ps", "ug", "tt",
 }
 
 # Maps bot lang codes to OpenWeatherMap lang codes
@@ -24,12 +20,15 @@ OW_LANG_MAP: dict[str, str] = {
     "pl": "pl", "uk": "ua", "fa": "fa", "nl": "nl",
     "sv": "sv", "no": "no", "da": "da", "fi": "fi",
     "he": "he", "vi": "vi", "th": "th", "id": "id",
-    "ms": "en", "hi": "en", "bn": "en", "ur": "en",
-    "az": "en", "kk": "en", "uz": "en", "ka": "en",
-    "hy": "en", "mn": "en", "si": "en", "km": "en",
+    "ms": "ms", "hi": "hi", "bn": "bn", "ur": "ur",
+    "az": "az", "kk": "en", "uz": "uz", "ka": "ka",
+    "hy": "hy", "mn": "en", "si": "en", "km": "en",
     "lo": "en", "my": "en", "am": "en", "sw": "en",
     "cs": "cz", "sk": "sk", "ro": "ro", "hu": "hu",
     "bg": "bg", "hr": "hr", "sr": "sr",
+    # Languages without OWM support → English descriptions
+    "ha": "en", "yo": "en", "ig": "en", "so": "en",
+    "ps": "en", "ku": "en", "ug": "en", "tt": "en",
 }
 
 # Maps lang code to LLM instruction ("reply only in X")
@@ -77,6 +76,14 @@ LANG_INSTRUCTIONS: dict[str, str] = {
     "ur": "صرف اردو میں جواب دیں۔",
     "sw": "Jibu kwa Kiswahili tu.",
     "am": "በአማርኛ ብቻ መልስ ስጥ።",
+    "ha": "Amsa KAWAI da Hausa.",
+    "yo": "Dahun NIKAN ni Yorùbá.",
+    "ig": "Zaghachi NAANỊ n'Igbo.",
+    "so": "Ku jawaab KALIYA Soomaali.",
+    "ku": "Bersivê TENÊ bi Kurdî bide.",
+    "ps": "یوازې پښتو کې ځواب ورکړئ.",
+    "ug": "پەقەت ئۇيغۇرچە جاۋاب بېرىڭ.",
+    "tt": "Тик татарча жавап бир.",
 }
 
 _TON_WALLET = "UQA78muNWF-tW4bhePG8GMdXzj1RuByOtf1XAwZ9VDOBElSA"
@@ -438,7 +445,7 @@ _STRINGS: dict[str, dict[str, str]] = {
 
     # ── rate limiting ─────────────────────────────────────────────────────────
     "rate_limited": {
-        "en": "⏳ You're sending messages too fast. Please wait a moment.",
+    "en": "⏳ You're sending messages too fast. Please wait a moment.",
         "ru": "⏳ Вы отправляете сообщения слишком быстро. Подождите немного.",
         "de": "⏳ Du sendest Nachrichten zu schnell. Bitte kurz warten.",
         "fr": "⏳ Vous envoyez des messages trop vite. Patientez un instant.",
