@@ -220,6 +220,69 @@ def _build_result(
     )
 
 
+# ─── PRE-EMBEDDING SIGNAL PATTERNS ──────────────────────────────────────────
+# These run BEFORE pgvector embedding to catch well-known task types that
+# the embedding model may mismatch as QUESTION (triggering unwanted retrieval).
+# Covers: math, genetics, chemistry, physics, exam tasks.
+
+_MATH_TASK_SIGNALS: tuple[str, ...] = (
+    # Arithmetic / algebra
+    "решите уравнение", "решить уравнение", "найдите корни", "вычислите",
+    "найдите значение", "упростите выражение", "разложите на множители",
+    "найдите производную", "интеграл", "solve the equation", "find the value",
+    "calculate", "simplify", "factorise", "factorize", "derivative",
+    "integral", "berechne", "résoudre", "calcule", "hitung",
+    # Geometry
+    "площадь", "периметр", "объём", "угол треугольника", "найдите длину",
+    "площадь фигуры", "area of", "perimeter of", "volume of", "find the angle",
+    # Probability / combinatorics
+    "вероятность", "probability", "комбинации", "перестановки",
+    "combinations", "permutations", "wahrscheinlichkeit",
+)
+
+_EXAM_TASK_SIGNALS: tuple[str, ...] = (
+    # Biology / genetics
+    "генотип", "фенотип", "хромосом", "аллель", "доминантн", "рецессивн",
+    "сцеплен с x", "сцеплен с у", "x-хромосом", "y-хромосом", "дальтонизм",
+    "гемофилия", "наследован", "скрещивание", "f1", "f2", "расщепление",
+    "genotype", "phenotype", "chromosome", "allele", "dominant", "recessive",
+    "x-linked", "y-linked", "inheritance", "hemophilia", "colorblind",
+    "punnett", "offspring", "gamete", "гамет",
+    # Chemistry
+    "молярная масса", "степень окисления", "валентность", "реакция",
+    "уравнение реакции", "химическая формула", "molar mass", "oxidation",
+    "valence", "chemical equation", "балансировать",
+    # Physics
+    "скорость", "ускорение", "сила тока", "напряжение", "сопротивление",
+    "закон ома", "мощность", "импульс", "кинетическая энергия",
+    "velocity", "acceleration", "current", "voltage", "resistance",
+    "ohm's law", "momentum", "kinetic energy",
+    # Exam keywords
+    "огэ", "егэ", "впр", "определите генотип", "определите вероятность",
+    "составьте схему", "запишите генотип", "укажите генотип",
+    "oge", "ege", "determine the genotype", "find the probability",
+)
+
+def _pre_classify(text: str, lang: str) -> IntentResult | None:
+    """
+    Signal-based pre-classifier that runs before pgvector embedding.
+    Returns an IntentResult if a strong match is found, None otherwise.
+
+    Purpose: prevent well-known task types (genetics, math, physics, chemistry)
+    from falling through to QUESTION + retrieval, which causes the model to
+    search the web instead of reasoning through the problem.
+    """
+    lower = text.lower()
+
+    if any(s in lower for s in _EXAM_TASK_SIGNALS):
+        return _build_result(Intent.EXAM, 0.85, lang, text)
+
+    if any(s in lower for s in _MATH_TASK_SIGNALS):
+        return _build_result(Intent.MATH, 0.85, lang, text)
+
+    return None
+
+
 async def classify(
     text: str,
     lang: str = "en",
@@ -236,6 +299,17 @@ async def classify(
       - no match above MIN_CONFIDENCE
     """
     fallback = _build_result(Intent.QUESTION, 0.70, lang, text)
+
+    # ── pre-embedding signal check ────────────────────────────────────────────
+    # Catches math/science/exam tasks BEFORE embedding to prevent them
+    # from being misclassified as QUESTION and triggering web retrieval.
+    pre = _pre_classify(text, lang)
+    if pre is not None:
+        logger.info("classify: pre-signal match", extra={
+            "intent": pre.intent.value,
+            "confidence": pre.confidence,
+        })
+        return pre
 
     if supabase is None or hf_client is None:
         logger.warning("classify called without supabase/hf_client — using fallback")
