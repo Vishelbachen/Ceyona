@@ -14,12 +14,16 @@ _STRICT_INTENTS = {
     Intent.WEATHER,
     Intent.MAPS,
     Intent.MAPS_POI,
+    Intent.QUESTION,   # prevents hallucinations on hotel/place/fact queries
 }
 
 # Intents that benefit from context but can generate freely
 _HYBRID_INTENTS = {
     Intent.INSTRUCTION,
     Intent.CODE,
+    Intent.ANALYSIS,
+    Intent.EXAM,
+    Intent.MATH,
 }
 
 # Intents that generate freely — no grounding needed
