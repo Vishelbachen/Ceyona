@@ -71,7 +71,8 @@ _LINGUA_ISO: dict[Language, str] = {
     Language.JAPANESE: "ja",      Language.KOREAN: "ko",
     Language.POLISH: "pl",        Language.UKRAINIAN: "uk",
     Language.PERSIAN: "fa",       Language.DUTCH: "nl",
-    Language.SWEDISH: "sv",       Language.NORWEGIAN: "no",
+    Language.SWEDISH: "sv",       Language.BOKMAL: "no",
+    Language.NYNORSK: "no",
     Language.DANISH: "da",        Language.FINNISH: "fi",
     Language.CZECH: "cs",         Language.SLOVAK: "sk",
     Language.ROMANIAN: "ro",      Language.HUNGARIAN: "hu",
@@ -99,116 +100,6 @@ _LINGUA_ISO: dict[Language, str] = {
     Language.XHOSA: "xh",        Language.TSONGA: "ts",
 }
 
-
-def _detect_lang(update: dict) -> str:
-    """
-    Detect the language of the user's message using lingua.
-    Falls back to Telegram profile language_code if detection fails.
-    """
-    profile_lang = "en"
-    text = ""
-
-    for key in ("message", "edited_message", "callback_query"):
-        entry = update.get(key, {})
-        user = entry.get("from") or {}
-        code = user.get("language_code", "")
-        if code:
-            profile_lang = code.split("-")[0].lower()
-        if not text:
-            text = (entry.get("text") or entry.get("caption") or "").strip()
-
-    if not text or len(text) < 3:
-        return profile_lang
-
-    try:
-        detected = _detector.detect_language_of(text)
-        if detected is not None:
-            return _LINGUA_ISO.get(detected, profile_lang)
-    except Exception:
-        pass
-
-    return profile_lang
-
-
-# Script → language code mapping for script-based language detection.
-# Used when the message text contains non-Latin characters that unambiguously
-# identify the language, overriding the Telegram profile language_code.
-_SCRIPT_LANG_MAP: tuple[tuple[range, str], ...] = (
-    (range(0x0400, 0x0500), "ru"),   # Cyrillic → ru (refined below)
-    (range(0x0500, 0x0530), "ru"),   # Cyrillic supplement
-    (range(0x10A0, 0x10FF), "ka"),   # Georgian
-    (range(0x0530, 0x058F), "hy"),   # Armenian
-    (range(0x0600, 0x06FF), "ar"),   # Arabic
-    (range(0x0590, 0x05FF), "he"),   # Hebrew
-    (range(0x0900, 0x097F), "hi"),   # Devanagari
-    (range(0x0980, 0x09FF), "bn"),   # Bengali
-    (range(0x0600, 0x06FF), "fa"),   # Persian (overlaps Arabic — handled by profile)
-    (range(0x4E00, 0x9FFF), "zh"),   # CJK Unified (Chinese)
-    (range(0x3040, 0x30FF), "ja"),   # Hiragana/Katakana
-    (range(0xAC00, 0xD7AF), "ko"),   # Hangul
-    (range(0x0E00, 0x0E7F), "th"),   # Thai
-    (range(0x1200, 0x137F), "am"),   # Ethiopic
-    (range(0x1800, 0x18AF), "mn"),   # Mongolian script
-)
-
-# Cyrillic-script languages — disambiguated by profile language_code
-_CYRILLIC_LANGS: frozenset[str] = frozenset(
-    {"ru", "uk", "bg", "sr", "mk", "kk", "ky", "mn", "tg", "uz", "ba"}
-)
-
-
-# Languages written in Latin script that Telegram may misreport.
-# Matched by characteristic vocabulary — checked ONLY when script detection
-# returns None (i.e. the message is predominantly Latin-script).
-# Tuples of (lang_code, frozenset_of_signals).
-_LATIN_LANG_SIGNALS: tuple[tuple[str, frozenset[str]], ...] = (
-    ("ha", frozenset({
-        "yanayi", "yanzu", "wane", "ina", "gari", "ruwan", "zafi",
-        "sanyi", "saukar", "sama", "iska", "tsananin",
-    })),
-    ("yo", frozenset({
-        "ojo", "ojo ojo", "ise", "ilu", "omi", "afefe", "orun",
-        "igba", "bawo", "nibo", "kini",
-    })),
-    ("ig", frozenset({
-        "gini", "obi", "mmiri", "ikuku", "oge", "ebe", "oji",
-        "otutu", "okpomoku",
-    })),
-    ("sw", frozenset({
-        "hali ya hewa", "joto", "baridi", "upepo", "mvua",
-        "nchi", "mji", "sasa", "leo",
-    })),
-    ("id", frozenset({
-        "cuaca", "sekarang", "suhu", "angin", "hujan", "kota",
-        "hari", "malam", "pagi",
-    })),
-    ("ms", frozenset({
-        "cuaca", "sekarang", "suhu", "angin", "hujan", "bandar",
-        "hari ini", "petang", "pagi",
-    })),
-    ("vi", frozenset({
-        "thời tiết", "nhiệt độ", "gió", "mưa", "thành phố",
-        "bây giờ", "hôm nay",
-    })),
-    ("th", frozenset({
-        "อากาศ", "อุณหภูมิ", "ลม", "ฝน", "ตอนนี้", "วันนี้",
-    })),
-    ("fi", frozenset({
-        "sää", "lämpötila", "tuuli", "sade", "kaupunki", "nyt", "tänään",
-    })),
-    ("hu", frozenset({
-        "időjárás", "hőmérséklet", "szél", "eső", "város", "most", "ma",
-    })),
-    ("cs", frozenset({
-        "počasí", "teplota", "vítr", "déšť", "město", "nyní", "dnes",
-    })),
-    ("ro", frozenset({
-        "vreme", "temperatură", "vânt", "ploaie", "oraș", "acum", "azi",
-    })),
-    ("sk", frozenset({
-        "počasie", "teplota", "vietor", "dážď", "mesto", "teraz", "dnes",
-    })),
-)
 
 
 def _detect_lang_from_script(text: str, profile_lang: str) -> str | None:
