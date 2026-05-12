@@ -51,14 +51,83 @@ def _get_chat_id(update: dict) -> int | None:
     return msg.get("chat", {}).get("id")
 
 
+# Script → language code mapping for script-based language detection.
+# Used when the message text contains non-Latin characters that unambiguously
+# identify the language, overriding the Telegram profile language_code.
+_SCRIPT_LANG_MAP: tuple[tuple[range, str], ...] = (
+    (range(0x0400, 0x0500), "ru"),   # Cyrillic → ru (refined below)
+    (range(0x0500, 0x0530), "ru"),   # Cyrillic supplement
+    (range(0x10A0, 0x10FF), "ka"),   # Georgian
+    (range(0x0530, 0x058F), "hy"),   # Armenian
+    (range(0x0600, 0x06FF), "ar"),   # Arabic
+    (range(0x0590, 0x05FF), "he"),   # Hebrew
+    (range(0x0900, 0x097F), "hi"),   # Devanagari
+    (range(0x0980, 0x09FF), "bn"),   # Bengali
+    (range(0x0600, 0x06FF), "fa"),   # Persian (overlaps Arabic — handled by profile)
+    (range(0x4E00, 0x9FFF), "zh"),   # CJK Unified (Chinese)
+    (range(0x3040, 0x30FF), "ja"),   # Hiragana/Katakana
+    (range(0xAC00, 0xD7AF), "ko"),   # Hangul
+    (range(0x0E00, 0x0E7F), "th"),   # Thai
+    (range(0x1200, 0x137F), "am"),   # Ethiopic
+    (range(0x1800, 0x18AF), "mn"),   # Mongolian script
+)
+
+# Cyrillic-script languages — disambiguated by profile language_code
+_CYRILLIC_LANGS: frozenset[str] = frozenset(
+    {"ru", "uk", "bg", "sr", "mk", "kk", "ky", "mn", "tg", "uz", "ba"}
+)
+
+
+def _detect_lang_from_script(text: str, profile_lang: str) -> str | None:
+    """
+    Detect language from message script.
+    Returns a lang code if the script is unambiguous, None otherwise.
+    """
+    if not text or len(text) < 3:
+        return None
+    # Count characters in each script range
+    counts: dict[str, int] = {}
+    for ch in text:
+        cp = ord(ch)
+        for char_range, lang in _SCRIPT_LANG_MAP:
+            if cp in char_range:
+                counts[lang] = counts.get(lang, 0) + 1
+                break
+    if not counts:
+        return None
+    dominant = max(counts, key=lambda k: counts[k])
+    dominant_count = counts[dominant]
+    # Require at least 40% of text chars to be in this script
+    if dominant_count < max(3, len(text) * 0.4):
+        return None
+    # Cyrillic is shared — defer to profile lang if it's a Cyrillic language
+    if dominant == "ru" and profile_lang in _CYRILLIC_LANGS:
+        return profile_lang
+    return dominant
+
+
 def _detect_lang(update: dict) -> str:
+    # Step 1: get profile language from Telegram (user's app language)
+    profile_lang = "en"
+    text = ""
     for key in ("message", "edited_message", "callback_query"):
         entry = update.get(key, {})
         user = entry.get("from") or {}
         code = user.get("language_code", "")
         if code:
-            return code.split("-")[0].lower()
-    return "en"
+            profile_lang = code.split("-")[0].lower()
+        # Also grab text to detect script
+        if not text:
+            text = (entry.get("text") or entry.get("caption") or "").strip()
+
+    # Step 2: detect language from message script (overrides profile for unambiguous scripts)
+    # Rationale: Telegram language_code = UI language of the app, not the message language.
+    # A Georgian user writing in Georgian may have ru/en as their app language.
+    script_lang = _detect_lang_from_script(text, profile_lang)
+    if script_lang:
+        return script_lang
+
+    return profile_lang
 
 
 @router.post("/webhook")
