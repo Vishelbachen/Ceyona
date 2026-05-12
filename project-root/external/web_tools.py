@@ -6,7 +6,7 @@ import re
 import httpx
 
 from app.settings import settings
-from i18n.t import ow_lang as _ow_lang_fn
+from i18n.t import t as _t, ow_lang as _ow_lang_fn
 
 logger = logging.getLogger(__name__)
 
@@ -163,36 +163,8 @@ _WEATHER_ICON_MAP: dict[str, str] = {
     "50d": "🌫️", "50n": "🌫️",
 }
 
-_FEELS_LIKE: dict[str, str] = {
-    "en": "feels like", "ru": "ощущается как", "de": "gefühlt",
-    "fr": "ressenti",   "es": "sensación",      "pt": "sensação",
-    "it": "percepito",  "tr": "hissedilen",     "ar": "يبدو كأنه",
-    "zh": "体感",        "ja": "体感",            "ko": "체감",
-    "pl": "odczuwalna", "uk": "відчувається як", "fa": "احساس می‌شود",
-    "nl": "voelt als",  "sv": "känns som",      "no": "føles som",
-    "da": "føles som",  "fi": "tuntuu kuin",    "he": "מורגש כ",
-    "ka": "feels like", "hy": "feels like",
-}
 
-_HUMIDITY: dict[str, str] = {
-    "en": "Humidity",      "ru": "Влажность",    "de": "Luftfeuchtigkeit",
-    "fr": "Humidité",      "es": "Humedad",       "pt": "Umidade",
-    "it": "Umidità",       "tr": "Nem",           "ar": "الرطوبة",
-    "zh": "湿度",           "ja": "湿度",           "ko": "습도",
-    "pl": "Wilgotność",    "uk": "Вологість",     "fa": "رطوبت",
-    "nl": "Vochtigheid",   "sv": "Luftfuktighet", "no": "Luftfuktighet",
-    "da": "Luftfugtighed", "fi": "Kosteus",       "he": "לחות",
-    "ka": "Humidity",      "hy": "Humidity",
-}
 
-_WIND: dict[str, str] = {
-    "en": "Wind",   "ru": "Ветер",  "de": "Wind",  "fr": "Vent",
-    "es": "Viento", "pt": "Vento",  "it": "Vento", "tr": "Rüzgar",
-    "ar": "الرياح", "zh": "风速",   "ja": "風速",   "ko": "바람",
-    "pl": "Wiatr",  "uk": "Вітер",  "fa": "باد",   "nl": "Wind",
-    "sv": "Vind",   "no": "Vind",   "da": "Vind",  "fi": "Tuuli",
-    "he": "רוח",    "ka": "Wind",   "hy": "Wind",
-}
 
 
 # Locative/case suffixes for non-Slavic languages that OWM doesn't understand.
@@ -358,9 +330,9 @@ def _format_weather(d: dict, lang: str) -> str:
     emoji   = _WEATHER_ICON_MAP.get(icon, "🌤️")
     loc     = f"{city}, {country}" if country else city
 
-    fl  = _FEELS_LIKE.get(lang, _FEELS_LIKE["en"])
-    hum = _HUMIDITY.get(lang, _HUMIDITY["en"])
-    wnd = _WIND.get(lang, _WIND["en"])
+    fl  = _t("weather_feels_like", lang) or "feels like"
+    hum = _t("weather_humidity", lang)   or "Humidity"
+    wnd = _t("weather_wind", lang)       or "Wind"
 
     return (
         f"{emoji} {loc}\n"
