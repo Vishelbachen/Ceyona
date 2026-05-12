@@ -25,7 +25,6 @@ router = APIRouter()
 
 _TELEGRAM_API = f"https://api.telegram.org/bot{settings.bot_token}"
 
-# secret_token: only A-Z a-z 0-9 _ - allowed, max 256 chars
 _WEBHOOK_SECRET = re.sub(r"[^A-Za-z0-9_\-]", "_", settings.bot_token)[:256]
 
 
@@ -61,82 +60,86 @@ def _get_chat_id(update: dict) -> int | None:
 
 
 # ─── LINGUA ISO MAP ───────────────────────────────────────────────────────────
-# Only includes Language attributes that exist in lingua 2.x.
-# Full list verified against lingua-language-detector source.
-# Do NOT add languages without confirming they exist in the installed version.
+# All 75 Language attributes verified against lingua-language-detector 2.x enum.
+# Languages without a bot-supported ISO code map to closest supported lang or
+# are omitted (detector returns them but _LINGUA_ISO.get() falls back to profile_lang).
 _LINGUA_ISO: dict[Language, str] = {
-    Language.ENGLISH:    "en",
-    Language.RUSSIAN:    "ru",
-    Language.GERMAN:     "de",
-    Language.FRENCH:     "fr",
-    Language.SPANISH:    "es",
-    Language.PORTUGUESE: "pt",
-    Language.ITALIAN:    "it",
-    Language.TURKISH:    "tr",
-    Language.ARABIC:     "ar",
-    Language.CHINESE:    "zh",
-    Language.JAPANESE:   "ja",
-    Language.KOREAN:     "ko",
-    Language.POLISH:     "pl",
-    Language.UKRAINIAN:  "uk",
-    Language.PERSIAN:    "fa",
-    Language.DUTCH:      "nl",
-    Language.SWEDISH:    "sv",
-    Language.BOKMAL:     "no",
-    Language.NYNORSK:    "no",
-    Language.DANISH:     "da",
-    Language.FINNISH:    "fi",
-    Language.CZECH:      "cs",
-    Language.SLOVAK:     "sk",
-    Language.ROMANIAN:   "ro",
-    Language.HUNGARIAN:  "hu",
-    Language.BULGARIAN:  "bg",
-    Language.CROATIAN:   "hr",
-    Language.SERBIAN:    "sr",
-    Language.HEBREW:     "he",
-    Language.VIETNAMESE: "vi",
-    Language.THAI:       "th",
-    Language.INDONESIAN: "id",
-    Language.MALAY:      "ms",
-    Language.HINDI:      "hi",
-    Language.BENGALI:    "bn",
-    Language.URDU:       "ur",
-    Language.GEORGIAN:   "ka",
-    Language.ARMENIAN:   "hy",
-    Language.MONGOLIAN:  "mn",
-    Language.SWAHILI:    "sw",
     Language.AFRIKAANS:  "af",
     Language.ALBANIAN:   "sq",
+    Language.ARABIC:     "ar",
+    Language.ARMENIAN:   "hy",
     Language.AZERBAIJANI:"az",
     Language.BASQUE:     "eu",
     Language.BELARUSIAN: "be",
+    Language.BENGALI:    "bn",
+    Language.BOKMAL:     "no",
     Language.BOSNIAN:    "bs",
+    Language.BULGARIAN:  "bg",
     Language.CATALAN:    "ca",
+    Language.CHINESE:    "zh",
+    Language.CROATIAN:   "hr",
+    Language.CZECH:      "cs",
+    Language.DANISH:     "da",
+    Language.DUTCH:      "nl",
+    Language.ENGLISH:    "en",
+    Language.ESPERANTO:  "eo",
     Language.ESTONIAN:   "et",
-    Language.IRISH:      "ga",
+    Language.FINNISH:    "fi",
+    Language.FRENCH:     "fr",
+    Language.GANDA:      "lg",   # Luganda — no bot support, falls back to profile
+    Language.GEORGIAN:   "ka",
+    Language.GERMAN:     "de",
+    Language.GREEK:      "el",
+    Language.GUJARATI:   "gu",
+    Language.HEBREW:     "he",
+    Language.HINDI:      "hi",
+    Language.HUNGARIAN:  "hu",
     Language.ICELANDIC:  "is",
+    Language.INDONESIAN: "id",
+    Language.IRISH:      "ga",
+    Language.ITALIAN:    "it",
+    Language.JAPANESE:   "ja",
     Language.KAZAKH:     "kk",
+    Language.KOREAN:     "ko",
+    Language.LATIN:      "la",
     Language.LATVIAN:    "lv",
     Language.LITHUANIAN: "lt",
     Language.MACEDONIAN: "mk",
-    Language.SLOVENIAN:  "sl",
+    Language.MALAY:      "ms",
+    Language.MAORI:      "mi",
+    Language.MARATHI:    "mr",
+    Language.MONGOLIAN:  "mn",
+    Language.NYNORSK:    "no",
+    Language.PERSIAN:    "fa",
+    Language.POLISH:     "pl",
+    Language.PORTUGUESE: "pt",
+    Language.PUNJABI:    "pa",
+    Language.ROMANIAN:   "ro",
+    Language.RUSSIAN:    "ru",
+    Language.SERBIAN:    "sr",
+    Language.SHONA:      "sn",
+    Language.SLOVAK:     "sk",
+    Language.SLOVENE:    "sl",
+    Language.SOMALI:     "so",
+    Language.SOTHO:      "st",
+    Language.SPANISH:    "es",
+    Language.SWAHILI:    "sw",
+    Language.SWEDISH:    "sv",
     Language.TAGALOG:    "tl",
     Language.TAMIL:      "ta",
     Language.TELUGU:     "te",
-    Language.UZBEK:      "uz",
+    Language.THAI:       "th",
+    Language.TSONGA:     "ts",
+    Language.TSWANA:     "tn",
+    Language.TURKISH:    "tr",
+    Language.UKRAINIAN:  "uk",
+    Language.URDU:       "ur",
+    Language.VIETNAMESE: "vi",
     Language.WELSH:      "cy",
+    Language.XHOSA:      "xh",
     Language.YORUBA:     "yo",
     Language.ZULU:       "zu",
-    Language.LATIN:      "la",
-    Language.SOMALI:     "so",
-    Language.SHONA:      "sn",
-    Language.XHOSA:      "xh",
 }
-
-# Languages that use Cyrillic script — needed for script-based disambiguation
-_CYRILLIC_LANGS = frozenset({
-    "ru", "uk", "bg", "sr", "mk", "be", "kk", "mn", "ky", "tg",
-})
 
 
 def _detect_lang(update: dict) -> str:
@@ -144,9 +147,9 @@ def _detect_lang(update: dict) -> str:
     Detect language of incoming message.
 
     Priority:
-      1. lingua detection on message text (most accurate)
-      2. Telegram profile language_code (app language, not message language)
-      3. Fallback to "en"
+      1. lingua detection on message text (75 languages)
+      2. Telegram profile language_code (UI language, fallback)
+      3. "en" as final fallback
     """
     text = ""
     profile_lang = "en"
@@ -163,7 +166,6 @@ def _detect_lang(update: dict) -> str:
     if not text or len(text) < 3:
         return profile_lang
 
-    # lingua detection — covers 75 languages reliably
     try:
         detected = _detector.detect_language_of(text)
         if detected is not None:
@@ -181,7 +183,6 @@ async def telegram_webhook(
     request: Request,
     x_telegram_bot_api_secret_token: str | None = Header(default=None),
 ) -> dict:
-    # ── secret token check ────────────────────────────────────────────────────
     if x_telegram_bot_api_secret_token:
         if not verify_webhook_secret(x_telegram_bot_api_secret_token, _WEBHOOK_SECRET):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
