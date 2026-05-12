@@ -1,13 +1,3 @@
-# Downloads a Telegram photo and sends it to a Groq vision model.
-# Uses raw httpx to call Groq REST API directly (avoids SDK Pydantic issues).
-#
-# Pipeline:
-#   Photo → llama-4-scout (EXTRACTION ONLY — no solving, no answering)
-#         ↓
-#         VisionResult(text, needs_pipeline)
-#         ↓
-#   needs_pipeline=False → direct response (descriptive / conversational)
-#   needs_pipeline=True  → text forwarded into main pipeline (EPK decides tier)
 from __future__ import annotations
 
 import base64
