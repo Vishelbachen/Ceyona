@@ -15,6 +15,8 @@ _REQUIRED = [
     "supabase_url",
     "supabase_service_role_key",
     "redis_url",
+    "serpapi_key",   # required: search, maps_poi, hotel/place queries
+    "mapbox_token",  # required: geocoding, maps
 ]
 
 
