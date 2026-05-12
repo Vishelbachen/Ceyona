@@ -300,3 +300,50 @@ async def handle_message(
             logger.error("History save failed", extra={"error": str(exc)})
 
     return result
+
+# ── save history ──────────────────────────────────────────────────────────
+    if history_store is not None and not result.denied:
+        try:
+            await history_store.append(user_id, "user", text)
+            if result.text:
+                await history_store.append(user_id, "assistant", result.text)
+        except Exception as exc:
+            logger.error("History save failed", extra={"error": str(exc)})
+
+    # ── meta layer: reflection + memory_audit (async side-channel) ────────────
+    # Pure observability — never blocks the response, never raises.
+    try:
+        import asyncio
+        from meta.reflection import ReflectionInput, reflect
+        from meta.memory_audit import MemorySnapshot, audit
+
+        # Build reflection input from result
+        ref_input = ReflectionInput(
+            intent=str(result.epk_decision),  # use actual intent if available
+            lang=lang,
+            tier=str(result.tier),
+            model=result.model or "",
+            response_text=result.text or "",
+            response_truncated=len(result.text or "") >= 4096,
+            cost_usd=result.usage.cost_usd,
+            was_degraded_mode=str(result.epk_decision) == "DEGRADED_MODE",
+            safety_blocked=result.deny_reason == "safety_block",
+            user_id=user_id,
+        )
+        report = reflect(ref_input)
+        logger.info("Reflection", extra=report.to_dict())
+
+        # Build memory snapshot for audit
+        snap = MemorySnapshot(
+            user_id=user_id,
+            history_turn_count=len(conversation_history) if conversation_history else 0,
+            snapshot_available=True,
+        )
+        audit_report = audit(snap)
+        if not audit_report.is_healthy():
+            logger.warning("Memory audit", extra=audit_report.to_dict())
+
+    except Exception as exc:
+        logger.warning("Meta layer failed (non-critical)", extra={"error": str(exc)})
+
+    return result
