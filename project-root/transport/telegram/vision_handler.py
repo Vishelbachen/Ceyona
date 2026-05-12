@@ -195,7 +195,7 @@ async def handle_vision(
     intent_result  = None
     try:
         from cognition.intent_engine import classify, Intent
-        intent_result  = classify(classify_input, lang=lang)
+        intent_result  = await classify(classify_input, lang=lang)
         needs_pipeline = intent_result.intent != Intent.CONVERSATION
     except Exception as exc:
         # If classifier fails, default to pipeline for safety.
