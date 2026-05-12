@@ -40,6 +40,8 @@ async def lifespan(app: FastAPI):
     app.state.redis = state["redis"]
     app.state.supabase = state["supabase"]
     app.state.settings = state["settings"]
+    from llm.hf_client import hf_client
+    app.state.hf_client = hf_client
 
     # ── rate limiter ──────────────────────────────────────
     from security.rate_limiter import init_rate_limiter
