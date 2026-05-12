@@ -211,6 +211,11 @@ async def handle_message(
             })
 
     # ── web search fallback ───────────────────────────────────────────────────
+    # quick_intent is computed here and reused as forced_intent so the
+    # orchestrator never classifies the same text twice, and never runs
+    # a second SerpAPI call for the same SEARCH query.
+    _forced_intent: object = locals().get("_vision_intent_result")
+
     if not retrieved_context:
         try:
             from cognition.intent_engine import classify
@@ -240,11 +245,15 @@ async def handle_message(
                         "chars":   len(web_result),
                     })
 
+            # Pass quick_intent as forced_intent so orchestrator skips both
+            # classify() and _run_tool() — we already did both above.
+            # This eliminates the double SerpAPI call visible in deploy logs.
+            _forced_intent = quick_intent
+
         except Exception as exc:
             logger.warning("Web search failed", extra={"error": str(exc)})
 
     # ── run pipeline ──────────────────────────────────────────────────────────
-    _forced_intent = locals().get("_vision_intent_result")
 
     request = OrchestratorRequest(
         user_message=text,
