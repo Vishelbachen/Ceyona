@@ -131,34 +131,53 @@ _WEATHER_ICON_MAP: dict[str, str] = {
 }
 
 _FEELS_LIKE: dict[str, str] = {
-    "en": "feels like", "ru": "ощущается как", "de": "gefühlt",
-    "fr": "ressenti",   "es": "sensación",      "pt": "sensação",
-    "it": "percepito",  "tr": "hissedilen",     "ar": "يبدو كأنه",
-    "zh": "体感",        "ja": "体感",            "ko": "체감",
-    "pl": "odczuwalna", "uk": "відчувається як", "fa": "احساس می‌شود",
-    "nl": "voelt als",  "sv": "känns som",      "no": "føles som",
-    "da": "føles som",  "fi": "tuntuu kuin",    "he": "מורגש כ",
-    "ka": "feels like", "hy": "feels like",
+    "en": "feels like",     "ru": "ощущается как",   "de": "gefühlt",
+    "fr": "ressenti",       "es": "sensación",         "pt": "sensação",
+    "it": "percepito",      "tr": "hissedilen",        "ar": "يبدو كأنه",
+    "zh": "体感",            "ja": "体感",              "ko": "체감",
+    "pl": "odczuwalna",     "uk": "відчувається як",   "fa": "احساس می‌شود",
+    "nl": "voelt als",      "sv": "känns som",         "no": "føles som",
+    "da": "føles som",      "fi": "tuntuu kuin",       "he": "מורגש כ",
+    "ka": "შეგრძნება",      "hy": "զգացվում է",        "az": "hiss edilir",
+    "kk": "сезіледі",       "uz": "his qilinadi",      "mn": "мэдрэмж",
+    "sw": "hisi",           "am": "ይሰማዋል",            "hi": "महसूस होता है",
+    "bn": "অনুভূত হয়",     "ur": "محسوس ہوتا ہے",    "id": "terasa",
+    "ms": "terasa",         "th": "รู้สึกเหมือน",      "vi": "cảm giác như",
+    "bg": "усеща се",       "hr": "osjeća se",         "sr": "осећа се",
+    "cs": "pocitová",       "sk": "pocitová",          "ro": "simțită",
+    "hu": "hőérzet",        "ha": "yana ji kamar",
 }
 
 _HUMIDITY: dict[str, str] = {
-    "en": "Humidity",      "ru": "Влажность",    "de": "Luftfeuchtigkeit",
-    "fr": "Humidité",      "es": "Humedad",       "pt": "Umidade",
-    "it": "Umidità",       "tr": "Nem",           "ar": "الرطوبة",
-    "zh": "湿度",           "ja": "湿度",           "ko": "습도",
-    "pl": "Wilgotność",    "uk": "Вологість",     "fa": "رطوبت",
-    "nl": "Vochtigheid",   "sv": "Luftfuktighet", "no": "Luftfuktighet",
-    "da": "Luftfugtighed", "fi": "Kosteus",       "he": "לחות",
-    "ka": "Humidity",      "hy": "Humidity",
+    "en": "Humidity",       "ru": "Влажность",         "de": "Luftfeuchtigkeit",
+    "fr": "Humidité",       "es": "Humedad",            "pt": "Umidade",
+    "it": "Umidità",        "tr": "Nem",                "ar": "الرطوبة",
+    "zh": "湿度",            "ja": "湿度",               "ko": "습도",
+    "pl": "Wilgotność",     "uk": "Вологість",          "fa": "رطوبت",
+    "nl": "Vochtigheid",    "sv": "Luftfuktighet",      "no": "Luftfuktighet",
+    "da": "Luftfugtighed",  "fi": "Kosteus",            "he": "לחות",
+    "ka": "ტენიანობა",      "hy": "խոնավություն",       "az": "rütubət",
+    "kk": "ылғалдылық",     "uz": "namlik",             "mn": "чийгшил",
+    "sw": "unyevu",         "am": "እርጥበት",             "hi": "आर्द्रता",
+    "bn": "আর্দ্রতা",       "ur": "نمی",                "id": "Kelembapan",
+    "ms": "Kelembapan",     "th": "ความชื้น",            "vi": "Độ ẩm",
+    "bg": "Влажност",       "hr": "Vlažnost",           "sr": "Влажност",
+    "cs": "Vlhkost",        "sk": "Vlhkosť",            "ro": "Umiditate",
+    "hu": "Páratartalom",   "ha": "Danshi",
 }
 
 _WIND: dict[str, str] = {
-    "en": "Wind",   "ru": "Ветер",  "de": "Wind",  "fr": "Vent",
-    "es": "Viento", "pt": "Vento",  "it": "Vento", "tr": "Rüzgar",
-    "ar": "الرياح", "zh": "风速",   "ja": "風速",   "ko": "바람",
-    "pl": "Wiatr",  "uk": "Вітер",  "fa": "باد",   "nl": "Wind",
-    "sv": "Vind",   "no": "Vind",   "da": "Vind",  "fi": "Tuuli",
-    "he": "רוח",    "ka": "Wind",   "hy": "Wind",
+    "en": "Wind",    "ru": "Ветер",   "de": "Wind",    "fr": "Vent",
+    "es": "Viento",  "pt": "Vento",   "it": "Vento",   "tr": "Rüzgar",
+    "ar": "الرياح",  "zh": "风速",    "ja": "風速",    "ko": "바람",
+    "pl": "Wiatr",   "uk": "Вітер",   "fa": "باد",     "nl": "Wind",
+    "sv": "Vind",    "no": "Vind",    "da": "Vind",    "fi": "Tuuli",
+    "he": "רוח",     "ka": "ქარი",   "hy": "քամի",    "az": "külək",
+    "kk": "жел",     "uz": "shamol",  "mn": "салхи",   "sw": "upepo",
+    "am": "ነፋስ",    "hi": "हवा",     "bn": "বাতাস",   "ur": "ہوا",
+    "id": "Angin",   "ms": "Angin",   "th": "ลม",       "vi": "Gió",
+    "bg": "Вятър",   "hr": "Vjetar",  "sr": "Ветар",   "cs": "Vítr",
+    "sk": "Vietor",  "ro": "Vânt",    "hu": "Szél",    "ha": "Iska",
 }
 
 
@@ -389,15 +408,43 @@ async def _search(query: str, lang: str = "en") -> str:
 
             results = []
 
+            _DIRECT_ANSWER_LABEL: dict[str, str] = {
+                "en": "Direct answer", "ru": "Прямой ответ",  "de": "Direkte Antwort",
+                "fr": "Réponse directe","es": "Respuesta directa","pt": "Resposta direta",
+                "it": "Risposta diretta","tr": "Doğrudan cevap","ar": "إجابة مباشرة",
+                "zh": "直接答案",       "ja": "直接回答",       "ko": "직접 답변",
+                "pl": "Bezpośrednia odpowiedź","uk": "Пряма відповідь","fa": "پاسخ مستقیم",
+                "nl": "Direct antwoord","sv": "Direkt svar",  "no": "Direkte svar",
+                "da": "Direkte svar",  "fi": "Suora vastaus", "he": "תשובה ישירה",
+                "ka": "პირდაპირი პასუხი","hy": "Ուղղակի պատասխան","az": "Birbaşa cavab",
+                "kk": "Тікелей жауап","uz": "To'g'ridan-to'g'ri javob","mn": "Шууд хариулт",
+                "ha": "Amsa kai tsaye","hi": "सीधा उत्तर",   "id": "Jawaban langsung",
+            }
+            _SUMMARY_LABEL: dict[str, str] = {
+                "en": "Summary",  "ru": "Краткое описание", "de": "Zusammenfassung",
+                "fr": "Résumé",   "es": "Resumen",          "pt": "Resumo",
+                "it": "Sommario", "tr": "Özet",             "ar": "ملخص",
+                "zh": "摘要",      "ja": "概要",             "ko": "요약",
+                "pl": "Podsumowanie","uk": "Короткий опис", "fa": "خلاصه",
+                "nl": "Samenvatting","sv": "Sammanfattning","no": "Sammendrag",
+                "da": "Oversigt", "fi": "Yhteenveto",       "he": "סיכום",
+                "ka": "შეჯამება", "hy": "Ամփոփում",         "az": "Xülasə",
+                "kk": "Қысқаша",  "uz": "Xulosa",           "mn": "Хураангуй",
+                "ha": "Takaitawa", "hi": "सारांश",          "id": "Ringkasan",
+            }
+
+            da_label  = _DIRECT_ANSWER_LABEL.get(lang, _DIRECT_ANSWER_LABEL["en"])
+            sum_label = _SUMMARY_LABEL.get(lang, _SUMMARY_LABEL["en"])
+
             ab = data.get("answer_box", {})
             if ab.get("answer"):
-                results.append(f"Direct answer: {ab['answer']}")
+                results.append(f"{da_label}: {ab['answer']}")
             elif ab.get("snippet"):
-                results.append(f"Direct answer: {ab['snippet']}")
+                results.append(f"{da_label}: {ab['snippet']}")
 
             kg = data.get("knowledge_graph", {})
             if kg.get("description"):
-                results.append(f"Summary: {kg['description']}")
+                results.append(f"{sum_label}: {kg['description']}")
 
             for item in data.get("organic_results", [])[:5]:
                 title   = item.get("title", "")
@@ -411,6 +458,25 @@ async def _search(query: str, lang: str = "en") -> str:
     except Exception as exc:
         logger.error("Search API failed", extra={"query": query[:50], "error": str(exc)})
         return ""
+
+
+_COORD_LABEL: dict[str, str] = {
+    "en": "Coordinates", "ru": "Координаты",  "de": "Koordinaten",
+    "fr": "Coordonnées", "es": "Coordenadas", "pt": "Coordenadas",
+    "it": "Coordinate",  "tr": "Koordinatlar","ar": "الإحداثيات",
+    "zh": "坐标",         "ja": "座標",        "ko": "좌표",
+    "pl": "Współrzędne", "uk": "Координати",  "fa": "مختصات",
+    "nl": "Coördinaten", "sv": "Koordinater", "no": "Koordinater",
+    "da": "Koordinater", "fi": "Koordinaatit","he": "קואורדינטות",
+    "ka": "კოორდინატები","hy": "կոորդինատներ","az": "Koordinatlar",
+    "kk": "Координаттар","uz": "Koordinatlar","mn": "Координат",
+    "sw": "Kuratibu",    "am": "መጋጠሚያ",      "hi": "निर्देशांक",
+    "bn": "স্থানাঙ্ক",  "ur": "متناسق",      "id": "Koordinat",
+    "ms": "Koordinat",   "th": "พิกัด",        "vi": "Tọa độ",
+    "bg": "Координати",  "hr": "Koordinate",   "sr": "Координате",
+    "cs": "Souřadnice",  "sk": "Súradnice",    "ro": "Coordonate",
+    "hu": "Koordináták", "ha": "Matsayi",
+}
 
 
 async def _maps(query: str, lang: str = "en") -> str:
@@ -441,14 +507,96 @@ async def _maps(query: str, lang: str = "en") -> str:
             lon  = f["geometry"]["coordinates"][0]
             lat  = f["geometry"]["coordinates"][1]
 
+            coord = _COORD_LABEL.get(lang, _COORD_LABEL["en"])
             return (
                 f"📍 {name}\n"
-                f"Координаты: {lat:.5f}, {lon:.5f}\n"
+                f"{coord}: {lat:.5f}, {lon:.5f}\n"
                 f"Google Maps: https://maps.google.com/?q={lat},{lon}"
             )
     except Exception as exc:
         logger.error("Maps API failed", extra={"query": query[:50], "error": str(exc)})
         return ""
+
+
+_POI_LABELS: dict[str, dict[str, str]] = {
+    "address": {
+        "en": "Address",    "ru": "Адрес",       "de": "Adresse",
+        "fr": "Adresse",    "es": "Dirección",   "pt": "Endereço",
+        "it": "Indirizzo",  "tr": "Adres",       "ar": "العنوان",
+        "zh": "地址",        "ja": "住所",        "ko": "주소",
+        "pl": "Adres",      "uk": "Адреса",      "fa": "آدرس",
+        "nl": "Adres",      "sv": "Adress",      "no": "Adresse",
+        "da": "Adresse",    "fi": "Osoite",      "he": "כתובת",
+        "ka": "მისამართი",  "hy": "հասցե",       "az": "Ünvan",
+        "kk": "Мекенжай",   "uz": "Manzil",      "mn": "Хаяг",
+        "sw": "Anwani",     "am": "አድራሻ",       "hi": "पता",
+        "bn": "ঠিকানা",    "ur": "پتہ",         "id": "Alamat",
+        "ms": "Alamat",     "th": "ที่อยู่",      "vi": "Địa chỉ",
+        "bg": "Адрес",      "hr": "Adresa",      "sr": "Адреса",
+        "cs": "Adresa",     "sk": "Adresa",      "ro": "Adresă",
+        "hu": "Cím",        "ha": "Adireshi",
+    },
+    "rating": {
+        "en": "Rating",    "ru": "Рейтинг",    "de": "Bewertung",
+        "fr": "Note",      "es": "Puntuación", "pt": "Avaliação",
+        "it": "Valutazione","tr": "Puan",      "ar": "التقييم",
+        "zh": "评分",       "ja": "評価",       "ko": "평점",
+        "pl": "Ocena",     "uk": "Рейтинг",    "fa": "امتیاز",
+        "nl": "Beoordeling","sv": "Betyg",     "no": "Vurdering",
+        "da": "Vurdering", "fi": "Arvio",      "he": "דירוג",
+        "ka": "რეიტინგი",  "hy": "Վարկանիш",  "az": "Reytinq",
+        "kk": "Рейтинг",   "uz": "Reyting",   "mn": "Үнэлгээ",
+        "sw": "Ukadiriaji", "am": "ደረጃ",      "hi": "रेटिंग",
+        "bn": "রেটিং",    "ur": "ریٹنگ",      "id": "Penilaian",
+        "ms": "Penilaian", "th": "คะแนน",      "vi": "Đánh giá",
+        "bg": "Оценка",    "hr": "Ocjena",     "sr": "Оцена",
+        "cs": "Hodnocení", "sk": "Hodnotenie", "ro": "Evaluare",
+        "hu": "Értékelés", "ha": "Darajar",
+    },
+    "hours": {
+        "en": "Hours",     "ru": "Часы работы", "de": "Öffnungszeiten",
+        "fr": "Horaires",  "es": "Horario",     "pt": "Horário",
+        "it": "Orari",     "tr": "Çalışma Saatleri","ar": "ساعات العمل",
+        "zh": "营业时间",   "ja": "営業時間",    "ko": "영업시간",
+        "pl": "Godziny",   "uk": "Години роботи","fa": "ساعات کاری",
+        "nl": "Openingstijden","sv": "Öppettider","no": "Åpningstider",
+        "da": "Åbningstider","fi": "Aukioloajat","he": "שעות פעילות",
+        "ka": "სამუშაო საათები","hy": "Աշխատանքային ժամեր","az": "İş saatları",
+        "kk": "Жұмыс уақыты","uz": "Ish vaqti", "mn": "Ажиллах цаг",
+        "sw": "Masaa ya kazi","am": "የሥራ ሰዓቶች","hi": "कार्य समय",
+        "bn": "কার্যসময়",  "ur": "اوقات کار",  "id": "Jam buka",
+        "ms": "Waktu operasi","th": "เวลาทำการ","vi": "Giờ mở cửa",
+        "bg": "Работно време","hr": "Radno vrijeme","sr": "Радно време",
+        "cs": "Pracovní doba","sk": "Pracovná doba","ro": "Program",
+        "hu": "Nyitvatartás","ha": "Awannin aiki",
+    },
+    "phone": {
+        "en": "Phone",  "ru": "Телефон", "de": "Telefon", "fr": "Téléphone",
+        "es": "Teléfono","pt": "Telefone","it": "Telefono","tr": "Telefon",
+        "ar": "الهاتف", "zh": "电话",    "ja": "電話",    "ko": "전화",
+        "pl": "Telefon","uk": "Телефон", "fa": "تلفن",    "nl": "Telefoon",
+        "sv": "Telefon","no": "Telefon", "da": "Telefon", "fi": "Puhelin",
+        "he": "טלפון",  "ka": "ტელეფონი","hy": "Հեռախոս","az": "Telefon",
+        "kk": "Телефон","uz": "Telefon", "mn": "Утас",    "sw": "Simu",
+        "am": "ስልክ",   "hi": "फ़ोन",    "bn": "ফোন",    "ur": "فون",
+        "id": "Telepon","ms": "Telefon", "th": "โทรศัพท์","vi": "Điện thoại",
+        "bg": "Телефон","hr": "Telefon", "sr": "Телефон", "cs": "Telefon",
+        "sk": "Telefón","ro": "Telefon", "hu": "Telefon", "ha": "Waya",
+    },
+    "website": {
+        "en": "Website",  "ru": "Сайт",     "de": "Website",  "fr": "Site web",
+        "es": "Sitio web","pt": "Site",      "it": "Sito web", "tr": "Web sitesi",
+        "ar": "الموقع",   "zh": "网站",      "ja": "ウェブサイト","ko": "웹사이트",
+        "pl": "Strona",   "uk": "Сайт",      "fa": "وبسایت",  "nl": "Website",
+        "sv": "Hemsida",  "no": "Nettsted",  "da": "Hjemmeside","fi": "Verkkosivusto",
+        "he": "אתר אינטרנט","ka": "ვებსაიტი","hy": "Կայք",   "az": "Vebsayt",
+        "kk": "Сайт",     "uz": "Sayt",      "mn": "Вэбсайт", "sw": "Tovuti",
+        "am": "ድረ-ገጽ",   "hi": "वेबसाइट",   "bn": "ওয়েবসাইট","ur": "ویب سائٹ",
+        "id": "Situs web","ms": "Laman web", "th": "เว็บไซต์", "vi": "Trang web",
+        "bg": "Уебсайт",  "hr": "Web stranica","sr": "Веб сајт","cs": "Web",
+        "sk": "Web",      "ro": "Website",   "hu": "Weboldal", "ha": "Gidan yanar gizo",
+    },
+}
 
 
 async def _maps_poi(query: str, lang: str = "en") -> str:
@@ -479,11 +627,12 @@ async def _maps_poi(query: str, lang: str = "en") -> str:
                 website = place.get("website", "")
 
                 parts = [f"📍 {name}"]
-                if address: parts.append(f"Address: {address}")
-                if rating:  parts.append(f"Rating: {rating}★")
-                if hours:   parts.append(f"Hours: {hours}")
-                if phone:   parts.append(f"Phone: {phone}")
-                if website: parts.append(f"Website: {website}")
+                lbl = {k: v.get(lang, v["en"]) for k, v in _POI_LABELS.items()}
+                if address: parts.append(f"{lbl['address']}: {address}")
+                if rating:  parts.append(f"{lbl['rating']}: {rating}★")
+                if hours:   parts.append(f"{lbl['hours']}: {hours}")
+                if phone:   parts.append(f"{lbl['phone']}: {phone}")
+                if website: parts.append(f"{lbl['website']}: {website}")
                 results.append("\n".join(parts))
 
             return "\n\n---\n\n".join(results)
