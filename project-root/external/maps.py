@@ -9,6 +9,28 @@ from app.settings import settings
 
 logger = logging.getLogger(__name__)
 
+
+# ─── LOCATION EXTRACTOR ───────────────────────────────────────────────────────
+
+def _extract_location(query: str) -> str:
+    """Extract location name from a maps query in any language."""
+    lower = query.lower()
+    for kw in (
+        "где находится", "где находятся", "местоположение", "адрес",
+        "покажи на карте", "координаты", "покажи местоположение",
+        "where is", "location of", "address of", "where are",
+        "show on map", "coordinates of",
+        "wo ist", "où est", "dónde está",
+    ):
+        idx = lower.find(kw)
+        if idx != -1:
+            loc = query[idx + len(kw):].strip()
+            loc = __import__('re').split(r"[?,\n]", loc)[0].strip()
+            if loc:
+                return loc
+    return query.strip()
+
+
 _BASE_URL       = "https://api.mapbox.com/geocoding/v5/mapbox.places"
 _DIRECTIONS_URL = "https://api.mapbox.com/directions/v5/mapbox"
 _TIMEOUT        = 10.0
