@@ -14,7 +14,6 @@ _STRICT_INTENTS = {
     Intent.WEATHER,
     Intent.MAPS,
     Intent.MAPS_POI,
-    Intent.QUESTION,   # prevents hallucinations on hotel/place/fact queries
 }
 
 # Intents that benefit from context but can generate freely
@@ -36,10 +35,6 @@ _GENERATIVE_INTENTS = {
 
 
 def resolve_truth_mode(intent: Intent | None) -> TruthMode:
-    """
-    Determine TruthMode based on intent.
-    Pure function. No I/O.
-    """
     if intent is None:
         return TruthMode.HYBRID
     if intent in _STRICT_INTENTS:
@@ -50,11 +45,6 @@ def resolve_truth_mode(intent: Intent | None) -> TruthMode:
 
 
 def assemble(req: ContextRequest) -> AssembledContext:
-    """
-    Deterministic context assembly.
-    Concatenates retrieved documents up to max_chars limit.
-    No ranking. No inference. Formatting only.
-    """
     parts: list[str] = []
     total = 0
     truncated = False
