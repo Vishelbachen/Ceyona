@@ -25,6 +25,7 @@ _STRICT_INTENTS = {
     Intent.WEATHER,
     Intent.MAPS,
     Intent.MAPS_POI,
+    Intent.MAPS_ROUTE,
 }
 
 # No-data fallback message key (goes to synthesizer)
