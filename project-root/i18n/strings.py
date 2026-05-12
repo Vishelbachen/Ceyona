@@ -717,10 +717,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "pl": "odczuwalna", "uk": "відчувається як", "fa": "احساس می‌شود",
         "nl": "voelt als",  "sv": "känns som",      "no": "føles som",
         "da": "føles som",  "fi": "tuntuu kuin",    "he": "מורגש כ",
-        "ka": "feels like", "hy": "feels like",     "az": "hiss olunur",
-        "kk": "сезіледі",   "uz": "seziladi",       "hi": "feels like",
+        "ka": "ისეთივეა, როგორც", "hy": "ինչպես",    "az": "hiss olunur",
+        "kk": "сезіледі",   "uz": "seziladi",       "hi": "जैसा लगता है",
         "id": "terasa",     "ms": "terasa",         "th": "รู้สึกเหมือน",
-        "vi": "cảm giác",   "mn": "мэдрэмж",        "sw": "feels like",
+        "vi": "cảm giác",   "mn": "мэдрэмж",        "sw": "inajisikia kama",
         "bg": "усеща се",   "hr": "osjeća se",      "sr": "осећа се",
         "cs": "pocitově",   "sk": "cíti sa",        "ro": "se simte ca",
         "hu": "érzetben",
@@ -733,7 +733,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "pl": "Wilgotność",    "uk": "Вологість",     "fa": "رطوبت",
         "nl": "Vochtigheid",   "sv": "Luftfuktighet", "no": "Luftfuktighet",
         "da": "Luftfugtighed", "fi": "Kosteus",       "he": "לחות",
-        "ka": "Humidity",      "hy": "Խոնավություն",  "az": "Rütubət",
+        "ka": "ტენიანობა",     "hy": "Խոնավություն",  "az": "Rütubət",
         "kk": "Ылғалдылық",    "uz": "Namlik",        "hi": "आर्द्रता",
         "id": "Kelembaban",    "ms": "Kelembapan",    "th": "ความชื้น",
         "vi": "Độ ẩm",         "mn": "Чийглэг",       "sw": "Unyevu",
@@ -910,4 +910,3 @@ def is_supported(lang: str) -> bool:
 
 def normalize_lang(lang: str) -> str:
     return lang if lang in SUPPORTED_LANGS else "en"
-        
