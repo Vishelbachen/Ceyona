@@ -62,40 +62,7 @@ class IntentResult:
 
 # ─── LANGUAGE LAYER ───────────────────────────────────────────────────────────
 
-_LANG_NAMES: dict[str, str] = {
-    "ru": "Russian",        "en": "English",         "de": "German",
-    "fr": "French",         "es": "Spanish",          "pt": "Portuguese",
-    "it": "Italian",        "tr": "Turkish",          "ar": "Arabic",
-    "zh": "Chinese",        "ja": "Japanese",         "ko": "Korean",
-    "pl": "Polish",         "uk": "Ukrainian",        "fa": "Persian (Farsi)",
-    "nl": "Dutch",          "sv": "Swedish",          "no": "Norwegian",
-    "da": "Danish",         "fi": "Finnish",          "cs": "Czech",
-    "sk": "Slovak",         "ro": "Romanian",         "hu": "Hungarian",
-    "bg": "Bulgarian",      "hr": "Croatian",         "sr": "Serbian",
-    "he": "Hebrew",         "vi": "Vietnamese",       "th": "Thai",
-    "id": "Indonesian",     "ms": "Malay",            "hi": "Hindi",
-    "bn": "Bengali",        "ur": "Urdu",             "az": "Azerbaijani",
-    "kk": "Kazakh",         "uz": "Uzbek",            "ka": "Georgian",
-    "hy": "Armenian",       "mn": "Mongolian",        "sw": "Swahili",
-    "am": "Amharic",
-}
-
-
-def _lang_directive(lang: str) -> str:
-    lang_name = _LANG_NAMES.get(lang)
-    if lang_name:
-        return (
-            f"CRITICAL INSTRUCTION: The user is writing in {lang_name}. "
-            f"You MUST respond EXCLUSIVELY in {lang_name}. "
-            f"Do NOT use any English words, phrases, or sentences unless the user wrote in English. "
-            f"Do NOT mix languages. Every single word of your response must be in {lang_name}. "
-            "This instruction overrides everything else.\n\n"
-        )
-    return (
-        "CRITICAL INSTRUCTION: Detect the language of the user's message. "
-        "Respond EXCLUSIVELY in that same language. "
-        "Do NOT mix languages or use English unless the user wrote in English.\n\n"
-    )
+from i18n.t import lang_instruction as _lang_directive
 
 
 # ─── SYSTEM PROMPTS ───────────────────────────────────────────────────────────
