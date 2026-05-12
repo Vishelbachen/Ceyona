@@ -57,6 +57,54 @@ async def _web_search_fallback(query: str, lang: str = "en") -> str:
     return await _search(query, lang)
 
 
+async def _maps_route(query: str, lang: str = "en") -> str:
+    """
+    Build a driving route between two locations using Mapbox Directions API.
+
+    Expects query like "от аэропорта Воронежа до центра" or "from X to Y".
+    Extracts origin/destination then calls MapsService.get_route().
+    Falls back to graceful not-found message on any failure.
+    """
+    from external.maps import maps_service
+    origin, destination = _extract_route_endpoints(query, lang)
+
+    if not origin or not destination:
+        # Can't parse endpoints — fall back to web search for transport info
+        return await _search(query, lang)
+
+    route = await maps_service.get_route(origin=origin, destination=destination, lang=lang)
+    if not route:
+        return maps_service.format_route_not_found(lang=lang)
+
+    return maps_service.format_route(route, lang=lang)
+
+
+def _extract_route_endpoints(query: str, lang: str = "en") -> tuple[str, str]:
+    """
+    Extract (origin, destination) from a routing query.
+    Returns ("", "") if parsing fails.
+    """
+    import re
+    q = query.strip()
+
+    # Russian: "от X до Y" / "из X в Y" / "с X до Y"
+    m = re.search(r"(?:от|из|с)\s+(.+?)\s+(?:до|в|к)\s+(.+?)(?:\?|$)", q, re.IGNORECASE)
+    if m:
+        return m.group(1).strip(), m.group(2).strip()
+
+    # English: "from X to Y"
+    m = re.search(r"from\s+(.+?)\s+to\s+(.+?)(?:\?|$)", q, re.IGNORECASE)
+    if m:
+        return m.group(1).strip(), m.group(2).strip()
+
+    # German: "von X nach Y"
+    m = re.search(r"von\s+(.+?)\s+nach\s+(.+?)(?:\?|$)", q, re.IGNORECASE)
+    if m:
+        return m.group(1).strip(), m.group(2).strip()
+
+    return "", ""
+
+
 # ─── DISPATCHER ───────────────────────────────────────────────────────────────
 
 _TOOL_MAP = {
@@ -64,6 +112,7 @@ _TOOL_MAP = {
     "search":              _search,
     "maps":                _maps,
     "maps_poi":            _maps_poi,
+    "maps_route":          _maps_route,
     "web_search":          _web_search_fallback,
     "web_search_fallback": _web_search_fallback,
 }
