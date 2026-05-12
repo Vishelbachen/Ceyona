@@ -91,6 +91,7 @@ async def telegram_webhook(
     user_id = auth.user_id
     lang = _detect_lang(update)
     supabase = request.app.state.supabase
+    hf_client = request.app.state.hf_client
 
     # ── rate limiting ─────────────────────────────────────
     from cognition.response_synthesizer import get_system_message
@@ -122,7 +123,8 @@ async def telegram_webhook(
                 user_balance=user_balance,
                 lang=lang,
                 supabase=supabase,
-                redis=request.app.state.redis, 
+                redis=request.app.state.redis,
+                hf_client=hf_client,
             )
         except Exception as exc:
             logger.error("handle_message crashed", extra={"error": str(exc)})
