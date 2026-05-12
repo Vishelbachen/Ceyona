@@ -1,3 +1,20 @@
+"""
+cognition/intent_examples.py
+
+Стартовые примеры для embedding-based классификатора интентов.
+Роль: данные для первичного сида таблицы intent_examples в Supabase.
+
+Используется:
+  - cognition/intent_engine.py  →  seed_intent_examples() при старте
+  - Supabase RPC match_intent   →  classify() при каждом запросе
+
+Добавление нового интента = добавить строки в INTENT_EXAMPLES.
+Никакой другой код трогать не нужно.
+
+Примеры многоязычные намеренно — BGE-large векторизует их,
+Multilingual Normalization (до EPK) нормализует входящий запрос.
+Косинусное сходство работает корректно между языками.
+"""
 from __future__ import annotations
 
 # ─── EXAMPLES ─────────────────────────────────────────────────────────────────
