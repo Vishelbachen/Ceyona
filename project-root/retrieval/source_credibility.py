@@ -36,8 +36,12 @@ _DOMAIN_TRUST: dict[str, TrustTier] = {
     "transport.mos.ru":    TrustTier.AUTHORITATIVE,
     "russianrail.com":     TrustTier.AUTHORITATIVE,
     "rzd.ru":              TrustTier.AUTHORITATIVE,   # РЖД
-    "aviasales.ru":        TrustTier.TRUSTED,
     "aeroflot.ru":         TrustTier.AUTHORITATIVE,
+    # City transport portals — authoritative for local route/stop data
+    "voronezh.ru":         TrustTier.AUTHORITATIVE,   # Официальный сайт Воронежа
+    "goroda-rossii.ru":    TrustTier.NEUTRAL,          # aggregator, not official
+    "transportsb.ru":      TrustTier.AUTHORITATIVE,   # Воронежтранс
+    "vmeste-rf.ru":        TrustTier.NEUTRAL,
 
     # ── TRUSTED ───────────────────────────────────────────────────────────────
     "wikipedia.org":       TrustTier.TRUSTED,
@@ -46,10 +50,12 @@ _DOMAIN_TRUST: dict[str, TrustTier] = {
     "booking.com":         TrustTier.TRUSTED,
     "hotels.com":          TrustTier.TRUSTED,
     "tripadvisor.com":     TrustTier.TRUSTED,
+    "tripadvisor.ru":      TrustTier.TRUSTED,
     "yandex.ru":           TrustTier.TRUSTED,
     "yandex.maps":         TrustTier.TRUSTED,
     "2gis.ru":             TrustTier.TRUSTED,
     "google.com":          TrustTier.TRUSTED,
+    "aviasales.ru":        TrustTier.TRUSTED,
 
     # ── BLOCKED — Route / transport SEO aggregators ───────────────────────────
     # These generate invented specifics: fake bus numbers, non-existent stops,
