@@ -30,6 +30,17 @@ async def bootstrap() -> dict:
     setup_dispatcher(event_bus, store)
     logger.info("EventDispatcher ready")
 
+    # ─── Intent examples seed ───────────────────────────────────────────────
+    # Runs only if table is empty. No-op on subsequent starts.
+    try:
+        from cognition.intent_examples import seed_intent_examples
+        from llm.hf_client import hf_client
+        seeded = await seed_intent_examples(supabase, hf_client)
+        if seeded:
+            logger.info("intent_examples seeded", extra={"count": seeded})
+    except Exception as exc:
+        logger.error("intent_examples seed failed — classify will use fallback", extra={"error": str(exc)})
+
     return {
         "redis": redis,
         "supabase": supabase,
