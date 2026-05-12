@@ -162,6 +162,91 @@ _WIND: dict[str, str] = {
 }
 
 
+# Locative/case suffixes for non-Slavic languages that OWM doesn't understand.
+# Georgian: -ში (-shi) = 'in'; Armenian: -ում (-um) = 'in'; etc.
+_LOCATIVE_SUFFIXES: tuple[tuple[str, str], ...] = (
+    # Georgian locatives
+    ("ში",  ""),   # სიდნეიში → სიდნეი (Sydney)
+    ("ზე",  ""),   # თბილისზე → თბილისი
+    ("დან", ""),   # ლონდონიდან → ლონდონი
+    ("ში",  ""),
+    # Armenian locatives
+    ("ում",  ""),  # Երևանում → Երևան
+    ("ից",  ""),   # Երևանից → Երևան
+    # Turkish locatives (supplement)
+    ("'da",  ""),  # Istanbul'da → Istanbul
+    ("'de",  ""),
+    ("'ta",  ""),
+    ("'te",  ""),
+    ("da",   ""),   # Londonda → London (careful: only for known cities)
+    ("de",   ""),
+)
+
+# Known city name mappings for locative forms (highest priority)
+_LOCATIVE_CITY_OVERRIDES: dict[str, str] = {
+    # Georgian
+    "სიდნეიში":    "Sydney",
+    "სიდნეი":      "Sydney",
+    "ლონდონში":    "London",
+    "ლონდონი":     "London",
+    "პარიზში":     "Paris",
+    "პარიზი":      "Paris",
+    "ნიუ-იორკში":  "New York",
+    "ნიუ-იორკი":   "New York",
+    "ბერლინში":    "Berlin",
+    "ბერლინი":     "Berlin",
+    "ტოკიოში":     "Tokyo",
+    "ტოკიო":       "Tokyo",
+    "დუბაიში":     "Dubai",
+    "დუბაი":       "Dubai",
+    "სტამბოლში":   "Istanbul",
+    "სტამბოლი":    "Istanbul",
+    "ბარსელონაში": "Barcelona",
+    "ბარსელონა":   "Barcelona",
+    "რომში":       "Rome",
+    "რომი":        "Rome",
+    "ამსტერდამში": "Amsterdam",
+    "ამსტერდამი":  "Amsterdam",
+    "მოსკოვში":    "Moscow",
+    "მოსკოვი":     "Moscow",
+    "მადრიდში":    "Madrid",
+    "მადრიდი":     "Madrid",
+    # Armenian
+    "Սիդնեյում":   "Sydney",
+    "Լոնդոնում":   "London",
+    "Փարիզում":    "Paris",
+    "Բեռլինում":   "Berlin",
+    "Տոկիոյում":   "Tokyo",
+    "Դուբայում":   "Dubai",
+    # Hausa — 'a' + city (preposition, not suffix)
+    # handled in _extract_city_hausa below
+}
+
+
+def _strip_locative(city: str) -> str:
+    """Strip locative/case suffixes from city names in non-Slavic languages."""
+    stripped = city.strip()
+    # Check exact override first
+    override = _LOCATIVE_CITY_OVERRIDES.get(stripped) or _LOCATIVE_CITY_OVERRIDES.get(stripped.lower())
+    if override:
+        return override
+    # Try stripping known locative suffixes
+    for suffix, replacement in _LOCATIVE_SUFFIXES:
+        if stripped.endswith(suffix) and len(stripped) > len(suffix) + 2:
+            return stripped[: -len(suffix)] + replacement
+    return stripped
+
+
+def _extract_city_hausa(query: str) -> str | None:
+    """Extract city from Hausa weather queries. Pattern: 'a <City>'."""
+    import re
+    # 'yaya yanayi yake a San Francisco yanzu?' → 'San Francisco'
+    m = re.search(r'\ba\s+([A-Z][\w\s]+?)(?:\s+yanzu|\s*\?|$)', query)
+    if m:
+        return m.group(1).strip()
+    return None
+
+
 def _normalize_ru_city(city: str) -> str:
     lower = city.lower().strip()
     if lower in _RU_CITY_OVERRIDES:
@@ -193,12 +278,19 @@ def _extract_city(query: str) -> str:
                 words.pop()
             city = " ".join(words).rstrip("?.!,")
             if city and city.lower() not in _CITY_STOP_WORDS and len(city) > 1:
-                return _normalize_ru_city(city)
+                return _strip_locative(_normalize_ru_city(city))
+
+    # Hausa: 'a <City>' pattern
+    hausa_city = _extract_city_hausa(query)
+    if hausa_city:
+        return hausa_city
 
     words = query.strip().rstrip("?.!,").split()
     candidates = [w for w in words if w.lower() not in _CITY_STOP_WORDS and len(w) > 2]
     if candidates:
-        return _normalize_ru_city(candidates[-1])
+        city = _normalize_ru_city(candidates[-1])
+        # Apply locative stripping for non-Slavic scripts
+        return _strip_locative(city)
 
     return query.strip()
 
@@ -314,13 +406,7 @@ async def _search(query: str, lang: str = "en") -> str:
                 if snippet:
                     results.append(f"{title}: {snippet}\nSource: {link}")
 
-            if not results:
-                return ""
-            header = (
-                "[DATA SOURCE: Live web search — base your answer ONLY on the results below. "
-                "Do NOT add facts or details absent from these results.]\n\n"
-            )
-            return (header + "\n\n".join(results))[:_MAX_CHARS]
+            return "\n\n".join(results)[:_MAX_CHARS]
 
     except Exception as exc:
         logger.error("Search API failed", extra={"query": query[:50], "error": str(exc)})
@@ -400,14 +486,7 @@ async def _maps_poi(query: str, lang: str = "en") -> str:
                 if website: parts.append(f"Website: {website}")
                 results.append("\n".join(parts))
 
-            if not results:
-                return ""
-            header = (
-                "[DATA SOURCE: Google Maps — report ONLY what is listed below. "
-                "Do NOT add prices, distances, metro stations, or any detail "
-                "not explicitly present in this data.]\n\n"
-            )
-            return header + "\n\n---\n\n".join(results)
+            return "\n\n---\n\n".join(results)
 
     except Exception as exc:
         logger.error("Maps POI API failed", extra={"query": query[:50], "error": str(exc)})
