@@ -164,13 +164,9 @@ _BASE_PROMPTS: dict[Intent, str] = {
     Intent.SEARCH: (
         "You are a research assistant with access to live web search results. "
         "The search results in your context were fetched from the web RIGHT NOW. "
-        "STRICT RULES: "
-        "1. Base your answer ONLY on the search results in context. "
-        "2. NEVER add facts, figures, names, addresses, prices, or details "
-        "   that are not explicitly stated in the provided results. "
-        "3. If the results are insufficient to answer — say so and cite what you found. "
-        "4. Cite sources for specific claims. "
+        "Summarise them clearly, cite sources, and answer the user's question directly. "
         "NEVER say you cannot search or that your data is outdated — you have live results. "
+        "NEVER make up information — only use what is in the context. "
         + _NO_CUTOFF + _FORMAT_RULES
     ),
     Intent.MAPS: (
@@ -182,16 +178,8 @@ _BASE_PROMPTS: dict[Intent, str] = {
     ),
     Intent.MAPS_POI: (
         "You are a location assistant specialising in points of interest. "
-        "The place data in your context is LIVE — fetched from Google Maps right now. "
-        "STRICT RULES — follow exactly: "
-        "1. Report ONLY what is explicitly present in the context data. "
-        "2. NEVER invent, estimate, or assume ANY detail not in the data: "
-        "   no prices, distances, metro stations, landmarks, or descriptions "
-        "   unless they appear verbatim in the context. "
-        "3. If a field (price, hours, phone) is absent from the data — omit it entirely. "
-        "   Do NOT write 'unknown', do NOT guess, do NOT fill in from memory. "
-        "4. Present what you have: name, address, rating, hours, contacts — as-is. "
-        "5. If the context is empty or contains no relevant places — say so honestly. "
+        "The place data in your context is current — fetched from Google Maps right now. "
+        "Present it clearly: name, address, rating, hours, contacts. "
         "NEVER say you cannot find place information — you have it in context. "
         + _NO_CUTOFF + _FORMAT_RULES
     ),
@@ -232,6 +220,64 @@ def _build_result(
     )
 
 
+# ─── WEATHER PRE-SIGNAL PATTERNS ─────────────────────────────────────────────
+# Covers languages that pgvector may misroute (low-resource, non-Latin scripts).
+# Matched BEFORE embedding to prevent weather queries routing to maps/search.
+_WEATHER_PRE_SIGNALS: tuple[str, ...] = (
+    # Hausa
+    "yanayi", "ruwan sama", "zafi", "sanyi", "hadari",
+    # Hausa question starters for weather
+    "yaya yanayi", "menene yanayin",
+    # Swahili
+    "hali ya hewa", "mvua", "joto", "baridi", "upepo",
+    "jua", "dhoruba", "theluji", "hewa",
+    # Amharic
+    "የአየር ሁኔታ", "ዝናብ", "ሙቀት", "ቅዝቃዜ", "ነፋስ",
+    # Georgian locative stripping handled in web_tools — signal on root
+    "ამინდი", "ამინდია", "ამინდ",
+    "ტემპერატურ", "წვიმ", "თოვლ", "ქარ",
+    # Armenian
+    "եղանակ", "անձրև", "ջերմ", "ցուրտ", "քամի",
+    # Mongolian
+    "цаг агаар", "бороо", "цас", "салхи", "дулаан", "хүйтэн",
+    # Bengali
+    "আবহাওয়া", "বৃষ্টি", "গরম", "ঠান্ডা", "বাতাস",
+    # Urdu
+    "موسم", "بارش", "گرمی", "سردی", "ہوا",
+    # Kazakh
+    "ауа райы", "жаңбыр", "қар", "жел", "ыстық", "суық",
+    # Uzbek
+    "ob-havo", "yomg'ir", "qor", "shamol", "issiq", "sovuq",
+    # Azerbaijani
+    "hava", "yağış", "qar", "külək", "isti", "soyuq",
+    # Malay/Indonesian (supplement to existing)
+    "cuaca", "hujan", "panas", "dingin", "angin",
+    # Vietnamese
+    "thời tiết", "mưa", "nóng", "lạnh", "gió",
+    # Thai
+    "อากาศ", "ฝน", "ร้อน", "เย็น", "ลม",
+)
+
+_WEATHER_PRE_QUESTION_STARTERS: tuple[str, ...] = (
+    # Hausa — "how is the weather"
+    "yaya", "menene",
+    # Swahili
+    "hali ya", "je hali",
+    # Georgian — "what is the weather"
+    "რა ამინდ", "როგორია ამინდ",
+    # Armenian
+    "ինչ եղա", "ինչպիսի եղա",
+)
+
+
+def _pre_classify_weather(text: str, lang: str) -> bool:
+    """Return True if text is clearly a weather query (for low-resource langs)."""
+    lower = text.lower()
+    has_signal  = any(s in lower for s in _WEATHER_PRE_SIGNALS)
+    has_starter = any(lower.startswith(s) for s in _WEATHER_PRE_QUESTION_STARTERS)
+    return has_signal or has_starter
+
+
 async def classify(
     text: str,
     lang: str = "en",
@@ -248,6 +294,11 @@ async def classify(
       - no match above MIN_CONFIDENCE
     """
     fallback = _build_result(Intent.QUESTION, 0.70, lang, text)
+
+    # ── pre-embedding signal check ────────────────────────────────────────────
+    if _pre_classify_weather(text, lang):
+        logger.info("classify: weather pre-signal match", extra={"lang": lang})
+        return _build_result(Intent.WEATHER, 0.88, lang, text)
 
     if supabase is None or hf_client is None:
         logger.warning("classify called without supabase/hf_client — using fallback")
