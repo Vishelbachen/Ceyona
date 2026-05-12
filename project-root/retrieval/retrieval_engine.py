@@ -36,7 +36,12 @@ class RetrievalEngine:
         self._rerank_cache      = rerank_cache
 
     async def retrieve(self, query: RetrievalQuery) -> RetrievalResult:
-        return await retrieve(query)
+        # Pass supabase_store so pgvector similarity search actually fires.
+        # Previously retrieve(query) was called without supabase → always empty.
+        supabase_client = None
+        if self._supabase_store is not None:
+            supabase_client = self._supabase_store._db
+        return await retrieve(query, supabase=supabase_client, user_id=query.user_id)
 
 
 # ─── FUNCTION-BASED API (internal) ────────────────────────────────────────────
@@ -44,15 +49,20 @@ class RetrievalEngine:
 async def retrieve(
     query: RetrievalQuery,
     redis=None,
+    supabase=None,
+    user_id: str | None = None,
 ) -> RetrievalResult:
     """
     ONLY entry point for all retrieval operations.
     Returns ranked document set. No interpretation.
+
+    pgvector similarity search fires when supabase + user_id are provided.
+    Falls back gracefully to empty candidates if unavailable.
     """
-    clean_query     = preprocess(query.text)
+    clean_query      = preprocess(query.text)
     embedding_tokens = 0
-    rerank_tokens   = 0
-    cache_hit       = False
+    rerank_tokens    = 0
+    cache_hit        = False
 
     # ── embedding ─────────────────────────────────────────────────────────────
     use_fast = query.embedding_type == "small"
@@ -69,14 +79,52 @@ async def retrieve(
 
     embedding_tokens = dense_result.tokens_used
 
-    # ── memory similarity search ───────────────────────────────────────────────
-    candidates: list[str] = []
+    # ── memory similarity search via pgvector ─────────────────────────────────
+    # BUG FIX: previously candidates was always [], pgvector was never called.
+    # Now we invoke SupabaseStore.similarity_search() with the fresh embedding.
+    candidates: list[tuple[str, float]] = []
+
+    effective_user_id = user_id or getattr(query, "user_id", None)
+
+    if supabase is not None and effective_user_id is not None and dense_result.embedding:
+        try:
+            from memory.supabase_store import SupabaseStore
+            store = SupabaseStore(supabase)
+            records = await store.similarity_search(
+                embedding=dense_result.embedding,
+                user_id=str(effective_user_id),
+                limit=query.top_k,
+                threshold=0.7,
+            )
+            candidates = [(r.content, 1.0) for r in records]
+            logger.info(
+                "pgvector similarity search completed",
+                extra={
+                    "user_id":    str(effective_user_id),
+                    "candidates": len(candidates),
+                },
+            )
+        except Exception as exc:
+            logger.error(
+                "pgvector similarity search failed — continuing without memory",
+                extra={"error": str(exc)},
+            )
+            candidates = []
+    else:
+        logger.debug(
+            "pgvector skipped",
+            extra={
+                "has_supabase":  supabase is not None,
+                "has_user_id":   effective_user_id is not None,
+                "has_embedding": bool(dense_result.embedding),
+            },
+        )
 
     # ── rerank if candidates available ────────────────────────────────────────
     if candidates:
-        reranked     = await cross_encoder.rerank(clean_query, candidates)
+        reranked      = await cross_encoder.rerank(clean_query, candidates)
         rerank_tokens = max(1, len(candidates) * len(clean_query) // 100)
-        top          = reranked[: query.rerank_top_k]
+        top           = reranked[: query.rerank_top_k]
     else:
         top = []
 
