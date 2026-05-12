@@ -223,10 +223,12 @@ async def handle_message(
             )
             intent_value = quick_intent.intent.value
 
-            if intent_value not in _NO_SEARCH_INTENTS:
-                tool = intent_value if intent_value in ("weather", "maps", "maps_poi") else "search"
+            # weather / maps / maps_poi are handled by orchestrator._run_tool().
+            # Running them here too causes doubled output — skip them.
+            _ORCHESTRATOR_TOOLS = {"weather", "maps", "maps_poi"}
+            if intent_value not in _NO_SEARCH_INTENTS and intent_value not in _ORCHESTRATOR_TOOLS:
                 web_result = await run_tool(
-                    tool_name=tool,
+                    tool_name="search",
                     params={"query": text, "lang": lang},
                     lang=lang,
                 )
