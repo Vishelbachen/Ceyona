@@ -78,6 +78,60 @@ _CYRILLIC_LANGS: frozenset[str] = frozenset(
 )
 
 
+# Languages written in Latin script that Telegram may misreport.
+# Matched by characteristic vocabulary — checked ONLY when script detection
+# returns None (i.e. the message is predominantly Latin-script).
+# Tuples of (lang_code, frozenset_of_signals).
+_LATIN_LANG_SIGNALS: tuple[tuple[str, frozenset[str]], ...] = (
+    ("ha", frozenset({
+        "yanayi", "yanzu", "wane", "ina", "gari", "ruwan", "zafi",
+        "sanyi", "saukar", "sama", "iska", "tsananin",
+    })),
+    ("yo", frozenset({
+        "ojo", "ojo ojo", "ise", "ilu", "omi", "afefe", "orun",
+        "igba", "bawo", "nibo", "kini",
+    })),
+    ("ig", frozenset({
+        "gini", "obi", "mmiri", "ikuku", "oge", "ebe", "oji",
+        "otutu", "okpomoku",
+    })),
+    ("sw", frozenset({
+        "hali ya hewa", "joto", "baridi", "upepo", "mvua",
+        "nchi", "mji", "sasa", "leo",
+    })),
+    ("id", frozenset({
+        "cuaca", "sekarang", "suhu", "angin", "hujan", "kota",
+        "hari", "malam", "pagi",
+    })),
+    ("ms", frozenset({
+        "cuaca", "sekarang", "suhu", "angin", "hujan", "bandar",
+        "hari ini", "petang", "pagi",
+    })),
+    ("vi", frozenset({
+        "thời tiết", "nhiệt độ", "gió", "mưa", "thành phố",
+        "bây giờ", "hôm nay",
+    })),
+    ("th", frozenset({
+        "อากาศ", "อุณหภูมิ", "ลม", "ฝน", "ตอนนี้", "วันนี้",
+    })),
+    ("fi", frozenset({
+        "sää", "lämpötila", "tuuli", "sade", "kaupunki", "nyt", "tänään",
+    })),
+    ("hu", frozenset({
+        "időjárás", "hőmérséklet", "szél", "eső", "város", "most", "ma",
+    })),
+    ("cs", frozenset({
+        "počasí", "teplota", "vítr", "déšť", "město", "nyní", "dnes",
+    })),
+    ("ro", frozenset({
+        "vreme", "temperatură", "vânt", "ploaie", "oraș", "acum", "azi",
+    })),
+    ("sk", frozenset({
+        "počasie", "teplota", "vietor", "dážď", "mesto", "teraz", "dnes",
+    })),
+)
+
+
 def _detect_lang_from_script(text: str, profile_lang: str) -> str | None:
     """
     Detect language from message script.
@@ -126,6 +180,15 @@ def _detect_lang(update: dict) -> str:
     script_lang = _detect_lang_from_script(text, profile_lang)
     if script_lang:
         return script_lang
+
+    # Step 3: keyword detection for Latin-script languages that Telegram may
+    # misreport (e.g. a Hausa speaker with app language set to English).
+    # Only fires when script detection returned None (pure Latin text).
+    if text:
+        lower_text = text.lower()
+        for lang_code, signals in _LATIN_LANG_SIGNALS:
+            if any(sig in lower_text for sig in signals):
+                return lang_code
 
     return profile_lang
 
