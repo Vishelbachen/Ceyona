@@ -3,12 +3,21 @@ import re
 
 import httpx
 from fastapi import APIRouter, Header, HTTPException, Request, status
+from lingua import Language, LanguageDetectorBuilder
 
 from app.settings import settings
 from transport.telegram.auth_middleware import verify_update, verify_webhook_secret
 from transport.telegram.callback_handler import CallbackAction, parse_callback
 from transport.telegram.message_router import UpdateType, classify_update
 from transport.telegram.update_handler import handle_message
+
+# Build detector once at import time (expensive operation)
+_detector = (
+    LanguageDetectorBuilder
+    .from_all_languages()
+    .with_minimum_relative_distance(0.15)
+    .build()
+)
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +58,76 @@ def _get_chat_id(update: dict) -> int | None:
     cq = update.get("callback_query", {})
     msg = cq.get("message", {})
     return msg.get("chat", {}).get("id")
+
+
+# ─── LINGUA ISO MAP ───────────────────────────────────────────────────────────
+# Maps lingua Language enum → ISO 639-1 code used by the rest of the system.
+_LINGUA_ISO: dict[Language, str] = {
+    Language.ENGLISH: "en",       Language.RUSSIAN: "ru",
+    Language.GERMAN: "de",        Language.FRENCH: "fr",
+    Language.SPANISH: "es",       Language.PORTUGUESE: "pt",
+    Language.ITALIAN: "it",       Language.TURKISH: "tr",
+    Language.ARABIC: "ar",        Language.CHINESE: "zh",
+    Language.JAPANESE: "ja",      Language.KOREAN: "ko",
+    Language.POLISH: "pl",        Language.UKRAINIAN: "uk",
+    Language.PERSIAN: "fa",       Language.DUTCH: "nl",
+    Language.SWEDISH: "sv",       Language.NORWEGIAN: "no",
+    Language.DANISH: "da",        Language.FINNISH: "fi",
+    Language.CZECH: "cs",         Language.SLOVAK: "sk",
+    Language.ROMANIAN: "ro",      Language.HUNGARIAN: "hu",
+    Language.BULGARIAN: "bg",     Language.CROATIAN: "hr",
+    Language.SERBIAN: "sr",       Language.HEBREW: "he",
+    Language.VIETNAMESE: "vi",    Language.THAI: "th",
+    Language.INDONESIAN: "id",    Language.MALAY: "ms",
+    Language.HINDI: "hi",         Language.BENGALI: "bn",
+    Language.URDU: "ur",          Language.GEORGIAN: "ka",
+    Language.ARMENIAN: "hy",      Language.MONGOLIAN: "mn",
+    Language.SWAHILI: "sw",       Language.AFRIKAANS: "af",
+    Language.ALBANIAN: "sq",      Language.AZERBAIJANI: "az",
+    Language.BASQUE: "eu",        Language.BELARUSIAN: "be",
+    Language.BOSNIAN: "bs",       Language.CATALAN: "ca",
+    Language.ESTONIAN: "et",      Language.IRISH: "ga",
+    Language.ICELANDIC: "is",     Language.KAZAKH: "kk",
+    Language.LATVIAN: "lv",       Language.LITHUANIAN: "lt",
+    Language.MACEDONIAN: "mk",    Language.MALTESE: "mt",
+    Language.SLOVENIAN: "sl",     Language.TAGALOG: "tl",
+    Language.TAMIL: "ta",         Language.TELUGU: "te",
+    Language.UZBEK: "uz",         Language.WELSH: "cy",
+    Language.YORUBA: "yo",        Language.ZULU: "zu",
+    Language.LATIN: "la",         Language.ESPERANTO: "eo",
+    Language.SOMALI: "so",        Language.SHONA: "sn",
+    Language.XHOSA: "xh",        Language.TSONGA: "ts",
+}
+
+
+def _detect_lang(update: dict) -> str:
+    """
+    Detect the language of the user's message using lingua.
+    Falls back to Telegram profile language_code if detection fails.
+    """
+    profile_lang = "en"
+    text = ""
+
+    for key in ("message", "edited_message", "callback_query"):
+        entry = update.get(key, {})
+        user = entry.get("from") or {}
+        code = user.get("language_code", "")
+        if code:
+            profile_lang = code.split("-")[0].lower()
+        if not text:
+            text = (entry.get("text") or entry.get("caption") or "").strip()
+
+    if not text or len(text) < 3:
+        return profile_lang
+
+    try:
+        detected = _detector.detect_language_of(text)
+        if detected is not None:
+            return _LINGUA_ISO.get(detected, profile_lang)
+    except Exception:
+        pass
+
+    return profile_lang
 
 
 # Script → language code mapping for script-based language detection.
