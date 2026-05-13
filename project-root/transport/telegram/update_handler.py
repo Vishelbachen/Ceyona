@@ -230,7 +230,7 @@ async def handle_message(
 
             # weather / maps / maps_poi are handled by orchestrator._run_tool().
             # Running them here too causes doubled output — skip them.
-            _ORCHESTRATOR_TOOLS = {"weather", "maps", "maps_poi"}
+            _ORCHESTRATOR_TOOLS = {"weather", "maps", "maps_poi", "maps_route"}
             if intent_value not in _NO_SEARCH_INTENTS and intent_value not in _ORCHESTRATOR_TOOLS:
                 web_result = await run_tool(
                     tool_name="search",
