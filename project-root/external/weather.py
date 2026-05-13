@@ -1,11 +1,8 @@
-"""
-external/weather.py
-
 OpenWeatherMap API client + city name extractor.
 
 Роль:
   - WeatherService: получение погоды по названию города
-  - _extract_city(): парсинг города из свободного текста запроса
+  - _extract_city(): парсинг города из свободного текста — делегирует LLM (Groq)
   - Синглтон weather_service используется через web_tools.py
 
 Импортируется:
@@ -13,8 +10,8 @@ OpenWeatherMap API client + city name extractor.
 """
 from __future__ import annotations
 
+import json
 import logging
-import re
 
 import httpx
 
@@ -28,6 +25,7 @@ _TIMEOUT  = 10.0
 
 
 # ─── RUSSIAN CASE NORMALIZATION ───────────────────────────────────────────────
+# Kept here because it's pure normalization logic, not i18n.
 
 _RU_SUFFIX_MAP: tuple[tuple[str, str], ...] = (
     ("бурге", "бург"),   ("граде", "град"),   ("роде",  "род"),
@@ -99,49 +97,9 @@ _RU_CITY_OVERRIDES: dict[str, str] = {
     "ашхабаде":          "Ashgabat",
 }
 
-_CITY_STOP_WORDS: frozenset[str] = frozenset({
-    # Russian
-    "сейчас", "сегодня", "прямо", "там", "здесь", "это", "какая", "какой",
-    "будет", "есть", "данный", "этот", "реальная", "реальный", "актуальная",
-    # English
-    "now", "today", "currently", "right", "there", "here", "the", "a", "an",
-    "real", "current", "actual", "latest", "like", "what", "is", "weather",
-    # Georgian
-    "ამ", "ახლა", "წუთას", "დღეს", "რა", "არის",
-    # Turkish
-    "şu", "an", "şimdi", "bugün", "hava",
-    # Arabic
-    "الآن", "اليوم", "هناك", "في",
-    # Hindi
-    "अभी", "आज", "वहाँ",
-    # Hausa
-    "yaya", "yake", "yanzu",
-    # Indonesian / Malay
-    "sekarang", "hari", "ini",
-    # Vietnamese
-    "bây", "giờ", "hôm", "nay",
-    # Swahili
-    "sasa", "leo", "hali",
-})
-
-_WEATHER_PREPS = (
-    "погода в ", "температура в ", "прогноз для ", "погоду в ",
-    "погода для города ", "для города ",
-    "weather in ", "temperature in ", "forecast for ", "in ",
-    "für ", "dans ", "en ", "para ",
-    "yanayi yake a ", "yanayi a ",
-    "de hava ", "hava durumu ", "hava ",
-    "الطقس في ", "في ",
-    "cuaca di ", "di ",
-    "thời tiết ở ", "ở ",
-    "hali ya hewa ya ", "hali ya hewa ",
-    "का मौसम ", "में मौसम ",
-    "날씨 ",
-)
-
 _LOCATIVE_SUFFIXES: tuple[tuple[str, str], ...] = (
     ("ში",  ""),   ("ზე",  ""),   ("დან", ""),
-    ("ում",  ""),  ("ից",  ""),
+    ("UM",  ""),   ("ից",  ""),
     ("'da",  ""),  ("'de",  ""),  ("'ta",  ""),  ("'te",  ""),
     ("da",   ""),  ("de",   ""),
 )
@@ -160,10 +118,22 @@ _LOCATIVE_CITY_OVERRIDES: dict[str, str] = {
     "ამსტერდამში":"Amsterdam", "ამსტერდამი": "Amsterdam",
     "მოსკოვში":   "Moscow",    "მოსკოვი":    "Moscow",
     "მადრიდში":   "Madrid",    "მადრიდი":    "Madrid",
-    "Սիդնեյում":  "Sydney",    "Լոնդոնում":  "London",
-    "Փարիզում":   "Paris",     "Բեռլինում":  "Berlin",
-    "Տոկիոյում":  "Tokyo",     "Դուբայում":  "Dubai",
+    "Սиднейум":  "Sydney",    "Լонدонум":  "London",
+    "Паризум":   "Paris",     "Берлинум":  "Berlin",
+    "Токиойум":  "Tokyo",     "Дубайум":   "Dubai",
 }
+
+
+def _normalize_ru_city(city: str) -> str:
+    lower = city.lower().strip()
+    override = _RU_CITY_OVERRIDES.get(lower)
+    if override:
+        return override
+    for suffix, replacement in _RU_SUFFIX_MAP:
+        if lower.endswith(suffix) and len(lower) > len(suffix) + 2:
+            stem = city[: -len(suffix)]
+            return stem + replacement
+    return city
 
 
 def _strip_locative(city: str) -> str:
@@ -180,53 +150,39 @@ def _strip_locative(city: str) -> str:
     return stripped
 
 
-def _extract_city_hausa(query: str) -> str | None:
-    m = re.search(r'\ba\s+([A-Z][\w\s]+?)(?:\s+yanzu|\s*\?|$)', query)
-    return m.group(1).strip() if m else None
+# ─── CITY EXTRACTOR ───────────────────────────────────────────────────────────
 
+async def _extract_city(query: str) -> str:
+    """
+    Extract city name from a weather query in any language.
+    Delegates to Groq LLM; falls back to returning the raw query
+    so OpenWeatherMap can still try.
+    """
+    try:
+        from llm.groq_client import groq_client
+        prompt = (
+            "Extract the city name from the following weather query. "
+            "Reply with a JSON object only, no extra text: "
+            '{"city": "..."}. '
+            "If no city is mentioned, use an empty string.\n\n"
+            f"Query: {query}"
+        )
+        response = await groq_client.complete(
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=60,
+            temperature=0.0,
+        )
+        raw = response.text
+        raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+        data = json.loads(raw)
+        city = data.get("city", "").strip()
+        if city:
+            return _strip_locative(_normalize_ru_city(city))
+    except Exception as exc:
+        logger.warning("_extract_city LLM failed", extra={"error": str(exc)})
 
-def _normalize_ru_city(city: str) -> str:
-    lower = city.lower().strip()
-    if lower in _RU_CITY_OVERRIDES:
-        return _RU_CITY_OVERRIDES[lower]
-    for suffix, replacement in sorted(_RU_SUFFIX_MAP, key=lambda x: -len(x[0])):
-        if lower.endswith(suffix) and len(lower) > len(suffix) + 2:
-            return (lower[: -len(suffix)] + replacement).capitalize()
-    return city.strip()
-
-
-def _extract_city(query: str) -> str:
-    """Extract city name from a weather query in any language."""
-    lower = query.lower()
-
-    if "ში" in query:
-        for word in query.split():
-            if word.endswith("ში") and len(word) > 4:
-                city = word[:-2].rstrip("?.!,")
-                if city.lower() not in _CITY_STOP_WORDS and len(city) > 2:
-                    return city
-
-    for prep in _WEATHER_PREPS:
-        idx = lower.find(prep)
-        if idx != -1:
-            rest = query[idx + len(prep):].strip()
-            city = re.split(r"[?,\n]", rest)[0].strip()
-            words = city.split()
-            while words and words[-1].lower() in _CITY_STOP_WORDS:
-                words.pop()
-            city = " ".join(words).rstrip("?.!,")
-            if city and city.lower() not in _CITY_STOP_WORDS and len(city) > 1:
-                return _strip_locative(_normalize_ru_city(city))
-
-    hausa_city = _extract_city_hausa(query)
-    if hausa_city:
-        return hausa_city
-
-    words = query.strip().rstrip("?.!,").split()
-    candidates = [w for w in words if w.lower() not in _CITY_STOP_WORDS and len(w) > 2]
-    if candidates:
-        return _strip_locative(_normalize_ru_city(candidates[-1]))
-
+    # Fallback: return query as-is; OWM geocoding is tolerant
     return query.strip()
 
 
