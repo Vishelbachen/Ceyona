@@ -28,15 +28,93 @@ _TELEGRAM_API = f"https://api.telegram.org/bot{settings.bot_token}"
 _WEBHOOK_SECRET = re.sub(r"[^A-Za-z0-9_\-]", "_", settings.bot_token)[:256]
 
 
-async def _send_message(chat_id: int, text: str) -> None:
+async def _send_message(
+    chat_id: int,
+    text: str,
+    reply_markup: dict | None = None,
+) -> None:
     if not text:
         return
+    payload: dict = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "Markdown",
+    }
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
     async with httpx.AsyncClient() as client:
         await client.post(
             f"{_TELEGRAM_API}/sendMessage",
-            json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
+            json=payload,
             timeout=10.0,
         )
+
+
+def _top_up_keyboard(lang: str) -> dict:
+    """
+    Inline keyboard with a single "Top Up" button.
+    Opens the TON wallet address in TON Space / any TON wallet via ton:// deeplink.
+    Falls back to t.me/wallet deeplink for users without a TON app installed.
+    """
+    from app.settings import settings
+    wallet = getattr(settings, "ton_wallet", None) or ""
+
+    _BUTTON_LABELS: dict[str, str] = {
+        "ru": "馃拵 袩芯锌芯谢薪懈褌褜 斜邪谢邪薪褋",
+        "en": "馃拵 Top Up Balance",
+        "de": "馃拵 Guthaben aufladen",
+        "fr": "馃拵 Recharger le solde",
+        "es": "馃拵 Recargar saldo",
+        "pt": "馃拵 Recarregar saldo",
+        "it": "馃拵 Ricarica il saldo",
+        "tr": "馃拵 Bakiye y眉kle",
+        "ar": "馃拵 卮丨賳 丕賱乇氐賷丿",
+        "zh": "馃拵 鍏呭€间綑棰�",
+        "ja": "馃拵 娈嬮珮銈掋儊銉ｃ兗銈�",
+        "ko": "馃拵 鞛旍暋 於╈爠",
+        "pl": "馃拵 Do艂aduj konto",
+        "uk": "馃拵 袩芯锌芯胁薪懈褌懈 斜邪谢邪薪褋",
+        "fa": "馃拵 卮丕乇跇 賲賵噩賵丿蹖",
+        "nl": "馃拵 Saldo opladen",
+        "sv": "馃拵 Fyll p氓 saldo",
+        "no": "馃拵 Fyll p氓 saldo",
+        "da": "馃拵 Opfyld saldo",
+        "fi": "馃拵 Lataa saldo",
+        "he": "馃拵 讟注讬谞转 讬转专讛",
+        "ka": "馃拵 醿戓儛醿氠儛醿溼儭醿樶儭 醿ㄡ償醿曖儭醿斸儜醿�",
+        "hy": "馃拵 諃铡沾铡宅謤榨宅 瞻铡辗斋站炸",
+        "az": "馃拵 Balans谋 art谋r",
+        "kk": "馃拵 袘邪谢邪薪褋褌褘 褌芯谢褌褘褉褍",
+        "uz": "馃拵 Balansi to'ldirish",
+        "mn": "馃拵 耶谢写褝谐写褝谢 薪褝屑褝褏",
+        "sw": "馃拵 Ongeza salio",
+        "am": "馃拵 釅€釄� 釄傖埑釅� 釄欋垕",
+        "hi": "馃拵 啶啶侧啶傕じ 啶溹ぎ啶� 啶曕ぐ啷囙",
+        "bn": "馃拵 唳唳唳侧唳ㄠ唳� 唳唳� 唳曕Π唰佮Θ",
+        "ur": "馃拵 亘蹖賱賳爻 亘诰乇蹖诤",
+        "id": "馃拵 Isi saldo",
+        "ms": "馃拵 Tambah baki",
+        "th": "馃拵 喙€喔曕复喔∴箑喔囙复喔�",
+        "vi": "馃拵 N岷 s峄� d瓢",
+        "bg": "馃拵 袟邪褉械写懈 斜邪谢邪薪褋",
+        "hr": "馃拵 Napuni saldo",
+        "sr": "馃拵 袧邪锌褍薪懈 褋褌邪褮械",
+        "cs": "馃拵 Dob铆t kredit",
+        "sk": "馃拵 Dobi钮 kredit",
+        "ro": "馃拵 Re卯ncarc膬 soldul",
+        "hu": "馃拵 Egyenleg felt枚lt茅se",
+        "ha": "馃拵 茦ara ma'auni",
+    }
+    label = _BUTTON_LABELS.get(lang, _BUTTON_LABELS["en"])
+
+    # ton:// deeplink opens any TON wallet app directly to the send screen
+    url = f"ton://transfer/{wallet}" if wallet else "https://t.me/wallet"
+
+    return {
+        "inline_keyboard": [[
+            {"text": label, "url": url}
+        ]]
+    }
 
 
 async def _answer_callback(callback_query_id: str, text: str = "") -> None:
@@ -59,7 +137,7 @@ def _get_chat_id(update: dict) -> int | None:
     return msg.get("chat", {}).get("id")
 
 
-# ─── LINGUA ISO MAP ───────────────────────────────────────────────────────────
+# 鈹€鈹€鈹€ LINGUA ISO MAP 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 # All 75 Language attributes verified against lingua-language-detector 2.x enum.
 # Languages without a bot-supported ISO code map to closest supported lang or
 # are omitted (detector returns them but _LINGUA_ISO.get() falls back to profile_lang).
@@ -86,7 +164,7 @@ _LINGUA_ISO: dict[Language, str] = {
     Language.ESTONIAN:   "et",
     Language.FINNISH:    "fi",
     Language.FRENCH:     "fr",
-    Language.GANDA:      "lg",   # Luganda — no bot support, falls back to profile
+    Language.GANDA:      "lg",   # Luganda 鈥� no bot support, falls back to profile
     Language.GEORGIAN:   "ka",
     Language.GERMAN:     "de",
     Language.GREEK:      "el",
@@ -173,7 +251,7 @@ def _detect_lang(update: dict) -> str:
             if iso:
                 return iso
             # lingua recognised a language but we have no ISO mapping for it
-            # (e.g. GANDA/Luganda) — fall through to profile_lang below
+            # (e.g. GANDA/Luganda) 鈥� fall through to profile_lang below
         else:
             # lingua returned None: language is unrecognised (e.g. Inuktitut,
             # Greenlandic, invented text).  For very short inputs there is a
@@ -181,7 +259,7 @@ def _detect_lang(update: dict) -> str:
             # so we flag this by returning profile_lang.  The downstream
             # intent classifier receives lang_uncertain=False (profile_lang
             # is still a valid lang code), but classify() will apply a higher
-            # confidence threshold for short unrecognised texts — see
+            # confidence threshold for short unrecognised texts 鈥� see
             # cognition/intent_engine.py classify().
             logger.info(
                 "lingua: language unrecognised, falling back to profile_lang",
@@ -226,7 +304,7 @@ async def telegram_webhook(
 
     logger.info("Incoming message", extra={"user_id": user_id, "lang": lang})
 
-    # ── rate limiting ─────────────────────────────────────────────────────────
+    # 鈹€鈹€ rate limiting 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
     from cognition.response_synthesizer import get_system_message
     from security.rate_limiter import get_rate_limiter
 
@@ -236,7 +314,7 @@ async def telegram_webhook(
             await _send_message(chat_id, get_system_message("rate_limited", lang))
         return {"ok": True}
 
-    # ── balance ───────────────────────────────────────────────────────────────
+    # 鈹€鈹€ balance 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
     user_balance = 0.0
     try:
         from payments.access_controller import AccessController
@@ -246,7 +324,7 @@ async def telegram_webhook(
     except Exception as exc:
         logger.error("Balance fetch failed", extra={"error": str(exc)})
 
-    # ── message handling ──────────────────────────────────────────────────────
+    # 鈹€鈹€ message handling 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
     if update_type in (UpdateType.MESSAGE, UpdateType.EDITED_MESSAGE):
         try:
             result = await handle_message(
@@ -268,7 +346,7 @@ async def telegram_webhook(
                 )
             return {"ok": True}
 
-        # ── billing ───────────────────────────────────────────────────────────
+        # 鈹€鈹€ billing 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
         if not result.denied and result.usage.cost_usd > 0:
             try:
                 from payments.access_controller import AccessController
@@ -296,13 +374,18 @@ async def telegram_webhook(
                 logger.error("Billing failed", extra={"error": str(exc)})
 
         if chat_id:
-            await _send_message(chat_id, result.text)
+            keyboard = (
+                _top_up_keyboard(lang)
+                if result.denied and result.deny_reason == "insufficient_balance"
+                else None
+            )
+            await _send_message(chat_id, result.text, reply_markup=keyboard)
 
     elif update_type == UpdateType.CALLBACK_QUERY:
         ctx = parse_callback(update, user_id)
 
         if ctx.action == CallbackAction.BALANCE:
-            bal_text = f"💰 Balance: ${user_balance:.2f}"
+            bal_text = f"馃挵 Balance: ${user_balance:.2f}"
             await _answer_callback(ctx.callback_query_id, bal_text)
         elif ctx.action == CallbackAction.HELP:
             await _answer_callback(
