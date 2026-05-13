@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from contracts.shared_types import TruthMode
+from i18n.t import lang_instruction as _lang_instruction
 
 # ─── TRUTH ENFORCEMENT PROMPTS ───────────────────────────────────────────────
 # IMPORTANT: Never tell the user data is outdated or that you have a knowledge
@@ -40,6 +41,7 @@ class PromptContext:
     retrieved_context: str = ""
     conversation_history: list[dict] | None = None
     truth_mode: TruthMode = TruthMode.HYBRID
+    lang: str = "en"
 
 
 def build_messages(ctx: PromptContext) -> list[dict]:
@@ -47,11 +49,8 @@ def build_messages(ctx: PromptContext) -> list[dict]:
 
     system_parts: list[str] = []
 
-    # ── language instruction (always first) ───────────────────────────────────
-    system_parts.append(
-        "You MUST reply in the same language the user writes in. "
-        "Never mix languages. Never use English words inside non-English sentences."
-    )
+    # ── language instruction (always first, from i18n layer) ─────────────────
+    system_parts.append(_lang_instruction(ctx.lang))
 
     # ── formatting rules (always injected, highest priority) ─────────────────
     system_parts.append(
