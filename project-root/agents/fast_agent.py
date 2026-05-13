@@ -3,8 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from llm.groq_client import groq_client
-from llm.model_router import FAST_AGENT_MODEL, route_max_tokens
+from llm.fallback_handler import complete_with_fallback
 from contracts.shared_types import Tier
 
 logger = logging.getLogger(__name__)
@@ -22,19 +21,18 @@ class AgentResult:
 
 async def run(messages: list[dict], temperature: float = 0.7) -> AgentResult:
     """
-    Fast agent — groq/compound-mini (Agent Layer, models.md).
+    Fast agent — llama-3.1-8b-instant (Fast Tier, models.md).
 
-    Role: tool selection authority, lightweight single-step execution.
-    NOT a tier model — compound-mini has tool-use capability that
-    plain Fast Tier (llama-3.1-8b-instant) does not.
+    Used for: conversation, simple questions, emotional responses,
+    low-cost tasks, fallback for synthesis.
 
-    Used for: conversation, simple questions, low-cost tasks.
+    Calls complete_with_fallback(Tier.FAST) so it cascades to GENERAL
+    if llama-3.1-8b-instant is unavailable, never returning empty silently.
     """
     try:
-        response = await groq_client.complete(
-            model=FAST_AGENT_MODEL,
+        response = await complete_with_fallback(
+            tier=Tier.FAST,
             messages=messages,
-            max_tokens=route_max_tokens(Tier.FAST),
             temperature=temperature,
         )
         return AgentResult(
@@ -42,15 +40,11 @@ async def run(messages: list[dict], temperature: float = 0.7) -> AgentResult:
             model=response.model,
             input_tokens=response.input_tokens,
             output_tokens=response.output_tokens,
-            success=True,
+            success=bool(response.text.strip()),
         )
     except Exception as exc:
         logger.error("FastAgent failed", extra={"error": str(exc)})
         return AgentResult(
-            text="",
-            model="",
-            input_tokens=0,
-            output_tokens=0,
-            success=False,
-            error=str(exc),
+            text="", model="", input_tokens=0, output_tokens=0,
+            success=False, error=str(exc),
         )
