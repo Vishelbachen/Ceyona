@@ -1,13 +1,3 @@
-OpenWeatherMap API client + city name extractor.
-
-Роль:
-  - WeatherService: получение погоды по названию города
-  - _extract_city(): парсинг города из свободного текста — делегирует LLM (Groq)
-  - Синглтон weather_service используется через web_tools.py
-
-Импортируется:
-  - external/web_tools.py → weather_service, _extract_city
-"""
 from __future__ import annotations
 
 import json
