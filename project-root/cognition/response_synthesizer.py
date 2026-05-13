@@ -209,6 +209,20 @@ def _apply_correction(text: str) -> str:
         return text
 
 
+def _apply_normalizer(text: str, lang: str) -> str:
+    """
+    Step 6: output_normalizer — strip retrieval contamination artifacts.
+    Removes:  source attribution tags, garbled URLs, English leak terms.
+    Never changes meaning. Safe to call unconditionally.
+    """
+    try:
+        from meta.output_normalizer import apply as _norm
+        result = _norm(text, lang)
+        return result if result and result.strip() else text
+    except Exception:
+        return text
+
+
 def _truncate(text: str, lang: str) -> tuple[str, bool]:
     if len(text) <= _TELEGRAM_MAX_CHARS:
         return text, False
@@ -232,8 +246,9 @@ def synthesize(inp: SynthesisInput) -> SynthesisResult:
       2. structure    — intent-aware shaping
       3. normalize    — strip LaTeX/Markdown Telegram can't render
       4. format       — whitespace normalisation
-      5. correction   — meta/correction
-      6. finalize     — truncate to Telegram limit
+      5. correction   — meta/correction (preamble/sign-off stripping)
+      6. normalizer   — meta/output_normalizer (retrieval contamination cleanup)
+      7. finalize     — truncate to Telegram limit
     """
     lang = normalize_lang(inp.lang)
 
@@ -261,6 +276,7 @@ def synthesize(inp: SynthesisInput) -> SynthesisResult:
     text = _structure(text, inp.intent)
     text = _format(text)
     text = _apply_correction(text)
+    text = _apply_normalizer(text, lang)
     text, truncated = _finalize(text, lang)
 
     return SynthesisResult(text=text, truncated=truncated)
