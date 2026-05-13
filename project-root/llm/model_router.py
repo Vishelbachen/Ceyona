@@ -29,11 +29,22 @@ _TIER_MODELS: dict[Tier, list[str]] = {
     ],
 }
 
-# Max output tokens per tier
+# Max output tokens per tier.
+#
+# These are hard limits passed directly to the Groq API.
+# Set them high enough that responses are never cut mid-sentence,
+# but not so high that latency and cost blow up on short queries.
+#
+# FAST:    1024  — conversation, emotional, fallback synthesis.
+#                  800 was too tight: search fallback synthesis was truncating.
+# GENERAL: 3072  — search synthesis, route queries, POI, code, analysis.
+#                  2048 was cutting long search summaries and route descriptions.
+# HEAVY:   6144  — deep reasoning, long documents, heavy consensus tasks.
+#                  4096 was limiting for multi-source synthesis at HEAVY tier.
 _MAX_TOKENS: dict[Tier, int] = {
-    Tier.FAST:    800,    # raised from 512: FAST is also used as fallback for search synthesis
-    Tier.GENERAL: 2048,
-    Tier.HEAVY:   4096,
+    Tier.FAST:    1024,
+    Tier.GENERAL: 3072,
+    Tier.HEAVY:   6144,
 }
 
 # Special-purpose model assignments (not tiers — utility roles)
