@@ -88,11 +88,83 @@ LANG_INSTRUCTIONS: dict[str, str] = {
 
 _TON_WALLET = "UQA78muNWF-tW4bhePG8GMdXzj1RuByOtf1XAwZ9VDOBElSA"
 
+# ─── WEATHER LABEL KEYS ───────────────────────────────────────────────────────
+# Used by external/weather.py._label() to localise weather card labels.
+# Single source of truth — do NOT duplicate these in weather.py or web_tools.py.
+# Key contract: _i18n("weather_feels_like", lang) → native translation or "".
+# weather.py falls back to the key string itself if result is "", so all
+# languages not listed here will show the English key — add them here instead.
+
+WEATHER_FEELS_LIKE: dict[str, str] = {
+    "en": "feels like",         "ru": "ощущается как",      "de": "gefühlt",
+    "fr": "ressenti",           "es": "sensación",           "pt": "sensação",
+    "it": "percepito",          "tr": "hissedilen",          "ar": "يبدو كأنه",
+    "zh": "体感",                "ja": "体感",                "ko": "체감",
+    "pl": "odczuwalna",         "uk": "відчувається як",     "fa": "احساس می‌شود",
+    "nl": "voelt als",          "sv": "känns som",           "no": "føles som",
+    "da": "føles som",          "fi": "tuntuu kuin",         "he": "מורגש כ",
+    "ka": "შეგრძნება",          "hy": "զգացվում է",          "az": "hiss edilir",
+    "kk": "сезіледі",           "uz": "his qilinadi",        "mn": "мэдрэмж",
+    "sw": "hisi",               "am": "ይሰማዋል",              "hi": "महसूस होता है",
+    "bn": "অনুভূত হয়",         "ur": "محسوس ہوتا ہے",       "id": "terasa",
+    "ms": "terasa",             "th": "รู้สึกเหมือน",         "vi": "cảm giác như",
+    "bg": "усеща се",           "hr": "osjeća se",           "sr": "осећа се",
+    "cs": "pocitová",           "sk": "pocitová",            "ro": "simțită",
+    "hu": "hőérzet",            "ha": "yana ji kamar",       "yo": "ó dàbí",
+    "so": "dareemaysa",         "el": "αίσθηση",             "lv": "jūtas kā",
+    "lt": "jaučiasi kaip",      "et": "tundub",              "sl": "zdi se",
+    "mk": "се чувствува",
+}
+
+WEATHER_HUMIDITY: dict[str, str] = {
+    "en": "Humidity",           "ru": "Влажность",           "de": "Luftfeuchtigkeit",
+    "fr": "Humidité",           "es": "Humedad",             "pt": "Umidade",
+    "it": "Umidità",            "tr": "Nem",                 "ar": "الرطوبة",
+    "zh": "湿度",                "ja": "湿度",                "ko": "습도",
+    "pl": "Wilgotność",         "uk": "Вологість",           "fa": "رطوبت",
+    "nl": "Vochtigheid",        "sv": "Luftfuktighet",       "no": "Luftfuktighet",
+    "da": "Luftfugtighed",      "fi": "Kosteus",             "he": "לחות",
+    "ka": "ტენიანობა",          "hy": "խոնավություն",        "az": "rütubət",
+    "kk": "ылғалдылық",         "uz": "namlik",              "mn": "чийгшил",
+    "sw": "unyevu",             "am": "እርጥበት",              "hi": "आर्द्रता",
+    "bn": "আর্দ্রতা",           "ur": "نمی",                 "id": "Kelembapan",
+    "ms": "Kelembapan",         "th": "ความชื้น",             "vi": "Độ ẩm",
+    "bg": "Влажност",           "hr": "Vlažnost",            "sr": "Влажност",
+    "cs": "Vlhkost",            "sk": "Vlhkosť",             "ro": "Umiditate",
+    "hu": "Páratartalom",       "ha": "Danshi",              "yo": "Ọrọ omi",
+    "so": "Qoyaanka",           "el": "Υγρασία",             "lv": "Mitrums",
+    "lt": "Drėgnumas",          "et": "Niiskus",             "sl": "Vlažnost",
+    "mk": "Влажност",
+}
+
+WEATHER_WIND: dict[str, str] = {
+    "en": "Wind",        "ru": "Ветер",    "de": "Wind",     "fr": "Vent",
+    "es": "Viento",      "pt": "Vento",    "it": "Vento",    "tr": "Rüzgar",
+    "ar": "الرياح",      "zh": "风速",      "ja": "風速",     "ko": "바람",
+    "pl": "Wiatr",       "uk": "Вітер",    "fa": "باد",      "nl": "Wind",
+    "sv": "Vind",        "no": "Vind",     "da": "Vind",     "fi": "Tuuli",
+    "he": "רוח",         "ka": "ქარი",    "hy": "քամի",     "az": "külək",
+    "kk": "жел",         "uz": "shamol",   "mn": "салхи",    "sw": "upepo",
+    "am": "ነፋስ",        "hi": "हवा",      "bn": "বাতাস",    "ur": "ہوا",
+    "id": "Angin",       "ms": "Angin",    "th": "ลม",        "vi": "Gió",
+    "bg": "Вятър",       "hr": "Vjetar",   "sr": "Ветар",    "cs": "Vítr",
+    "sk": "Vietor",      "ro": "Vânt",     "hu": "Szél",     "ha": "Iska",
+    "yo": "Afẹfẹ",       "so": "Dabaysha", "el": "Άνεμος",   "lv": "Vējš",
+    "lt": "Vėjas",       "et": "Tuul",     "sl": "Veter",    "mk": "Ветер",
+}
+
 # ─── ALL STRINGS ──────────────────────────────────────────────────────────────
 # Ported directly from cognition/response_synthesizer._MESSAGES
 # with full Unicode preserved.
 
 _STRINGS: dict[str, dict[str, str]] = {
+
+    # ── weather labels ────────────────────────────────────────────────────────
+    # Populated from the module-level dicts above so there is a single source
+    # of truth. _i18n("weather_feels_like", lang) resolves through _STRINGS.
+    "weather_feels_like": WEATHER_FEELS_LIKE,
+    "weather_humidity":   WEATHER_HUMIDITY,
+    "weather_wind":       WEATHER_WIND,
 
     # ── balance ───────────────────────────────────────────────────────────────
     "insufficient_balance": {
