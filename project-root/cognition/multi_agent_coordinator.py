@@ -13,6 +13,7 @@ from agents.fast_agent import AgentResult
 from agents.safety_agent import SafetyInput, SafetyResult, SafetyVerdict, check as safety_check
 from cognition.intent_engine import Intent
 from cognition.reasoning_engine import ReasoningMode, ReasoningStrategy
+from i18n.t import t as _t
 from contracts.shared_types import Tier
 
 logger = logging.getLogger(__name__)
@@ -319,39 +320,7 @@ async def coordinate(
     # Graceful fallback for EMOTIONAL intent: rule-based empathy response
     # avoids showing a cold error message when the user just vented.
     if intent == Intent.EMOTIONAL:
-        _EMOTIONAL_FALLBACK: dict[str, str] = {
-            "ru": "Понимаю, это неприятно. Расскажи, что случилось — постараюсь помочь.",
-            "en": "That sounds rough. Want to tell me more about what happened?",
-            "de": "Das klingt wirklich frustrierend. Erzähl mir, was passiert ist.",
-            "fr": "Ça a l'air difficile. Dis-moi ce qui s'est passé.",
-            "es": "Entiendo, eso es difícil. Cuéntame qué pasó.",
-            "pt": "Entendo, isso é difícil. Me conta o que aconteceu.",
-            "it": "Capisco, sembra brutto. Dimmi cosa è successo.",
-            "tr": "Anlıyorum, bu zor. Ne olduğunu anlatır mısın?",
-            "ar": "أفهم ذلك، يبدو صعباً. أخبرني ماذا حدث.",
-            "zh": "听起来很糟。跟我说说发生了什么？",
-            "ja": "それは大変だったね。何があったか話してみて。",
-            "ko": "힘들었겠네요. 무슨 일이 있었는지 얘기해줄래요?",
-            "pl": "Rozumiem, to musi być frustrujące. Opowiedz, co się stało.",
-            "uk": "Розумію, це неприємно. Розкажи, що сталося.",
-            "fa": "می‌فهمم، این سخته. بگو چی شده.",
-            "nl": "Dat klinkt vervelend. Vertel me wat er is gebeurd.",
-            "sv": "Det låter jobbigt. Berätta vad som hände.",
-            "no": "Det høres tøft ut. Fortell meg hva som skjedde.",
-            "da": "Det lyder svært. Fortæl mig hvad der skete.",
-            "fi": "Kuulostaa raskaalta. Kerro mitä tapahtui.",
-            "he": "נשמע קשה. ספר לי מה קרה.",
-            "hi": "समझ सकता हूँ, यह मुश्किल है। बताओ क्या हुआ।",
-            "id": "Kedengarannya berat. Ceritakan apa yang terjadi.",
-            "az": "Anlayıram, bu çətindir. De görüm nə baş verdi.",
-            "kk": "Түсінемін, бұл ауыр. Не болғанын айтшы.",
-            "uz": "Tushunaman, bu qiyin. Nima bo'lganini ayt.",
-            "ka": "მესმის, ეს ძნელია. მიამბე, რა მოხდა.",
-            "hy": "Հասկանում եմ, դա ծանր է: Պատմիր՝ ինչ եղավ:",
-            "mn": "Ойлгож байна, энэ хэцүү. Юу болсноо хэлж өгнө үү.",
-            "sw": "Naelewa, ni vigumu. Niambie kilichotokea.",
-        }
-        fallback_text = _EMOTIONAL_FALLBACK.get(lang) or _EMOTIONAL_FALLBACK["en"]
+        fallback_text = _t("emotional_fallback", lang)
         logger.info("EMOTIONAL graceful fallback used", extra={"lang": lang})
         return CoordinationResult(
             text=fallback_text,
