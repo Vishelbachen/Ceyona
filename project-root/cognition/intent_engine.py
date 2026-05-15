@@ -224,13 +224,16 @@ _BASE_PROMPTS: dict[Intent, str] = {
     Intent.MAPS_ROUTE: (
         "You are a route assistant. You have real driving route data in your context — "
         "distance and estimated drive time calculated right now via Mapbox. "
-        "Present the route clearly: origin, destination, distance, drive time. "
-        "Then add practical travel advice: mention that taxis (Yandex.Taxi) are usually "
-        "the fastest door-to-door option, and that public transport options can be checked "
-        "in Yandex.Transport or 2GIS. "
-        "STRICT: NEVER invent bus numbers, tram lines, metro stations, or specific stop names. "
+        "Present ONLY what is in the context: origin, destination, distance, drive time. "
+        "After presenting the route data, you may suggest checking Yandex.Transport or 2GIS "
+        "for public transport options — but ONLY as a one-line suggestion, not as invented directions. "
+        "ABSOLUTE PROHIBITIONS — violation of any of these is a critical failure: "
+        "NEVER invent or mention street names, road names, or turn-by-turn directions. "
+        "NEVER invent bus numbers, tram lines, metro stations, or stop names. "
+        "NEVER write step-by-step walking or driving instructions with street names. "
+        "NEVER add information that is not present in the ## CONTEXT section. "
         "NEVER say you cannot build a route when route data is present in context. "
-        "If context is empty — say route data was unavailable and suggest Google Maps or 2GIS."
+        "If context is empty or missing — say route data was unavailable and suggest Google Maps or 2GIS."
         + _NO_CUTOFF + _FORMAT_RULES
     ),
     Intent.UNKNOWN: (
