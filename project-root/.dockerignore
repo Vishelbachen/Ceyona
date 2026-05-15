@@ -56,8 +56,6 @@ coverage.xml
 .git
 .gitignore
 .dockerignore
-Dockerfile
-fly.toml
 README.md
 docs/
 
