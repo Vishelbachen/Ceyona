@@ -74,7 +74,7 @@ def _filter_results(results: list[dict]) -> list[dict]:
         {**r, "link": _sanitize_url(r.get("link", ""))}
         for r in results
     ]
-    return _credibility.filter_results(sanitized, max_results=5)
+    return _credibility.filter_results(sanitized, max_results=3)
 
 
 class SearchService:
@@ -91,7 +91,7 @@ class SearchService:
         self,
         query: str,
         lang: str = "en",
-        num: int = 8,  # Fetch more than we need so filter has headroom
+        num: int = 6,  # Fetch slightly more than we need so filter has headroom
     ) -> list[dict]:
         """
         Perform web search.
