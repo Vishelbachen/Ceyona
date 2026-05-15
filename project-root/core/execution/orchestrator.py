@@ -471,9 +471,15 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
         # (tool output comes next — we check after tool execution below)
 
         # ── tool execution ───────────────────────────────────────────────────
+        # Skip _run_tool when update_handler already ran this tool and populated
+        # retrieved_context (forced_intent path for SEARCH). Running it again
+        # doubles search output, inflates payload, causes 413s.
         tool_output: str | None = None
-        if intent_result.requires_tools:
+        _already_grounded = bool(request.retrieved_context) and request.forced_intent is not None
+        if intent_result.requires_tools and not _already_grounded:
             tool_output = await _run_tool(intent_result, lang)
+        elif _already_grounded and intent_result.requires_tools:
+            tool_output = request.retrieved_context
 
         # ── STRICT truth gate ─────────────────────────────────────────────────
         # For STRICT intents: if no retrieved context AND no tool output → block
