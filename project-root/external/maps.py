@@ -478,12 +478,29 @@ class MapsService:
 
     def format_route(self, route: dict, lang: str = "en") -> str:
         """Format route result into Telegram-ready localised string."""
+        dist = route["distance_km"]
+        dur  = route["duration_min"]
+
+        # Guard: Mapbox returns 0.0/0 when geocoding produced identical or
+        # invalid coordinates (e.g. "центр" without a city name resolved to
+        # the wrong place, then both origin and destination hit the same coords).
+        # In this case the route data is meaningless — return not-found instead.
+        if dist == 0.0 and dur == 0:
+            logger.warning(
+                "format_route: zero route (bad geocode?)",
+                extra={
+                    "origin":      route.get("origin_name", ""),
+                    "destination": route.get("destination_name", ""),
+                },
+            )
+            return self.format_route_not_found(lang)
+
         return _t(
             "maps_route_result", lang,
             origin=route["origin_name"],
             destination=route["destination_name"],
-            dist=str(route["distance_km"]),
-            dur=str(route["duration_min"]),
+            dist=str(dist),
+            dur=str(dur),
         )
 
     def format_route_not_found(self, lang: str = "en") -> str:
