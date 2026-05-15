@@ -240,7 +240,10 @@ async def handle_message(
 
             # weather / maps / maps_poi are handled by orchestrator._run_tool().
             # Running them here too causes doubled output — skip them.
-            _ORCHESTRATOR_TOOLS = {"weather", "maps", "maps_poi", "maps_route"}
+            # "search" IS handled here (we just ran it above).
+            # orchestrator must NOT run it again via _run_tool() → double SerpAPI call + 413.
+            # weather/maps/maps_poi/maps_route are handled exclusively by orchestrator._run_tool().
+            _ORCHESTRATOR_TOOLS = {"weather", "maps", "maps_poi", "maps_route", "search"}
             if intent_value not in _NO_SEARCH_INTENTS and intent_value not in _ORCHESTRATOR_TOOLS:
                 web_result = await run_tool(
                     tool_name="search",
