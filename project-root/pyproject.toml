@@ -2,7 +2,7 @@
 name = "ai-platform"
 version = "1.0.0"
 description = "Modular AI orchestration platform (EPK-driven)"
-requires-python = ">=3.11,<3.13"
+requires-python = ">=3.11,<3.12"
 
 dependencies = [
     "fastapi>=0.130,<0.136",
