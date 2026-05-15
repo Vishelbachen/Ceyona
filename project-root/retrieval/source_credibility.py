@@ -1,195 +1,162 @@
+Оценка доверия к источникам поиска.
+
+Роль:
+  Единственная ответственность — оценить trustworthiness источника
+  ДО того как его контент попадёт в контекст LLM.
+
+  Это НЕ:
+    - semantic reranking     (→ cross_encoder.py)
+    - policy enforcement     (→ EPK)
+    - safety filtering       (→ safety_agent.py)
+    - routing / arbitration  (→ consensus_engine.py)
+
+  Это ТОЛЬКО:
+    - оценка доверия к домену и типу источника
+    - фильтрация ненадёжных источников из retrieval pipeline
+    - взвешивание результатов по trustworthiness
+
+Используется:
+  - retrieval/retrieval_engine.py  → filter_web_results()
+  - external/search.py             → _filter_results() делегирует сюда
+                                     (junk-list из search.py мигрирован сюда)
+
+Интеграционная точка:
+  results = retrieve()
+  results = source_credibility.filter(results)   ← здесь
+  # далее → LLM
+"""
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
-from enum import Enum
+from enum import IntEnum
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
 
 # ─── TRUST TIERS ──────────────────────────────────────────────────────────────
+# Числовые значения используются как weights при scoring.
+# Не менять порядок без обновления _DOMAIN_TRUST и filter().
 
-class TrustTier(str, Enum):
-    AUTHORITATIVE = "authoritative"   # official gov/transport/institutional sources
-    TRUSTED       = "trusted"         # established news, major aggregators, wikis
-    NEUTRAL       = "neutral"         # unknown — not blocked, not elevated
-    DEGRADED      = "degraded"        # low-signal: forums, Q&A spam, SEO farms
-    BLOCKED       = "blocked"         # known junk — filtered out before LLM sees it
+class TrustTier(IntEnum):
+    BLOCKED    = 0   # никогда не показывать LLM
+    VERY_LOW   = 1   # SEO-агрегаторы, форумы без верификации
+    LOW        = 2   # общие агрегаторы с частично верифицированным контентом
+    MEDIUM     = 3   # нейтральные источники, Wikipedia, новостные агрегаторы
+    HIGH       = 4   # специализированные сервисы, официальные сайты
+    AUTHORITATIVE = 5  # правительственные, академические, верифицированные API
 
 
 # ─── DOMAIN TRUST REGISTRY ────────────────────────────────────────────────────
-# Single source of truth for domain trust classification.
-# Previously _JUNK_DOMAINS lived in external/search.py as a flat frozenset.
-# Migrated here to support graduated scoring and centralised governance.
+# Явные записи перекрывают автоматическую классификацию по паттернам.
+# Структура: домен (без www.) → TrustTier
 #
-# Add new entries here as junk sources are discovered in production.
-# Never add to search.py — that module delegates to this one.
+# Принципы включения:
+#   BLOCKED:       домены, систематически генерирующие галлюцинации в контексте
+#   VERY_LOW:      SEO-фермы, агрегаторы без первичного контента
+#   HIGH:          сервисы с верифицированными данными реального времени
+#   AUTHORITATIVE: официальные источники с подтверждённой точностью
 
 _DOMAIN_TRUST: dict[str, TrustTier] = {
 
-    # ── AUTHORITATIVE ─────────────────────────────────────────────────────────
-    # Official transport / city / government sources
-    "mos.ru":              TrustTier.AUTHORITATIVE,   # Официальный портал Москвы
-    "mintrans.ru":         TrustTier.AUTHORITATIVE,   # Министерство транспорта РФ
-    "mosgortrans.ru":      TrustTier.AUTHORITATIVE,   # Мосгортранс
-    "transport.mos.ru":    TrustTier.AUTHORITATIVE,
-    "russianrail.com":     TrustTier.AUTHORITATIVE,
-    "rzd.ru":              TrustTier.AUTHORITATIVE,   # РЖД
-    "aeroflot.ru":         TrustTier.AUTHORITATIVE,
-    # City transport portals — authoritative for local route/stop data
-    "voronezh.ru":         TrustTier.AUTHORITATIVE,   # Официальный сайт Воронежа
-    "goroda-rossii.ru":    TrustTier.NEUTRAL,          # aggregator, not official
-    "transportsb.ru":      TrustTier.AUTHORITATIVE,   # Воронежтранс
-    "vmeste-rf.ru":        TrustTier.NEUTRAL,
-
-    # ── TRUSTED ───────────────────────────────────────────────────────────────
-    "wikipedia.org":       TrustTier.TRUSTED,
-    "wikidata.org":        TrustTier.TRUSTED,
-    "openstreetmap.org":   TrustTier.TRUSTED,
-    "booking.com":         TrustTier.TRUSTED,
-    "hotels.com":          TrustTier.TRUSTED,
-    "tripadvisor.com":     TrustTier.TRUSTED,
-    "tripadvisor.ru":      TrustTier.TRUSTED,
-    "yandex.ru":           TrustTier.TRUSTED,
-    "yandex.maps":         TrustTier.TRUSTED,
-    "2gis.ru":             TrustTier.TRUSTED,
-    "google.com":          TrustTier.TRUSTED,
-    "aviasales.ru":        TrustTier.TRUSTED,
-
-    # ── BLOCKED — Route / transport SEO aggregators ───────────────────────────
-    # These generate invented specifics: fake bus numbers, non-existent stops,
-    # made-up journey times. Root cause of "автобус 27А / площадь Горького" errors.
+    # ── BLOCKED: систематические источники галлюцинаций ───────────────────────
     "all-routes.ru":       TrustTier.BLOCKED,
     "all-routes.com":      TrustTier.BLOCKED,
-    "mapbbcode.org":       TrustTier.BLOCKED,
     "kartagoroda.ru":      TrustTier.BLOCKED,
+    "mapbbcode.org":       TrustTier.BLOCKED,
 
-    # ── BLOCKED — Hotel SEO aggregators ──────────────────────────────────────
-    # Use booking.com / hotels.com instead.
-    "101hotels.com":       TrustTier.BLOCKED,
+    # ── VERY_LOW: SEO-агрегаторы без первичного контента ─────────────────────
+    "101hotels.com":       TrustTier.VERY_LOW,
+    "otvet.mail.ru":       TrustTier.VERY_LOW,
+    "travelask.ru":        TrustTier.VERY_LOW,
+    "turpravda.com":       TrustTier.VERY_LOW,
+    "votpusk.ru":          TrustTier.VERY_LOW,
+    "tourister.ru":        TrustTier.VERY_LOW,
+    "irecommend.ru":       TrustTier.VERY_LOW,
+    "otzovik.com":         TrustTier.VERY_LOW,
+    "yell.ru":             TrustTier.VERY_LOW,
 
-    # ── BLOCKED — Q&A spam ───────────────────────────────────────────────────
-    "otvet.mail.ru":       TrustTier.BLOCKED,
-    "travelask.ru":        TrustTier.BLOCKED,
+    # ── LOW: общие агрегаторы ─────────────────────────────────────────────────
+    "tripadvisor.com":     TrustTier.LOW,
+    "tripadvisor.ru":      TrustTier.LOW,
+    "flamp.ru":            TrustTier.LOW,
+    "zoon.ru":             TrustTier.LOW,
 
-    # ── BLOCKED — Generic travel SEO farms ───────────────────────────────────
-    "tourister.ru":        TrustTier.BLOCKED,
-    "turpravda.com":       TrustTier.BLOCKED,
-    "votpusk.ru":          TrustTier.BLOCKED,
+    # ── MEDIUM: нейтральные источники ─────────────────────────────────────────
+    "wikipedia.org":       TrustTier.MEDIUM,
+    "ru.wikipedia.org":    TrustTier.MEDIUM,
+    "en.wikipedia.org":    TrustTier.MEDIUM,
+    "wikitravel.org":      TrustTier.MEDIUM,
+    "ria.ru":              TrustTier.MEDIUM,
+    "tass.ru":             TrustTier.MEDIUM,
+    "rbc.ru":              TrustTier.MEDIUM,
+    "kommersant.ru":       TrustTier.MEDIUM,
+
+    # ── HIGH: верифицированные сервисы с реальными данными ───────────────────
+    "yandex.ru":           TrustTier.HIGH,
+    "maps.yandex.ru":      TrustTier.HIGH,
+    "2gis.ru":             TrustTier.HIGH,
+    "2gis.com":            TrustTier.HIGH,
+    "booking.com":         TrustTier.HIGH,
+    "hotels.com":          TrustTier.HIGH,
+    "ostrovok.ru":         TrustTier.HIGH,
+    "tutu.ru":             TrustTier.HIGH,   # реальные данные транспорта
+    "rasp.yandex.ru":      TrustTier.HIGH,
+    "maps.google.com":     TrustTier.HIGH,
+    "google.com":          TrustTier.HIGH,
+
+    # ── AUTHORITATIVE: официальные источники ──────────────────────────────────
+    "openweathermap.org":  TrustTier.AUTHORITATIVE,
+    "mapbox.com":          TrustTier.AUTHORITATIVE,
+    "gks.ru":              TrustTier.AUTHORITATIVE,   # Росстат
+    "government.ru":       TrustTier.AUTHORITATIVE,
 }
 
-# Score assigned to each tier — used by hybrid_scorer for trust weighting
-TIER_SCORES: dict[TrustTier, float] = {
-    TrustTier.AUTHORITATIVE: 1.0,
-    TrustTier.TRUSTED:       0.8,
-    TrustTier.NEUTRAL:       0.5,
-    TrustTier.DEGRADED:      0.2,
-    TrustTier.BLOCKED:       0.0,
-}
 
-
-# ─── RESULT CONTRACT ──────────────────────────────────────────────────────────
+# ─── PATTERN-BASED CLASSIFICATION ────────────────────────────────────────────
+# Применяется когда домен не в _DOMAIN_TRUST.
+# Паттерны проверяются по порядку, первое совпадение побеждает.
 
 @dataclass(frozen=True)
-class CredibilitySignal:
+class _DomainPattern:
+    pattern: re.Pattern
+    tier: TrustTier
+    reason: str
+
+_DOMAIN_PATTERNS: list[_DomainPattern] = [
+    # Правительственные домены
+    _DomainPattern(re.compile(r"\.gov\.(ru|ua|by|kz|uz)$"), TrustTier.AUTHORITATIVE, "government"),
+    _DomainPattern(re.compile(r"\.gov$"),                    TrustTier.AUTHORITATIVE, "government"),
+    _DomainPattern(re.compile(r"\.edu$"),                    TrustTier.HIGH,          "academic"),
+    _DomainPattern(re.compile(r"\.ac\.\w{2}$"),              TrustTier.HIGH,          "academic"),
+
+    # Официальные транспортные ресурсы
+    _DomainPattern(re.compile(r"(transport|metro|bus|avto|railway|rzd)\.\w"),
+                   TrustTier.HIGH, "transport_official"),
+
+    # SEO-паттерны — домены с типичными SEO-суффиксами
+    _DomainPattern(re.compile(r"(top|best|rating|rank|otzyv|review)"),
+                   TrustTier.VERY_LOW, "seo_pattern"),
+    _DomainPattern(re.compile(r"\d{2,}(hotels?|tours?|travel)"),
+                   TrustTier.VERY_LOW, "seo_aggregator"),
+]
+
+
+# ─── SCORING ──────────────────────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class CredibilityScore:
     domain: str
     tier: TrustTier
-    score: float        # 0.0 – 1.0 from TIER_SCORES
-    blocked: bool
+    score: float          # 0.0 – 1.0, производное от tier
+    reason: str           # для логирования
+    is_blocked: bool      # True → никогда не попадёт в контекст LLM
 
-
-# ─── CORE ─────────────────────────────────────────────────────────────────────
-
-class SourceCredibility:
-    """
-    Evaluates trustworthiness of web sources by domain.
-
-    Position in pipeline:
-        search.py  →  source_credibility.filter_results()  →  reranker  →  LLM
-
-    Responsibility boundary:
-        THIS module:   domain trustworthiness
-        reranker:      semantic relevance
-        safety_agent:  emergent content safety
-        EPK:           policy / cost
-
-    Does NOT:
-        interpret content
-        make routing decisions
-        duplicate reranker logic
-    """
-
-    def evaluate(self, url: str) -> CredibilitySignal:
-        """
-        Return a CredibilitySignal for the given URL.
-        Never raises — falls back to NEUTRAL on any parse error.
-        """
-        domain = _extract_domain(url)
-        tier   = _DOMAIN_TRUST.get(domain, TrustTier.NEUTRAL)
-        return CredibilitySignal(
-            domain=domain,
-            tier=tier,
-            score=TIER_SCORES[tier],
-            blocked=tier == TrustTier.BLOCKED,
-        )
-
-    def filter_results(
-        self,
-        results: list[dict],
-        max_results: int = 5,
-    ) -> list[dict]:
-        """
-        Filter and cap web search results by domain credibility.
-
-        - Removes BLOCKED domains entirely.
-        - Preserves ordering (reranker handles semantic re-ordering downstream).
-        - Caps at max_results after filtering (fewer, better sources > more noise).
-
-        Args:
-            results:     list of dicts with at least a "link" key.
-            max_results: hard cap on returned results.
-
-        Returns:
-            Filtered list, at most max_results long.
-        """
-        kept: list[dict] = []
-        blocked_count = 0
-
-        for r in results:
-            signal = self.evaluate(r.get("link", ""))
-            if signal.blocked:
-                blocked_count += 1
-                logger.debug(
-                    "source_credibility: blocked domain",
-                    extra={"domain": signal.domain, "tier": signal.tier},
-                )
-                continue
-            kept.append(r)
-
-        capped = kept[:max_results]
-        removed = len(results) - len(capped)
-
-        if removed > 0:
-            logger.info(
-                "source_credibility: filtered results",
-                extra={
-                    "original": len(results),
-                    "blocked":  blocked_count,
-                    "kept":     len(capped),
-                },
-            )
-
-        return capped
-
-
-# ─── HELPERS ──────────────────────────────────────────────────────────────────
 
 def _extract_domain(url: str) -> str:
-    """
-    Parse URL and return bare domain without www. prefix.
-    Returns empty string on parse failure.
-    """
+    """Извлечь домен без www. Пустая строка при ошибке."""
     try:
         netloc = urlparse(url).netloc.lower()
         return netloc[4:] if netloc.startswith("www.") else netloc
@@ -197,6 +164,173 @@ def _extract_domain(url: str) -> str:
         return ""
 
 
+def _tier_to_score(tier: TrustTier) -> float:
+    """Конвертация TrustTier в float weight для downstream использования."""
+    return tier.value / TrustTier.AUTHORITATIVE.value
+
+
+def evaluate(url: str) -> CredibilityScore:
+    """
+    Оценить trustworthiness источника по URL.
+    Детерминированная. Без I/O. Без side effects.
+
+    Приоритет:
+      1. Явная запись в _DOMAIN_TRUST
+      2. Паттерн из _DOMAIN_PATTERNS
+      3. DEFAULT: MEDIUM (неизвестный источник — не блокировать, но и не доверять)
+    """
+    domain = _extract_domain(url)
+
+    # 1. Явная запись
+    if domain in _DOMAIN_TRUST:
+        tier = _DOMAIN_TRUST[domain]
+        return CredibilityScore(
+            domain=domain,
+            tier=tier,
+            score=_tier_to_score(tier),
+            reason="explicit_registry",
+            is_blocked=(tier == TrustTier.BLOCKED),
+        )
+
+    # 2. Паттерн
+    for dp in _DOMAIN_PATTERNS:
+        if dp.pattern.search(domain):
+            return CredibilityScore(
+                domain=domain,
+                tier=dp.tier,
+                score=_tier_to_score(dp.tier),
+                reason=f"pattern:{dp.reason}",
+                is_blocked=(dp.tier == TrustTier.BLOCKED),
+            )
+
+    # 3. Default
+    return CredibilityScore(
+        domain=domain,
+        tier=TrustTier.MEDIUM,
+        score=_tier_to_score(TrustTier.MEDIUM),
+        reason="unknown_domain",
+        is_blocked=False,
+    )
+
+
+# ─── FILTER API ───────────────────────────────────────────────────────────────
+# Используется в retrieval_engine и search.py
+
+# Минимальный tier для попадания в контекст LLM.
+# VERY_LOW и ниже → отфильтровываются.
+_MIN_TIER = TrustTier.LOW
+
+
+def filter_results(
+    results: list[dict],
+    min_tier: TrustTier = _MIN_TIER,
+    max_results: int = 5,
+) -> list[dict]:
+    """
+    Отфильтровать список результатов поиска по credibility.
+    Входной формат: [{"title": str, "link": str, "snippet": str}, ...]
+    Возвращает отфильтрованный и ограниченный список.
+
+    Порядок сохраняется (изначальный ranking SerpAPI).
+    Credibility не перестраивает порядок — это задача reranker'а.
+    """
+    passed: list[dict] = []
+    blocked_count = 0
+    low_trust_count = 0
+
+    for r in results:
+        url = r.get("link", "")
+        cred = evaluate(url)
+
+        if cred.is_blocked:
+            blocked_count += 1
+            logger.debug(
+                "source_credibility: BLOCKED",
+                extra={"domain": cred.domain, "url": url[:80]},
+            )
+            continue
+
+        if cred.tier < min_tier:
+            low_trust_count += 1
+            logger.debug(
+                "source_credibility: below min_tier",
+                extra={
+                    "domain": cred.domain,
+                    "tier":   cred.tier.name,
+                    "min":    min_tier.name,
+                },
+            )
+            continue
+
+        # Аннотировать результат credibility-метаданными для downstream
+        passed.append({
+            **r,
+            "_credibility": {
+                "domain": cred.domain,
+                "tier":   cred.tier.name,
+                "score":  round(cred.score, 3),
+                "reason": cred.reason,
+            },
+        })
+
+    kept = passed[:max_results]
+
+    if blocked_count or low_trust_count or len(results) > len(kept):
+        logger.info(
+            "source_credibility: filter complete",
+            extra={
+                "input":       len(results),
+                "blocked":     blocked_count,
+                "low_trust":   low_trust_count,
+                "kept":        len(kept),
+            },
+        )
+
+    return kept
+
+
+def score_documents(
+    documents: list[tuple[str, float]],
+) -> list[tuple[str, float]]:
+    """
+    Применить credibility-weighting к результатам pgvector (content, score).
+    Используется в retrieval_engine после similarity_search.
+
+    Документы из памяти не имеют URL — credibility не применяется,
+    возвращаются as-is. Этот метод зарезервирован для будущих случаев
+    когда memory records будут содержать source metadata.
+    """
+    # Memory records сейчас не содержат source URL — пропускаем без изменений.
+    # Когда MemoryRecord получит поле source_url, здесь добавится weighting.
+    return documents
+
+
 # ─── SINGLETON ────────────────────────────────────────────────────────────────
+# Stateless — синглтон только для единообразия с остальными сервисами.
+
+class SourceCredibility:
+    """
+    Публичный фасад для использования через dependency injection.
+    Все методы делегируют module-level функциям.
+    Stateless — не хранит состояния между вызовами.
+    """
+
+    def evaluate(self, url: str) -> CredibilityScore:
+        return evaluate(url)
+
+    def filter_results(
+        self,
+        results: list[dict],
+        min_tier: TrustTier = _MIN_TIER,
+        max_results: int = 5,
+    ) -> list[dict]:
+        return filter_results(results, min_tier=min_tier, max_results=max_results)
+
+    def score_documents(
+        self,
+        documents: list[tuple[str, float]],
+    ) -> list[tuple[str, float]]:
+        return score_documents(documents)
+
 
 source_credibility = SourceCredibility()
