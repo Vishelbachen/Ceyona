@@ -30,6 +30,30 @@ def _mb_lang(lang: str) -> str:
     return _MB_LANG_MAP.get(lang, "en")
 
 
+# Mapbox "country" filter bias — restricts geocoding to most likely country
+# for a given UI language. Prevents "центр" resolving to Centre, TX.
+# Source: ISO 3166-1 alpha-2.
+_LANG_COUNTRY_BIAS: dict[str, str] = {
+    "ru": "ru",  "uk": "ua",  "be": "by",
+    "kk": "kz",  "uz": "uz",  "az": "az",
+    "ka": "ge",  "hy": "am",  "mn": "mn",
+    "de": "de",  "fr": "fr",  "es": "es",
+    "pt": "pt",  "it": "it",  "pl": "pl",
+    "nl": "nl",  "sv": "se",  "da": "dk",
+    "fi": "fi",  "cs": "cz",  "ro": "ro",
+    "hu": "hu",  "tr": "tr",  "he": "il",
+    "ar": "sa",  "fa": "ir",  "hi": "in",
+    "zh": "cn",  "ja": "jp",  "ko": "kr",
+    "vi": "vn",  "th": "th",  "id": "id",
+    "ms": "my",
+}
+
+
+def _country_bias(lang: str) -> str | None:
+    """Return ISO 3166-1 country code for Mapbox geocoding bias, or None."""
+    return _LANG_COUNTRY_BIAS.get(lang)
+
+
 # ─── QUERY VALIDATION ─────────────────────────────────────────────────────────
 
 _QUERY_MIN_LEN  = 3
@@ -380,13 +404,17 @@ class MapsService:
         async def _geocode(place: str) -> tuple[float, float, str] | None:
             try:
                 async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                    _params: dict = {
+                        "access_token": self._token,
+                        "limit": 1,
+                        "language": _mb_lang(lang),
+                    }
+                    country = _country_bias(lang)
+                    if country:
+                        _params["country"] = country
                     r = await client.get(
                         f"{_BASE_URL}/{place}.json",
-                        params={
-                            "access_token": self._token,
-                            "limit": 1,
-                            "language": _mb_lang(lang),
-                        },
+                        params=_params,
                     )
                     r.raise_for_status()
                     features = r.json().get("features", [])
