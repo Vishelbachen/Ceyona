@@ -3,6 +3,8 @@ primary_region = 'fra'
 
 [build]
   dockerfile = "Dockerfile"
+  [build.args]
+    CACHEBUST = "2"
 
 [env]
   PORT = "8080"
