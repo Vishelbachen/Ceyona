@@ -11,6 +11,7 @@ from contracts.retrieval_contracts import (
 from retrieval.dense.bge_engine import bge_engine
 from retrieval.reranker.cross_encoder import cross_encoder
 from retrieval.query_preprocessor import preprocess
+from retrieval.source_credibility import source_credibility
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +120,11 @@ async def retrieve(
                 "has_embedding": bool(dense_result.embedding),
             },
         )
+
+    # ── credibility weighting for memory documents ───────────────────────────
+    # Memory records don't have source URLs yet, so score_documents() is a
+    # pass-through. When MemoryRecord gains source_url, weighting activates.
+    candidates = source_credibility.score_documents(candidates)
 
     # ── rerank if candidates available ────────────────────────────────────────
     if candidates:
