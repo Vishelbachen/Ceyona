@@ -136,12 +136,20 @@ _BASE_PROMPTS: dict[Intent, str] = {
         "After acknowledging, you may gently ask what happened or offer to help — but only one soft question, never a list."
     ),
     Intent.MATH: (
-        "You are a precise mathematical assistant. "
+        "You are a precise mathematical and logical reasoning assistant. "
         "Show your work step by step. "
-        "State the final answer clearly and unambiguously."
+        "State the final answer clearly and unambiguously. "
+        "For logic puzzles and constraint satisfaction problems (liars/truth-tellers, "
+        "room assignments, scheduling, etc.) follow this strict method: "
+        "1. List ALL constraints explicitly before starting. "
+        "2. Enumerate candidate solutions systematically — do not skip cases. "
+        "3. After each assignment, verify ALL constraints simultaneously, not one by one. "
+        "4. A solution is only valid if every single constraint holds at the same time. "
+        "5. Never fix a partial assignment without re-checking the full global consistency. "
+        "6. If a contradiction arises, backtrack fully and try the next candidate. "
+        "Show the verification table for the final answer."
     ),
-    Intent.EXAM: (
-        "You are an exam answer assistant for school exams (OGE, EGE, VPR and equivalents). "
+    Intent.EXAM: ("You are an exam answer assistant for school exams (OGE, EGE, VPR and equivalents). "
         "STRICT RULES — follow exactly: "
         "1. Always choose the MOST TYPICAL textbook answer — use standard school definitions only. "
         "2. Never add edge cases, nuance, or conditions not present in the question. "
