@@ -275,7 +275,7 @@ class MapsService:
 
         params_base = {
             "access_token": self._token,
-            "limit": 1,
+            "limit": 5,
             "language": _mb_lang(lang),
             "types": "poi",
         }
@@ -288,13 +288,17 @@ class MapsService:
             else:
                 try:
                     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                        _loc_params: dict = {
+                            "access_token": self._token,
+                            "limit": 1,
+                            "language": _mb_lang(lang),
+                        }
+                        _cb = _country_bias(lang)
+                        if _cb:
+                            _loc_params["country"] = _cb
                         response = await client.get(
                             f"{_BASE_URL}/{location}.json",
-                            params={
-                                "access_token": self._token,
-                                "limit": 1,
-                                "language": _mb_lang(lang),
-                            },
+                            params=_loc_params,
                         )
                         response.raise_for_status()
                         data     = response.json()
@@ -335,9 +339,9 @@ class MapsService:
                     return None
                 logger.info(
                     "search_poi: success",
-                    extra={"category": category, "location": location[:50]},
+                    extra={"category": category, "location": location[:50], "count": len(features)},
                 )
-                return features[0]
+                return features  # list of up to 5 features
         except Exception as exc:
             logger.error(
                 "MapsService.search_poi failed",
@@ -347,29 +351,37 @@ class MapsService:
 
     def format_poi(
         self,
-        feature: dict,
+        features: list[dict] | dict,
         lang: str = "en",
     ) -> str:
-        """Format POI search result into localised Telegram-ready string."""
-        try:
-            name    = feature.get("text", "") or feature.get("place_name", "Unknown")
-            address = feature.get("place_name", "")
-            center  = feature.get("center", [])
+        """Format POI search results (list or single) into a Telegram-ready string."""
+        if isinstance(features, dict):
+            features = [features]
 
-            if not center or len(center) < 2:
-                return f"📍 *{name}*\n{address}"
+        lines: list[str] = []
+        for feature in features[:5]:
+            try:
+                name    = feature.get("text", "") or feature.get("place_name", "Unknown")
+                address = feature.get("place_name", "")
+                center  = feature.get("center", [])
 
-            lon, lat = center[0], center[1]
-            return _t(
-                "maps_poi_result", lang,
-                name=name,
-                address=address,
-                lat=f"{lat:.5f}",
-                lon=f"{lon:.5f}",
-            )
-        except Exception as exc:
-            logger.error("format_poi failed", extra={"error": str(exc)})
-            return "📍 Could not format location."
+                if not center or len(center) < 2:
+                    lines.append(f"📍 *{name}*\n{address}")
+                    continue
+
+                lon, lat = center[0], center[1]
+                lines.append(_t(
+                    "maps_poi_result", lang,
+                    name=name,
+                    address=address,
+                    lat=f"{lat:.5f}",
+                    lon=f"{lon:.5f}",
+                ))
+            except Exception as exc:
+                logger.error("format_poi failed for feature", extra={"error": str(exc)})
+                continue
+
+        return "\n\n".join(lines) if lines else "📍 Could not format location."
 
     def format_poi_not_found(
         self,
