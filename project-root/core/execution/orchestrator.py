@@ -82,6 +82,9 @@ class OrchestratorResult:
     denied: bool = False
     deny_reason: str = ""
     lang: str = "en"
+    intent: str = ""          # classified intent value, for reflection/observability
+    tool_used: bool = False   # whether an external tool was called
+    tool_failed: bool = False # whether the tool call failed
 
 
 # ─── INTERNAL HELPERS ─────────────────────────────────────────────────────────
@@ -260,6 +263,8 @@ async def _run_allow(
             cost_usd=cost,
         ),
         lang=lang,
+        intent=intent_result.intent.value,
+        tool_used=bool(intent_result.tool_name),
     )
 
 
@@ -326,6 +331,8 @@ async def _run_degraded(
             cost_usd=cost,
         ),
         lang=lang,
+        intent=intent_result.intent.value,
+        tool_used=bool(intent_result.tool_name),
     )
 
 
@@ -416,6 +423,8 @@ async def _run_heavy(
             cost_usd=cost,
         ),
         lang=lang,
+        intent=intent_result.intent.value,
+        tool_used=bool(intent_result.tool_name),
     )
 
 
@@ -539,6 +548,8 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
                 epk_decision=epk_out.decision,
                 usage=_empty_usage(request, tier),
                 lang=lang,
+                intent=intent_result.intent.value,
+                tool_used=True,
             )
 
         # ── assemble retrieved context ────────────────────────────────────────
