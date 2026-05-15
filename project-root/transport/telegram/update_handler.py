@@ -220,16 +220,6 @@ async def handle_message(
         try:
             from cognition.intent_engine import classify
             from external.web_tools import run_tool
-            from meta.analysis import analyse
-
-            # Structural analysis — provides hints to intent classifier
-            # (HAS_MATH, IS_MULTIPART, SCRIPT_CYRILLIC etc.) at zero cost.
-            analysis_report = analyse(text, lightweight=False)
-            logger.debug("Meta analysis", extra={
-                "dominant_script": analysis_report.dominant_script,
-                "word_count":      analysis_report.word_count,
-                "hint_count":      len(analysis_report.hints),
-            })
 
             _pre_intent  = locals().get("_vision_intent_result")
             quick_intent = (
@@ -240,9 +230,6 @@ async def handle_message(
 
             # weather / maps / maps_poi are handled by orchestrator._run_tool().
             # Running them here too causes doubled output — skip them.
-            # "search" IS handled here (we just ran it above).
-            # orchestrator must NOT run it again via _run_tool() → double SerpAPI call + 413.
-            # weather/maps/maps_poi/maps_route are handled exclusively by orchestrator._run_tool().
             _ORCHESTRATOR_TOOLS = {"weather", "maps", "maps_poi", "maps_route", "search"}
             if intent_value not in _NO_SEARCH_INTENTS and intent_value not in _ORCHESTRATOR_TOOLS:
                 web_result = await run_tool(
@@ -301,15 +288,13 @@ async def handle_message(
         from meta.memory_audit import MemorySnapshot, audit
 
         ref_input = ReflectionInput(
-            intent=result.intent or str(result.epk_decision),
+            intent=str(result.epk_decision),
             lang=lang,
             tier=str(result.tier),
             model=result.model or "",
             response_text=result.text or "",
             response_truncated=len(result.text or "") >= 4096,
             cost_usd=result.usage.cost_usd,
-            tool_used=result.tool_used,
-            tool_failed=result.tool_failed,
             was_degraded_mode=str(result.epk_decision) == "DEGRADED_MODE",
             safety_blocked=result.deny_reason == "safety_block",
             user_id=user_id,
@@ -320,7 +305,6 @@ async def handle_message(
         snap = MemorySnapshot(
             user_id=user_id,
             history_turn_count=len(conversation_history) if conversation_history else 0,
-            vector_entry_count=len(retrieval_result.documents) if "retrieval_result" in dir() and retrieval_result else 0,
             snapshot_available=True,
         )
         audit_report = audit(snap)
