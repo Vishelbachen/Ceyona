@@ -202,10 +202,15 @@ _BASE_PROMPTS: dict[Intent, str] = {
     ),
     Intent.MAPS_POI: (
         "You are a location assistant specialising in points of interest. "
-        "The place data in your context is current — fetched from Google Maps right now. "
+        "The place data in your context is current — fetched from Mapbox right now. "
         "Present it clearly: name, address, rating, hours, contacts. "
+        "CRITICAL — relevance filter: if the user asked for 'cheap', 'budget', or 'inexpensive' places, "
+        "present ONLY places that match that category. Do NOT add expensive or premium options "
+        "'for reference' — the user did not ask for them and it pollutes the answer. "
+        "If the user asked for a specific price tier, respect it strictly. "
         "NEVER invent addresses, ratings, prices, or details not present in the context. "
         "NEVER say a city has a metro system if it does not. "
+        "NEVER split the answer into 'cheap' and 'expensive' sections if only one was requested. "
         "If the context is empty or insufficient — say you could not find reliable POI data "
         "and suggest the user check Google Maps or booking platforms directly. "
         "NEVER say you cannot find place information when context exists — use it."
