@@ -109,23 +109,66 @@ _STRATEGY_MATRIX: dict[tuple[str, str], ReasoningStrategy] = {
     ),
 
     # ── MATH ─────────────────────────────────────────────
+    # instruction_prefix triggers the constraint-propagation protocol
+    # defined in the MATH system prompt in intent_engine.py:
+    # list all constraints → enumerate candidates → verify ALL simultaneously
+    # → backtrack on contradiction → show verification table.
     (Intent.MATH, Tier.FAST): ReasoningStrategy(
         mode=ReasoningMode.CHAIN_OF_THOUGHT,
         temperature=0.1,
-        instruction_prefix="Solve step by step:",
-        max_reasoning_steps=3,
+        instruction_prefix=(
+            "Before solving: list ALL constraints explicitly. "
+            "Then enumerate candidates. "
+            "Verify ALL constraints simultaneously for each candidate. "
+            "Only then give the answer:"
+        ),
+        max_reasoning_steps=4,
     ),
     (Intent.MATH, Tier.GENERAL): ReasoningStrategy(
         mode=ReasoningMode.CHAIN_OF_THOUGHT,
         temperature=0.1,
-        instruction_prefix="Solve step by step:",
-        max_reasoning_steps=5,
+        instruction_prefix=(
+            "Before solving: list ALL constraints explicitly. "
+            "Then enumerate candidates systematically. "
+            "For each candidate verify ALL constraints at once — not one by one. "
+            "Backtrack fully if any constraint fails. "
+            "Show a verification table for the final answer:"
+        ),
+        max_reasoning_steps=6,
     ),
     (Intent.MATH, Tier.HEAVY): ReasoningStrategy(
         mode=ReasoningMode.CHAIN_OF_THOUGHT,
         temperature=0.05,
-        instruction_prefix="Solve step by step:",
-        max_reasoning_steps=8,
+        instruction_prefix=(
+            "Before solving: list ALL constraints explicitly. "
+            "Then enumerate ALL candidate solutions systematically. "
+            "For each candidate verify ALL constraints simultaneously — never partially. "
+            "A solution is valid only when every single constraint holds at the same time. "
+            "Backtrack fully on any contradiction. "
+            "Count truth-tellers/liars globally, not locally. "
+            "Show the complete verification table for the final answer:"
+        ),
+        max_reasoning_steps=10,
+    ),
+
+    # ── EXAM ──────────────────────────────────────────────
+    (Intent.EXAM, Tier.FAST): ReasoningStrategy(
+        mode=ReasoningMode.DIRECT,
+        temperature=0.1,
+        instruction_prefix="",
+        max_reasoning_steps=1,
+    ),
+    (Intent.EXAM, Tier.GENERAL): ReasoningStrategy(
+        mode=ReasoningMode.DIRECT,
+        temperature=0.1,
+        instruction_prefix="",
+        max_reasoning_steps=2,
+    ),
+    (Intent.EXAM, Tier.HEAVY): ReasoningStrategy(
+        mode=ReasoningMode.DIRECT,
+        temperature=0.1,
+        instruction_prefix="",
+        max_reasoning_steps=2,
     ),
 
     # ── INSTRUCTION ──────────────────────────────────────
