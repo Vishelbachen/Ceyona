@@ -1,30 +1,3 @@
-Оценка доверия к источникам поиска.
-
-Роль:
-  Единственная ответственность — оценить trustworthiness источника
-  ДО того как его контент попадёт в контекст LLM.
-
-  Это НЕ:
-    - semantic reranking     (→ cross_encoder.py)
-    - policy enforcement     (→ EPK)
-    - safety filtering       (→ safety_agent.py)
-    - routing / arbitration  (→ consensus_engine.py)
-
-  Это ТОЛЬКО:
-    - оценка доверия к домену и типу источника
-    - фильтрация ненадёжных источников из retrieval pipeline
-    - взвешивание результатов по trustworthiness
-
-Используется:
-  - retrieval/retrieval_engine.py  → filter_web_results()
-  - external/search.py             → _filter_results() делегирует сюда
-                                     (junk-list из search.py мигрирован сюда)
-
-Интеграционная точка:
-  results = retrieve()
-  results = source_credibility.filter(results)   ← здесь
-  # далее → LLM
-"""
 from __future__ import annotations
 
 import logging
