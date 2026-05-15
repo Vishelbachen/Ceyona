@@ -47,6 +47,10 @@ async def _extract_poi_parts_via_llm(query: str) -> tuple[str, str]:
             "Extract the POI category and location from the following query. "
             "Reply with a JSON object only, no extra text: "
             '{"category": "...", "location": "..."}. '
+            "category = what the user is looking for (e.g. 'cheap hotels', 'restaurants', 'pharmacies'). "
+            "location = the full city/area name for geocoding (e.g. 'Voronezh', 'Rome city center'). "
+            "Always include the city name in location — never return just 'center' or 'downtown'. "
+            "Include any price qualifier (cheap, budget, luxury) in category, not in location. "
             "If you cannot determine one of the fields, use an empty string.\n\n"
             f"Query: {query}"
         )
@@ -111,6 +115,12 @@ async def _extract_route_endpoints_via_llm(query: str) -> tuple[str, str]:
             "Extract the origin and destination from the following routing query. "
             "Reply with a JSON object only, no extra text: "
             '{"origin": "...", "destination": "..."}. '
+            "IMPORTANT: always produce FULL, unambiguous place names suitable for geocoding. "
+            "If the query mentions a city, include it in both fields. "
+            "Never return vague words like 'center', 'центр', 'downtown', 'airport' alone — "
+            "always attach the city name, e.g. 'Voronezh city center', 'Voronezh Airport'. "
+            "If the city is not mentioned explicitly but is clear from context (e.g. 'airport' "
+            "in a query that already names a city), include the city anyway. "
             "If you cannot determine one of the fields, use an empty string.\n\n"
             f"Query: {query}"
         )
