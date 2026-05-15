@@ -45,13 +45,16 @@ async def _extract_poi_parts_via_llm(query: str) -> tuple[str, str]:
         from llm.groq_client import groq_client
         prompt = (
             "Extract the POI category and location from the following query. "
-            "Reply with a JSON object only, no extra text: "
-            '{"category": "...", "location": "..."}. '
-            "category = what the user is looking for (e.g. 'cheap hotels', 'restaurants', 'pharmacies'). "
-            "location = the full city/area name for geocoding (e.g. 'Voronezh', 'Rome city center'). "
-            "Always include the city name in location — never return just 'center' or 'downtown'. "
-            "Include any price qualifier (cheap, budget, luxury) in category, not in location. "
-            "If you cannot determine one of the fields, use an empty string.\n\n"
+            "Reply with a JSON object ONLY, no extra text, no markdown: "
+            '{"category": "...", "location": ""}. '
+            "RULES:\n"
+            "1. category = what the user is looking for (e.g. 'cheap hotels', 'restaurants', 'pharmacies', 'ATMs').\n"
+            "2. location = the FULL city or area name suitable for geocoding. "
+            "Never return just 'center', 'downtown', 'центр', 'here'. "
+            "Always return the actual city name, e.g. 'Voronezh', 'Saint Petersburg city center'.\n"
+            "3. Include price qualifiers (cheap, budget, luxury, дешёвые) in category, NOT in location.\n"
+            "4. If you cannot determine a field, use empty string \"\".\n"
+            "Output JSON only. No explanation.\n\n"
             f"Query: {query}"
         )
         response = await groq_client.complete(
@@ -113,15 +116,17 @@ async def _extract_route_endpoints_via_llm(query: str) -> tuple[str, str]:
         from llm.groq_client import groq_client
         prompt = (
             "Extract the origin and destination from the following routing query. "
-            "Reply with a JSON object only, no extra text: "
+            "Reply with a JSON object ONLY — no markdown, no explanation: "
             '{"origin": "...", "destination": "..."}. '
-            "IMPORTANT: always produce FULL, unambiguous place names suitable for geocoding. "
-            "If the query mentions a city, include it in both fields. "
-            "Never return vague words like 'center', 'центр', 'downtown', 'airport' alone — "
-            "always attach the city name, e.g. 'Voronezh city center', 'Voronezh Airport'. "
-            "If the city is not mentioned explicitly but is clear from context (e.g. 'airport' "
-            "in a query that already names a city), include the city anyway. "
-            "If you cannot determine one of the fields, use an empty string.\n\n"
+            "CRITICAL RULES:\n"
+            "1. Both values MUST be FULL, geocodable place names — never vague words alone.\n"
+            "2. Never output: center, центр, downtown, airport, station, вокзал, аэропорт — "
+            "always add the CITY NAME. Examples: 'Voronezh Airport', 'Voronezh city center', "
+            "'Moscow Sheremetyevo Airport', 'Saint Petersburg Moskovsky station'.\n"
+            "3. If a city is named anywhere in the query — include it in BOTH origin AND destination.\n"
+            "4. 'центр' → '[City] city center'. 'аэропорт' → '[City] Airport'.\n"
+            "5. If you cannot determine a value — use empty string.\n"
+            "Output JSON only.\n\n"
             f"Query: {query}"
         )
         response = await groq_client.complete(
