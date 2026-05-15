@@ -191,6 +191,7 @@ def _build_messages(
         retrieved_context=retrieved_context,
         conversation_history=request.conversation_history,
         truth_mode=truth_mode,
+        lang=request.lang,
     ))
 
 
@@ -357,6 +358,7 @@ async def _run_heavy(
             retrieved_context=request.retrieved_context or "",
             conversation_history=request.conversation_history,
             truth_mode=truth_mode,
+            lang=request.lang,
         ))
 
     plan = plan_agents(intent_result.intent, tier, strategy)
