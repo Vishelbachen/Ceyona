@@ -1,512 +1,543 @@
-🥇 FINAL ARCHITECTURE v5.5 (FULLY SYNCED WITH SSoT v6.3)
-
-📁 APP LAYER
-app/
-├── main.py
-├── bootstrap.py
-├── settings.py
-
-🌐 TRANSPORT LAYER (INGRESS ONLY)
-transport/telegram/
-├── webhook.py
-├── update_handler.py
-├── message_router.py
-├── callback_handler.py
-└── auth_middleware.py
-✔ ingestion only / no domain logic / no routing decisions
-
-⚙️ EXECUTION CORE
-core/kernel/
-├── execution_policy_kernel.py   # EPK — SOLE POLICY AUTHORITY
-├── decision_matrix.py
-├── cost_model.py
-├── policy_registry.py
-
-core/execution/
-├── orchestrator.py              # EPK signal execution only
-
-✔ EPK OUTPUT: ALLOW | DENY | DEGRADED_MODE | HEAVY_REQUIRED
-
-  ALLOW →
-    полный DAG ✅
-
-  DENY →
-    immediate exit ❌
-    NO downstream ❌
-
-  DEGRADED_MODE →
-    Memory / Embedding / Reranker ✅
-    analysis.py (lightweight) ✅
-    Intent Engine ✅
-    Fast Tier only ✅
-    skip Reasoning / Coordinator / General / Agents ❌
-    skip safety_agent / heavy_input_shaper / Heavy / Consensus ❌
-    Response Synthesizer напрямую ✅
-    META lightweight ✅
-
-  HEAVY_REQUIRED →
-    [SKIP FAST TIER] ❌
-    [SKIP GENERAL TIER] ❌
-    analysis.py (full) ✅
-    Reasoning Engine ACTIVE ✅
-    heavy_input_shaper ALWAYS CALLED (self-gated) ✅
-    Heavy Tier mandatory ✅
-    safety_agent mandatory ✅
-    Consensus SKIP (mutex) ❌
-    Response Synthesizer агрегирует напрямую ✅
-    META full ✅
-
-✔ Orchestrator = EPK signal execution only
-✔ NO policy generation ❌
-✔ NO routing decisions ❌
-✔ NO Heavy Tier self-activation ❌
-
-🔁 EVENT SYSTEM
-events/
-├── event_bus.py
-├── event_store.py
-├── event_types.py
-├── event_dispatcher.py
-└── event_replay.py
-✔ append-only / no execution influence
-✔ Event Store ∥ Memory Write: параллельно / independent failure domains
-
-🧠 COGNITION LAYER
-cognition/
-├── intent_engine.py
-├── reasoning_engine.py
-├── multi_agent_coordinator.py
-└── response_synthesizer.py
-
-✔ intent_engine.py
-  stateless prompt construction
-  NO policy ❌ NO routing ❌
-
-✔ reasoning_engine.py
-  строит reasoning_plan
-  ACTIVE on ALLOW / HEAVY_REQUIRED ✅
-  skip on DENY / DEGRADED ❌
-  control-plane (архитектор) ✅
-  Heavy Tier = data-plane (исполнитель) ✅
-  NO model routing ❌ NO agent execution ❌ NO policy ❌
-
-✔ multi_agent_coordinator.py
-  вызывается ТОЛЬКО orchestrator'ом ✅
-  строит agent_execution_plan
-  возвращает ТОЛЬКО orchestrator'у ✅
-  skip on DENY / DEGRADED ❌
-  NO прямой вызов агентов ❌
-  NO pipeline control ❌
-  NO model selection ❌
-
-✔ response_synthesizer.py
-  FINAL OUTPUT AUTHORITY
-
-  INTERNAL PIPELINE:
-    1. assemble_response
-    2. structure_output
-    3. apply_formatting
-    4. apply_correction  ← meta/correction.py
-    5. finalize_output
-
-  агрегирует Heavy Tier output при HEAVY_REQUIRED ✅
-  correction НЕ имеет authority ❌
-  location: meta/ | authority: synthesizer ✅
-  NO policy ❌ NO agent selection ❌ NO routing ❌
-
-🧠 META LAYER (OBSERVATION / DIAGNOSTICS ONLY)
-meta/
-├── analysis.py      ← PRE-REASONING (шаг DAG до intent_engine)
-├── reflection.py    ← POST-EXECUTION side-channel
-├── correction.py    ← INLINE (owned: meta / executed: synthesizer)
-└── memory_audit.py  ← OFFLINE DIAGNOSTICS side-channel
-
-✔ КЛЮЧЕВОЙ ИНВАРИАНТ:
-  observes system ✅
-  NEVER controls system ❌
-  NEVER participates in execution decisions ❌
-  NEVER affects EPK ❌
-  NEVER escalates tier ❌
-
-✔ META ≠ COGNITION (наблюдает vs думает)
-✔ META ≠ OBSERVABILITY (смысл vs система)
-
-✔ analysis.py
-  POSITION: DAG шаг ДО intent_engine
-  НЕ вызывается Orchestrator'ом ❌
-  автоматический шаг pipeline ✅
-  ACTIVE on ALLOW / HEAVY (full) ✅
-  ACTIVE on DEGRADED (lightweight) ✅
-  SKIP on DENY ❌
-  OUTPUT: hints (non-binding, zero authority)
-  NO policy ❌ NO routing ❌ NO reasoning ❌
-
-✔ reflection.py
-  POSITION: POST-EXECUTION side-channel
-  ACTIVE on ALLOW / HEAVY (full) ✅
-  ACTIVE on DEGRADED (lightweight) ✅
-  SKIP on DENY ❌
-  OUTPUT: reflection_report
-    → observability (logs / traces) ✅
-    → optional: memory_audit input ✅
-  NO pipeline feedback ❌
-  NO response modification ❌
-  NO current request influence ❌
-
-✔ correction.py
-  OWNERSHIP: meta/
-  EXECUTION: ONLY via response_synthesizer (step 4)
-  EXCLUDED FROM: META side-channel DAG ❌
-  NO authority ❌
-  NO independent execution ❌
-  CANNOT override synthesizer intent ❌
-
-✔ memory_audit.py
-  POSITION: OFFLINE side-channel
-  ACTIVE on ALLOW / HEAVY / DEGRADED ✅
-  SKIP on DENY ❌
-  OUTPUT: audit_report (read-only)
-  optional input → reflection.py ✅
-  NO memory write ❌
-  NO conflict resolution ❌
-  NO execution trigger ❌
-
-✔ META в DEGRADED_MODE:
-  STATUS: ENABLED (lightweight)
-  analysis / reflection / memory_audit → lightweight ✅
-  correction → вызывается synthesizer'ом как обычно ✅
-  meta NEVER affects EPK ❌
-  meta NEVER escalates tier ❌
-
-✔ META side-channel DAG INCLUDES:
-  analysis.py ✅
-  reflection.py ✅
-  memory_audit.py ✅
-  EXCLUDES correction.py ❌
-
-🤖 AGENTS LAYER
-agents/
-├── fast_agent.py           # groq/compound-mini
-├── deep_agent.py           # groq/compound
-├── creative_agent.py       # llama-3.3-70b-versatile
-├── safety_agent.py         # POST-REASONING SEMANTIC VALIDATION
-└── consensus_engine.py     # openai/gpt-oss-120b (mutex)
-
-✔ safety_agent.py
-  ACTIVE on ALLOW / HEAVY_REQUIRED ✅
-  skip on DEGRADED / DENY ❌
-  LAST in Agent Layer before Consensus ✅
-  валидирует reasoning_plan и draft_response
-  выдаёт: allow / revise / block
-  NO input-level filtering ❌
-  НЕ дублирует Safety Layer ✅
-
-✔ consensus_engine.py
-  ACTIVE on ALLOW only ✅
-  SKIP при HEAVY_REQUIRED (mutex) ❌
-  Response Synthesizer агрегирует напрямую при HEAVY ✅
-
-✔ model placement → see SSoT v6.3
-
-💳 ECONOMIC LAYER (TON)
-payments/
-├── ton_client.py
-├── pricing_engine.py
-├── access_controller.py
-├── usage_meter.py
-└── wallet_manager.py
-
-🧠 MEMORY LAYER (STORAGE ONLY)
-memory/
-├── supabase_store.py
-├── vector_memory.py
-└── conversation_history.py
-✔ storage only / no retrieval logic
-✔ Memory Write = independent failure domain
-✔ parallel with Event Store
-✔ skip on EPK = DENY ❌
-
-🧠 LLM LAYER (INFERENCE ONLY)
-
-✔ LLM TIER CLARIFICATION:
-  FAST / GENERAL / HEAVY = тиры мощности, НЕ слои логики ❌
-  heavy_input_shaper = self-gated utility, НЕ тир ❌
-
-llm/
-├── groq_client.py
-├── hf_client.py
-├── model_router.py
-├── prompt_engine.py           # qwen → thinking: False
-├── fallback_handler.py
-└── heavy_input_shaper.py
-    # self-gated utility
-    # ONLY on HEAVY_REQUIRED
-    # ALWAYS CALLED, internal NO-OP if not needed
-    # SKIP on ALLOW / DEGRADED / DENY
-    # decision: context_size / structure / tokens / format
-    # uses llama-3.1-8b-instant (NOT as Fast Tier)
-    # реализация гибкая: compression / chunking / summarization
-
-🌍 EXTERNAL TOOLS
-external/
-├── weather.py
-├── maps.py
-├── search.py
-└── web_tools.py
-
-🔔 NOTIFICATIONS LAYER
-notifications/
-├── email_service.py
-└── event_notifier.py
-✔ async side-effects only / no control flow
-
-🔐 SECURITY LAYER
-security/
-├── auth.py
-├── encryption.py
-├── rate_limiter.py
-└── origin_guard.py
-
-📊 OBSERVABILITY (NO FEEDBACK LOOP)
-observability/
-├── logger.py
-├── metrics.py
-├── tracing.py
-└── sentry.py
-
-✔ OBSERVABILITY ≠ META:
-  observability → инфраструктура (system alive? latency?)
-  meta          → семантика (ответ логичный? полный?)
-
-🧱 INFRASTRUCTURE
-infra/
-├── config_loader.py
-├── env_validator.py
-└── healthcheck.py
-
-🧠 FEATURE LAYER
-features = {
-    "token_count": int,
-    "char_count": int,
-    "newline_density": float,
-    "has_code_block": bool,
-    "has_json_shape": bool,
-    "has_math_symbols": bool,
-    "unicode_entropy": float,
-    "is_voice_input": bool
-}
-✔ ПОСЛЕ Safety Pass 1 / ДО Safety Pass 2
-✔ ДО Intent Engine / ДО любого LLM
-
-🛡 SAFETY LAYER
-Pass 1: prompt-guard-2-22m → BEFORE Feature Extraction
-Pass 2: prompt-guard-2-86m + safeguard-20b → AFTER Feature Extraction
-✔ unavailable → DENY by default
-✔ Safety Layer ≠ safety_agent (разные стадии) ✅
-
-🧠 MULTILINGUAL NORMALIZATION
-allam-2-7b    → арабский [один вызов, три контекста] ✅
-llama-3.3-70b → остальные языки ✅
-ДО EPK / NO policy influence ❌
-
-🔁 FINAL EXECUTION DAG (v5.5)
-
-INPUT
-↓
-Safety Pass 1 (22m) [unavailable → DENY]
-↓
-Feature Extraction (+ is_voice_input)
-↓
-Safety Pass 2 (86m + safeguard) [unavailable → DENY]
-↓
-Auth / Rate Limit / Event Log
-↓
-Multilingual Normalization
-↓
-EPK [SOLE POLICY AUTHORITY]
-  DENY → EXIT
-  ALLOW / DEGRADED / HEAVY_REQUIRED → continue
-↓
-Memory Retrieval          [skip on DENY]
-↓
-Embedding Retrieval       [skip on DENY]
-↓
-Reranker                  [skip on DENY]
-↓
-analysis.py               [skip on DENY]
-  ALLOW / HEAVY → full
-  DEGRADED → lightweight
-  hints → intent_engine (non-binding)
-↓
-Intent Engine             [skip on DENY]
-↓
-Reasoning Engine          [skip on DENY / DEGRADED]
-                          [ACTIVE on ALLOW / HEAVY]
-↓
-Multi-Agent Coordinator   [skip on DENY / DEGRADED]
-↓
-Orchestrator (EPK signal execution only)
-  ├── HEAVY_REQUIRED
-  │   → [SKIP FAST] ❌ [SKIP GENERAL] ❌
-  │   → heavy_input_shaper (ALWAYS, self-gated)
-  │   → Heavy Tier (mandatory)
-  │   → safety_agent (mandatory)
-  │   → [SKIP CONSENSUS] ❌
-  │   → Response Synthesizer (агрегирует)
-  ├── ALLOW
-  │   → Fast → General → Agents → safety_agent → Consensus
-  └── DEGRADED
-      → Fast Tier only → Response Synthesizer
-↓
-Response Synthesizer ← FINAL OUTPUT AUTHORITY
-  1. assemble → 2. structure → 3. format
-  4. correction (meta/correction.py)
-  5. finalize
-↓
-Speech (orpheus) [voice only]
-↓
-Event Store ∥ Memory Write [параллельно]
-↓
-META side-channel [skip on DENY]
-  analysis    → уже выполнен в DAG (pre-reasoning)
-  reflection  → report → observability / memory_audit
-  memory_audit → offline diagnostics
-  ALLOW/HEAVY → full / DEGRADED → lightweight
-↓
-OUTPUT
-
-🚨 RETRIEVAL CONTROL PLANE (v5.5)
-
-retrieval/
-├── retrieval_engine.py        # ONLY ENTRY POINT
-├── query_preprocessor.py      # query-level ONLY ≠ heavy_input_shaper
-├── retrieval_models.py
-├── sparse/bm25_engine.py
-├── dense/bge_engine.py        # bge-large (primary) / bge-small (fallback)
-├── reranker/cross_encoder.py  # bge-reranker-large
-├── fusion/hybrid_scorer.py
-└── cache/
-    ├── query_cache.py
-    ├── embedding_cache.py
-    ├── rerank_cache.py
-    └── ttl_policy.py
-✔ ALL access ONLY via retrieval_engine.py
-✔ skip on EPK = DENY ❌
-
-context/
-├── assembler.py    # детерминированная сборка ≠ heavy_input_shaper
-├── serializer.py
-└── context_models.py
-✔ formatting only / NO LLM ❌
-
-contracts/
-├── retrieval_contracts.py
-├── context_contracts.py
-└── shared_types.py
-✔ DTO boundary only
-
-🔐 ENVIRONMENT VARIABLES
-
-📌 CORE: BOT_TOKEN / JWT_SECRET / ENCRYPTION_KEY
-🤖 LLM: GROQ_API_KEY / HF_TOKEN
-🧠 STORAGE: SUPABASE_URL / SUPABASE_ANON_KEY /
-           SUPABASE_SERVICE_ROLE_KEY / REDIS_URL
-🔔 EXTERNAL: BREVO_API_KEY / MAPBOX_TOKEN /
-            OPENWEATHER_API_KEY / SERPAPI_KEY / SENTRY_DSN
-💳 DEPLOY: TON_WALLET / WEBHOOK_URL / ALLOWED_ORIGINS
-
-🧠 🔒 FINAL HARD RULES (v5.5 — SYNCED WITH SSoT v6.3)
-
-✔ EPK → SOLE POLICY AUTHORITY
-  OUTPUT: ALLOW | DENY | DEGRADED_MODE | HEAVY_REQUIRED
-  DENY → immediate exit
-
-✔ Orchestrator → execution only
-  NO policy / NO routing / NO self-activation
-
-✔ Safety Layer
-  Pass 1 → before Feature Extraction
-  Pass 2 → after Feature Extraction
-  unavailable → DENY by default
-  ≠ safety_agent ✅
-
-✔ safety_agent
-  ACTIVE on ALLOW / HEAVY ✅
-  skip on DEGRADED / DENY ❌
-  LAST before Consensus ✅
-  НЕ дублирует Safety Layer ✅
-
-✔ heavy_input_shaper
-  ONLY on HEAVY_REQUIRED ✅
-  ALWAYS CALLED, self-gated ✅
-  NO-OP if not needed ✅
-  SKIP on ALLOW / DEGRADED / DENY ❌
-  NOT a tier ❌ NOT an agent ❌
-
-✔ Fast Tier → ALLOW / DEGRADED only
-  SKIP on HEAVY / DENY ❌
-
-✔ General Tier → ALLOW only
-  SKIP on HEAVY / DEGRADED / DENY ❌
-
-✔ reasoning_engine
-  ACTIVE on ALLOW / HEAVY ✅
-  skip on DENY / DEGRADED ❌
-  control-plane ✅
-
-✔ Heavy Tier
-  HEAVY_REQUIRED only ✅
-  output → Response Synthesizer напрямую ✅
-  Consensus SKIP (mutex) ✅
-
-✔ Response Synthesizer → FINAL OUTPUT AUTHORITY
-  агрегирует Heavy при HEAVY_REQUIRED ✅
-  вызывает correction.py (step 4) ✅
-
-✔ META LAYER
-  NO execution authority ❌
-  NO policy authority ❌
-  NO EPK influence ❌
-  NO tier escalation ❌
-  analysis → pre-reasoning DAG step ✅
-    NOT called by Orchestrator ❌
-  reflection → post-execution report only ✅
-  correction → owned meta / executed synthesizer ✅
-  memory_audit → read-only ✅
-  DEGRADED → lightweight ✅
-  DENY → SKIP ❌
-  META ≠ COGNITION ≠ OBSERVABILITY ✅
-
-✔ retrieval
-  ALL access via retrieval_engine.py
-  query_preprocessor ≠ heavy_input_shaper ✅
-  skip on DENY ❌
-
-✔ context/assembler ≠ heavy_input_shaper ✅
-
-✔ Multilingual Normalization
-  allam-2-7b → арабский [один вызов] ✅
-  llama-3.3-70b → остальные ✅
-  ДО EPK ✅
-
-✔ Parallel Write
-  Event Store ∥ Memory Write
-  independent failure domains ✅
-
-✔ Model placement → see SSoT v6.3
-  qwen → thinking: False enforced
-
-🧠 💡 FINAL STATUS (v5.5)
-✔ synced with SSoT v6.3 — 100%
-✔ analysis.py → pre-reasoning DAG step (не post-output)
-✔ analysis.py → NOT called by Orchestrator (автоматический шаг)
-✔ reflection.py → output: report → observability / memory_audit
-✔ correction.py → EXCLUDED from META side-channel
-✔ heavy_input_shaper → SKIP on ALLOW / DEGRADED / DENY явно
-✔ META при DEGRADED → lightweight, active ✅
-✔ META при DENY → SKIP ✅
-✔ META ≠ COGNITION ≠ OBSERVABILITY явно
-✔ no naming conflicts
-✔ no duplicate responsibilities
-✔ no hidden gaps
-✔ system ready for implementation
+CEYONA — CANONICAL ARCHITECTURE
+Version: Canonical Consolidated Edition
+Status: Active Source of Truth
+Supersedes:
+architecture2.md
+architecture3.md
+architecture4.md
+This document is the ONLY canonical architectural authority of the system.
+All previous architectural variants are deprecated and non-authoritative.
+If runtime behavior, implementation details, prompts, handlers, coordinators, routing logic, execution semantics, model behavior, economic behavior, retrieval behavior, or orchestration topology contradict this document — the runtime must be corrected.
+1. CORE PHILOSOPHY
+Ceyona is a governed deterministic AI orchestration system.
+It is NOT:
+an emergent multi-agent swarm;
+a self-organizing reasoning ecosystem;
+a recursive autonomous agent mesh;
+a collection of independent LLM wrappers;
+a prompt-driven improvisation engine.
+The system operates through:
+centralized policy governance;
+deterministic execution lifecycles;
+explicit authority ownership;
+bounded orchestration;
+controlled escalation;
+synchronized model governance;
+synchronized economic governance;
+retrieval-grounded execution.
+The architecture prioritizes:
+correctness;
+execution determinism;
+factual stability;
+scalable orchestration;
+explicit contracts;
+bounded cognition;
+anti-drift resilience;
+authority clarity.
+2. CONSTITUTIONAL RULES
+2.1 Single Policy Authority Principle
+Architectural policy layers define:
+execution policy;
+routing semantics;
+escalation policy;
+truth policy;
+model eligibility;
+lifecycle governance;
+orchestration permissions.
+Runtime execution nodes MUST NOT create policy.
+2.2 Deterministic Execution Principle
+All execution paths must be:
+explicit;
+bounded;
+observable;
+reproducible.
+Forbidden:
+hidden execution chains;
+recursive uncontrolled agent systems;
+unbounded retry loops;
+emergent orchestration behavior;
+implicit execution mutation.
+2.3 No Hidden Authority
+No handler, coordinator, verifier, retriever, synthesizer, helper, adapter, or runtime node may silently:
+escalate tiers;
+select models independently;
+mutate routing;
+redefine truth semantics;
+alter orchestration topology;
+redefine execution ownership.
+All authority must be explicit and declared.
+2.4 Runtime Obeys Architecture
+Implementation convenience never overrides architecture.
+If runtime diverges from architecture:
+runtime must be corrected;
+architecture must not be bypassed.
+2.5 Explicit Ownership Principle
+Every execution subsystem MUST have:
+declared authority;
+declared responsibilities;
+declared invocation boundaries;
+declared upstream dependencies;
+declared downstream dependencies.
+Shared undeclared ownership is forbidden.
+3. ARCHITECTURAL LAYERS
+Layer 1 — Constitutional Layer
+architecture.md
+Defines:
+execution philosophy;
+authority graph;
+orchestration model;
+lifecycle semantics;
+execution invariants;
+ownership contracts;
+system governance.
+Nothing may contradict this layer.
+Layer 2 — Policy Layers
+models.md
+Defines ONLY:
+approved models;
+model capabilities;
+role assignments;
+tier eligibility;
+deterministic fallback hierarchy.
+models.md MUST NOT:
+define orchestration;
+define execution policy;
+mutate routing;
+override architecture.
+economic.md
+Defines ONLY:
+budget constraints;
+token limits;
+escalation permissions;
+throughput policy;
+economic restrictions.
+Economic policy MAY:
+restrict execution;
+deny escalation;
+apply cost controls.
+Economic policy MUST NOT:
+redefine orchestration;
+redefine authority;
+mutate TruthMode;
+bypass EPK.
+Layer 3 — Retrieval Layer
+Responsible for:
+external data acquisition;
+retrieval normalization;
+evidence packaging;
+retrieval grounding.
+Retrieval MAY:
+fetch;
+normalize;
+rank;
+structure retrieved evidence.
+Retrieval MUST NOT:
+synthesize unsupported facts;
+fabricate missing evidence;
+mutate TruthMode;
+bypass EPK;
+silently suppress evidence.
+Retrieval is grounding. Retrieval is not synthesis.
+Layer 4 — Cognition Layer
+Responsible for:
+decomposition;
+reasoning structure;
+constraint handling;
+verification coordination;
+correction coordination.
+Cognition MAY:
+structure reasoning;
+organize analytical stages;
+coordinate bounded correction.
+Cognition MUST NOT:
+own orchestration;
+mutate execution topology;
+self-authorize escalation;
+bypass EPK;
+redefine runtime authority.
+Cognition structures reasoning. Cognition does not govern execution.
+Layer 5 — Runtime Execution Layer
+Contains:
+orchestrators;
+coordinators;
+handlers;
+retrievers;
+agents;
+synthesizers;
+verification stages;
+execution adapters.
+Runtime nodes execute. Runtime nodes do NOT define policy.
+Layer 6 — META Layer
+META layers may:
+normalize;
+annotate;
+repair presentation;
+emit diagnostics;
+stabilize formatting.
+META layers MUST NEVER:
+reroute execution;
+escalate tiers;
+redefine policy;
+alter orchestration topology;
+override authority.
+META exists to support execution clarity. META does not govern execution.
+4. EXECUTION LIFECYCLE
+Canonical execution lifecycle:
+User Input
+→ Intent Classification
+→ EPK Policy Resolution
+→ Execution Plan
+→ Model Resolution
+→ Economic Validation
+→ Retrieval / Runtime Invocation
+→ Verification Stage
+→ Response Synthesis
+→ META Normalization
+→ Output
+No hidden execution stages are allowed.
+No runtime node may insert undeclared execution phases.
+5. EPK — EXECUTION POLICY KERNEL
+EPK is the sole policy authority of the system.
+EPK owns:
+execution policy;
+truth policy;
+escalation permissions;
+activation permissions;
+routing permissions;
+execution mode resolution;
+orchestration eligibility;
+safety activation.
+No runtime node may override EPK.
+EPK governs execution. Runtime executes execution.
+6. ORCHESTRATOR
+The orchestrator is execution-only.
+The orchestrator MAY:
+execute DAGs;
+schedule nodes;
+invoke execution stages;
+manage sequencing;
+coordinate execution flow.
+The orchestrator MUST NOT:
+create policy;
+reinterpret intent;
+self-escalate;
+choose models;
+redefine TruthMode;
+synthesize responses.
+The orchestrator executes orchestration. EPK governs orchestration.
+7. REASONING ENGINE
+The reasoning engine is strategy-oriented.
+Reasoning MAY:
+decompose problems;
+structure reasoning chains;
+organize constraints;
+propose analytical steps.
+Reasoning MUST NOT:
+activate Heavy Tier;
+mutate routing;
+select execution policy;
+directly invoke models;
+override EPK;
+redefine orchestration.
+Reasoning generates strategy. Reasoning does not own execution.
+8. MODEL GOVERNANCE
+All model resolution is centralized.
+Runtime nodes MUST NOT self-select models.
+Canonical flow:
+EPK
+→ Model Resolver
+→ models.md registry
+→ Economic Validation
+→ Runtime Invocation
+Handlers MAY request capabilities.
+Handlers MUST NOT:
+own model policy;
+mutate model routing;
+self-upgrade execution tiers.
+9. ECONOMIC GOVERNANCE
+Economic governance is subordinate to architecture.
+Economics MAY:
+restrict expensive execution;
+deny escalation;
+enforce token budgets;
+enforce throughput limits.
+Economics MUST NOT:
+redefine orchestration;
+redefine reasoning;
+mutate TruthMode;
+bypass EPK;
+silently downgrade execution quality.
+Heavy Tier activation requires:
+architectural eligibility;
+policy eligibility;
+economic eligibility.
+10. TRUTH MODES
+TruthMode defines factual generation permissions.
+STRICT
+STRICT means:
+no unsupported factual generation;
+no speculative completion;
+no inferred geo data;
+no invented schedules;
+no fabricated availability;
+no hallucinated retrieval output.
+If retrieval is incomplete: System MUST:
+state uncertainty;
+state missing data;
+state retrieval limitation.
+In STRICT mode: absence of evidence is a valid terminal state.
+STRICT forbids:
+“filling gaps from memory”;
+speculative factual completion;
+unsupported retrieval synthesis.
+HYBRID
+HYBRID allows:
+retrieved grounding;
+bounded synthesis;
+contextual completion;
+generalized knowledge.
+HYBRID MUST still avoid fabricated claims.
+HYBRID does NOT permit fabricated factual evidence.
+11. MAPS / GEO / SEARCH POLICY
+The following intents are STRICT-only:
+MAPS_ROUTE
+MAPS_POI
+SEARCH
+AVAILABILITY
+SCHEDULE
+LOCATION_FACTS
+The system MUST NEVER invent:
+bus numbers;
+train schedules;
+hotel availability;
+pricing;
+routes;
+geo facts;
+opening hours;
+transport lines.
+All such data must originate from retrieval.
+If retrieval fails:
+system returns retrieval limitation;
+system does NOT hallucinate completion.
+12. WEATHER POLICY
+WEATHER intents are STRICT-grounded.
+Weather systems MUST:
+use retrieval-backed weather providers;
+avoid inferred forecasts;
+avoid fabricated weather conditions;
+avoid speculative environmental data.
+Weather responses MUST originate from:
+validated weather retrieval;
+external provider responses.
+If weather retrieval fails:
+system returns retrieval limitation;
+system does NOT fabricate weather conditions.
+13. PROVIDER INTEGRATION RULES
+External providers are retrieval or infrastructure dependencies.
+Providers MAY:
+supply external data;
+provide retrieval evidence;
+provide infrastructure services;
+provide caching or persistence.
+Providers MUST NOT:
+alter orchestration;
+redefine TruthMode;
+mutate execution policy;
+redefine authority ownership.
+Infrastructure integrations remain subordinate to architecture.
+14. INFRASTRUCTURE CONFIGURATION RULES
+Environment variables configure infrastructure access only.
+Environment configuration MUST NOT:
+alter architecture;
+mutate orchestration;
+redefine authority;
+bypass policy governance.
+Infrastructure configuration is operational. Infrastructure configuration is not governance.
+Security boundaries remain policy-governed.
+Infrastructure configuration alone MUST NOT define trust authority.
+15. VISION PIPELINE
+vision_handler.py is a multimodal ingress adapter.
+Its role:
+preprocess multimodal input;
+extract structured signals;
+normalize image-derived context;
+prepare downstream execution.
+vision_handler MUST NOT:
+select models independently;
+redefine routing;
+bypass EPK;
+own orchestration;
+self-escalate execution.
+Correct lifecycle:
+Input
+→ Vision Preprocessing
+→ Structured Extraction
+→ EPK Policy Resolution
+→ Runtime Orchestration
+Vision is ingress. Vision is not policy.
+16. MULTI AGENT COORDINATOR
+multi_agent_coordinator.py coordinates execution.
+Coordinator MAY:
+sequence agents;
+manage execution order;
+invoke verification stages;
+aggregate execution metadata;
+aggregate verification artifacts;
+aggregate bounded agent outputs.
+Coordinator MUST NOT:
+synthesize final truth;
+own narrative assembly;
+redefine response authority;
+redefine routing;
+mutate TruthMode;
+become hidden orchestration.
+Coordinator coordinates execution. Coordinator does not govern execution.
+17. VERIFICATION LIFECYCLE
+Verification is a bounded execution stage.
+Verification types:
+Constraint Verification;
+Factual Verification;
+Consistency Verification.
+Verification exists to:
+validate constraints;
+validate reasoning consistency;
+detect contradictions;
+validate grounding;
+improve reliability.
+Verification is NOT:
+orchestration;
+policy authority;
+recursive reasoning infrastructure.
+Canonical lifecycle:
+Primary Reasoning
+→ Verification
+→ Optional Single Correction Pass
+→ Final Synthesis
+Maximum retries must remain bounded.
+Recursive self-correction ecosystems are forbidden.
+18. MATH / CONSTRAINT REASONING
+Constraint-heavy reasoning requires staged cognition.
+Canonical cognition lifecycle:
+Intent Resolution
+→ Task Decomposition
+→ Primary Reasoning
+→ Constraint Verification
+→ Correction Pass
+→ Synthesis
+→ META Normalization
+Reasoning, verification, and synthesis are separate stages.
+They MUST NEVER collapse into a single uncontrolled generation pass.
+19. RESPONSE SYNTHESIZER
+The response synthesizer owns final response authority.
+Synthesizer owns:
+coherence;
+response assembly;
+multilingual consistency;
+narrative stabilization;
+final user-facing output.
+META layers support synthesis.
+META layers do NOT replace synthesis authority.
+The synthesizer is the final response authority.
+20. SOURCE CREDIBILITY
+source_credibility.py is advisory.
+It MAY:
+annotate reliability;
+score retrieval confidence;
+provide trust diagnostics.
+It MUST NOT:
+suppress evidence silently;
+prioritize execution paths;
+downgrade authority;
+mutate retrieval artifacts;
+redefine orchestration;
+become routing authority.
+Credibility scoring is subordinate to EPK.
+21. SAFETY ACTIVATION
+Safety systems are activation-based.
+Safety execution MUST be:
+explicit;
+deterministic;
+policy-governed.
+Safety layers MAY:
+restrict dangerous execution;
+deny unsafe actions;
+enforce policy.
+Safety layers MUST NOT:
+silently mutate orchestration;
+redefine architecture;
+become hidden routing systems.
+22. MUTEX RULES
+Heavy reasoning and consensus systems must remain mutually controlled.
+The system MUST avoid:
+duplicated expensive reasoning;
+overlapping authority;
+multi-authority synthesis;
+redundant deep execution.
+Execution escalation MUST remain deterministic.
+23. MULTILINGUAL EXECUTION
+Language preservation is mandatory.
+The system MUST:
+preserve user language;
+preserve multilingual coherence;
+avoid silent language drift.
+Language normalization belongs to:
+synthesis;
+META normalization.
+Language selection MUST NOT emerge randomly from reasoning stages.
+24. FALLBACK SEMANTICS
+Fallback behavior MUST be deterministic.
+Fallbacks MAY occur only through:
+EPK policy;
+model registry;
+economic eligibility.
+Runtime nodes MUST NOT:
+invent fallback chains;
+mutate fallback behavior silently.
+25. ANTI-AGENT-AUTONOMY RULES
+Agents MUST NEVER:
+recursively invoke uncontrolled agents;
+self-create orchestration chains;
+mutate execution topology;
+self-authorize escalation;
+create hidden execution paths.
+Agents are execution participants. Agents are not autonomous systems.
+26. RUNTIME REGISTRY RULES
+Every new runtime node MUST declare:
+authority;
+lifecycle role;
+invocation conditions;
+upstream dependencies;
+downstream dependencies;
+TruthMode behavior;
+model governance compliance.
+Undeclared runtime nodes are non-canonical.
+No new module may:
+silently introduce orchestration;
+create hidden routing;
+own undeclared policy;
+duplicate responsibilities;
+redefine existing ownership domains.
+27. ANTI-DRIFT PRINCIPLES
+Architecture MUST scale through:
+explicit contracts;
+bounded execution;
+centralized governance;
+deterministic orchestration;
+synchronized policy layers.
+Architecture MUST NOT scale through:
+emergent behavior;
+hidden coupling;
+implicit orchestration;
+undocumented authority;
+runtime improvisation.
+28. FINAL SYSTEM PRINCIPLE
+Ceyona is a governed orchestration system.
+It is NOT a collection of autonomous AI behaviors.
+The system succeeds only if:
+authority remains explicit;
+execution remains deterministic;
+policy remains synchronized;
+runtime remains subordinate to architecture;
+retrieval remains grounded;
+orchestration remains bounded.
+Architecture governs the system. Runtime executes the system.
