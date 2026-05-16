@@ -36,7 +36,9 @@ COMPLEXITY_MULTIPLIER: dict[str, float] = {
     Complexity.CRITICAL: 3.0,
 }
 
-# Single source of truth — matches model_router._MAX_TOKENS exactly
+# Conservative estimation caps — intentionally lower than model_router._MAX_TOKENS.
+# These exist to make pre-execution cost estimates safe (never underestimate).
+# model_router._MAX_TOKENS are the actual Groq API hard limits — different purpose.
 MAX_OUTPUT_CAP: dict[str, int] = {
     Tier.FAST:    512,
     Tier.GENERAL: 2048,
