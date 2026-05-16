@@ -159,6 +159,31 @@ def plan_agents(
 
 # ─── AGENT DISPATCHER ─────────────────────────────────────────────────────────
 
+async def _run_agent(
+    agent_type: AgentType,
+    messages: list[dict],
+    temperature: float,
+) -> AgentResult:
+    """
+    Dispatch to the correct agent module based on AgentType.
+    Returns AgentResult. Never raises — catches all exceptions and returns
+    a failed AgentResult so the coordinator can handle fallback/blocking.
+    """
+    try:
+        if agent_type == AgentType.DEEP:
+            return await deep_agent.run(messages=messages, temperature=temperature)
+        if agent_type == AgentType.CREATIVE:
+            return await creative_agent.run(messages=messages, temperature=temperature)
+        # FAST is the default
+        return await fast_agent.run(messages=messages, temperature=temperature)
+    except Exception as exc:
+        logger.error(
+            "_run_agent failed",
+            extra={"agent": agent_type, "error": str(exc)},
+        )
+        return AgentResult(text="", model="", input_tokens=0, output_tokens=0, success=False, error=str(exc))
+
+
 async def _verify_math_solution(
     user_message: str,
     solution: str,
