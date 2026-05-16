@@ -8,22 +8,56 @@ import re
 # Matched case-insensitively at the start or end of the response.
 
 _PREAMBLE_PATTERNS: list[re.Pattern] = [
-    # "Sure! Here is..." / "Of course! ..."
+    # English: "Sure! / Of course! / Certainly! / Absolutely! / Great!"
     re.compile(r"^(sure[!,.]?\s*|of course[!,.]?\s*|certainly[!,.]?\s*|absolutely[!,.]?\s*|great[!,.]?\s*)", re.IGNORECASE),
-    # "Here is your ..." / "Here's the ..."
+    # English: "Here is your ..." / "Here's the ..."
     re.compile(r"^(here(?:'s| is)(?: your| the)?\s+(?:answer|response|result|code|explanation|text|solution)[:\s]*\n*)", re.IGNORECASE),
-    # "I'd be happy to help..." / "I'm happy to assist..."
+    # English: "I'd be happy to help..." / "I'm happy to assist..."
     re.compile(r"^(i(?:'d| would) be (?:happy|glad|delighted) to (?:help|assist)[!.,]?\s*\n*)", re.IGNORECASE),
-    # "As an AI language model, ..."
+    # English: "As an AI language model, ..."
     re.compile(r"^(as an ai(?: language)? model[,.]?\s*)", re.IGNORECASE),
-    # "I hope this helps!" at the end
+    # English sign-offs
     re.compile(r"\n*i hope (?:this|that) (?:helps|was helpful)[!.]?\s*$", re.IGNORECASE),
-    # "Let me know if you have any questions!"
     re.compile(r"\n*(?:please )?let me know if you(?:'ve| have) any (?:more )?questions[!.]?\s*$", re.IGNORECASE),
-    # "Feel free to ask if you need anything else!"
     re.compile(r"\n*feel free to (?:ask|reach out)[^.!?\n]{0,60}[!.]?\s*$", re.IGNORECASE),
-    # "Is there anything else I can help you with?"
     re.compile(r"\n*is there anything else i(?: can| could)(?: help you with)?[?!.]?\s*$", re.IGNORECASE),
+
+    # Russian preambles
+    re.compile(r"^(конечно[!,.]?\s*|разумеется[!,.]?\s*|с удовольствием[!,.]?\s*)", re.IGNORECASE),
+    re.compile(r"^(давайте\s+(?:разберём|рассмотрим|посмотрим)[^\n]{0,60}\n*)", re.IGNORECASE),
+    re.compile(r"^(отвечу на ваш вопрос[.!]?\s*\n*)", re.IGNORECASE),
+    re.compile(r"^(да,?\s+я\s+могу\s+помочь[.!]?\s*\n*)", re.IGNORECASE),
+    re.compile(r"\n*если у вас (?:есть )?(?:ещё )?вопросы[^.!?\n]{0,40}[!.]?\s*$", re.IGNORECASE),
+    re.compile(r"\n*надеюсь,? (?:это )?помогло[!.]?\s*$", re.IGNORECASE),
+
+    # German preambles
+    re.compile(r"^(natürlich[!,.]?\s*|selbstverständlich[!,.]?\s*|gerne[!,.]?\s*)", re.IGNORECASE),
+    re.compile(r"^(ich helfe (?:dir|ihnen) gerne[!.,]?\s*\n*)", re.IGNORECASE),
+    re.compile(r"\n*(?:falls|wenn) (?:du|sie) (?:noch )?fragen (?:hast|haben)[^.!?\n]{0,40}[!.]?\s*$", re.IGNORECASE),
+
+    # French preambles
+    re.compile(r"^(bien sûr[!,.]?\s*|bien sur[!,.]?\s*|certainement[!,.]?\s*|avec plaisir[!,.]?\s*)", re.IGNORECASE),
+    re.compile(r"^(je vais vous aider[.!]?\s*\n*|je peux vous aider[.!]?\s*\n*)", re.IGNORECASE),
+    re.compile(r"\n*n'hésitez pas à (?:me )?(?:poser|demander)[^.!?\n]{0,40}[!.]?\s*$", re.IGNORECASE),
+
+    # Spanish preambles
+    re.compile(r"^(claro[!,.]?\s*|por supuesto[!,.]?\s*|¡claro[!,.]?\s*)", re.IGNORECASE),
+    re.compile(r"^(con gusto[!,.]?\s*|encantado de ayudar[.!]?\s*\n*)", re.IGNORECASE),
+    re.compile(r"\n*si tienes (?:más )?preguntas[^.!?\n]{0,40}[!.]?\s*$", re.IGNORECASE),
+
+    # Turkish preambles
+    re.compile(r"^(tabii[!,.]?\s*|tabii ki[!,.]?\s*|elbette[!,.]?\s*|memnuniyetle[!,.]?\s*)", re.IGNORECASE),
+    re.compile(r"\n*başka sorularınız (?:olursa|varsa)[^.!?\n]{0,40}[!.]?\s*$", re.IGNORECASE),
+
+    # Georgian preambles
+    re.compile(r"^(რა თქმა უნდა[!,.]?\s*|სიამოვნებით[!,.]?\s*)", re.IGNORECASE),
+
+    # Arabic preambles
+    re.compile(r"^(بالتأكيد[!,.]?\s*|بكل سرور[!,.]?\s*|حبًا وكرامة[!,.]?\s*)", re.IGNORECASE),
+
+    # Universal: "Да, конечно." / "Yes, of course." variants already covered above
+    # "Привет!" as opener when user didn't greet
+    re.compile(r"^(привет[!,.]?\s*(?=\S))", re.IGNORECASE),
 ]
 
 # ─── MARKDOWN FIXERS ──────────────────────────────────────────────────────────
