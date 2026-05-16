@@ -39,6 +39,37 @@ async def _send_message(chat_id: int, text: str) -> None:
         )
 
 
+async def _send_message_with_topup(chat_id: int, text: str, lang: str = "en") -> None:
+    """Send message with an inline 'Top Up' button linking to TON wallet."""
+    if not text:
+        return
+    from app.settings import settings
+    from i18n.t import t as _t
+
+    topup_label = _t("topup_button", lang)
+
+    keyboard = {
+        "inline_keyboard": [[
+            {
+                "text": topup_label,
+                "callback_data": "topup",
+            }
+        ]]
+    }
+
+    async with httpx.AsyncClient() as client:
+        await client.post(
+            f"{_TELEGRAM_API}/sendMessage",
+            json={
+                "chat_id": chat_id,
+                "text": text,
+                "parse_mode": "Markdown",
+                "reply_markup": keyboard,
+            },
+            timeout=10.0,
+        )
+
+
 async def _answer_callback(callback_query_id: str, text: str = "") -> None:
     async with httpx.AsyncClient() as client:
         await client.post(
@@ -296,6 +327,18 @@ async def telegram_webhook(
                 logger.error("Billing failed", extra={"error": str(exc)})
 
         if chat_id:
+            # Low balance warning — show topup button when balance drops below $0.10
+            try:
+                from payments.access_controller import AccessController
+                ac2 = AccessController(supabase)
+                fresh_balance = await ac2.get_balance(user_id)
+                if 0 < fresh_balance.balance_usd < 0.10:
+                    from i18n.t import t as _t
+                    low_balance_text = _t("low_balance_warning", lang)
+                    await _send_message_with_topup(chat_id, low_balance_text, lang)
+            except Exception:
+                pass  # non-critical, never block response
+
             await _send_message(chat_id, result.text)
 
     elif update_type == UpdateType.CALLBACK_QUERY:
