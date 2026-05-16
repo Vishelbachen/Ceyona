@@ -179,8 +179,13 @@ async def _extract_city(query: str) -> str:
     except Exception as exc:
         logger.warning("_extract_city LLM failed", extra={"error": str(exc)})
 
-    # Fallback: return query as-is; OWM geocoding is tolerant
-    return query.strip()
+    # Fallback: if query is ASCII/Latin — try it directly with OWM (tolerant geocoder).
+    # If non-Latin script (Georgian, Arabic, Chinese etc.) — return "" so the caller
+    # gets an empty city and reports "city not found" rather than sending garbage to OWM
+    # which would cause a 404.
+    if all(ord(c) < 128 for c in query.strip()):
+        return query.strip()
+    return ""
 
 
 # ─── ICON MAP ─────────────────────────────────────────────────────────────────
