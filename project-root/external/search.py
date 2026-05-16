@@ -83,6 +83,38 @@ def _filter_results(results: list[dict]) -> list[dict]:
     return _credibility.filter_results(sanitized, max_results=5)
 
 
+# ─── VALIDATION ──────────────────────────────────────────────────────────────
+
+# Patterns that indicate fabricated/suspicious hotel names
+# These appear in LLM hallucinations but not in real SerpAPI results
+_SUSPICIOUS_PATTERNS = {
+    "негород", "negород", "dubrava_fake",
+}
+
+def _validate_results(results: list[dict]) -> list[dict]:
+    """
+    Post-filter validation: remove results that look fabricated.
+    Only applied to structured hotel results where name verification matters.
+    For organic results: trust source_credibility filter.
+    """
+    if not results or not results[0].get("_structured"):
+        return results
+
+    validated = []
+    for r in results:
+        title = r.get("title", "").lower()
+        # Remove if matches known hallucination patterns
+        if any(pat in title for pat in _SUSPICIOUS_PATTERNS):
+            logger.warning("Validation: removed suspicious result", extra={"title": r.get("title")})
+            continue
+        # Remove if no name at all
+        if not r.get("title", "").strip():
+            continue
+        validated.append(r)
+
+    return validated
+
+
 # ─── SERVICE ──────────────────────────────────────────────────────────────────
 
 class SearchService:
@@ -99,15 +131,18 @@ class SearchService:
         self,
         query: str,
         lang: str = "en",
-        num: int = 10,  # fetch more so filter has headroom; was 6
+        num: int = 10,
     ) -> list[dict]:
         """
         Perform web search with retry.
+        For hotel/accommodation queries: also extracts structured hotels_results
+        from SerpAPI (price, rating, address) when available.
 
-        Returns list of filtered organic result dicts:
-          [{"title": str, "link": str, "snippet": str}, ...]
+        Returns list of filtered result dicts:
+          [{"title": str, "link": str, "snippet": str,
+            "price": str, "rating": str, "address": str}]  ← extras when available
 
-        Returns [] on all failures — caller must handle empty gracefully.
+        Returns [] on all failures.
         """
         if not self._api_key:
             logger.warning("SerpAPI key not set")
@@ -129,19 +164,51 @@ class SearchService:
                     response = await client.get(_BASE_URL, params=params)
                     response.raise_for_status()
                     data = response.json()
-                    raw_results = data.get("organic_results", [])
 
+                    # ── structured hotels_results (when Google returns hotel pack) ──
+                    hotel_pack = data.get("hotels_results", {})
+                    hotel_properties = hotel_pack.get("properties", [])
+                    if hotel_properties:
+                        structured: list[dict] = []
+                        for h in hotel_properties[:8]:
+                            name    = h.get("name", "")
+                            price   = h.get("rate_per_night", {}).get("lowest", "") or h.get("price", "")
+                            rating  = str(h.get("overall_rating", "")) or str(h.get("rating", ""))
+                            address = h.get("address", "") or h.get("location", "")
+                            link    = h.get("link", "") or h.get("serpapi_property_link", "")
+                            snippet = h.get("description", "") or h.get("snippet", "")
+                            if name:
+                                structured.append({
+                                    "title":   name,
+                                    "link":    _sanitize_url(link),
+                                    "snippet": snippet,
+                                    "price":   str(price),
+                                    "rating":  rating,
+                                    "address": address,
+                                    "_structured": True,
+                                })
+                        if structured:
+                            validated = _validate_results(structured)
+                            logger.info("Search completed (hotel pack)", extra={
+                                "query":    query[:50],
+                                "attempt":  attempt + 1,
+                                "hotels":   len(validated),
+                                "lang":     lang,
+                            })
+                            if validated:
+                                return validated
+
+                    # ── fallback: organic results ──────────────────────────────
+                    raw_results = data.get("organic_results", [])
                     results = [
                         {
                             "title":   r.get("title", ""),
-                            "link":    r.get("link", ""),
+                            "link":    _sanitize_url(r.get("link", "")),
                             "snippet": r.get("snippet", ""),
                         }
                         for r in raw_results
                     ]
-
                     filtered = _filter_results(results)
-
                     logger.info("Search completed", extra={
                         "query":    query[:50],
                         "attempt":  attempt + 1,
@@ -170,7 +237,7 @@ class SearchService:
 
     def format_results(self, results: list[dict], lang: str = "en") -> str:
         """
-        Format search results into Telegram-ready text.
+        Format search results into LLM-ready plain text.
         Pure function. No I/O.
 
         Returns "" when results is empty — NOT a localised placeholder.
@@ -178,18 +245,51 @@ class SearchService:
         thinking the tool returned real data → LLM gets useless context →
         synthesizer produces generic error. Empty string → truth gate fires
         cleanly with no_grounded_data message.
+
+        Structured hotel results (from hotels_results pack) are formatted
+        with explicit price/rating/address fields so the LLM has no reason
+        to invent them.
         """
         if not results:
             return ""
 
-        lines: list[str] = []
+        # Structured hotel pack — use rich formatter
+        if results[0].get("_structured"):
+            lines: list[str] = []
+            for i, r in enumerate(results, 1):
+                name    = r.get("title", "")
+                price   = r.get("price", "")
+                rating  = r.get("rating", "")
+                address = r.get("address", "")
+                link    = r.get("link", "")
+                snippet = r.get("snippet", "")
+
+                entry = f"[{i}] {name}"
+                if rating:
+                    entry += f"\nРейтинг: {rating}"
+                if price:
+                    entry += f"\nЦена: {price}"
+                if address:
+                    entry += f"\nАдрес: {address}"
+                if snippet:
+                    entry += f"\n{snippet}"
+                if link:
+                    entry += f"\nСсылка: {link}"
+                lines.append(entry)
+
+            header = "=== ДАННЫЕ ИЗ ПОИСКА (используй ТОЛЬКО эти факты) ===\n"
+            return header + "\n\n".join(lines)
+
+        # Standard organic results
+        lines = []
         for i, r in enumerate(results, 1):
             title   = r.get("title", "")
             link    = r.get("link", "")
             snippet = r.get("snippet", "")
-            lines.append(f"{i}. {title}\n{snippet}\nSource: {link}")
+            lines.append(f"[{i}] {title}\n{snippet}\nИсточник: {link}")
 
-        return "\n\n".join(lines)
+        header = "=== ДАННЫЕ ИЗ ПОИСКА (используй ТОЛЬКО эти факты) ===\n"
+        return header + "\n\n".join(lines)
 
 
 # Singleton
