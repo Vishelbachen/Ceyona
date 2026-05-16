@@ -544,10 +544,23 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
         tier = select_tier(estimated)
 
         # ── tool-only path ────────────────────────────────────────────────────
-        if intent_result.intent in _TOOL_INTENTS and tool_output:
-            logger.info("Tool-only path", extra={"intent": intent_result.intent})
+        # Also applies when SEARCH returns structured hotel/POI data (marked with
+        # the "=== ДАННЫЕ ИЗ ПОИСКА ===" header from format_results).
+        # In that case LLM must NOT touch the data — it will hallucinate additions.
+        _structured_search = (
+            intent_result.intent == Intent.SEARCH
+            and bool(request.retrieved_context)
+            and "=== ДАННЫЕ ИЗ ПОИСКА" in request.retrieved_context
+        )
+        # For structured search: use retrieved_context directly (set by update_handler)
+        _tool_data = request.retrieved_context if _structured_search else tool_output
+        if (intent_result.intent in _TOOL_INTENTS or _structured_search) and _tool_data:
+            logger.info("Tool-only path", extra={
+                "intent": intent_result.intent,
+                "structured": _structured_search,
+            })
             synthesis = synthesize(SynthesisInput(
-                raw_text=tool_output,
+                raw_text=_tool_data,
                 intent=intent_result.intent,
                 tier=tier,
                 lang=lang,
