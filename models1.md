@@ -1,0 +1,473 @@
+# CEYONA — MODEL REGISTRY
+Version: 7.0 — Synchronized Edition
+Status: Active Source of Truth
+Supersedes: models.md, models2.md (all previous versions)
+
+This document defines ONLY:
+- approved models and their roles
+- tier assignments and eligibility
+- activation rules and constraints
+- execution DAG
+
+This document MUST NOT define: orchestration, execution policy, pricing, billing.
+Pricing and token economics → economic.md
+
+---
+
+## 1. SAFETY LAYER (deterministic cascade — FIRST GATE)
+
+```
+prompt-guard-2-22m    → FAST REJECTION FILTER (Pass 1)
+prompt-guard-2-86m    → DEEP CLASSIFICATION FILTER (Pass 2)
+gpt-oss-safeguard-20b → FINAL ENFORCEMENT MODEL (Pass 2, combined with 86m)
+```
+
+**Role:** constraint evaluation only. NO generation. NO reasoning synthesis.
+
+**Execution order:**
+- 22m: BEFORE Feature Extraction
+- 86m + safeguard-20b: AFTER Feature Extraction, BEFORE EPK
+
+**Unavailability rule:** Safety model unavailable → DENY by default. NO fallback to ALLOW.
+
+**Critical distinction:**
+- Safety Layer → input firewall, deterministic, blocks harmful input before processing
+- safety_agent → semantic validator, post-reasoning, catches unsafe emergent content
+- These are NOT duplicates. Both are required.
+
+---
+
+## 2. FAST TIER (ALLOW / DEGRADED_MODE only)
+
+```
+llama-3.1-8b-instant  → PRIMARY: structural signal compression, shallow inference
+gemma2-9b-it          → FALLBACK: TPM overflow (15000 TPM vs 6000 TPM for llama)
+allam-2-7b            → MULTILINGUAL: Arabic normalization (one call, three contexts)
+```
+
+**Activation:** ALLOW or DEGRADED_MODE signals from EPK.
+**Skip on:** HEAVY_REQUIRED, DENY.
+
+**allam-2-7b contexts (NOT three instances):**
+1. Fast Tier preprocessing
+2. Specialized Layer (TTS pipeline)
+3. Multilingual normalization (Arabic routing)
+One model, one call per request where needed.
+
+**llama-3.1-8b-instant note:**
+When EPK = HEAVY_REQUIRED, llama-3.1-8b-instant is used ONLY in heavy_input_shaper.py
+and web_tools.py (route/POI extraction). It is NOT acting as Fast Tier in those contexts.
+
+---
+
+## 3. GENERAL TIER (ALLOW only)
+
+```
+llama-3.3-70b-versatile → PRIMARY: reasoning core + creative engine + non-Arabic normalization
+qwen/qwen3-32b          → structured logic / formatting engine
+openai/gpt-oss-20b      → constraint-aware general inference
+```
+
+**Activation:** ALLOW signal from EPK only.
+**Skip on:** HEAVY_REQUIRED, DEGRADED_MODE, DENY.
+
+**Critical:** FAST / GENERAL / HEAVY are tiers of model capability within the LLM layer.
+They are NOT cognitive layers. They are NOT logic layers.
+
+**qwen/qwen3-32b:** thinking mode MUST be explicitly disabled at every call site: `"thinking": False`
+
+---
+
+## 4. HEAVY TIER (HEAVY_REQUIRED only)
+
+```
+openai/gpt-oss-120b            → PRIMARY: deep multi-step reasoning
+                                  SECONDARY: Consensus arbiter (mutex — see §8)
+llama-4-scout-17b-16e-instruct → long-context transformation (512K context)
+```
+
+**Activation:** EPK = HEAVY_REQUIRED ONLY.
+**Self-activation:** forbidden. Orchestrator executes the signal, does NOT generate it.
+
+**Output rule:** Heavy Tier output → directly to Response Synthesizer. Consensus SKIP (mutex).
+
+**Hard invariants:**
+- each subsystem = isolated capability domain
+- NO shared state
+- NO hierarchical dominance
+- NO cross-decision influence
+
+---
+
+## 5. HEAVY INPUT SHAPER (self-gated utility — NOT a tier)
+
+`llm/heavy_input_shaper.py`
+
+**Role:** prepare input for Heavy Tier execution.
+
+**Activation:**
+- ONLY when EPK = HEAVY_REQUIRED
+- ALWAYS CALLED on HEAVY_REQUIRED (self-gated internally)
+- Internal gating: shaping needed → execute | not needed → NO-OP (return input as-is)
+- SKIP on ALLOW, DEGRADED_MODE, DENY
+
+**Model used:** llama-3.1-8b-instant — NOT as Fast Tier
+
+**Constraints:** NO reasoning, NO final output generation.
+
+---
+
+## 6. AGENT LAYER (tool-use execution fabric)
+
+```
+groq/compound      → DEEP AGENT  (deep_agent.py)   — multi-step, deep reasoning
+groq/compound-mini → FAST AGENT  (fast_agent.py)   — lightweight, single-step
+```
+
+**Role:** tool selection authority, multi-step execution.
+**No policy authority.** No system governance. No Heavy Tier activation.
+
+---
+
+## 7. SAFETY AGENT (post-reasoning semantic validation)
+
+`agents/safety_agent.py`
+
+**Position:** LAST in agent execution, before Consensus (on consensus path).
+
+**Activation rules:**
+
+| Path | Condition | safety_agent |
+|---|---|---|
+| ALLOW + consensus | use_consensus=True | ✅ runs before consensus |
+| ALLOW + DEEP primary, no consensus | fallback ≠ primary | ✅ runs |
+| HEAVY_REQUIRED | always | ✅ mandatory |
+| DEGRADED_MODE | | ❌ skipped |
+| EMOTIONAL intent | primary=FAST, fallback=None | ❌ skipped |
+| default GENERAL | primary=FAST, fallback=None | ❌ skipped |
+
+**Responsibilities:** validate reasoning_plan + draft_response, detect unsafe emergent content.
+**Verdict:** allow / revise / block.
+
+**NOT responsible for:** input-level filtering, deterministic cascade, model routing.
+
+---
+
+## 8. CONSENSUS LAYER
+
+```
+openai/gpt-oss-120b → CONSENSUS ARBITER
+```
+
+**Activation:** ALLOW path with use_consensus=True ONLY.
+**Mutex:** SKIP when HEAVY_REQUIRED (openai/gpt-oss-120b cannot be both simultaneously).
+**On HEAVY_REQUIRED:** Response Synthesizer aggregates Heavy Tier output directly.
+
+---
+
+## 9. MULTI-AGENT COORDINATOR
+
+`cognition/multi_agent_coordinator.py`
+
+The coordinator IS the agent execution fabric.
+It plans and executes agents on behalf of the orchestrator.
+
+**Correct invariants:**
+- called by orchestrator ONLY ✅
+- receives: AgentPlan + messages + intent + lang ✅
+- dispatches to agents (fast / deep / creative) via _run_agent() ✅
+- runs safety_agent where architecturally required ✅
+- runs consensus_engine on ALLOW + use_consensus paths ✅
+- implements MATH self-verification loop (1 correction pass max) ✅
+- returns CoordinationResult to orchestrator ONLY ✅
+
+**MUST NOT:**
+- make policy decisions ❌
+- select tiers (tier comes from EPK + decision_matrix) ❌
+- select models (model comes from model_router via agents) ❌
+- self-activate Heavy Tier ❌
+- become hidden orchestration ❌
+
+---
+
+## 10. RESPONSE SYNTHESIZER
+
+`cognition/response_synthesizer.py`
+
+**Role:** FINAL OUTPUT AUTHORITY.
+
+**7-step pipeline (code-authoritative — supersedes all previous 5/6-step descriptions):**
+
+```
+1. assemble           — accept raw LLM output
+2. normalize_telegram — LaTeX→Unicode, strip Markdown (NOT a meta module)
+3. structure          — intent-aware shaping (identity today, reserved)
+4. format             — whitespace normalization
+5. correction         — meta/correction.py (preamble/sign-off stripping)
+6. output_normalizer  — meta/output_normalizer.py (retrieval contamination)
+7. finalize           — truncate to Telegram 4096 chars
+```
+
+Steps 5 and 6: owned by meta/ but executed exclusively by synthesizer, never independently.
+correction + output_normalizer are EXCLUDED from META side-channel DAG.
+
+---
+
+## 11. META LAYER
+
+```
+meta/
+├── analysis.py       PRE-REASONING step (auto DAG, before intent_engine)
+├── reflection.py     POST-EXECUTION side-channel
+├── correction.py     INLINE — owned meta/, executed by synthesizer step 5 ONLY
+├── output_normalizer.py  INLINE — owned meta/, executed by synthesizer step 6 ONLY
+└── memory_audit.py   OFFLINE DIAGNOSTICS side-channel
+```
+
+**Key invariant:** META LAYER observes system. NEVER controls system. NEVER participates in execution decisions.
+
+**META ≠ COGNITION:** meta observes and evaluates. cognition thinks and decides.
+**META ≠ OBSERVABILITY:** observability = infrastructure telemetry (system alive? latency? errors?).
+meta = semantic quality (is the answer logical? complete? contradictory?).
+
+### analysis.py
+
+- Position: pre-reasoning DAG step (automatic, not called by Orchestrator explicitly)
+- Activation: ALLOW/HEAVY_REQUIRED (full), DEGRADED (lightweight), DENY (skip)
+- Output: non-binding hints → intent_engine (zero authority, MAY be ignored)
+- Does: input decomposition, pattern detection, complexity hints
+- Does NOT: policy, routing, reasoning, memory interaction
+
+### reflection.py
+
+- Position: post-execution side-channel (async, non-blocking)
+- Activation: ALLOW/HEAVY (full), DEGRADED (lightweight), DENY (skip)
+- Output: reflection_report → observability (logs/traces) + optional memory_audit input
+- Does NOT: pipeline feedback, response modification, current request influence
+
+### correction.py
+
+- Ownership: meta/ | Execution: ONLY via synthesizer step 5
+- Excluded from META side-channel DAG
+- Does: preamble/sign-off stripping (Конечно!, Давайте, Sure!, etc.)
+- Does NOT: full regeneration, reasoning override, new information, pipeline control
+
+### output_normalizer.py
+
+- Ownership: meta/ | Execution: ONLY via synthesizer step 6
+- Excluded from META side-channel DAG
+- Does: strip context self-reference phrases (по данным в контексте / according to the context),
+        inline source tags (источник 3 / source 2), garbled non-ASCII URLs,
+        English UI term leaks in non-English responses
+- Does NOT: translate text, rewrite meaning, make routing decisions
+
+### memory_audit.py
+
+- Position: offline diagnostics side-channel (async, non-blocking)
+- Activation: ALLOW/HEAVY/DEGRADED (active), DENY (skip)
+- Output: read-only audit_report → optional input for reflection.py
+- Does NOT: memory write, conflict resolution, execution trigger, retrieval influence
+
+---
+
+## 12. SPECIALIZED LAYER
+
+```
+whisper-large-v3       → PRIMARY SPEECH-TO-TEXT
+whisper-large-v3-turbo → FAST SPEECH-TO-TEXT
+orpheus-v1-english     → ENGLISH SPEECH SYNTHESIS
+orpheus-arabic-saudi   → ARABIC SPEECH SYNTHESIS
+allam-2-7b             → MULTILINGUAL NLP (Arabic anchor, also in FAST tier)
+llama-4-scout          → IMAGE EXTRACTION (vision_handler.py — OUTSIDE EPK DAG)
+```
+
+**Speech activation:** is_voice_input = true ONLY.
+**Vision (llama-4-scout):** specialized extraction role, NOT Heavy Tier,
+OUTSIDE EPK DAG, routes via groq_client, result feeds back via update_handler forced_intent.
+
+---
+
+## 13. HF EMBEDDINGS + RETRIEVAL
+
+```
+BAAI/bge-large-en-v1.5 → PRIMARY EMBEDDING
+BAAI/bge-small-en-v1.5 → FAST EMBEDDING FALLBACK
+BAAI/bge-reranker-large → CROSS-ENCODER RERANKING
+```
+
+**Strict separation:**
+- bge-large / bge-small → ONLY generate vectors
+- bge-reranker-large → ONLY reorders candidates, NEVER generates embeddings,
+  NEVER influences EPK / agents / cognition
+
+All access via `retrieval/retrieval_engine.py` only.
+
+---
+
+## 14. SOURCE CREDIBILITY
+
+`retrieval/source_credibility.py`
+
+**Primary call site:** external/search.py → filters SerpAPI results BEFORE LLM exposure.
+**Secondary call site:** retrieval_engine.py → reserved hook for memory document scoring (pass-through today).
+
+NOT positioned between query_preprocessor and reranker in the retrieval pipeline.
+NOT advisory only — actively blocks BLOCKED-tier domains, filters VERY_LOW-tier sources.
+
+---
+
+## 15. FEATURE LAYER
+
+```python
+features = {
+    "token_count": int,
+    "char_count": int,
+    "newline_density": float,
+    "has_code_block": bool,
+    "has_json_shape": bool,
+    "has_math_symbols": bool,
+    "unicode_entropy": float,
+    "is_voice_input": bool,
+}
+```
+
+Extracted: AFTER Safety Gate Pass 1 (22m), BEFORE Safety Gate Pass 2 (86m + safeguard).
+Used for: EPK cost estimation, routing hints, is_voice_input trigger.
+
+---
+
+## 16. COMPLEXITY MODEL
+
+```
+LOW      → chat / short text
+MEDIUM   → structured input
+HIGH     → logs / code / structured blocks
+CRITICAL → mixed modality / context_length > 32K tokens → EPK: HEAVY_REQUIRED
+```
+
+---
+
+## 17. EPK SIGNALS AND PATHS
+
+**ALLOW:** full DAG
+```
+Fast Tier → General Tier → Agents → safety_agent → Consensus → Response Synthesizer
+```
+
+**DENY:** immediate exit, nothing downstream fires.
+
+**DEGRADED_MODE:** reduced path
+```
+Memory Retrieval ✅ | Embedding Retrieval ✅ | Reranker ✅ | analysis.py (lightweight) ✅
+Intent Engine ✅ | Fast Tier only ✅
+skip: Reasoning Engine ❌ | Multi-Agent Coordinator ❌ | General Tier ❌ | Agent Layer ❌
+skip: safety_agent ❌ | heavy_input_shaper ❌ | Heavy Tier ❌ | Consensus ❌
+→ Response Synthesizer directly ✅ | META lightweight ✅
+```
+
+**HEAVY_REQUIRED:** heavy path
+```
+skip: Fast Tier ❌ | General Tier ❌
+analysis.py (full) ✅ | Reasoning Engine ✅
+heavy_input_shaper (ALWAYS CALLED, self-gated) ✅
+Heavy Tier (120b / scout) mandatory ✅
+safety_agent mandatory ✅
+Consensus SKIP (mutex) ❌
+→ Response Synthesizer aggregates directly ✅ | META full ✅
+```
+
+---
+
+## 18. FINAL EXECUTION DAG
+
+```
+INPUT
+↓ Safety Gate Pass 1 (22m)            [unavailable → DENY]
+↓ Feature Extraction (+ is_voice_input)
+↓ Safety Gate Pass 2 (86m + safeguard-20b)  [unavailable → DENY]
+↓ Auth / Rate Limit / Event Log
+↓ Multilingual Normalization
+    allam-2-7b    → Arabic
+    llama-3.3-70b → all other languages
+↓ EPK [SOLE POLICY AUTHORITY]
+    DENY           → EXIT
+    ALLOW          ↓
+    DEGRADED_MODE  ↓
+    HEAVY_REQUIRED ↓
+↓ Memory + Embedding Retrieval + Reranker  [skip on DENY]
+↓ analysis.py                              [skip on DENY]
+    ALLOW / HEAVY → full | DEGRADED → lightweight
+↓ Intent Engine                            [skip on DENY]
+↓ Reasoning Engine                         [ALLOW / HEAVY only]
+↓ Multi-Agent Coordinator                  [ALLOW / HEAVY only]
+    dispatches via _run_agent() to fast / deep / creative agents
+    runs safety_agent per activation rules
+    runs consensus on ALLOW + use_consensus paths
+    returns CoordinationResult to orchestrator
+↓ Orchestrator (execution only)
+    ├── ALLOW:         Fast → General → Agents → safety_agent → Consensus
+    ├── HEAVY_REQUIRED: heavy_input_shaper → Heavy Tier → safety_agent [no Consensus]
+    └── DEGRADED:      Fast Tier only
+↓ Response Synthesizer ← FINAL OUTPUT AUTHORITY
+    1. assemble
+    2. normalize_telegram (LaTeX→Unicode, strip Markdown)
+    3. structure
+    4. format
+    5. correction (meta/correction.py)
+    6. output_normalizer (meta/output_normalizer.py)
+    7. finalize (truncate 4096 chars)
+↓ Speech Layer (orpheus)  [is_voice_input = true only]
+↓ Event Store ∥ Memory Write  [parallel, independent failure domains]
+↓ META side-channel [skip on DENY]
+    reflection.py   → report → observability / memory_audit
+    memory_audit.py → offline diagnostics
+    ALLOW / HEAVY → full | DEGRADED → lightweight
+    correction + output_normalizer EXCLUDED from side-channel
+↓ OUTPUT
+```
+
+---
+
+## 19. AUTHORITY BOUNDARIES (SEALED)
+
+```
+EPK                  → SOLE POLICY AUTHORITY
+Orchestrator         → execution control only
+Response Synthesizer → FINAL OUTPUT AUTHORITY
+model_router         → model routing only (tier → model name + API limits)
+cost_model           → economic calculation only (prices + estimation caps)
+decision_matrix      → tier selection on ALLOW path only (no policy)
+multi_agent_coordinator → agent execution fabric (not policy)
+safety_agent         → post-reasoning validation only
+heavy_input_shaper   → self-gated input prep only
+analysis.py          → non-binding hints only
+reflection.py        → read-only post-execution report
+correction.py        → preamble cleanup, no authority, synthesizer only
+output_normalizer.py → artifact cleanup, no authority, synthesizer only
+memory_audit.py      → read-only diagnostics only
+source_credibility   → domain trust filtering only
+```
+
+**Hard prohibitions:**
+```
+memory / embeddings / reranker → no routing authority
+LLM → no governance
+meta → no execution authority, no policy, no EPK influence, no tier escalation
+agents → no policy selection (tool selection only)
+```
+
+---
+
+## 20. WRITE ISOLATION
+
+Event Store + Memory Write: parallel execution, independent failure domains.
+Failure of one does NOT block the other.
+
+---
+
+## 21. NAVIGATION ROUTING
+
+| Trigger | Intent |
+|---|---|
+| Public transport keywords (маршрут, как добраться, by bus, transit...) | Intent.SEARCH (pre-signal) |
+| Driving point-to-point (no transport keywords) | Intent.MAPS_ROUTE (Mapbox) |
