@@ -253,7 +253,7 @@ class SearchService:
         if not results:
             return ""
 
-        # Structured hotel pack — use rich formatter
+        # Structured hotel pack — deterministic formatter, no LLM involved
         if results[0].get("_structured"):
             lines: list[str] = []
             for i, r in enumerate(results, 1):
@@ -262,23 +262,22 @@ class SearchService:
                 rating  = r.get("rating", "")
                 address = r.get("address", "")
                 link    = r.get("link", "")
-                snippet = r.get("snippet", "")
 
-                entry = f"[{i}] {name}"
-                if rating:
-                    entry += f"\nРейтинг: {rating}"
-                if price:
-                    entry += f"\nЦена: {price}"
+                entry = f"{i}. {name}"
                 if address:
-                    entry += f"\nАдрес: {address}"
-                if snippet:
-                    entry += f"\n{snippet}"
+                    entry += f"\n   📍 {address}"
+                if rating:
+                    entry += f"\n   ⭐ {rating}"
+                if price:
+                    entry += f"\n   💰 {price}"
                 if link:
-                    entry += f"\nСсылка: {link}"
+                    entry += f"\n   🔗 {link}"
                 lines.append(entry)
 
-            header = "=== ДАННЫЕ ИЗ ПОИСКА (используй ТОЛЬКО эти факты) ===\n"
-            return header + "\n\n".join(lines)
+            # Header used by orchestrator to detect structured data and bypass LLM
+            header = "=== ДАННЫЕ ИЗ ПОИСКА ===\n"
+            footer = "\n\nПроверьте актуальные цены на Booking.com или официальных сайтах."
+            return header + "\n\n".join(lines) + footer
 
         # Standard organic results
         lines = []
@@ -288,7 +287,7 @@ class SearchService:
             snippet = r.get("snippet", "")
             lines.append(f"[{i}] {title}\n{snippet}\nИсточник: {link}")
 
-        header = "=== ДАННЫЕ ИЗ ПОИСКА (используй ТОЛЬКО эти факты) ===\n"
+        header = "=== ДАННЫЕ ИЗ ПОИСКА ===\n"
         return header + "\n\n".join(lines)
 
 
