@@ -159,11 +159,86 @@ def plan_agents(
 
 # ─── AGENT DISPATCHER ─────────────────────────────────────────────────────────
 
-async def _run_agent(
-    agent_type: AgentType,
+async def _verify_math_solution(
+    user_message: str,
+    solution: str,
     messages: list[dict],
-    temperature: float = 0.7,
+    temperature: float = 0.1,
+) -> tuple[bool, str]:
+    """
+    Self-verification step for MATH/logic puzzle solutions.
+
+    Sends a second fast LLM call that acts as a constraint checker:
+    given the original problem and the proposed solution, it verifies
+    every stated constraint and returns either VERIFIED or a list of
+    violated constraints.
+
+    Returns: (is_correct: bool, feedback: str)
+    """
+    verification_prompt = (
+        f"TASK: Verify the following solution against ALL constraints in the problem.\n\n"
+        f"ORIGINAL PROBLEM:\n{user_message}\n\n"
+        f"PROPOSED SOLUTION:\n{solution}\n\n"
+        "INSTRUCTIONS:\n"
+        "1. Extract EVERY constraint from the original problem.\n"
+        "2. Check EACH constraint against the proposed solution one by one.\n"
+        "3. For each constraint write: OK or VIOLATED: <reason>.\n"
+        "4. On the last line write either:\n"
+        "   VERIFIED — if all constraints are satisfied, or\n"
+        "   ERRORS FOUND: <count> — if any constraint is violated.\n"
+        "Be systematic. Do not skip any constraint. Do not add assumptions."
+    )
+
+    verify_messages = [
+        {"role": "system", "content": (
+            "You are a strict logical constraint verifier. "
+            "Your only job is to check whether a solution satisfies every stated constraint. "
+            "Never suggest corrections — only verify. Be precise and systematic."
+        )},
+        {"role": "user", "content": verification_prompt},
+    ]
+
+    try:
+        result = await fast_agent.run(verify_messages, temperature=temperature)
+        if not result.success:
+            return True, ""  # verification failed silently → pass through
+
+        verdict = result.text.strip()
+        last_line = verdict.split("\n")[-1].strip().upper()
+
+        if last_line.startswith("VERIFIED"):
+            return True, ""
+
+        # Extract violation feedback for the correction round
+        return False, verdict
+
+    except Exception as exc:
+        logger.warning("MATH verifier failed", extra={"error": str(exc)})
+        return True, ""  # silent failure → pass through original solution
+
+
+async def _correct_math_solution(
+    messages: list[dict],
+    original_solution: str,
+    verification_feedback: str,
+    temperature: float = 0.1,
 ) -> AgentResult:
+    """
+    Second-pass correction: give the agent its solution + verifier feedback,
+    ask it to fix only the violated constraints.
+    """
+    correction_messages = list(messages) + [
+        {"role": "assistant", "content": original_solution},
+        {"role": "user", "content": (
+            "Your solution above has constraint violations. "
+            "The verifier found the following problems:\n\n"
+            f"{verification_feedback}\n\n"
+            "Fix ONLY the violated constraints. "
+            "Re-check ALL constraints from the original problem after fixing. "
+            "Show the corrected final answer table at the end."
+        )},
+    ]
+    return await deep_agent.run(correction_messages, temperature=temperature)
     """
     Dispatch to the correct agent module.
     Never raises — returns AgentResult(success=False) on any error.
@@ -268,6 +343,34 @@ async def coordinate(
 
     # ── primary succeeded (non-consensus path) ────────────────────────────────
     if _agent_succeeded(primary_result):
+
+        # ── MATH self-correction loop ─────────────────────────────────────────
+        # For constraint-satisfaction and logic puzzles: verify the solution
+        # against all stated constraints. If violations found → one correction
+        # round. Max 1 correction to avoid infinite loops.
+        if intent == Intent.MATH and user_message:
+            is_correct, feedback = await _verify_math_solution(
+                user_message=user_message,
+                solution=primary_result.text,
+                messages=messages,
+                temperature=0.05,
+            )
+            if not is_correct and feedback:
+                logger.info("MATH verifier found violations — attempting correction")
+                corrected = await _correct_math_solution(
+                    messages=messages,
+                    original_solution=primary_result.text,
+                    verification_feedback=feedback,
+                    temperature=0.1,
+                )
+                if _agent_succeeded(corrected):
+                    logger.info("MATH correction succeeded")
+                    primary_result = corrected
+                else:
+                    logger.warning("MATH correction failed — using original solution")
+            else:
+                logger.info("MATH verifier passed")
+
         # HEAVY path: safety_agent mandatory
         # DEGRADED path: safety_agent skipped (no parallel_validators, fallback is FAST==primary)
         is_heavy = not plan.use_consensus and plan.parallel_validators == [] and plan.fallback != plan.primary
