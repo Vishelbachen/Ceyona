@@ -93,7 +93,15 @@ def build_messages(ctx: PromptContext) -> list[dict]:
 
     # ── retrieved context ─────────────────────────────────────────────────────
     if ctx.retrieved_context:
-        system_parts.append(f"## CONTEXT\n{ctx.retrieved_context}")
+        # Hard grounding header — placed immediately before context data
+        # so it is the last thing the model reads before the facts.
+        # Separate from _TRUTH_STRICT to work even on HYBRID mode.
+        system_parts.append(
+            "SEARCH RESULTS FOLLOW. USE ONLY THESE FACTS.\n"
+            "DO NOT add, invent, or expand beyond what is listed below.\n"
+            "If a fact is not in the list — do not mention it.\n"
+            f"## CONTEXT\n{ctx.retrieved_context}"
+        )
 
     system = "\n\n".join(system_parts).strip()
     if system:
