@@ -900,10 +900,6 @@ _STRINGS: dict[str, dict[str, str]] = {
         "mn": "📍 Байршил олдсонгүй. Илүү тодорхой нэр ашиглана уу.",
     },
 
-    # ── silent keys ───────────────────────────────────────────────────────────
-    "empty_message": {"_silent": "true"},
-    "no_user_id":    {"_silent": "true"},
-
     # ── emotional fallback — when LLM unavailable for a pure emotional reaction ─
     # Used by synthesize() as last resort before no_response.
     "emotional_fallback": {
@@ -1255,6 +1251,44 @@ _STRINGS: dict[str, dict[str, str]] = {
         "fa": "🗺 مسیر ساخته نشد. هر دو مکان را بررسی کنید.",
         "hi": "🗺 मार्ग नहीं बन सका। दोनों स्थान जाँचें।",
         "mn": "🗺 Чиглэл байгуулж чадсангүй. Хоёр байршлыг шалгана уу.",
+    },
+
+    # ── Payments: top-up button label ─────────────────────────────────────────
+    "topup_button": {
+        "en": "💳 Top Up Balance",
+        "ru": "💳 Пополнить баланс",
+        "de": "💳 Guthaben aufladen",
+        "fr": "💳 Recharger le solde",
+        "es": "💳 Recargar saldo",
+        "pt": "💳 Recarregar saldo",
+        "it": "💳 Ricarica saldo",
+        "tr": "💳 Bakiye yükle",
+        "ar": "💳 إعادة شحن الرصيد",
+        "zh": "💳 充值",
+        "ja": "💳 残高チャージ",
+        "ko": "💳 잔액 충전",
+        "pl": "💳 Doładuj saldo",
+        "uk": "💳 Поповнити баланс",
+        "ka": "💳 ბალანსის შევსება",
+    },
+
+    # ── Payments: low balance warning ─────────────────────────────────────────
+    "low_balance_warning": {
+        "en": "⚠️ Your balance is running low. Top up to keep chatting.",
+        "ru": "⚠️ Баланс заканчивается. Пополните, чтобы продолжить.",
+        "de": "⚠️ Dein Guthaben wird knapp. Lade es auf, um weiterzumachen.",
+        "fr": "⚠️ Votre solde est faible. Rechargez pour continuer.",
+        "es": "⚠️ Tu saldo es bajo. Recarga para seguir chateando.",
+        "pt": "⚠️ Seu saldo está baixo. Recarregue para continuar.",
+        "it": "⚠️ Il tuo saldo è basso. Ricarica per continuare.",
+        "tr": "⚠️ Bakiyeniz azalıyor. Devam etmek için yükleyin.",
+        "ar": "⚠️ رصيدك على وشك النفاد. أعد الشحن للمتابعة.",
+        "zh": "⚠️ 余额不足，请充值以继续使用。",
+        "ja": "⚠️ 残高が少なくなっています。チャットを続けるにはチャージしてください。",
+        "ko": "⚠️ 잔액이 부족합니다. 계속하려면 충전하세요.",
+        "pl": "⚠️ Twoje saldo jest niskie. Doładuj, aby kontynuować.",
+        "uk": "⚠️ Баланс закінчується. Поповніть, щоб продовжити.",
+        "ka": "⚠️ ბალანსი ამოიწურება. გასაგრძელებლად შეავსეთ.",
     },
 }
 
