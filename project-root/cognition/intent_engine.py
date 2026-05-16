@@ -409,4 +409,65 @@ async def classify(
 
     if supabase is None or hf_client is None:
         logger.warning("classify called without supabase/hf_client — using fallback")
-        return fall
+        return fallback
+
+    try:
+        from llm.hf_client import BGE_LARGE
+        vectors = await hf_client.embed([text], model=BGE_LARGE)
+        if not vectors:
+            logger.error("classify: empty embedding returned")
+            return fallback
+
+        query_vec = vectors[0]
+
+        result = supabase.rpc("match_intent", {
+            "query_embedding": query_vec,
+            "match_threshold": _MATCH_THRESHOLD,
+            "match_count": _MATCH_COUNT,
+        }).execute()
+
+        rows = result.data or []
+        if not rows:
+            logger.info("classify: no matches above threshold", extra={"text": text[:60]})
+            return fallback
+
+        # Агрегируем score по интентам — средний score среди топ примеров
+        scores: dict[str, list[float]] = defaultdict(list)
+        for row in rows:
+            scores[row["intent_name"]].append(float(row["similarity"]))
+
+        best_intent_name = max(scores, key=lambda k: sum(scores[k]) / len(scores[k]))
+        best_score = sum(scores[best_intent_name]) / len(scores[best_intent_name])
+
+        # For short texts (< 6 words) we require higher confidence to avoid
+        # spurious MAPS/WEATHER matches on unrecognised-language input.
+        # Example: "Rigami sila maanna qanoq ippa?" (Inuktitut) was scoring
+        # above 0.55 for MAPS due to accidental embedding similarity.
+        word_count = len(text.split())
+        effective_min = 0.75 if word_count < 6 else _MIN_CONFIDENCE
+
+        if best_score < effective_min:
+            logger.info("classify: best score below threshold", extra={
+                "intent": best_intent_name,
+                "score": f"{best_score:.3f}",
+                "threshold": effective_min,
+                "word_count": word_count,
+            })
+            return fallback
+
+        try:
+            intent = Intent(best_intent_name)
+        except ValueError:
+            logger.error("classify: unknown intent name", extra={"name": best_intent_name})
+            return fallback
+
+        logger.info("classify result", extra={
+            "intent": intent.value,
+            "confidence": f"{best_score:.3f}",
+            "lang": lang,
+        })
+        return _build_result(intent, round(best_score, 3), lang, text)
+
+    except Exception as exc:
+        logger.error("classify failed", extra={"error": str(exc)}, exc_info=True)
+        return fallback
