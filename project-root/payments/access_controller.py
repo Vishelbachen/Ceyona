@@ -6,7 +6,7 @@ from supabase import Client
 logger = logging.getLogger(__name__)
 
 _TABLE = "user_balances"
-_DEFAULT_BALANCE_USD = 1.0
+_DEFAULT_BALANCE_USD = 0.10
 
 
 @dataclass(frozen=True)
