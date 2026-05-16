@@ -16,7 +16,8 @@ _PRIMARY: dict[Tier, str] = {
 # All models available per tier (primary first)
 _TIER_MODELS: dict[Tier, list[str]] = {
     Tier.FAST: [
-        "llama-3.1-8b-instant",
+        "llama-3.1-8b-instant",   # primary: lowest latency
+        "gemma2-9b-it",           # fallback: 15000 TPM, handles overflow when llama-3.1-8b hits 6000 TPM limit
     ],
     Tier.GENERAL: [
         "llama-3.3-70b-versatile",   # primary: reasoning + creative
