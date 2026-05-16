@@ -2,8 +2,11 @@ from contracts.shared_types import Tier
 
 # ─── TIER THRESHOLDS (USD) ───────────────────────────────────────────────────
 
-_FAST_CEILING:    float = 0.05
-_GENERAL_CEILING: float = 0.003  # synced with EPK _DEGRADE_THRESHOLD
+# ASCENDING ORDER IS MANDATORY.
+# Previous values (0.05 / 0.003) were inverted — GENERAL tier was unreachable.
+# Fixed in economic.md v5.0.
+_FAST_CEILING:    float = 0.0005  # below $0.0005 → FAST  (~≤5000 combined tokens at FAST rates)
+_GENERAL_CEILING: float = 0.003   # below $0.003  → GENERAL (synced with EPK _DEGRADE_THRESHOLD)
 
 
 def select_tier(estimated_cost: float) -> Tier:
