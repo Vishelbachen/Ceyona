@@ -79,6 +79,21 @@ async def complete_with_fallback(
         models = get_tier_models(current_tier)
         max_tokens = route_max_tokens(current_tier)
 
+        # Log what actually reaches the model — critical for grounding debug
+        _total_chars = sum(len(str(m.get("content", ""))) for m in current_messages)
+        _has_context = any(
+            "SEARCH RESULTS" in str(m.get("content", "")) or
+            "## CONTEXT" in str(m.get("content", ""))
+            for m in current_messages
+        )
+        logger.info("LLM dispatch", extra={
+            "tier":        current_tier,
+            "messages":    len(current_messages),
+            "total_chars": _total_chars,
+            "has_context": _has_context,
+            "roles":       [m.get("role") for m in current_messages],
+        })
+
         for model in models:
             extra_params: dict = {}
             if requires_thinking_disabled(model):
