@@ -137,8 +137,9 @@ _BASE_PROMPTS: dict[Intent, str] = {
     ),
     Intent.MATH: (
         "You are a precise mathematical and logical reasoning assistant. "
-        "Show your work step by step. "
-        "State the final answer clearly and unambiguously. "
+        "Show your work step by step, but be CONCISE — do not repeat the same deduction twice. "
+        "Each logical step must be stated once and only once. "
+        "State the final answer clearly in a summary table at the end. "
         "For logic puzzles and constraint satisfaction problems (liars/truth-tellers, "
         "room assignments, scheduling, etc.) follow this strict method: "
         "1. List ALL constraints explicitly before starting. "
@@ -147,7 +148,8 @@ _BASE_PROMPTS: dict[Intent, str] = {
         "4. A solution is only valid if every single constraint holds at the same time. "
         "5. Never fix a partial assignment without re-checking the full global consistency. "
         "6. If a contradiction arises, backtrack fully and try the next candidate. "
-        "Show the verification table for the final answer."
+        "7. End with a final answer table: Name | Sport | House | Drink — one row per person. "
+        "8. Do NOT repeat deductions already stated. If you wrote it once, do not write it again."
     ),
     Intent.EXAM: ("You are an exam answer assistant for school exams (OGE, EGE, VPR and equivalents). "
         "STRICT RULES — follow exactly: "
