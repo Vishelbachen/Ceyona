@@ -284,34 +284,86 @@ def _build_result(
 # "How do I get from A to B" queries — we have no Directions API.
 # These must go to SEARCH (SerpAPI finds real transport info),
 # NOT to MAPS (Mapbox only geocodes a point and model invents the route).
+# ─── WEATHER SIGNALS ─────────────────────────────────────────────────────────
+# Pre-check for short queries in non-Latin scripts that may miss embedding classifier.
+_WEATHER_SIGNALS: tuple[str, ...] = (
+    "погода", "температура", "прогноз погоды",
+    "weather", "temperature", "forecast",
+    "ამინდი", "ამინდია", "ტემპერატურა",
+    "եղանակ", "hava durumu", "ауа райы",
+    "الطقس", "درجة الحرارة", "آب و هوا",
+    "मौसम", "天气", "気温", "날씨", "อากาศ", "cuaca",
+    "pogoda", "počasí", "vreme", "meteo", "időjárás",
+)
+
+# ─── ROUTE SIGNALS ────────────────────────────────────────────────────────────
+# Route/directions → SEARCH (SerpAPI gets real transit info).
+# NOT MAPS_ROUTE — Mapbox only knows driving, not buses/metro/taxi.
 _ROUTE_SIGNALS: tuple[str, ...] = (
     # Russian
-    "маршрут", "как добраться", "как доехать", "как дойти", "как попасть",
-    "построй маршрут", "дорога от", "путь от", "путь до",
+    "как добраться", "как доехать", "как дойти", "как попасть",
+    "дорога от", "путь от", "путь до",
     "от аэропорта", "до центра", "до аэропорта", "от вокзала", "до вокзала",
     "на автобусе", "на метро", "на такси", "общественный транспорт",
     # English
-    "route from", "route to", "directions from", "directions to",
     "how to get from", "how to get to", "how do i get to",
-    "way from", "way to", "get from", "travel from", "travel to",
+    "how do i reach", "get from", "travel from", "travel to",
     "from airport", "to airport", "from station", "to station",
     "by bus", "by metro", "by subway", "by train", "by taxi",
     "public transport", "public transit",
     # German
-    "route von", "route nach", "wie komme ich", "wie kommt man",
-    "vom flughafen", "zum flughafen", "weg von", "weg nach",
+    "wie komme ich", "wie kommt man",
+    "vom flughafen", "zum flughafen",
     # French
-    "itinéraire", "comment aller", "comment se rendre",
+    "comment aller", "comment se rendre",
     "depuis l'aéroport", "jusqu'au centre",
     # Spanish
-    "ruta desde", "ruta hasta", "cómo llegar", "cómo ir",
+    "cómo llegar", "cómo ir",
     "desde el aeropuerto", "hasta el centro",
     # Turkish
-    "nasıl gidilir", "yol tarifi", "havalimanından", "merkeze",
+    "nasıl gidilir", "havalimanından",
     # Georgian
-    "მარშრუტი", "როგორ მივიდე", "როგორ ჩავიდე", "აეროპორტიდან",
+    "როგორ მივიდე", "როგორ ჩავიდე", "აეროპორტიდან", "მივიდე",
     # Arabic
-    "كيف أصل", "طريق من", "طريق إلى", "من المطار", "إلى المركز",
+    "كيف أصل", "من المطار", "إلى المركز",
+)
+
+# ─── EMOTIONAL SIGNALS ────────────────────────────────────────────────────────
+# Short exclamatory / expressive messages → EMOTIONAL intent.
+# Avoids misclassifying "wtf", "пиздец", "OMG" as SEARCH or QUESTION.
+_EMOTIONAL_SIGNALS: tuple[str, ...] = (
+    # Profanity / strong expletives (language-independent treatment)
+    "wtf", "omg", "holy shit", "oh my god", "oh my",
+    "пиздец", "блять", "блин", "чёрт", "да ладно", "нифига",
+    "ой", "ого", "вот это да", "не может быть", "серьёзно?",
+    "ничего себе", "ну и ну", "капец", "кошмар", "ужас",
+    # Frustration
+    "бесит", "надоело", "устал", "устала", "задолбал", "задолбало",
+    "annoying", "frustrating", "i give up", "so annoying",
+    # Surprise / disbelief
+    "seriously?", "no way", "are you kidding", "you're joking",
+    "что за", "это что", "ты серьёзно", "ты шутишь",
+    # Excitement
+    "наконец-то", "наконец то", "ура", "класс", "круто", "огонь",
+    "yay", "finally", "awesome", "amazing", "wow",
+    # Disappointment
+    "жаль", "обидно", "грустно", "расстроил", "расстроила",
+    "sad", "disappointed", "that's sad", "такая жалость",
+)
+
+# ─── MATH / EXAM KEYWORD PRE-CHECK ───────────────────────────────────────────
+# Short mathematical expressions can have low pgvector score → fall to QUESTION.
+# Catch them early with keyword patterns.
+import re as _re
+_MATH_PATTERN = _re.compile(
+    r"(?:"
+    r"\d+\s*[\+\-\*\/\^]\s*\d+"       # arithmetic: 2+2, 3*4
+    r"|(?:реши|solve|найди|find|вычисли|calculate|simplify|упрости)\s"
+    r"|(?:x|у|z)\s*[\^²³]"            # variables with powers
+    r"|(?:интеграл|integral|производная|derivative|предел|limit)"
+    r"|(?:теорема|theorem|докажи|prove|доказательство)"
+    r")",
+    _re.IGNORECASE,
 )
 
 
@@ -332,77 +384,29 @@ async def classify(
     """
     fallback = _build_result(Intent.QUESTION, 0.70, lang, text)
 
-    # ── routing pre-check ─────────────────────────────────────────────────────
-    # Route/directions queries go to MAPS_ROUTE (Mapbox Directions API).
-    # MAPS only geocodes a single point — it cannot build routes.
-    # SEARCH was used previously as a fallback, but returned SEO junk with
-    # invented bus numbers. MAPS_ROUTE uses real geodata and falls back
-    # to web search gracefully if endpoint extraction fails.
-    if any(s in text.lower() for s in _ROUTE_SIGNALS):
-        logger.info("classify: route pre-signal → MAPS_ROUTE", extra={"lang": lang})
-        return _build_result(Intent.MAPS_ROUTE, 0.87, lang, text)
+    # ── pre-checks ────────────────────────────────────────────────────────────
+    text_lower = text.lower()
+
+    # Weather pre-check: short non-Latin queries can miss embedding classifier.
+    if any(s in text_lower for s in _WEATHER_SIGNALS):
+        logger.info("classify: weather pre-signal → WEATHER", extra={"lang": lang})
+        return _build_result(Intent.WEATHER, 0.85, lang, text)
+
+    # Route queries → SEARCH (real transit info via SerpAPI, not just driving distance).
+    if any(s in text_lower for s in _ROUTE_SIGNALS):
+        logger.info("classify: route pre-signal → SEARCH", extra={"lang": lang})
+        return _build_result(Intent.SEARCH, 0.87, lang, text)
+
+    # Emotional signals → EMOTIONAL (avoid classifying "пиздец" as SEARCH).
+    if any(s in text_lower for s in _EMOTIONAL_SIGNALS):
+        logger.info("classify: emotional pre-signal → EMOTIONAL", extra={"lang": lang})
+        return _build_result(Intent.EMOTIONAL, 0.82, lang, text)
+
+    # Math keyword pre-check: short expressions may have low pgvector score.
+    if _MATH_PATTERN.search(text):
+        logger.info("classify: math keyword pre-signal → MATH", extra={"lang": lang})
+        return _build_result(Intent.MATH, 0.85, lang, text)
 
     if supabase is None or hf_client is None:
         logger.warning("classify called without supabase/hf_client — using fallback")
-        return fallback
-
-    try:
-        from llm.hf_client import BGE_LARGE
-        vectors = await hf_client.embed([text], model=BGE_LARGE)
-        if not vectors:
-            logger.error("classify: empty embedding returned")
-            return fallback
-
-        query_vec = vectors[0]
-
-        result = supabase.rpc("match_intent", {
-            "query_embedding": query_vec,
-            "match_threshold": _MATCH_THRESHOLD,
-            "match_count": _MATCH_COUNT,
-        }).execute()
-
-        rows = result.data or []
-        if not rows:
-            logger.info("classify: no matches above threshold", extra={"text": text[:60]})
-            return fallback
-
-        # Агрегируем score по интентам — средний score среди топ примеров
-        scores: dict[str, list[float]] = defaultdict(list)
-        for row in rows:
-            scores[row["intent_name"]].append(float(row["similarity"]))
-
-        best_intent_name = max(scores, key=lambda k: sum(scores[k]) / len(scores[k]))
-        best_score = sum(scores[best_intent_name]) / len(scores[best_intent_name])
-
-        # For short texts (< 6 words) we require higher confidence to avoid
-        # spurious MAPS/WEATHER matches on unrecognised-language input.
-        # Example: "Rigami sila maanna qanoq ippa?" (Inuktitut) was scoring
-        # above 0.55 for MAPS due to accidental embedding similarity.
-        word_count = len(text.split())
-        effective_min = 0.75 if word_count < 6 else _MIN_CONFIDENCE
-
-        if best_score < effective_min:
-            logger.info("classify: best score below threshold", extra={
-                "intent": best_intent_name,
-                "score": f"{best_score:.3f}",
-                "threshold": effective_min,
-                "word_count": word_count,
-            })
-            return fallback
-
-        try:
-            intent = Intent(best_intent_name)
-        except ValueError:
-            logger.error("classify: unknown intent name", extra={"name": best_intent_name})
-            return fallback
-
-        logger.info("classify result", extra={
-            "intent": intent.value,
-            "confidence": f"{best_score:.3f}",
-            "lang": lang,
-        })
-        return _build_result(intent, round(best_score, 3), lang, text)
-
-    except Exception as exc:
-        logger.error("classify failed", extra={"error": str(exc)}, exc_info=True)
-        return fallback
+        return fall
