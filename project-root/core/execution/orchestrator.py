@@ -148,7 +148,12 @@ def _empty_usage(
 # WEATHER and MAPS: structured data already formatted by the tool — no synthesis needed.
 # SEARCH is intentionally NOT here: raw search snippets must be synthesised by LLM.
 # MAPS_POI is intentionally NOT here: POI data needs LLM to present it coherently.
-_TOOL_INTENTS = {Intent.WEATHER, Intent.MAPS}
+_TOOL_INTENTS = {
+    Intent.WEATHER,
+    Intent.MAPS,
+    Intent.MAPS_POI,    # tool output goes straight to synthesizer — no LLM
+    Intent.MAPS_ROUTE,  # same: format_route/format_poi is the final answer
+}
 
 
 async def _run_tool(intent_result, lang: str) -> str | None:
