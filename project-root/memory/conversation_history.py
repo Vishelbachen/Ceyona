@@ -10,11 +10,25 @@ logger = logging.getLogger(__name__)
 _TABLE = "conversation_history"
 _MAX_HISTORY = 20
 
-# Safe token budget for history — leaves room for system prompt + user message + output
-# llama-3.1-8b-instant TPM: 6000
-# 512 output + 800 system prompt + 300 user message + 500 buffer = 2012
-# history budget: 6000 - 2012 = ~3500, берём с запасом
-_MAX_HISTORY_TOKENS = 2000
+# Real token budget for history on FAST tier (llama-3.1-8b-instant, 6000 TPM):
+#
+# Actual system prompt breakdown (measured, not estimated):
+#   lang_instruction:     ~100 tokens
+#   formatting rules:     ~150 tokens
+#   no-cutoff mandate:    ~80 tokens
+#   intent system prompt: ~200-400 tokens
+#   truth enforcement:    ~300 tokens (HYBRID) or ~350 tokens (STRICT)
+#   retrieved context:    ~500-800 tokens (when present)
+#   ─────────────────────────────────────────────────────
+#   Total system:         ~1300-1800 tokens realistically
+#
+# Output max (FAST tier): 1024 tokens
+# User message:           ~100-300 tokens
+# Safety buffer:          300 tokens
+#
+# History budget: 6000 - 1800 - 1024 - 300 - 300 = ~1200 tokens (conservative)
+# Previously was 2000 — caused 413 errors on llama-3.1-8b-instant.
+_MAX_HISTORY_TOKENS = 1200
 
 
 @dataclass
