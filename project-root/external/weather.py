@@ -145,8 +145,10 @@ def _strip_locative(city: str) -> str:
 async def _extract_city(query: str) -> str:
     """
     Extract city name from a weather query in any language.
-    Delegates to Groq LLM; falls back to returning the raw query
-    so OpenWeatherMap can still try.
+    ALWAYS returns city in Latin script (English) — OpenWeatherMap
+    does not support non-Latin scripts (Georgian, Arabic, Chinese etc.)
+    in the q= parameter. Without this, Georgian ვარშავა → 404.
+    Delegates to Groq LLM; falls back to raw query.
     """
     try:
         from llm.groq_client import groq_client
@@ -154,6 +156,11 @@ async def _extract_city(query: str) -> str:
             "Extract the city name from the following weather query. "
             "Reply with a JSON object only, no extra text: "
             '{"city": "..."}. '
+            "CRITICAL: always write the city name in English (Latin script), "
+            "regardless of the language of the query. "
+            "Examples: query 'ვარშავა' → {\"city\": \"Warsaw\"}, "
+            "query 'Москва' → {\"city\": \"Moscow\"}, "
+            "query 'طوكيو' → {\"city\": \"Tokyo\"}. "
             "If no city is mentioned, use an empty string.\n\n"
             f"Query: {query}"
         )
