@@ -590,8 +590,8 @@ source_credibility MUST NOT:
 ## 21. SAFETY ACTIVATION
 
 **Safety Layer (input firewall):**
-- prompt-guard-2-22m (Pass 1, before Feature Extraction)
-- prompt-guard-2-86m + gpt-oss-safeguard-20b (Pass 2, after Feature Extraction)
+- meta-llama/llama-prompt-guard-2-22m (Pass 1, before Feature Extraction)
+- meta-llama/llama-prompt-guard-2-86m + openai/gpt-oss-safeguard-20b (Pass 2, after Feature Extraction)
 - deterministic, unavailability → DENY
 - distinct from safety_agent
 
@@ -677,7 +677,7 @@ All gaps are intentional architectural decisions, not defects.
 
 ### Safety Layer (§21)
 **Status: SPECIFIED, NOT YET IMPLEMENTED**
-`prompt-guard-2-22m`, `prompt-guard-2-86m`, `gpt-oss-safeguard-20b` are defined in
+`meta-llama/llama-prompt-guard-2-22m`, `meta-llama/llama-prompt-guard-2-86m`, `openai/gpt-oss-safeguard-20b` are defined in
 `models1.md` and `models.md` but no `safety_gate.py` exists in code.
 Current protection: `security/rate_limiter.py`, `security/origin_guard.py`,
 and `agents/safety_agent.py` (post-reasoning semantic validator only).
