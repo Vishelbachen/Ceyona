@@ -27,7 +27,7 @@ _TIER_MODELS: dict[Tier, list[str]] = {
     ],
     Tier.HEAVY: [
         "openai/gpt-oss-120b",               # primary: deep multi-step reasoning + consensus arbiter
-        "llama-4-scout-17b-16e-instruct",    # long-context transformation (512K)
+        "meta-llama/llama-4-scout-17b-16e-instruct",  # long-context transformation (512K)
     ],
 }
 
@@ -68,7 +68,20 @@ MULTILINGUAL_ARABIC_MODEL = "allam-2-7b"
 MULTILINGUAL_OTHER_MODEL  = "llama-3.3-70b-versatile"
 
 # Long-context specialist (Heavy Tier secondary)
-LONG_CONTEXT_MODEL = "llama-4-scout-17b-16e-instruct"
+LONG_CONTEXT_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+
+# Safety Gate models (Safety Layer — input firewall, NOT safety_agent)
+SAFETY_PASS1_MODEL   = "meta-llama/llama-prompt-guard-2-22m"   # fast rejection filter
+SAFETY_PASS2_MODELS  = [
+    "meta-llama/llama-prompt-guard-2-86m",  # deep classification
+    "openai/gpt-oss-safeguard-20b",          # final enforcement
+]
+
+# Speech models
+WHISPER_PRIMARY  = "whisper-large-v3"
+WHISPER_FAST     = "whisper-large-v3-turbo"
+ORPHEUS_ENGLISH  = "canopylabs/orpheus-v1-english"
+ORPHEUS_ARABIC   = "canopylabs/orpheus-arabic-saudi"
 
 # qwen must always have thinking disabled
 QWEN_THINKING_DISABLED_MODELS: frozenset[str] = frozenset({"qwen/qwen3-32b"})
