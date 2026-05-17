@@ -1,7 +1,11 @@
 from dataclasses import dataclass
 from contracts.shared_types import EPKDecision
+from core.kernel.policy_registry import RUNTIME
 
 # ─── THRESHOLDS ───────────────────────────────────────────────────────────────
+# Read from policy_registry.RUNTIME — single source of truth.
+# economic.md §5 defines the values; policy_registry.py holds them at runtime.
+#
 # Calibrated to ACTUAL Groq prices (May 2026):
 #   FAST    llama-3.1-8b-instant:    $0.05 / $0.08  per 1M
 #   GENERAL llama-3.3-70b-versatile: $0.59 / $0.79  per 1M
@@ -15,9 +19,9 @@ from contracts.shared_types import EPKDecision
 # HEAVY:   cost > $0.008  (≈ ~5000 input token GENERAL / 3000 HEAVY request)
 # ALLOW:   otherwise
 
-_DENY_THRESHOLD:    float = 0.0001   # effectively zero balance check
-_HEAVY_THRESHOLD:   float = 0.008    # large multi-step tasks → gpt-oss-120b
-_DEGRADE_THRESHOLD: float = 0.003    # oversized requests → FAST only
+_DENY_THRESHOLD:    float = RUNTIME.epk.deny_threshold
+_HEAVY_THRESHOLD:   float = RUNTIME.epk.heavy_threshold
+_DEGRADE_THRESHOLD: float = RUNTIME.epk.degrade_threshold
 
 
 @dataclass(frozen=True)
@@ -36,6 +40,8 @@ def evaluate(epk_input: EPKInput) -> EPKOutput:
     """
     SOLE POLICY AUTHORITY.
     OUTPUT: ALLOW | DENY | DEGRADED_MODE | HEAVY_REQUIRED
+
+    Thresholds read from policy_registry.RUNTIME — do not hardcode here.
 
     Rules (evaluated in order):
       1. balance ≤ 0 or cost > balance → DENY
