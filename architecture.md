@@ -675,15 +675,21 @@ own undeclared policy, duplicate responsibilities, or redefine existing ownershi
 This section tracks known gaps between architecture specification and runtime implementation.
 All gaps are intentional architectural decisions, not defects.
 
-### Safety Layer (§21)
-**Status: SPECIFIED, NOT YET IMPLEMENTED**
-`meta-llama/llama-prompt-guard-2-22m`, `meta-llama/llama-prompt-guard-2-86m`, `openai/gpt-oss-safeguard-20b` are defined in
-`models1.md` and `models.md` but no `safety_gate.py` exists in code.
-Current protection: `security/rate_limiter.py`, `security/origin_guard.py`,
-and `agents/safety_agent.py` (post-reasoning semantic validator only).
-Priority: implement Safety Gate before public launch.
+### Safety Gate (§21)
+**Status: IMPLEMENTED**
+`security/safety_gate.py` — Pass 1 (`llama-prompt-guard-2-22m`) and Pass 2
+(`llama-prompt-guard-2-86m` + `gpt-oss-safeguard-20b`) are implemented.
+Integrated into `update_handler.py`: Pass 1 before Feature Extraction,
+Pass 2 after Feature Extraction, before EPK.
+Unavailability → DENY with no fallback to ALLOW. ✅
 
-### Agent Layer — Compound Models (§16)
+### Multilingual Normalization (§23)
+**Status: IMPLEMENTED**
+`llm/multilingual_preprocessor.py` — Arabic via `allam-2-7b`,
+all other non-Latin via `llama-3.3-70b-versatile`, Latin-dominant → passthrough.
+Integrated into `update_handler.py` after Safety Gate Pass 2. ✅
+
+### Agent Layer — Compound Models (§6, §16)
 **Status: REGISTERED, NOT YET WIRED**
 `groq/compound` and `groq/compound-mini` are registered in `model_router.py`
 and `groq_client._CONTEXT_CHAR_LIMITS`. Agents currently dispatch via
@@ -691,19 +697,35 @@ and `groq_client._CONTEXT_CHAR_LIMITS`. Agents currently dispatch via
 Impact: agents lack native tool-selection authority defined in models1.md §6.
 Priority: wire compound models when Groq tool-use API stabilizes.
 
+### Speech Layer (§12)
+**Status: IMPLEMENTED (ASR + TTS), BILLING NOT YET WIRED**
+`external/speech_to_text.py` — Whisper ASR via Groq API. ✅
+`external/text_to_speech.py` — Orpheus TTS via Groq API. ✅
+`transport/telegram/message_router.py` — `extract_voice()` / `has_voice()`. ✅
+`transport/telegram/update_handler.py` — voice path: download → ASR → Safety Gate Pass 1
+→ pipeline. TTS on response when `is_voice_input = True`. ✅
+**Gap:** `audio_seconds` and `tts_characters` are captured in TranscriptResult / SynthesisResult
+but not yet wired to `usage_meter.record()` for billing.
+Priority: wire before speech features go to production.
+
+### OrchestratorResult.tts_audio_bytes
+**Status: FIELD NOT YET DECLARED**
+`update_handler.py` attempts `dataclasses.replace(result, tts_audio_bytes=...)` for TTS audio.
+`OrchestratorResult` in `orchestrator.py` does not yet declare `tts_audio_bytes: bytes = b""`.
+`webhook.py` does not yet send `sendAudio` when `tts_audio_bytes` is non-empty.
+Priority: declare field + wire Telegram sendAudio before speech goes to production.
+
 ### Speech Billing
-**Status: SPECIFIED, PARTIALLY IMPLEMENTED**
-`UsageEntry` now includes `audio_seconds`, `tts_characters`, `tool_calls` fields.
-Actual billing integration in `vision_handler.py` and `webhook.py` speech paths
-is not yet wired to `usage_meter.record()`.
+**Status: SPECIFIED, NOT YET WIRED**
+`UsageEntry` fields `audio_seconds`, `tts_characters`, `tool_calls` declared.
+Actual billing in `usage_meter.record()` for speech paths not yet wired.
 Priority: wire before speech features go to production.
 
 ### policy_registry.py
 **Status: REWRITTEN (May 2026)**
-Previously dead code with stale values (degrade_threshold=0.30, max_output_tokens=300).
-Rewritten as `RuntimePolicy` configuration hub — values now synchronized with
-`execution_policy_kernel.py`, `model_router.py`, and `access_controller.py`.
-ACTIVE_POLICY removed. RUNTIME exported instead.
+Previously dead code with stale values. Rewritten as `RuntimePolicy` configuration
+hub — values synchronized with `execution_policy_kernel.py`, `model_router.py`,
+and `access_controller.py`. `ACTIVE_POLICY` removed. `RUNTIME` exported instead.
 
 ---
 
