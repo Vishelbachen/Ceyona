@@ -24,6 +24,11 @@ class UsageEntry:
     model: str
     intent: str = ""
     lang: str = "en"
+    # Speech billing (audio_seconds for ASR, tts_characters for TTS)
+    audio_seconds: float = 0.0      # whisper billing: per hour transcribed
+    tts_characters: int = 0         # orpheus billing: per 1M characters
+    # Agent tool call billing (compound web_search: $5.00 / 1000 calls)
+    tool_calls: int = 0
 
 
 class UsageMeter:
@@ -55,6 +60,9 @@ class UsageMeter:
                 "model": entry.model,
                 "intent": entry.intent,
                 "lang": entry.lang,
+                "audio_seconds": entry.audio_seconds,
+                "tts_characters": entry.tts_characters,
+                "tool_calls": entry.tool_calls,
             }).execute()
 
             logger.info("Usage recorded", extra={
