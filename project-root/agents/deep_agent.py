@@ -3,7 +3,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from llm.fallback_handler import complete_with_fallback
+from llm.groq_client import groq_client, LLMResponse
+from llm.model_router import DEEP_AGENT_MODEL, route_max_tokens
 from contracts.shared_types import Tier
 
 logger = logging.getLogger(__name__)
@@ -21,23 +22,22 @@ class AgentResult:
 
 async def run(messages: list[dict], temperature: float = 0.7) -> AgentResult:
     """
-    Deep agent — llama-3.3-70b-versatile primary, gpt-oss-120b fallback (models.md).
+    Deep agent — groq/compound (Agent Layer, models1.md §6).
 
-    Used for: code, analysis, math, search synthesis, route queries,
-    POI synthesis, complex multi-step tasks.
+    Uses compound directly via groq_client — NOT complete_with_fallback.
+    Agent Layer models have tool-selection authority; tier fallback cascade
+    is not appropriate here. If compound fails, coordinator handles fallback
+    to fast_agent.
 
-    Calls complete_with_fallback(Tier.GENERAL) which:
-      1. Tries llama-3.3-70b-versatile
-      2. Falls back to qwen/qwen3-32b (thinking disabled)
-      3. Falls back to openai/gpt-oss-20b
-      4. Cascades to FAST tier if all GENERAL models fail
-    Never returns empty silently — raises RuntimeError only when
-    all tiers exhausted, which coordinator catches as success=False.
+    Previously used complete_with_fallback(Tier.GENERAL) which routed to
+    llama-3.3-70b-versatile — correct for General Tier but wrong for Agent Layer.
+    groq/compound is a distinct capability (multi-step tool-use) not a tier model.
     """
     try:
-        response = await complete_with_fallback(
-            tier=Tier.GENERAL,
+        response: LLMResponse = await groq_client.complete(
+            model=DEEP_AGENT_MODEL,
             messages=messages,
+            max_tokens=route_max_tokens(Tier.GENERAL),
             temperature=temperature,
         )
         return AgentResult(
