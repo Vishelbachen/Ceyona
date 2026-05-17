@@ -35,7 +35,7 @@ GENERAL tier
 
 HEAVY tier
   openai/gpt-oss-120b      → input: $0.15   output: $0.60   (500 TPS)
-  llama-4-scout-17b-16e    → input: $0.11   output: $0.34   (594 TPS)
+  meta-llama/llama-4-scout-17b-16e-instruct    → input: $0.11   output: $0.34   (594 TPS)
 ```
 
 **MODEL_RATES in cost_model.py** uses the PRIMARY model of each tier:
