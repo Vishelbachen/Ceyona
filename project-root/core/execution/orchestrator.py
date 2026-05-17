@@ -223,6 +223,7 @@ async def _run_allow(
         temperature=strategy.temperature,
         intent=intent_result.intent,
         lang=lang,
+        tier=tier,
     )
 
     if coordination.blocked:
@@ -291,6 +292,7 @@ async def _run_degraded(
         temperature=strategy.temperature,
         intent=intent_result.intent,
         lang=lang,
+        tier=tier,
     )
 
     if coordination.blocked:
@@ -383,6 +385,7 @@ async def _run_heavy(
         temperature=strategy.temperature,
         intent=intent_result.intent,
         lang=lang,
+        tier=tier,
     )
 
     if coordination.blocked:
