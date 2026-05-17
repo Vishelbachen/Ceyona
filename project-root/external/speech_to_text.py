@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
+import tempfile
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -35,6 +38,9 @@ _TURBO_MODEL   = "whisper-large-v3-turbo"
 
 # Maximum audio file size Groq accepts (25 MB)
 _MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024
+
+# Formats natively supported by Groq Whisper API
+_GROQ_SUPPORTED_EXTENSIONS = {"mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm", "flac"}
 
 
 @dataclass(frozen=True)
@@ -89,6 +95,13 @@ async def transcribe(
     try:
         import httpx
         from app.settings import settings
+
+        # Convert OGG/OGA (Telegram voice) to WAV — Groq Whisper does not accept OGG/Opus
+        ext = filename.rsplit(".", 1)[-1].lower()
+        if ext not in _GROQ_SUPPORTED_EXTENSIONS:
+            logger.info("Converting %s to WAV for Groq compatibility", filename)
+            audio_bytes = await _convert_to_wav(audio_bytes, source_ext=ext)
+            filename = filename.rsplit(".", 1)[0] + ".wav"
 
         # Groq Whisper uses multipart/form-data — not the standard chat completions endpoint
         files = {"file": (filename, audio_bytes, _mime_type(filename))}
@@ -188,6 +201,42 @@ async def download_telegram_voice(
 
 
 # ─── HELPERS ──────────────────────────────────────────────────────────────────
+
+async def _convert_to_wav(audio_bytes: bytes, source_ext: str = "oga") -> bytes:
+    """
+    Convert audio bytes to WAV (16kHz mono) using ffmpeg.
+    Required for OGG/Opus files from Telegram — not supported by Groq Whisper API.
+    Raises RuntimeError if ffmpeg fails.
+    """
+    in_path = out_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=f".{source_ext}", delete=False) as f_in:
+            f_in.write(audio_bytes)
+            in_path = f_in.name
+
+        out_path = in_path.rsplit(".", 1)[0] + ".wav"
+
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-y", "-i", in_path,
+            "-ar", "16000", "-ac", "1",
+            out_path,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+
+        if proc.returncode != 0:
+            raise RuntimeError(f"ffmpeg failed: {stderr.decode()[:300]}")
+
+        with open(out_path, "rb") as f:
+            return f.read()
+
+    finally:
+        if in_path and os.path.exists(in_path):
+            os.unlink(in_path)
+        if out_path and os.path.exists(out_path):
+            os.unlink(out_path)
+
 
 def _mime_type(filename: str) -> str:
     ext = filename.rsplit(".", 1)[-1].lower()
