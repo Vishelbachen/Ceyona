@@ -59,6 +59,39 @@ async def handle_message(
             "caption": caption[:50],
         })
 
+        # Safety Gate Pass 1 on caption (photo text)
+        if caption:
+            try:
+                from security.safety_gate import check_pass1, GateVerdict
+                gate1 = await check_pass1(caption)
+                if gate1.verdict == GateVerdict.DENY:
+                    from cognition.response_synthesizer import get_system_message
+                    return OrchestratorResult(
+                        text=get_system_message("safety_block", lang),
+                        tier=Tier.FAST, model=gate1.model_used,
+                        epk_decision=EPKDecision.DENY,
+                        usage=UsageRecord(
+                            input_tokens=0, output_tokens=0,
+                            embedding_tokens=0, rerank_tokens=0,
+                            tier=Tier.FAST, embedding_type="large", cost_usd=0.0,
+                        ),
+                        denied=True, deny_reason="safety_gate_pass1", lang=lang,
+                    )
+            except Exception as exc:
+                logger.error("Safety Gate Pass 1 (photo) crashed — DENY", extra={"error": str(exc)})
+                from cognition.response_synthesizer import get_system_message
+                return OrchestratorResult(
+                    text=get_system_message("safety_block", lang),
+                    tier=Tier.FAST, model="",
+                    epk_decision=EPKDecision.DENY,
+                    usage=UsageRecord(
+                        input_tokens=0, output_tokens=0,
+                        embedding_tokens=0, rerank_tokens=0,
+                        tier=Tier.FAST, embedding_type="large", cost_usd=0.0,
+                    ),
+                    denied=True, deny_reason="safety_gate_error", lang=lang,
+                )
+
         try:
             from transport.telegram.vision_handler import handle_vision
             vision_result = await handle_vision(
@@ -129,7 +162,89 @@ async def handle_message(
             lang=lang,
         )
 
+    # ── Safety Gate Pass 1 — fast rejection (BEFORE Feature Extraction) ───────
+    try:
+        from security.safety_gate import check_pass1, GateVerdict
+        gate1 = await check_pass1(text)
+        if gate1.verdict == GateVerdict.DENY:
+            logger.warning("Safety Gate Pass 1 blocked message", extra={"user_id": user_id})
+            from cognition.response_synthesizer import get_system_message
+            return OrchestratorResult(
+                text=get_system_message("safety_block", lang),
+                tier=Tier.FAST, model=gate1.model_used,
+                epk_decision=EPKDecision.DENY,
+                usage=UsageRecord(
+                    input_tokens=0, output_tokens=0,
+                    embedding_tokens=0, rerank_tokens=0,
+                    tier=Tier.FAST, embedding_type="large", cost_usd=0.0,
+                ),
+                denied=True, deny_reason="safety_gate_pass1", lang=lang,
+            )
+    except Exception as exc:
+        logger.error("Safety Gate Pass 1 crashed — DENY", extra={"error": str(exc)})
+        from cognition.response_synthesizer import get_system_message
+        return OrchestratorResult(
+            text=get_system_message("safety_block", lang),
+            tier=Tier.FAST, model="",
+            epk_decision=EPKDecision.DENY,
+            usage=UsageRecord(
+                input_tokens=0, output_tokens=0,
+                embedding_tokens=0, rerank_tokens=0,
+                tier=Tier.FAST, embedding_type="large", cost_usd=0.0,
+            ),
+            denied=True, deny_reason="safety_gate_error", lang=lang,
+        )
+
     complexity = _classify_complexity(text)
+
+    # ── multilingual normalization ─────────────────────────────────────────────
+    # Normalize non-Latin scripts (Arabic via allam-2-7b, others via llama-3.3-70b)
+    # before retrieval and EPK. Latin-script languages pass through unchanged.
+    # Position: after text extraction, before retrieval — per architecture.md §4.
+    try:
+        from llm.multilingual_preprocessor import PreprocessorInput, preprocess as ml_preprocess
+        ml_result = await ml_preprocess(PreprocessorInput(text=text, lang=lang))
+        if ml_result.was_normalized:
+            logger.info("Multilingual normalization applied", extra={
+                "model": ml_result.model_used,
+                "lang":  lang,
+            })
+            text = ml_result.text
+    except Exception as exc:
+        logger.warning("Multilingual preprocessor failed (non-critical)", extra={"error": str(exc)})
+
+    # ── Safety Gate Pass 2 — deep classification (AFTER Feature Extraction) ───
+    try:
+        from security.safety_gate import check_pass2, GateVerdict as GV2
+        gate2 = await check_pass2(text)
+        if gate2.verdict == GV2.DENY:
+            logger.warning("Safety Gate Pass 2 blocked message", extra={"user_id": user_id})
+            from cognition.response_synthesizer import get_system_message
+            return OrchestratorResult(
+                text=get_system_message("safety_block", lang),
+                tier=Tier.FAST, model=gate2.model_used,
+                epk_decision=EPKDecision.DENY,
+                usage=UsageRecord(
+                    input_tokens=0, output_tokens=0,
+                    embedding_tokens=0, rerank_tokens=0,
+                    tier=Tier.FAST, embedding_type="large", cost_usd=0.0,
+                ),
+                denied=True, deny_reason="safety_gate_pass2", lang=lang,
+            )
+    except Exception as exc:
+        logger.error("Safety Gate Pass 2 crashed — DENY", extra={"error": str(exc)})
+        from cognition.response_synthesizer import get_system_message
+        return OrchestratorResult(
+            text=get_system_message("safety_block", lang),
+            tier=Tier.FAST, model="",
+            epk_decision=EPKDecision.DENY,
+            usage=UsageRecord(
+                input_tokens=0, output_tokens=0,
+                embedding_tokens=0, rerank_tokens=0,
+                tier=Tier.FAST, embedding_type="large", cost_usd=0.0,
+            ),
+            denied=True, deny_reason="safety_gate_error", lang=lang,
+        )
 
     # ── conversation history ──────────────────────────────────────────────────
     conversation_history: list[dict] | None = None
