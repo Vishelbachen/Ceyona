@@ -160,7 +160,7 @@ async def handle_message(
 
                 audio_bytes, filename = await download_telegram_voice(
                     file_id=voice_file_id,
-                    bot_token=settings.telegram_bot_token,
+                    bot_token=settings.bot_token,
                 )
 
                 tr = await transcribe(
