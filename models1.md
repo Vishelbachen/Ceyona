@@ -45,9 +45,10 @@ openai/gpt-oss-safeguard-20b           → FINAL ENFORCEMENT MODEL (Pass 2, comb
 
 ```
 llama-3.1-8b-instant  → PRIMARY: structural signal compression, shallow inference
-gemma2-9b-it          → FALLBACK: TPM overflow (15000 TPM vs 6000 TPM for llama)
 allam-2-7b            → MULTILINGUAL: Arabic normalization (one call, three contexts)
 ```
+
+> **Note:** gemma2-9b-it removed — deprecated by Groq, August 2025. No active fallback for FAST tier TPM overflow.
 
 **Activation:** ALLOW or DEGRADED_MODE signals from EPK.
 **Skip on:** HEAVY_REQUIRED, DENY.
