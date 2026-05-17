@@ -670,45 +670,51 @@ own undeclared policy, duplicate responsibilities, or redefine existing ownershi
 
 ---
 
-27. IMPLEMENTATION STATUS (May 2026)
+## 27. IMPLEMENTATION STATUS (May 2026)
+
 This section tracks known gaps between architecture specification and runtime implementation.
 All gaps are intentional architectural decisions, not defects.
-Safety Gate (§21)
-Status: IMPLEMENTED
-security/safety_gate.py — Pass 1 (llama-prompt-guard-2-22m) and Pass 2
-(llama-prompt-guard-2-86m + gpt-oss-safeguard-20b) are implemented.
-Integrated into update_handler.py: Pass 1 before Feature Extraction,
+
+### Safety Gate (§21)
+**Status: IMPLEMENTED**
+`security/safety_gate.py` — Pass 1 (`llama-prompt-guard-2-22m`) and Pass 2
+(`llama-prompt-guard-2-86m` + `gpt-oss-safeguard-20b`) are implemented.
+Integrated into `update_handler.py`: Pass 1 before Feature Extraction,
 Pass 2 after Feature Extraction, before EPK.
 Unavailability → DENY with no fallback to ALLOW. ✅
-Multilingual Normalization (§23)
-Status: IMPLEMENTED
-llm/multilingual_preprocessor.py — Arabic via allam-2-7b,
-all other non-Latin via llama-3.3-70b-versatile, Latin-dominant → passthrough.
-Integrated into update_handler.py after Safety Gate Pass 2. ✅
-Agent Layer — Compound Models (§6, §16)
-Status: REGISTERED, NOT YET WIRED
-groq/compound and groq/compound-mini are registered in model_router.py
-and groq_client._CONTEXT_CHAR_LIMITS. Agents currently dispatch via
-complete_with_fallback(Tier.*) (standard tier models), not compound tool-use models.
-Actual agents in use: fast_agent.py (Tier.FAST), deep_agent.py (Tier.GENERAL),
-creative_agent.py (Tier.GENERAL, temperature=0.9) — all via complete_with_fallback().
-models1.md §6 updated to reflect NOT YET WIRED status.
+
+### Multilingual Normalization (§23)
+**Status: IMPLEMENTED**
+`llm/multilingual_preprocessor.py` — Arabic via `allam-2-7b`,
+all other non-Latin via `llama-3.3-70b-versatile`, Latin-dominant → passthrough.
+Integrated into `update_handler.py` after Safety Gate Pass 2. ✅
+
+### Agent Layer — Compound Models (§6, §16)
+**Status: REGISTERED, NOT YET WIRED**
+`groq/compound` and `groq/compound-mini` are registered in `model_router.py`
+and `groq_client._CONTEXT_CHAR_LIMITS`. Agents currently dispatch via
+`complete_with_fallback(Tier.*)` (standard tier models), not compound tool-use models.
+Actual agents in use: `fast_agent.py` (Tier.FAST), `deep_agent.py` (Tier.GENERAL),
+`creative_agent.py` (Tier.GENERAL, temperature=0.9) — all via complete_with_fallback().
+`models1.md §6` updated to reflect NOT YET WIRED status.
 Impact: agents lack native tool-selection authority defined in models1.md §6.
 Priority: wire compound models when Groq tool-use API stabilizes.
-Speech Layer (§12)
-Status: IMPLEMENTED (ASR + TTS), BILLING NOT YET WIRED
-external/speech_to_text.py — Whisper ASR via Groq API. ✅
-external/text_to_speech.py — Orpheus TTS via Groq API. ✅
-transport/telegram/message_router.py — extract_voice() / has_voice(). ✅
-transport/telegram/update_handler.py — voice path: download → ASR → Safety Gate Pass 1
-→ pipeline. TTS on response when is_voice_input = True. ✅
-Gap: audio_seconds and tts_characters are captured in TranscriptResult / SynthesisResult
-but not yet wired to usage_meter.record() for billing.
+
+### Speech Layer (§12)
+**Status: IMPLEMENTED (ASR + TTS), BILLING NOT YET WIRED**
+`external/speech_to_text.py` — Whisper ASR via Groq API. ✅
+`external/text_to_speech.py` — Orpheus TTS via Groq API. ✅
+`transport/telegram/message_router.py` — `extract_voice()` / `has_voice()`. ✅
+`transport/telegram/update_handler.py` — voice path: download → ASR → Safety Gate Pass 1
+→ pipeline. TTS on response when `is_voice_input = True`. ✅
+**Gap:** `audio_seconds` and `tts_characters` are captured in TranscriptResult / SynthesisResult
+but not yet wired to `usage_meter.record()` for billing.
 Priority: wire before speech features go to production.
-OrchestratorResult.tts_audio_bytes + Telegram sendVoice
-Status: IMPLEMENTED (May 2026)
-OrchestratorResult now declares tts_audio_bytes: bytes = b"". ✅
-update_handler.py sets field via dataclasses.replace(result, tts_audio_bytes=...) after TTS synthesis. ✅
+
+### OrchestratorResult.tts_audio_bytes + Telegram sendVoice
+**Status: IMPLEMENTED (May 2026)**
+`OrchestratorResult` now declares `tts_audio_bytes: bytes = b""`. ✅
+`update_handler.py` sets field via `dataclasses.replace(result, tts_audio_bytes=...) after TTS synthesis. ✅
 webhook.py now implements _send_voice() and checks tts_audio_bytes before sending:
 non-empty → sendVoice (Telegram voice message)
 sendVoice failure → silent fallback to _send_message() (text)
@@ -719,10 +725,13 @@ UsageEntry fields audio_seconds, tts_characters, tool_calls declared.
 Actual billing in usage_meter.record() for speech paths not yet wired.
 Priority: wire before speech features go to production.
 policy_registry.py
-Status: REWRITTEN (May 2026)
-Previously dead code with stale values. Rewritten as RuntimePolicy configuration
-hub — values synchronized with execution_policy_kernel.py, model_router.py,
-and access_controller.py. ACTIVE_POLICY removed. RUNTIME exported instead.
+Status: IMPLEMENTED — LIVE (May 2026)
+Previously dead code — nobody imported it. Now the true single source of truth:
+execution_policy_kernel.py reads RUNTIME.epk.* for all EPK thresholds ✅
+model_router.py reads RUNTIME.tier_configs[tier].max_output_tokens for _MAX_TOKENS ✅
+access_controller.py reads RUNTIME.default_balance_usd for _DEFAULT_BALANCE_USD ✅
+To change any threshold or default balance — edit policy_registry.py only.
+All three modules pick up the change automatically. No more scattered hardcoded values.
 27. ANTI-DRIFT PRINCIPLES
 Architecture MUST scale through:
 explicit contracts, bounded execution, centralized governance
