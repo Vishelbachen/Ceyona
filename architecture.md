@@ -670,6 +670,43 @@ own undeclared policy, duplicate responsibilities, or redefine existing ownershi
 
 ---
 
+## 27. IMPLEMENTATION STATUS (May 2026)
+
+This section tracks known gaps between architecture specification and runtime implementation.
+All gaps are intentional architectural decisions, not defects.
+
+### Safety Layer (§21)
+**Status: SPECIFIED, NOT YET IMPLEMENTED**
+`prompt-guard-2-22m`, `prompt-guard-2-86m`, `gpt-oss-safeguard-20b` are defined in
+`models1.md` and `models.md` but no `safety_gate.py` exists in code.
+Current protection: `security/rate_limiter.py`, `security/origin_guard.py`,
+and `agents/safety_agent.py` (post-reasoning semantic validator only).
+Priority: implement Safety Gate before public launch.
+
+### Agent Layer — Compound Models (§16)
+**Status: REGISTERED, NOT YET WIRED**
+`groq/compound` and `groq/compound-mini` are registered in `model_router.py`
+and `groq_client._CONTEXT_CHAR_LIMITS`. Agents currently dispatch via
+`complete_with_fallback(Tier.*)` (standard tier models), not compound tool-use models.
+Impact: agents lack native tool-selection authority defined in models1.md §6.
+Priority: wire compound models when Groq tool-use API stabilizes.
+
+### Speech Billing
+**Status: SPECIFIED, PARTIALLY IMPLEMENTED**
+`UsageEntry` now includes `audio_seconds`, `tts_characters`, `tool_calls` fields.
+Actual billing integration in `vision_handler.py` and `webhook.py` speech paths
+is not yet wired to `usage_meter.record()`.
+Priority: wire before speech features go to production.
+
+### policy_registry.py
+**Status: REWRITTEN (May 2026)**
+Previously dead code with stale values (degrade_threshold=0.30, max_output_tokens=300).
+Rewritten as `RuntimePolicy` configuration hub — values now synchronized with
+`execution_policy_kernel.py`, `model_router.py`, and `access_controller.py`.
+ACTIVE_POLICY removed. RUNTIME exported instead.
+
+---
+
 ## 27. ANTI-DRIFT PRINCIPLES
 
 Architecture MUST scale through:
