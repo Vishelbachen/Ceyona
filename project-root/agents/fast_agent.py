@@ -3,7 +3,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from llm.fallback_handler import complete_with_fallback
+from llm.groq_client import groq_client, LLMResponse
+from llm.model_router import FAST_AGENT_MODEL, route_max_tokens
 from contracts.shared_types import Tier
 
 logger = logging.getLogger(__name__)
@@ -21,18 +22,21 @@ class AgentResult:
 
 async def run(messages: list[dict], temperature: float = 0.7) -> AgentResult:
     """
-    Fast agent — llama-3.1-8b-instant (Fast Tier, models.md).
+    Fast agent — groq/compound-mini (Agent Layer, models1.md §6).
 
-    Used for: conversation, simple questions, emotional responses,
-    low-cost tasks, fallback for synthesis.
+    Uses compound-mini directly via groq_client — NOT complete_with_fallback.
+    Agent Layer models have tool-selection authority; tier fallback cascade
+    is not appropriate here. If compound-mini fails, coordinator handles fallback.
 
-    Calls complete_with_fallback(Tier.FAST) so it cascades to GENERAL
-    if llama-3.1-8b-instant is unavailable, never returning empty silently.
+    Previously used complete_with_fallback(Tier.FAST) which routed to
+    llama-3.1-8b-instant — correct for Fast Tier but wrong for Agent Layer.
+    compound-mini is a distinct capability (tool-use) not a tier replacement.
     """
     try:
-        response = await complete_with_fallback(
-            tier=Tier.FAST,
+        response: LLMResponse = await groq_client.complete(
+            model=FAST_AGENT_MODEL,
             messages=messages,
+            max_tokens=route_max_tokens(Tier.FAST),
             temperature=temperature,
         )
         return AgentResult(
