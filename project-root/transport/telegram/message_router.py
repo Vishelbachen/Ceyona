@@ -59,6 +59,49 @@ def has_photo(update: dict) -> bool:
     return extract_photo(update) is not None
 
 
+def extract_voice(update: dict) -> dict | None:
+    """
+    Extract voice/audio metadata from a message update.
+
+    Telegram sends voice messages as message.voice (OGG Opus).
+    Telegram sends audio files as message.audio (any format).
+    Both are supported for ASR — voice is preferred.
+
+    Returns dict with file_id, duration, mime_type, file_size, or None.
+    """
+    for key in ("message", "edited_message"):
+        msg = update.get(key, {})
+
+        # Voice message (message.voice) — OGG Opus, always
+        voice = msg.get("voice")
+        if voice:
+            return {
+                "file_id":   voice.get("file_id", ""),
+                "duration":  voice.get("duration", 0),     # seconds
+                "mime_type": voice.get("mime_type", "audio/ogg"),
+                "file_size": voice.get("file_size", 0),
+                "source":    "voice",
+            }
+
+        # Audio file (message.audio) — any format
+        audio = msg.get("audio")
+        if audio:
+            return {
+                "file_id":   audio.get("file_id", ""),
+                "duration":  audio.get("duration", 0),
+                "mime_type": audio.get("mime_type", "audio/mpeg"),
+                "file_size": audio.get("file_size", 0),
+                "source":    "audio",
+            }
+
+    return None
+
+
+def has_voice(update: dict) -> bool:
+    """Return True if this update contains a voice or audio message."""
+    return extract_voice(update) is not None
+
+
 def extract_callback_data(update: dict) -> str:
     """Extract callback_data from callback_query update."""
     return update.get("callback_query", {}).get("data", "")
