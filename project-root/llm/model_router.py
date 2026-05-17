@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contracts.shared_types import Tier
+from core.kernel.policy_registry import RUNTIME
 
 # ─── MODEL REGISTRY ───────────────────────────────────────────────────────────
 # Source of truth for all model assignments per tier.
@@ -31,22 +32,16 @@ _TIER_MODELS: dict[Tier, list[str]] = {
     ],
 }
 
-# Max output tokens per tier.
-#
-# These are hard limits passed directly to the Groq API.
-# Set them high enough that responses are never cut mid-sentence,
-# but not so high that latency and cost blow up on short queries.
+# Max output tokens per tier — read from policy_registry.RUNTIME.
+# Values defined in policy_registry.py and documented in economic.md.
+# Do NOT hardcode here — change values in policy_registry.py only.
 #
 # FAST:    1024  — conversation, emotional, fallback synthesis.
-#                  800 was too tight: search fallback synthesis was truncating.
 # GENERAL: 3072  — search synthesis, route queries, POI, code, analysis.
-#                  2048 was cutting long search summaries and route descriptions.
 # HEAVY:   6144  — deep reasoning, long documents, heavy consensus tasks.
-#                  4096 was limiting for multi-source synthesis at HEAVY tier.
 _MAX_TOKENS: dict[Tier, int] = {
-    Tier.FAST:    1024,
-    Tier.GENERAL: 3072,
-    Tier.HEAVY:   6144,
+    tier: RUNTIME.tier_configs[tier].max_output_tokens
+    for tier in (Tier.FAST, Tier.GENERAL, Tier.HEAVY)
 }
 
 # Special-purpose model assignments (not tiers — utility roles)
