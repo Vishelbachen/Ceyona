@@ -21,7 +21,7 @@ class LLMResponse:
 _CONTEXT_CHAR_LIMITS: dict[str, int] = {
     "llama-3.1-8b-instant":           60_000,   # 128K ctx → ~60K chars safe input
     "llama-3.3-70b-versatile":        60_000,
-    "llama-4-scout-17b-16e-instruct": 200_000,  # 512K ctx
+    "meta-llama/llama-4-scout-17b-16e-instruct": 200_000,  # 512K ctx
     "qwen/qwen3-32b":                 60_000,
     "openai/gpt-oss-20b":             60_000,
     "openai/gpt-oss-120b":            60_000,
@@ -29,6 +29,21 @@ _CONTEXT_CHAR_LIMITS: dict[str, int] = {
     "groq/compound":                  60_000,
 }
 _DEFAULT_CHAR_LIMIT = 50_000  # fallback for unknown models
+
+# Safety Gate — short inputs only (guard models are classifiers, not generators)
+_CONTEXT_CHAR_LIMITS["meta-llama/llama-prompt-guard-2-22m"] = 4_000
+_CONTEXT_CHAR_LIMITS["meta-llama/llama-prompt-guard-2-86m"] = 8_000
+_CONTEXT_CHAR_LIMITS["openai/gpt-oss-safeguard-20b"]        = 16_000
+
+# Speech models — no text context limit (audio input, not token-based)
+# Listed here for registry completeness; they use separate audio/char billing.
+_CONTEXT_CHAR_LIMITS["whisper-large-v3"]                = 0  # audio input
+_CONTEXT_CHAR_LIMITS["whisper-large-v3-turbo"]          = 0  # audio input
+_CONTEXT_CHAR_LIMITS["canopylabs/orpheus-v1-english"]   = 50_000  # TTS text input
+_CONTEXT_CHAR_LIMITS["canopylabs/orpheus-arabic-saudi"] = 50_000  # TTS text input
+
+# Multilingual normalization
+_CONTEXT_CHAR_LIMITS["allam-2-7b"] = 20_000
 
 
 def _truncate_messages(messages: list[dict], char_limit: int) -> list[dict]:
