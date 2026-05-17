@@ -151,9 +151,9 @@ COMPLEXITY_MULTIPLIER = {
 # NOT the same as model_router._MAX_TOKENS (API hard limits).
 # These are intentionally lower — estimate must be safe, not exact.
 MAX_OUTPUT_CAP = {
-    Tier.FAST:    300,    # estimation cap (actual API limit: 1024)
-    Tier.GENERAL: 1200,   # estimation cap (actual API limit: 3072)
-    Tier.HEAVY:   3000,   # estimation cap (actual API limit: 6144)
+    Tier.FAST:    512,    # estimation cap (actual API limit: 1024)
+    Tier.GENERAL: 2048,   # estimation cap (actual API limit: 3072)
+    Tier.HEAVY:   4096,   # estimation cap (actual API limit: 6144)
 }
 
 def estimate_output_tokens(input_tokens, complexity, tier):
