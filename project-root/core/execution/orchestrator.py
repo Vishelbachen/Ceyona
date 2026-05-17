@@ -85,6 +85,9 @@ class OrchestratorResult:
     intent: str = ""          # classified intent value, for reflection/observability
     tool_used: bool = False   # whether an external tool was called
     tool_failed: bool = False # whether the tool call failed
+    tts_audio_bytes: bytes = b""  # TTS audio — set by update_handler after speech synthesis
+                                   # non-empty only when is_voice_input=True and TTS succeeded
+                                   # webhook sends sendVoice when this is non-empty
 
 
 # ─── INTERNAL HELPERS ─────────────────────────────────────────────────────────
