@@ -16,10 +16,12 @@ Pricing and token economics → economic.md
 
 ## 1. SAFETY LAYER (deterministic cascade — FIRST GATE)
 
+*Prices: economic.md §1.2*
+
 ```
-prompt-guard-2-22m    → FAST REJECTION FILTER (Pass 1)
-prompt-guard-2-86m    → DEEP CLASSIFICATION FILTER (Pass 2)
-gpt-oss-safeguard-20b → FINAL ENFORCEMENT MODEL (Pass 2, combined with 86m)
+meta-llama/llama-prompt-guard-2-22m    → FAST REJECTION FILTER (Pass 1)
+meta-llama/llama-prompt-guard-2-86m    → DEEP CLASSIFICATION FILTER (Pass 2)
+openai/gpt-oss-safeguard-20b           → FINAL ENFORCEMENT MODEL (Pass 2, combined with 86m)
 ```
 
 **Role:** constraint evaluation only. NO generation. NO reasoning synthesis.
@@ -38,6 +40,8 @@ gpt-oss-safeguard-20b → FINAL ENFORCEMENT MODEL (Pass 2, combined with 86m)
 ---
 
 ## 2. FAST TIER (ALLOW / DEGRADED_MODE only)
+
+*Prices: economic.md §1.1*
 
 ```
 llama-3.1-8b-instant  → PRIMARY: structural signal compression, shallow inference
@@ -62,6 +66,8 @@ and web_tools.py (route/POI extraction). It is NOT acting as Fast Tier in those 
 
 ## 3. GENERAL TIER (ALLOW only)
 
+*Prices: economic.md §1.1*
+
 ```
 llama-3.3-70b-versatile → PRIMARY: reasoning core + creative engine + non-Arabic normalization
 qwen/qwen3-32b          → structured logic / formatting engine
@@ -79,6 +85,8 @@ They are NOT cognitive layers. They are NOT logic layers.
 ---
 
 ## 4. HEAVY TIER (HEAVY_REQUIRED only)
+
+*Prices: economic.md §1.1*
 
 ```
 openai/gpt-oss-120b            → PRIMARY: deep multi-step reasoning
@@ -118,6 +126,8 @@ llama-4-scout-17b-16e-instruct → long-context transformation (512K context)
 ---
 
 ## 6. AGENT LAYER (tool-use execution fabric)
+
+*Prices: economic.md §1.3*
 
 ```
 groq/compound      → DEEP AGENT  (deep_agent.py)   — multi-step, deep reasoning
@@ -278,11 +288,13 @@ whisper-large-v3-turbo → FAST SPEECH-TO-TEXT
 orpheus-v1-english     → ENGLISH SPEECH SYNTHESIS
 orpheus-arabic-saudi   → ARABIC SPEECH SYNTHESIS
 allam-2-7b             → MULTILINGUAL NLP (Arabic anchor, also in FAST tier)
-llama-4-scout          → IMAGE EXTRACTION (vision_handler.py — OUTSIDE EPK DAG)
+meta-llama/llama-4-scout-17b-16e-instruct → IMAGE EXTRACTION (vision_handler.py — OUTSIDE EPK DAG)
 ```
 
+**Pricing:** All model prices → economic.md §1. Specialized layer speech billed per hour (ASR) / per character (TTS).
+
 **Speech activation:** is_voice_input = true ONLY.
-**Vision (llama-4-scout):** specialized extraction role, NOT Heavy Tier,
+**Vision (llama-4-scout-17b-16e-instruct):** specialized extraction role, NOT Heavy Tier,
 OUTSIDE EPK DAG, routes via groq_client, result feeds back via update_handler forced_intent.
 
 ---
@@ -388,7 +400,7 @@ INPUT
 ↓ Auth / Rate Limit / Event Log
 ↓ Multilingual Normalization
     allam-2-7b    → Arabic
-    llama-3.3-70b → all other languages
+    llama-3.3-70b-versatile → all other languages
 ↓ EPK [SOLE POLICY AUTHORITY]
     DENY           → EXIT
     ALLOW          ↓
