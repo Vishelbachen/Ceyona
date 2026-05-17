@@ -5,7 +5,10 @@ import traceback
 
 from contracts.shared_types import Complexity, EPKDecision, Tier
 from core.execution.orchestrator import OrchestratorRequest, OrchestratorResult, UsageRecord, run
-from transport.telegram.message_router import UpdateType, extract_text, extract_photo, has_photo
+from transport.telegram.message_router import (
+    UpdateType, extract_text, extract_photo, has_photo,
+    has_voice, extract_voice,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -142,8 +145,79 @@ async def handle_message(
         _vision_text_override  = vision_result.text
         _vision_intent_result  = vision_result.intent_result
 
-    # ── text handling ─────────────────────────────────────────────────────────
-    text = locals().get("_vision_text_override") or extract_text(update)
+    # ── voice/audio handling (ASR → transcript → pipeline) ───────────────────
+    _is_voice_input    = False
+    _asr_audio_seconds = 0.0
+    if not locals().get("_vision_text_override") and has_voice(update):
+        voice_meta    = extract_voice(update)
+        voice_file_id = voice_meta["file_id"] if voice_meta else None
+
+        if voice_file_id:
+            try:
+                from security.safety_gate import check_pass1
+                from external.speech_to_text import download_telegram_voice, transcribe
+                from app.settings import settings
+
+                audio_bytes, filename = await download_telegram_voice(
+                    file_id=voice_file_id,
+                    bot_token=settings.telegram_bot_token,
+                )
+
+                tr = await transcribe(
+                    audio_bytes=audio_bytes,
+                    filename=filename,
+                    lang=lang if lang != "en" else None,
+                )
+
+                if not tr.success or not tr.text:
+                    logger.warning("ASR failed", extra={"user_id": user_id})
+                    from cognition.response_synthesizer import get_system_message
+                    return OrchestratorResult(
+                        text=get_system_message("no_response", lang),
+                        tier=Tier.FAST, model="",
+                        epk_decision=EPKDecision.DENY,
+                        usage=UsageRecord(
+                            input_tokens=0, output_tokens=0,
+                            embedding_tokens=0, rerank_tokens=0,
+                            tier=Tier.FAST, embedding_type="large", cost_usd=0.0,
+                        ),
+                        denied=True, deny_reason="asr_failed", lang=lang,
+                    )
+
+                # Safety Gate Pass 1 on transcript text
+                gate1 = await check_pass1(tr.text)
+                if not gate1.safe:
+                    from cognition.response_synthesizer import get_system_message
+                    return OrchestratorResult(
+                        text=get_system_message("safety_block", lang),
+                        tier=Tier.FAST, model="",
+                        epk_decision=EPKDecision.DENY,
+                        usage=UsageRecord(
+                            input_tokens=0, output_tokens=0,
+                            embedding_tokens=0, rerank_tokens=0,
+                            tier=Tier.FAST, embedding_type="large", cost_usd=0.0,
+                        ),
+                        denied=True, deny_reason="safety_gate_pass1", lang=lang,
+                    )
+
+                _is_voice_input    = True
+                _asr_audio_seconds = tr.audio_seconds
+                update = dict(update)
+                update["_voice_transcript"] = tr.text
+                logger.info(
+                    "ASR complete — forwarding to pipeline",
+                    extra={"user_id": user_id, "chars": len(tr.text), "seconds": tr.audio_seconds},
+                )
+
+            except Exception as exc:
+                logger.error("Voice path crashed", extra={"user_id": user_id, "error": str(exc)})
+
+    # ── text extraction ───────────────────────────────────────────────────────
+    text = (
+        locals().get("_vision_text_override")
+        or update.get("_voice_transcript")
+        or extract_text(update)
+    )
 
     if not text:
         logger.info("Empty text update ignored", extra={"user_id": user_id})
@@ -428,5 +502,24 @@ async def handle_message(
 
     except Exception as exc:
         logger.warning("Meta layer failed (non-critical)", extra={"error": str(exc)})
+
+    # ── TTS (voice response when input was voice) ─────────────────────────────
+    # Per architecture.md §18: Speech Layer runs AFTER Response Synthesizer.
+    # Falls back to text-only silently — does not alter result.text or result.denied.
+    if _is_voice_input and result.text and not result.denied:
+        try:
+            from external.text_to_speech import synthesize as tts_synthesize
+            tts_result = await tts_synthesize(text=result.text, lang=lang)
+            if tts_result.success:
+                # Attach audio to result for webhook to send via sendAudio
+                # result is a frozen dataclass — we rebuild with tts_audio_bytes
+                from dataclasses import replace
+                result = replace(result, tts_audio_bytes=tts_result.audio_bytes)
+                logger.info(
+                    "TTS synthesis complete",
+                    extra={"chars": tts_result.char_count, "model": tts_result.model_used},
+                )
+        except Exception as exc:
+            logger.warning("TTS failed — returning text-only", extra={"error": str(exc)})
 
     return result
