@@ -264,22 +264,6 @@ async def _correct_math_solution(
         )},
     ]
     return await deep_agent.run(correction_messages, temperature=temperature)
-    """
-    Dispatch to the correct agent module.
-    Never raises — returns AgentResult(success=False) on any error.
-    """
-    try:
-        if agent_type == AgentType.FAST:
-            return await fast_agent.run(messages, temperature=temperature)
-        if agent_type == AgentType.DEEP:
-            return await deep_agent.run(messages, temperature=temperature)
-        if agent_type == AgentType.CREATIVE:
-            return await creative_agent.run(messages, temperature=temperature)
-    except Exception as exc:
-        logger.error("Agent dispatch error", extra={
-            "agent": agent_type, "error": str(exc),
-        }, exc_info=True)
-    return AgentResult(text="", model="", input_tokens=0, output_tokens=0, success=False)
 
 
 def _agent_succeeded(result: AgentResult) -> bool:
@@ -296,6 +280,7 @@ async def coordinate(
     temperature: float = 0.7,
     intent: Intent | None = None,
     lang: str = "en",
+    tier: Tier = Tier.GENERAL,
 ) -> CoordinationResult:
     """
     Execute agent plan. Return CoordinationResult to orchestrator.
@@ -397,8 +382,8 @@ async def coordinate(
                 logger.info("MATH verifier passed")
 
         # HEAVY path: safety_agent mandatory
-        # DEGRADED path: safety_agent skipped (no parallel_validators, fallback is FAST==primary)
-        is_heavy = not plan.use_consensus and plan.parallel_validators == [] and plan.fallback != plan.primary
+        # DEGRADED/EMOTIONAL/default-GENERAL: safety_agent skipped
+        is_heavy = (tier == Tier.HEAVY)
         if is_heavy:
             safety = safety_check(SafetyInput(
                 reasoning_plan=reasoning_plan,
