@@ -2,11 +2,14 @@ import logging
 from dataclasses import dataclass
 
 from supabase import Client
+from core.kernel.policy_registry import RUNTIME
 
 logger = logging.getLogger(__name__)
 
 _TABLE = "user_balances"
-_DEFAULT_BALANCE_USD = 0.10
+# Read from policy_registry.RUNTIME — single source of truth.
+# Change default balance in policy_registry.py only.
+_DEFAULT_BALANCE_USD: float = RUNTIME.default_balance_usd
 
 
 @dataclass(frozen=True)
