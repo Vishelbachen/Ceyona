@@ -152,14 +152,27 @@ meta-llama/llama-4-scout-17b-16e-instruct     → long-context transformation (5
 
 ## 6. AGENT LAYER (tool-use execution fabric)
 
-**Provider: Groq**
+**Provider: Groq (compound models registered, not yet wired)**
 *Prices: economic.md §1.3*
 
 ```
-groq/compound      → DEEP AGENT  (deep_agent.py)   — multi-step, deep reasoning
-groq/compound-mini → FAST AGENT  (fast_agent.py)   — lightweight, single-step
+groq/compound      → REGISTERED as DEEP_AGENT_MODEL in model_router.py
+                     NOT YET WIRED — deep_agent.py dispatches via complete_with_fallback(Tier.GENERAL)
+                     Current models: llama-3.3-70b-versatile → qwen/qwen3-32b → gpt-oss-20b
+
+groq/compound-mini → REGISTERED as FAST_AGENT_MODEL in model_router.py
+                     NOT YET WIRED — fast_agent.py dispatches via complete_with_fallback(Tier.FAST)
+                     Current model: llama-3.1-8b-instant
 ```
 
+**Actual agent dispatch (current code):**
+```
+fast_agent.py     → Tier.FAST via complete_with_fallback()   — conversation, simple tasks
+deep_agent.py     → Tier.GENERAL via complete_with_fallback() — code, analysis, math, search
+creative_agent.py → Tier.GENERAL via complete_with_fallback(), temperature=0.9 — creative writing
+```
+
+**compound wiring priority:** wire when Groq tool-use API stabilizes.
 **Role:** tool selection authority, multi-step execution.
 **No policy authority.** No system governance. No Heavy Tier activation.
 
