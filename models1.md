@@ -1,5 +1,5 @@
 # CEYONA — MODEL REGISTRY
-Version: 7.0 — Synchronized Edition
+Version: 7.1 — Synchronized Edition
 Status: Active Source of Truth
 Supersedes: models.md, models2.md (all previous versions)
 
@@ -14,8 +14,28 @@ Pricing and token economics → economic.md
 
 ---
 
+## INFRASTRUCTURE SPLIT — READ FIRST
+
+Models in this registry run on two separate providers:
+
+**Groq (api.groq.com)** — primary inference provider
+API key: `GROQ_API_KEY`
+Billing: Groq account
+Models: all LLM tiers, Safety Layer, Agent Layer, Speech Layer, allam-2-7b
+
+**HuggingFace Serverless (api-inference.huggingface.co)** — embedding + reranking only
+API key: `HF_TOKEN`
+Billing: HuggingFace account (separate from Groq)
+Models: BAAI/bge-large-en-v1.5, BAAI/bge-small-en-v1.5, BAAI/bge-reranker-large
+
+These are independent cost streams. Failure of one does NOT imply failure of the other.
+Quota exhaustion on HF does NOT trigger Groq fallback — it degrades retrieval quality.
+
+---
+
 ## 1. SAFETY LAYER (deterministic cascade — FIRST GATE)
 
+**Provider: Groq**
 *Prices: economic.md §1.2*
 
 ```
@@ -41,6 +61,7 @@ openai/gpt-oss-safeguard-20b           → FINAL ENFORCEMENT MODEL (Pass 2, comb
 
 ## 2. FAST TIER (ALLOW / DEGRADED_MODE only)
 
+**Provider: Groq**
 *Prices: economic.md §1.1*
 
 ```
@@ -67,6 +88,7 @@ and web_tools.py (route/POI extraction). It is NOT acting as Fast Tier in those 
 
 ## 3. GENERAL TIER (ALLOW only)
 
+**Provider: Groq**
 *Prices: economic.md §1.1*
 
 ```
@@ -87,12 +109,13 @@ They are NOT cognitive layers. They are NOT logic layers.
 
 ## 4. HEAVY TIER (HEAVY_REQUIRED only)
 
+**Provider: Groq**
 *Prices: economic.md §1.1*
 
 ```
-openai/gpt-oss-120b            → PRIMARY: deep multi-step reasoning
-                                  SECONDARY: Consensus arbiter (mutex — see §8)
-llama-4-scout-17b-16e-instruct → long-context transformation (512K context)
+openai/gpt-oss-120b                           → PRIMARY: deep multi-step reasoning
+                                                SECONDARY: Consensus arbiter (mutex — see §8)
+meta-llama/llama-4-scout-17b-16e-instruct     → long-context transformation (512K context)
 ```
 
 **Activation:** EPK = HEAVY_REQUIRED ONLY.
@@ -110,6 +133,7 @@ llama-4-scout-17b-16e-instruct → long-context transformation (512K context)
 
 ## 5. HEAVY INPUT SHAPER (self-gated utility — NOT a tier)
 
+**Provider: Groq (uses llama-3.1-8b-instant)**
 `llm/heavy_input_shaper.py`
 
 **Role:** prepare input for Heavy Tier execution.
@@ -128,6 +152,7 @@ llama-4-scout-17b-16e-instruct → long-context transformation (512K context)
 
 ## 6. AGENT LAYER (tool-use execution fabric)
 
+**Provider: Groq**
 *Prices: economic.md §1.3*
 
 ```
@@ -142,6 +167,7 @@ groq/compound-mini → FAST AGENT  (fast_agent.py)   — lightweight, single-ste
 
 ## 7. SAFETY AGENT (post-reasoning semantic validation)
 
+**Provider: internal (no external model call — rule-based + LLM via existing tier)**
 `agents/safety_agent.py`
 
 **Position:** LAST in agent execution, before Consensus (on consensus path).
@@ -166,6 +192,8 @@ groq/compound-mini → FAST AGENT  (fast_agent.py)   — lightweight, single-ste
 
 ## 8. CONSENSUS LAYER
 
+**Provider: Groq**
+
 ```
 openai/gpt-oss-120b → CONSENSUS ARBITER
 ```
@@ -173,6 +201,7 @@ openai/gpt-oss-120b → CONSENSUS ARBITER
 **Activation:** ALLOW path with use_consensus=True ONLY.
 **Mutex:** SKIP when HEAVY_REQUIRED (openai/gpt-oss-120b cannot be both simultaneously).
 **On HEAVY_REQUIRED:** Response Synthesizer aggregates Heavy Tier output directly.
+**Max tokens for arbitration:** route_max_tokens(Tier.GENERAL) — arbitration, not generation.
 
 ---
 
@@ -228,11 +257,11 @@ correction + output_normalizer are EXCLUDED from META side-channel DAG.
 
 ```
 meta/
-├── analysis.py       PRE-REASONING step (auto DAG, before intent_engine)
-├── reflection.py     POST-EXECUTION side-channel
-├── correction.py     INLINE — owned meta/, executed by synthesizer step 5 ONLY
+├── analysis.py           PRE-REASONING step (auto DAG, before intent_engine)
+├── reflection.py         POST-EXECUTION side-channel
+├── correction.py         INLINE — owned meta/, executed by synthesizer step 5 ONLY
 ├── output_normalizer.py  INLINE — owned meta/, executed by synthesizer step 6 ONLY
-└── memory_audit.py   OFFLINE DIAGNOSTICS side-channel
+└── memory_audit.py       OFFLINE DIAGNOSTICS side-channel
 ```
 
 **Key invariant:** META LAYER observes system. NEVER controls system. NEVER participates in execution decisions.
@@ -242,70 +271,66 @@ meta/
 meta = semantic quality (is the answer logical? complete? contradictory?).
 
 ### analysis.py
-
 - Position: pre-reasoning DAG step (automatic, not called by Orchestrator explicitly)
 - Activation: ALLOW/HEAVY_REQUIRED (full), DEGRADED (lightweight), DENY (skip)
 - Output: non-binding hints → intent_engine (zero authority, MAY be ignored)
-- Does: input decomposition, pattern detection, complexity hints
-- Does NOT: policy, routing, reasoning, memory interaction
 
 ### reflection.py
-
 - Position: post-execution side-channel (async, non-blocking)
 - Activation: ALLOW/HEAVY (full), DEGRADED (lightweight), DENY (skip)
 - Output: reflection_report → observability (logs/traces) + optional memory_audit input
-- Does NOT: pipeline feedback, response modification, current request influence
 
 ### correction.py
-
 - Ownership: meta/ | Execution: ONLY via synthesizer step 5
 - Excluded from META side-channel DAG
-- Does: preamble/sign-off stripping (Конечно!, Давайте, Sure!, etc.)
-- Does NOT: full regeneration, reasoning override, new information, pipeline control
+- Does: preamble/sign-off stripping (Конечно!, Sure!, Давайте, etc.)
 
 ### output_normalizer.py
-
 - Ownership: meta/ | Execution: ONLY via synthesizer step 6
 - Excluded from META side-channel DAG
-- Does: strip context self-reference phrases (по данным в контексте / according to the context),
-        inline source tags (источник 3 / source 2), garbled non-ASCII URLs,
+- Does: strip context self-reference phrases, inline source tags, garbled URLs,
         English UI term leaks in non-English responses
-- Does NOT: translate text, rewrite meaning, make routing decisions
 
 ### memory_audit.py
-
 - Position: offline diagnostics side-channel (async, non-blocking)
 - Activation: ALLOW/HEAVY/DEGRADED (active), DENY (skip)
 - Output: read-only audit_report → optional input for reflection.py
-- Does NOT: memory write, conflict resolution, execution trigger, retrieval influence
 
 ---
 
 ## 12. SPECIALIZED LAYER
 
-```
-whisper-large-v3       → PRIMARY SPEECH-TO-TEXT
-whisper-large-v3-turbo → FAST SPEECH-TO-TEXT
-orpheus-v1-english     → ENGLISH SPEECH SYNTHESIS
-orpheus-arabic-saudi   → ARABIC SPEECH SYNTHESIS
-allam-2-7b             → MULTILINGUAL NLP (Arabic anchor, also in FAST tier)
-meta-llama/llama-4-scout-17b-16e-instruct → IMAGE EXTRACTION (vision_handler.py — OUTSIDE EPK DAG)
-```
+**Provider: Groq (all models in this section)**
+*Prices: economic.md §1.4*
 
-**Pricing:** All model prices → economic.md §1. Specialized layer speech billed per hour (ASR) / per character (TTS).
+```
+whisper-large-v3                              → PRIMARY SPEECH-TO-TEXT (ASR)
+whisper-large-v3-turbo                        → FAST SPEECH-TO-TEXT (ASR)
+canopylabs/orpheus-v1-english                 → ENGLISH SPEECH SYNTHESIS (TTS)
+canopylabs/orpheus-arabic-saudi               → ARABIC SPEECH SYNTHESIS (TTS)
+allam-2-7b                                    → MULTILINGUAL NLP (Arabic anchor, also in FAST tier)
+meta-llama/llama-4-scout-17b-16e-instruct     → IMAGE EXTRACTION (vision_handler.py — OUTSIDE EPK DAG)
+```
 
 **Speech activation:** is_voice_input = true ONLY.
-**Vision (llama-4-scout-17b-16e-instruct):** specialized extraction role, NOT Heavy Tier,
-OUTSIDE EPK DAG, routes via groq_client, result feeds back via update_handler forced_intent.
+**Vision (meta-llama/llama-4-scout-17b-16e-instruct):** specialized extraction role, NOT Heavy Tier,
+OUTSIDE EPK DAG by design, routes via groq_client, result feeds back via update_handler forced_intent.
 
 ---
 
 ## 13. HF EMBEDDINGS + RETRIEVAL
 
+⚠️ **Provider: HuggingFace Serverless — NOT Groq**
+API key: `HF_TOKEN` (separate from `GROQ_API_KEY`)
+Billing: HuggingFace account (separate cost stream — see economic.md §1.5)
+These models do NOT appear in the Groq available_models list. This is expected and correct.
+
+*Prices: economic.md §1.5*
+
 ```
-BAAI/bge-large-en-v1.5 → PRIMARY EMBEDDING
-BAAI/bge-small-en-v1.5 → FAST EMBEDDING FALLBACK
-BAAI/bge-reranker-large → CROSS-ENCODER RERANKING
+BAAI/bge-large-en-v1.5  → PRIMARY EMBEDDING   (HuggingFace Inference API)
+BAAI/bge-small-en-v1.5  → FAST EMBEDDING FALLBACK  (HuggingFace Inference API)
+BAAI/bge-reranker-large  → CROSS-ENCODER RERANKING  (HuggingFace Inference API)
 ```
 
 **Strict separation:**
@@ -315,10 +340,15 @@ BAAI/bge-reranker-large → CROSS-ENCODER RERANKING
 
 All access via `retrieval/retrieval_engine.py` only.
 
+**Quota management:** HF serverless has rate limits independent of Groq.
+Exhaustion degrades retrieval quality — does NOT cause LLM failure.
+Monitor HF usage separately from Groq usage.
+
 ---
 
 ## 14. SOURCE CREDIBILITY
 
+**Provider: none (internal logic, no model calls)**
 `retrieval/source_credibility.py`
 
 **Primary call site:** external/search.py → filters SerpAPI results BEFORE LLM exposure.
@@ -333,14 +363,14 @@ NOT advisory only — actively blocks BLOCKED-tier domains, filters VERY_LOW-tie
 
 ```python
 features = {
-    "token_count": int,
-    "char_count": int,
-    "newline_density": float,
-    "has_code_block": bool,
-    "has_json_shape": bool,
+    "token_count":      int,
+    "char_count":       int,
+    "newline_density":  float,
+    "has_code_block":   bool,
+    "has_json_shape":   bool,
     "has_math_symbols": bool,
-    "unicode_entropy": float,
-    "is_voice_input": bool,
+    "unicode_entropy":  float,
+    "is_voice_input":   bool,
 }
 ```
 
@@ -395,32 +425,33 @@ Consensus SKIP (mutex) ❌
 
 ```
 INPUT
-↓ Safety Gate Pass 1 (22m)            [unavailable → DENY]
+↓ Safety Gate Pass 1 (meta-llama/llama-prompt-guard-2-22m)   [unavailable → DENY]
 ↓ Feature Extraction (+ is_voice_input)
-↓ Safety Gate Pass 2 (86m + safeguard-20b)  [unavailable → DENY]
+↓ Safety Gate Pass 2 (meta-llama/llama-prompt-guard-2-86m + openai/gpt-oss-safeguard-20b)
+                                                              [unavailable → DENY]
 ↓ Auth / Rate Limit / Event Log
 ↓ Multilingual Normalization
-    allam-2-7b    → Arabic
-    llama-3.3-70b-versatile → all other languages
+    allam-2-7b                → Arabic
+    llama-3.3-70b-versatile   → all other languages
 ↓ EPK [SOLE POLICY AUTHORITY]
-    DENY           → EXIT
-    ALLOW          ↓
-    DEGRADED_MODE  ↓
-    HEAVY_REQUIRED ↓
-↓ Memory + Embedding Retrieval + Reranker  [skip on DENY]
+    DENY            → EXIT
+    ALLOW           ↓
+    DEGRADED_MODE   ↓
+    HEAVY_REQUIRED  ↓
+↓ Memory + Embedding Retrieval [HuggingFace] + Reranker [HuggingFace]  [skip on DENY]
 ↓ analysis.py                              [skip on DENY]
     ALLOW / HEAVY → full | DEGRADED → lightweight
 ↓ Intent Engine                            [skip on DENY]
 ↓ Reasoning Engine                         [ALLOW / HEAVY only]
 ↓ Multi-Agent Coordinator                  [ALLOW / HEAVY only]
     dispatches via _run_agent() to fast / deep / creative agents
-    runs safety_agent per activation rules
+    runs safety_agent per activation rules (§7)
     runs consensus on ALLOW + use_consensus paths
     returns CoordinationResult to orchestrator
 ↓ Orchestrator (execution only)
-    ├── ALLOW:         Fast → General → Agents → safety_agent → Consensus
+    ├── ALLOW:          Fast → General → Agents → safety_agent → Consensus
     ├── HEAVY_REQUIRED: heavy_input_shaper → Heavy Tier → safety_agent [no Consensus]
-    └── DEGRADED:      Fast Tier only
+    └── DEGRADED:       Fast Tier only
 ↓ Response Synthesizer ← FINAL OUTPUT AUTHORITY
     1. assemble
     2. normalize_telegram (LaTeX→Unicode, strip Markdown)
@@ -429,7 +460,7 @@ INPUT
     5. correction (meta/correction.py)
     6. output_normalizer (meta/output_normalizer.py)
     7. finalize (truncate 4096 chars)
-↓ Speech Layer (orpheus)  [is_voice_input = true only]
+↓ Speech Layer (canopylabs/orpheus-*)  [is_voice_input = true only]
 ↓ Event Store ∥ Memory Write  [parallel, independent failure domains]
 ↓ META side-channel [skip on DENY]
     reflection.py   → report → observability / memory_audit
@@ -455,8 +486,8 @@ safety_agent         → post-reasoning validation only
 heavy_input_shaper   → self-gated input prep only
 analysis.py          → non-binding hints only
 reflection.py        → read-only post-execution report
-correction.py        → preamble cleanup, no authority, synthesizer only
-output_normalizer.py → artifact cleanup, no authority, synthesizer only
+correction.py        → preamble cleanup, no authority, synthesizer step 5 only
+output_normalizer.py → artifact cleanup, no authority, synthesizer step 6 only
 memory_audit.py      → read-only diagnostics only
 source_credibility   → domain trust filtering only
 ```
@@ -484,3 +515,51 @@ Failure of one does NOT block the other.
 |---|---|
 | Public transport keywords (маршрут, как добраться, by bus, transit...) | Intent.SEARCH (pre-signal) |
 | Driving point-to-point (no transport keywords) | Intent.MAPS_ROUTE (Mapbox) |
+
+---
+
+## 22. AVAILABLE GROQ MODELS (May 2026)
+
+Complete list of models available on Groq API as of May 2026.
+Cross-reference with model assignments above to verify no gaps.
+
+```json
+[
+  "whisper-large-v3",
+  "meta-llama/llama-4-scout-17b-16e-instruct",
+  "allam-2-7b",
+  "llama-3.3-70b-versatile",
+  "groq/compound-mini",
+  "openai/gpt-oss-safeguard-20b",
+  "meta-llama/llama-prompt-guard-2-22m",
+  "meta-llama/llama-prompt-guard-2-86m",
+  "canopylabs/orpheus-v1-english",
+  "groq/compound",
+  "whisper-large-v3-turbo",
+  "qwen/qwen3-32b",
+  "canopylabs/orpheus-arabic-saudi",
+  "openai/gpt-oss-20b",
+  "openai/gpt-oss-120b",
+  "llama-3.1-8b-instant"
+]
+```
+
+**Assignment coverage:**
+| Model | Role | Section |
+|---|---|---|
+| llama-3.1-8b-instant | FAST tier primary | §2 |
+| llama-3.3-70b-versatile | GENERAL tier primary | §3 |
+| qwen/qwen3-32b | GENERAL tier | §3 |
+| openai/gpt-oss-20b | GENERAL tier | §3 |
+| openai/gpt-oss-120b | HEAVY tier primary + Consensus | §4, §8 |
+| meta-llama/llama-4-scout-17b-16e-instruct | HEAVY tier secondary + Vision | §4, §12 |
+| groq/compound | Agent Layer (deep_agent) | §6 |
+| groq/compound-mini | Agent Layer (fast_agent) | §6 |
+| meta-llama/llama-prompt-guard-2-22m | Safety Gate Pass 1 | §1 |
+| meta-llama/llama-prompt-guard-2-86m | Safety Gate Pass 2 | §1 |
+| openai/gpt-oss-safeguard-20b | Safety Gate Pass 2 | §1 |
+| whisper-large-v3 | ASR primary | §12 |
+| whisper-large-v3-turbo | ASR fast | §12 |
+| canopylabs/orpheus-v1-english | TTS English | §12 |
+| canopylabs/orpheus-arabic-saudi | TTS Arabic | §12 |
+| allam-2-7b | Multilingual + FAST tier | §2, §12 |
