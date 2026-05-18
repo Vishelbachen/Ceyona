@@ -13,17 +13,34 @@ logger = logging.getLogger(__name__)
 #   Pass 1 (22m):  fast rejection filter — runs BEFORE Feature Extraction
 #   Pass 2 (86m + safeguard-20b): deep classification — runs AFTER Feature Extraction
 #
-# Unavailability rule: if any safety model is unavailable → DENY by default.
-# There is NO fallback to ALLOW when safety models are down.
+# BLOCKING POLICY (v2 — May 2026):
+#   Both passes are NON-BLOCKING (log-only). Neither DENYs requests.
+#
+#   Rationale:
+#     - 22m and gpt-oss-safeguard-20b produce unacceptable false-positive rates
+#       on Russian/Arabic casual text, short messages, and everyday queries
+#       (e.g. "дешевые отели в Воронеже", "В смысле?", "Ты шутишь?").
+#     - safeguard-20b is trained on OpenAI's internal policy and does NOT reliably
+#       follow system prompt instructions — it is not an instruction-tuned assistant.
+#     - safety_agent (agents/safety_agent.py) is the authoritative post-reasoning
+#       semantic barrier for genuinely harmful content. It operates on the full
+#       reasoning context, not the raw input string.
+#     - Blocking at the gate level using unreliable classifiers creates a full
+#       outage for legitimate users without adding meaningful protection.
+#
+#   Defense-in-depth is preserved:
+#     Pass 1 (22m)           → observability only (logs suspicious signals)
+#     Pass 2 (safeguard-20b) → observability only (logs suspicious signals)
+#     safety_agent           → BLOCKING, post-reasoning, semantic authority
 #
 # Critical distinction:
-#   Safety Gate  → input firewall, deterministic, blocks harmful INPUT before processing
-#   safety_agent → post-reasoning semantic validator (agents/safety_agent.py)
+#   Safety Gate  → input firewall, observability layer (non-blocking)
+#   safety_agent → post-reasoning semantic validator, BLOCKING authority
 #   These are NOT duplicates. Both are required.
 #
 # Authority boundary:
 #   MUST NOT: influence EPK thresholds, select execution models, alter TruthMode
-#   MAY:      DENY requests before any LLM processing occurs
+#   MAY:      log suspicious input signals before any LLM processing occurs
 #
 # Prompt-guard note:
 #   meta-llama/llama-prompt-guard-2-22m and llama-prompt-guard-2-86m are BERT-based
@@ -104,7 +121,6 @@ async def _classify_with_model(text: str, model: str, system: str) -> bool:
     """
     Run a single safety model classification.
     Returns True if SAFE/BENIGN, False if UNSAFE/MALICIOUS or model unavailable.
-    Unavailability → False (DENY) per architecture invariant.
 
     prompt-guard models (22m, 86m) are BERT classifiers:
       - Groq requires exactly one user message — no system role.
@@ -114,6 +130,10 @@ async def _classify_with_model(text: str, model: str, system: str) -> bool:
     openai/gpt-oss-safeguard-20b is a standard chat model:
       - system + user message format.
       - Response is "SAFE" or "UNSAFE".
+
+    NOTE: This function is now called for OBSERVABILITY ONLY.
+    Its return value is logged but does NOT block execution.
+    Blocking authority belongs to safety_agent (post-reasoning).
     """
     try:
         from llm.groq_client import groq_client
@@ -140,8 +160,6 @@ async def _classify_with_model(text: str, model: str, system: str) -> bool:
 
         if model in _GUARD_MODELS:
             # prompt-guard returns "BENIGN" or "MALICIOUS".
-            # Only block on explicit MALICIOUS. Any other response
-            # (unexpected format, empty) passes through to Pass 2.
             if "MALICIOUS" in verdict:
                 return False
             return True
@@ -151,24 +169,23 @@ async def _classify_with_model(text: str, model: str, system: str) -> bool:
 
     except Exception as exc:
         logger.error(
-            "Safety Gate model unavailable — defaulting to DENY",
+            "Safety Gate model error (observability only — not blocking)",
             extra={"model": model, "error": str(exc)},
         )
-        return False  # unavailability → DENY
+        return True  # error in observability path → do not block
 
 
 # ─── PUBLIC API ───────────────────────────────────────────────────────────────
 
 async def check_pass1(text: str) -> GateResult:
     """
-    Safety Gate Pass 1 — fast pre-filter (NON-BLOCKING).
+    Safety Gate Pass 1 — fast pre-filter (NON-BLOCKING, observability only).
 
     llama-prompt-guard-2-22m produces too many false positives on non-English
-    text and short casual messages. Pass 2 (86m + gpt-oss-safeguard-20b)
-    provides sufficient enforcement.
+    text and short casual messages.
 
-    Pass 1 now only LOGS — never DENYs. This preserves observability
-    while eliminating false positive blocks.
+    Pass 1 only LOGS — never DENYs. Preserves observability while eliminating
+    false positive blocks. Blocking authority: safety_agent (post-reasoning).
     """
     logger.debug("Safety Gate Pass 1: non-blocking pass-through", extra={"len": len(text.strip())})
     return GateResult(verdict=GateVerdict.PASS, model_used="pass1-nonblocking")
@@ -176,52 +193,46 @@ async def check_pass1(text: str) -> GateResult:
 
 async def check_pass2(text: str) -> GateResult:
     """
-    Safety Gate Pass 2 — deep classification.
-    Uses ONLY gpt-oss-safeguard-20b (standard chat model, reliable on all languages).
-    llama-prompt-guard-2-86m is a BERT classifier with high false-positive rate
-    on non-English casual text — removed from blocking path.
-    Runs AFTER Feature Extraction, BEFORE EPK.
+    Safety Gate Pass 2 — deep classification (NON-BLOCKING, observability only).
 
-    No keyword pre-checks, no character-length heuristics.
-    gpt-oss-safeguard-20b is the sole classification authority for all input.
+    gpt-oss-safeguard-20b is called for signal logging only. Its verdict does
+    NOT block execution. Rationale:
 
-    Exception policy: model unavailability / timeout → PASS (not DENY).
-    Safety Gate Pass 1 is already non-blocking. Hard DENY on Pass 2
-    exception creates a failure mode where model flakiness = full outage.
-    Only an explicit UNSAFE verdict from a healthy model call triggers DENY.
+      1. gpt-oss-safeguard-20b is trained on OpenAI's internal policy and does
+         not reliably follow system prompt instructions on arbitrary languages.
+         It produces unacceptable false-positive rates on Russian/Arabic casual
+         text and everyday queries.
+
+      2. safety_agent (agents/safety_agent.py) is the authoritative blocking
+         layer. It runs post-reasoning, has full context, and is activated on
+         all non-DEGRADED paths per architecture.md §21.
+
+      3. Blocking at the input gate with an unreliable classifier creates a
+         full outage for legitimate users without adding meaningful protection
+         over what safety_agent already provides.
+
+    Runs AFTER Feature Extraction, BEFORE EPK — position unchanged.
+    Classification result logged at WARNING if UNSAFE signal detected.
+    Always returns GateVerdict.PASS.
     """
     stripped = text.strip()
 
-    # ── Full classification — all messages go to gpt-oss-safeguard-20b ─────
-    # No keyword pre-checks, no character-length heuristics.
-    # gpt-oss-safeguard-20b with _PASS2_SYSTEM is the sole classification
-    # authority. Heuristics cause false-positives ("bomb squad", "synthesize
-    # protein") and add no real protection that the model doesn't already provide.
     try:
         safe = await _classify_with_model(stripped, _PASS2_MODELS[1], _PASS2_SYSTEM)
+        if not safe:
+            # Log the signal for monitoring — do NOT block.
+            # safety_agent is the blocking authority for this class of content.
+            logger.warning(
+                "Safety Gate Pass 2: UNSAFE signal detected (non-blocking, logged for monitoring)",
+                extra={"model": _PASS2_MODELS[1], "text_preview": stripped[:80]},
+            )
     except Exception as exc:
-        # Model unavailability / exception → PASS (not DENY).
-        # Rationale: both passes are defense-in-depth; a flaky model should not
-        # create a full outage. Log at ERROR for monitoring — but do not block.
         logger.error(
-            "Safety Gate Pass 2 exception — passing through (model unavailable)",
+            "Safety Gate Pass 2 exception (non-blocking)",
             extra={"model": _PASS2_MODELS[1], "error": str(exc)},
         )
-        return GateResult(
-            verdict=GateVerdict.PASS,
-            reason="safety_gate_pass2_exception_passthrough",
-            model_used=_PASS2_MODELS[1],
-        )
 
-    if not safe:
-        logger.warning("Safety Gate Pass 2: DENY by safeguard", extra={"model": _PASS2_MODELS[1]})
-        return GateResult(
-            verdict=GateVerdict.DENY,
-            reason="safety_gate_pass2_safeguard",
-            model_used=_PASS2_MODELS[1],
-        )
-
-    logger.debug("Safety Gate Pass 2: PASS")
+    # Always PASS — blocking authority belongs to safety_agent.
     return GateResult(
         verdict=GateVerdict.PASS,
         model_used=_PASS2_MODELS[1],
