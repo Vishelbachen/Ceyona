@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 
+from i18n.t import SUPPORTED_LANGS
+
 # ─── ROLE ─────────────────────────────────────────────────────────────────────
 # Deterministic post-processing step in the synthesizer pipeline.
 # Position: after meta/correction, before finalize/truncate.
@@ -62,97 +64,72 @@ _GARBLED_URL = re.compile(
 #   1. The English term must be a known retrieval artifact (seen in production)
 #   2. The substitution must be semantically equivalent, not approximate
 #   3. Never add terms that could appear in code, URLs, or proper nouns
+#
+# Each entry is case-insensitive — _smart_sub() restores original casing.
+# One entry per term: no need for "Route"/"route" duplicates.
 
 _LEAK_MAPS: dict[str, dict[str, str]] = {
     "ru": {
-        # Transport terms leaking from English routing sources
         "route":        "маршрут",
-        "Route":        "Маршрут",
         "station":      "станция",
-        "Station":      "Станция",
         "stop":         "остановка",
-        "Stop":         "Остановка",
         "terminal":     "терминал",
-        "Terminal":     "Терминал",
         "departure":    "отправление",
-        "Departure":    "Отправление",
         "arrival":      "прибытие",
-        "Arrival":      "Прибытие",
         "platform":     "платформа",
-        "Platform":     "Платформа",
         "traffic":      "пробки",
-        "Traffic":      "Пробки",
         "drive time":   "время в пути",
-        "Drive time":   "Время в пути",
         "distance":     "расстояние",
-        "Distance":     "Расстояние",
-        # UI/navigation terms
         "directions":   "маршрут",
-        "Directions":   "Маршрут",
         "estimated":    "примерно",
-        "Estimated":    "Примерно",
     },
     "de": {
         "route":        "Route",
         "station":      "Station",
         "stop":         "Haltestelle",
-        "Stop":         "Haltestelle",
         "departure":    "Abfahrt",
         "arrival":      "Ankunft",
         "platform":     "Gleis",
         "traffic":      "Verkehr",
-        "Traffic":      "Verkehr",
         "drive time":   "Fahrzeit",
         "distance":     "Entfernung",
     },
     "fr": {
         "stop":         "arrêt",
-        "Stop":         "Arrêt",
         "departure":    "départ",
-        "Departure":    "Départ",
         "arrival":      "arrivée",
-        "Arrival":      "Arrivée",
         "platform":     "quai",
-        "Platform":     "Quai",
         "traffic":      "trafic",
-        "Traffic":      "Trafic",
         "drive time":   "temps de trajet",
         "distance":     "distance",
         "route":        "itinéraire",
-        "Route":        "Itinéraire",
     },
-    "tr": {
-        "stop":         "durak",
-        "Stop":         "Durak",
-        "station":      "istasyon",
-        "Station":      "İstasyon",
-        "departure":    "kalkış",
-        "arrival":      "varış",
-        "platform":     "peron",
+    "it": {
+        "route":        "percorso",
+        "station":      "stazione",
+        "stop":         "fermata",
+        "departure":    "partenza",
+        "arrival":      "arrivo",
+        "platform":     "binario",
+        "traffic":      "traffico",
+        "drive time":   "tempo di percorrenza",
+        "distance":     "distanza",
     },
-    "uk": {
-        "route":        "маршрут",
-        "Route":        "Маршрут",
-        "station":      "станція",
-        "Station":      "Станція",
-        "stop":         "зупинка",
-        "Stop":         "Зупинка",
-        "departure":    "відправлення",
-        "arrival":      "прибуття",
-        "platform":     "платформа",
-        "traffic":      "затори",
-        "Traffic":      "Затори",
-        "drive time":   "час у дорозі",
-        "distance":     "відстань",
-        "directions":   "маршрут",
+    "pt": {
+        "route":        "rota",
+        "station":      "estação",
+        "stop":         "paragem",
+        "departure":    "partida",
+        "arrival":      "chegada",
+        "platform":     "plataforma",
+        "traffic":      "trânsito",
+        "drive time":   "tempo de viagem",
+        "distance":     "distância",
     },
     "es": {
         "route":        "ruta",
-        "Route":        "Ruta",
         "station":      "estación",
-        "Station":      "Estación",
         "stop":         "parada",
-        "Stop":         "Parada",
         "departure":    "salida",
         "arrival":      "llegada",
         "platform":     "andén",
@@ -162,11 +139,8 @@ _LEAK_MAPS: dict[str, dict[str, str]] = {
     },
     "pl": {
         "route":        "trasa",
-        "Route":        "Trasa",
         "station":      "stacja",
-        "Station":      "Stacja",
         "stop":         "przystanek",
-        "Stop":         "Przystanek",
         "departure":    "odjazd",
         "arrival":      "przyjazd",
         "platform":     "peron",
@@ -174,9 +148,207 @@ _LEAK_MAPS: dict[str, dict[str, str]] = {
         "drive time":   "czas jazdy",
         "distance":     "odległość",
     },
+    "uk": {
+        "route":        "маршрут",
+        "station":      "станція",
+        "stop":         "зупинка",
+        "departure":    "відправлення",
+        "arrival":      "прибуття",
+        "platform":     "платформа",
+        "traffic":      "затори",
+        "drive time":   "час у дорозі",
+        "distance":     "відстань",
+        "directions":   "маршрут",
+    },
+    "tr": {
+        "stop":         "durak",
+        "station":      "istasyon",
+        "departure":    "kalkış",
+        "arrival":      "varış",
+        "platform":     "peron",
+        "route":        "güzergah",
+        "traffic":      "trafik",
+        "drive time":   "seyahat süresi",
+        "distance":     "mesafe",
+    },
+    "nl": {
+        "route":        "route",
+        "station":      "station",
+        "stop":         "halte",
+        "departure":    "vertrek",
+        "arrival":      "aankomst",
+        "platform":     "perron",
+        "traffic":      "verkeer",
+        "drive time":   "reistijd",
+        "distance":     "afstand",
+    },
+    "sv": {
+        "route":        "rutt",
+        "station":      "station",
+        "stop":         "hållplats",
+        "departure":    "avgång",
+        "arrival":      "ankomst",
+        "platform":     "plattform",
+        "traffic":      "trafik",
+        "drive time":   "restid",
+        "distance":     "avstånd",
+    },
+    "no": {
+        "route":        "rute",
+        "station":      "stasjon",
+        "stop":         "holdeplass",
+        "departure":    "avgang",
+        "arrival":      "ankomst",
+        "platform":     "plattform",
+        "traffic":      "trafikk",
+        "drive time":   "reisetid",
+        "distance":     "avstand",
+    },
+    "da": {
+        "route":        "rute",
+        "station":      "station",
+        "stop":         "stoppested",
+        "departure":    "afgang",
+        "arrival":      "ankomst",
+        "platform":     "perron",
+        "traffic":      "trafik",
+        "drive time":   "rejsetid",
+        "distance":     "afstand",
+    },
+    "fi": {
+        "route":        "reitti",
+        "station":      "asema",
+        "stop":         "pysäkki",
+        "departure":    "lähtö",
+        "arrival":      "saapuminen",
+        "platform":     "laituri",
+        "traffic":      "liikenne",
+        "drive time":   "matka-aika",
+        "distance":     "etäisyys",
+    },
+    "cs": {
+        "route":        "trasa",
+        "station":      "stanice",
+        "stop":         "zastávka",
+        "departure":    "odjezd",
+        "arrival":      "příjezd",
+        "platform":     "nástupiště",
+        "traffic":      "provoz",
+        "drive time":   "doba jízdy",
+        "distance":     "vzdálenost",
+    },
+    "sk": {
+        "route":        "trasa",
+        "station":      "stanica",
+        "stop":         "zastávka",
+        "departure":    "odchod",
+        "arrival":      "príchod",
+        "platform":     "nástupište",
+        "traffic":      "premávka",
+        "drive time":   "čas jazdy",
+        "distance":     "vzdialenosť",
+    },
+    "ro": {
+        "route":        "rută",
+        "station":      "stație",
+        "stop":         "oprire",
+        "departure":    "plecare",
+        "arrival":      "sosire",
+        "platform":     "peron",
+        "traffic":      "trafic",
+        "drive time":   "timp de condus",
+        "distance":     "distanță",
+    },
+    "hu": {
+        "route":        "útvonal",
+        "station":      "állomás",
+        "stop":         "megálló",
+        "departure":    "indulás",
+        "arrival":      "érkezés",
+        "platform":     "vágány",
+        "traffic":      "forgalom",
+        "drive time":   "menetidő",
+        "distance":     "távolság",
+    },
+    "bg": {
+        "route":        "маршрут",
+        "station":      "гара",
+        "stop":         "спирка",
+        "departure":    "заминаване",
+        "arrival":      "пристигане",
+        "platform":     "перон",
+        "traffic":      "трафик",
+        "drive time":   "време за пътуване",
+        "distance":     "разстояние",
+    },
+    "hr": {
+        "route":        "ruta",
+        "station":      "stanica",
+        "stop":         "stajalište",
+        "departure":    "polazak",
+        "arrival":      "dolazak",
+        "platform":     "peron",
+        "traffic":      "promet",
+        "drive time":   "vrijeme vožnje",
+        "distance":     "udaljenost",
+    },
+    "sr": {
+        "route":        "маршрута",
+        "station":      "станица",
+        "stop":         "станица",
+        "departure":    "полазак",
+        "arrival":      "долазак",
+        "platform":     "перон",
+        "traffic":      "саобраћај",
+        "drive time":   "време вожње",
+        "distance":     "удаљеност",
+    },
+    "vi": {
+        "route":        "tuyến đường",
+        "station":      "ga",
+        "stop":         "điểm dừng",
+        "departure":    "khởi hành",
+        "arrival":      "đến nơi",
+        "platform":     "sân ga",
+        "traffic":      "giao thông",
+        "drive time":   "thời gian lái xe",
+        "distance":     "khoảng cách",
+    },
+    "id": {
+        "route":        "rute",
+        "station":      "stasiun",
+        "stop":         "pemberhentian",
+        "departure":    "keberangkatan",
+        "arrival":      "kedatangan",
+        "platform":     "peron",
+        "traffic":      "lalu lintas",
+        "drive time":   "waktu tempuh",
+        "distance":     "jarak",
+    },
+    "ms": {
+        "route":        "laluan",
+        "station":      "stesen",
+        "stop":         "perhentian",
+        "departure":    "berlepas",
+        "arrival":      "ketibaan",
+        "platform":     "platform",
+        "traffic":      "trafik",
+        "drive time":   "masa memandu",
+        "distance":     "jarak",
+    },
+    "hi": {
+        "route":        "मार्ग",
+        "station":      "स्टेशन",
+        "stop":         "पड़ाव",
+        "departure":    "प्रस्थान",
+        "arrival":      "आगमन",
+        "platform":     "प्लेटफार्म",
+        "traffic":      "यातायात",
+        "drive time":   "यात्रा समय",
+        "distance":     "दूरी",
+    },
     "ka": {
         "route":        "მარშრუტი",
-        "Route":        "მარშრუტი",
         "station":      "სადგური",
         "stop":         "გაჩერება",
         "departure":    "გამგზავრება",
@@ -184,15 +356,71 @@ _LEAK_MAPS: dict[str, dict[str, str]] = {
         "traffic":      "საგზაო მოძრაობა",
         "distance":     "მანძილი",
     },
+    "az": {
+        "route":        "marşrut",
+        "station":      "stansiya",
+        "stop":         "dayanacaq",
+        "departure":    "yola düşmə",
+        "arrival":      "gəliş",
+        "platform":     "platforma",
+        "traffic":      "nəqliyyat",
+        "drive time":   "yol müddəti",
+        "distance":     "məsafə",
+    },
+    "kk": {
+        "route":        "маршрут",
+        "station":      "станция",
+        "stop":         "аялдама",
+        "departure":    "жөнелу",
+        "arrival":      "келу",
+        "traffic":      "жол қозғалысы",
+        "distance":     "қашықтық",
+    },
+    "uz": {
+        "route":        "marshrut",
+        "station":      "stansiya",
+        "stop":         "bekat",
+        "departure":    "jo'nab ketish",
+        "arrival":      "kelish",
+        "traffic":      "transport",
+        "distance":     "masofa",
+    },
+    "hy": {
+        "route":        "երթուղի",
+        "station":      "կայան",
+        "stop":         "կանգառ",
+        "departure":    "մեկնում",
+        "arrival":      "ժամանում",
+        "traffic":      "երթևեկություն",
+        "distance":     "հեռավորություն",
+    },
+    "sw": {
+        "route":        "njia",
+        "station":      "kituo",
+        "stop":         "kusimama",
+        "departure":    "kuondoka",
+        "arrival":      "kuwasili",
+        "traffic":      "msongamano",
+        "distance":     "umbali",
+    },
 }
 
-# Languages where we skip leak substitution entirely:
-# EN is the source language of leaks, not a target.
-# JA/AR/ZH/KO have such different scripts that English leaks are visually
-# obvious and model rarely produces them mid-sentence.
+# Languages where leak substitution is skipped entirely:
+# EN — source language of leaks, not a target.
+# JA/ZH/KO/AR/HE/FA/TH/KO — non-Latin scripts where English leaks
+# are visually obvious and the model rarely produces them mid-sentence.
+# BN/UR/MN/AM/HA/YO/IG/SO/PS/KU/UG/TT — no production leak evidence yet;
+# add to _LEAK_MAPS if confirmed in Sentry.
 _SKIP_SUBSTITUTION: frozenset[str] = frozenset({
-    "en", "ja", "ar", "zh", "ko", "he", "fa",
+    "en",
+    "ja", "zh", "ko", "ar", "he", "fa", "th",
+    "bn", "ur", "mn", "am", "ha", "yo", "ig", "so", "ps", "ku", "ug", "tt",
 })
+
+# Sanity check at import time: every lang in _LEAK_MAPS must be in SUPPORTED_LANGS.
+_unknown = set(_LEAK_MAPS) - SUPPORTED_LANGS
+if _unknown:
+    raise ValueError(f"output_normalizer: _LEAK_MAPS contains unsupported langs: {_unknown}")
 
 
 # ─── INTERNAL HELPERS ─────────────────────────────────────────────────────────
@@ -209,11 +437,35 @@ def _strip_garbled_urls(text: str) -> str:
     return _GARBLED_URL.sub("", text)
 
 
+def _smart_sub(text: str, en_term: str, native_term: str) -> str:
+    """
+    Case-insensitive substitution that restores the casing of the match.
+
+    Rules:
+      - ALL CAPS match  → native term uppercased
+      - Title Case match → native term title-cased
+      - lowercase match  → native term as-is (already lowercase in _LEAK_MAPS)
+
+    For non-Latin native terms (Cyrillic, Georgian, etc.) title-casing
+    is applied only to the first character — correct for all scripts.
+    """
+    pattern = re.compile(rf"\b{re.escape(en_term)}\b", re.IGNORECASE)
+
+    def _replace(m: re.Match) -> str:
+        matched = m.group(0)
+        if matched.isupper():
+            return native_term.upper()
+        if matched[0].isupper():
+            return native_term[0].upper() + native_term[1:]
+        return native_term
+
+    return pattern.sub(_replace, text)
+
+
 def _apply_leak_map(text: str, lang: str) -> str:
     """
     Substitute known English leak terms with target language equivalents.
     Only runs for languages in _LEAK_MAPS. Skips _SKIP_SUBSTITUTION langs.
-    Uses word-boundary matching to avoid partial substitutions.
     """
     if lang in _SKIP_SUBSTITUTION:
         return text
@@ -223,9 +475,7 @@ def _apply_leak_map(text: str, lang: str) -> str:
         return text
 
     for en_term, native_term in leak_map.items():
-        # Word boundary: don't match inside longer words or URLs
-        pattern = re.compile(rf"\b{re.escape(en_term)}\b")
-        text = pattern.sub(native_term, text)
+        text = _smart_sub(text, en_term, native_term)
 
     return text
 
