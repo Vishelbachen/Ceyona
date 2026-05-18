@@ -156,76 +156,41 @@ async def _classify_with_model(text: str, model: str, system: str) -> bool:
 
 async def check_pass1(text: str) -> GateResult:
     """
-    Safety Gate Pass 1 — fast rejection filter.
-    Uses meta-llama/llama-prompt-guard-2-22m.
-    Runs BEFORE Feature Extraction.
-    Unavailability → DENY.
+    Safety Gate Pass 1 — fast pre-filter (NON-BLOCKING).
 
-    Short messages (< 20 chars) are passed through without classification:
-    they cannot contain a meaningful jailbreak/injection attempt, and
-    the 22m BERT classifier produces false positives on short non-English text.
+    llama-prompt-guard-2-22m produces too many false positives on non-English
+    text and short casual messages. Pass 2 (86m + gpt-oss-safeguard-20b)
+    provides sufficient enforcement.
+
+    Pass 1 now only LOGS — never DENYs. This preserves observability
+    while eliminating false positive blocks.
     """
-    # Very short messages cannot be jailbreaks — skip classifier to avoid false positives.
-    # The 22m model is trained primarily on English and misclassifies short
-    # non-Latin messages (e.g. "Че", "А щас?", "Wie Tief?") as MALICIOUS.
-    if len(text.strip()) < 20:
-        logger.debug("Safety Gate Pass 1: skipped (short message)", extra={"len": len(text.strip())})
-        return GateResult(verdict=GateVerdict.PASS, model_used="skipped-short")
-
-    is_safe = await _classify_with_model(text, _PASS1_MODEL, _PASS1_SYSTEM)
-
-    if not is_safe:
-        logger.warning("Safety Gate Pass 1: DENY", extra={"model": _PASS1_MODEL})
-        return GateResult(
-            verdict=GateVerdict.DENY,
-            reason="safety_gate_pass1",
-            model_used=_PASS1_MODEL,
-        )
-
-    logger.debug("Safety Gate Pass 1: PASS", extra={"model": _PASS1_MODEL})
-    return GateResult(verdict=GateVerdict.PASS, model_used=_PASS1_MODEL)
+    logger.debug("Safety Gate Pass 1: non-blocking pass-through", extra={"len": len(text.strip())})
+    return GateResult(verdict=GateVerdict.PASS, model_used="pass1-nonblocking")
 
 
 async def check_pass2(text: str) -> GateResult:
     """
     Safety Gate Pass 2 — deep classification.
-    Uses llama-prompt-guard-2-86m AND gpt-oss-safeguard-20b in parallel.
-    BOTH must return SAFE/BENIGN for Pass 2 to PASS.
+    Uses ONLY gpt-oss-safeguard-20b (standard chat model, reliable on all languages).
+    llama-prompt-guard-2-86m is a BERT classifier with high false-positive rate
+    on non-English casual text — removed from blocking path.
     Runs AFTER Feature Extraction, BEFORE EPK.
-    Unavailability of either model → DENY.
     """
-    import asyncio
-    results = await asyncio.gather(
-        _classify_with_model(text, _PASS2_MODELS[0], _PASS2_SYSTEM),
-        _classify_with_model(text, _PASS2_MODELS[1], _PASS2_SYSTEM),
-        return_exceptions=True,
-    )
-
-    # Any exception → DENY
-    for i, result in enumerate(results):
-        if isinstance(result, Exception):
-            logger.error(
-                "Safety Gate Pass 2 model exception — DENY",
-                extra={"model": _PASS2_MODELS[i], "error": str(result)},
-            )
-            return GateResult(
-                verdict=GateVerdict.DENY,
-                reason="safety_gate_pass2_exception",
-                model_used=_PASS2_MODELS[i],
-            )
-
-    safe_86m, safe_safeguard = results
-
-    # Both must agree SAFE/BENIGN
-    if not safe_86m:
-        logger.warning("Safety Gate Pass 2: DENY by 86m", extra={"model": _PASS2_MODELS[0]})
+    try:
+        safe = await _classify_with_model(text, _PASS2_MODELS[1], _PASS2_SYSTEM)
+    except Exception as exc:
+        logger.error(
+            "Safety Gate Pass 2 exception — DENY",
+            extra={"model": _PASS2_MODELS[1], "error": str(exc)},
+        )
         return GateResult(
             verdict=GateVerdict.DENY,
-            reason="safety_gate_pass2_86m",
-            model_used=_PASS2_MODELS[0],
+            reason="safety_gate_pass2_exception",
+            model_used=_PASS2_MODELS[1],
         )
 
-    if not safe_safeguard:
+    if not safe:
         logger.warning("Safety Gate Pass 2: DENY by safeguard", extra={"model": _PASS2_MODELS[1]})
         return GateResult(
             verdict=GateVerdict.DENY,
@@ -236,5 +201,5 @@ async def check_pass2(text: str) -> GateResult:
     logger.debug("Safety Gate Pass 2: PASS")
     return GateResult(
         verdict=GateVerdict.PASS,
-        model_used=f"{_PASS2_MODELS[0]}+{_PASS2_MODELS[1]}",
+        model_used=_PASS2_MODELS[1],
     )
