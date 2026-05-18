@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import traceback
+import asyncio
 
 from contracts.shared_types import Complexity, EPKDecision, Tier
 from core.execution.orchestrator import OrchestratorRequest, OrchestratorResult, UsageRecord, run
