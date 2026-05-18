@@ -277,106 +277,9 @@ def _build_result(
     )
 
 
-# ─── ROUTING / DIRECTIONS SIGNALS ────────────────────────────────────────────
-# "How do I get from A to B" queries — we have no Directions API.
-# These must go to SEARCH (SerpAPI finds real transport info),
-# NOT to MAPS (Mapbox only geocodes a point and model invents the route).
-# ─── WEATHER SIGNALS ─────────────────────────────────────────────────────────
-# Pre-check for short queries in non-Latin scripts that may miss embedding classifier.
-_WEATHER_SIGNALS: tuple[str, ...] = (
-    "погода", "температура", "прогноз погоды",
-    "weather", "temperature", "forecast",
-    "ამინდი", "ამინდია", "ტემპერატურა",
-    "եղանակ", "hava durumu", "ауа райы",
-    "الطقس", "درجة الحرارة", "آب و هوا",
-    "मौसम", "天气", "気温", "날씨", "อากาศ", "cuaca",
-    "pogoda", "počasí", "vreme", "meteo", "időjárás",
-)
-
-# ─── ROUTE SIGNALS ────────────────────────────────────────────────────────────
-# Route/directions → SEARCH (SerpAPI gets real transit info).
-# NOT MAPS_ROUTE — Mapbox only knows driving, not buses/metro/taxi.
-_ROUTE_SIGNALS: tuple[str, ...] = (
-    # Russian
-    "как добраться", "как доехать", "как дойти", "как попасть",
-    "дорога от", "путь от", "путь до",
-    "от аэропорта", "до центра", "до аэропорта", "от вокзала", "до вокзала",
-    "на автобусе", "на метро", "на такси", "общественный транспорт",
-    # English
-    "how to get from", "how to get to", "how do i get to",
-    "how do i reach", "get from", "travel from", "travel to",
-    "from airport", "to airport", "from station", "to station",
-    "by bus", "by metro", "by subway", "by train", "by taxi",
-    "public transport", "public transit",
-    # German
-    "wie komme ich", "wie kommt man",
-    "vom flughafen", "zum flughafen",
-    # French
-    "comment aller", "comment se rendre",
-    "depuis l'aéroport", "jusqu'au centre",
-    # Spanish
-    "cómo llegar", "cómo ir",
-    "desde el aeropuerto", "hasta el centro",
-    # Turkish
-    "nasıl gidilir", "havalimanından",
-    # Georgian
-    "როგორ მივიდე", "როგორ ჩავიდე", "აეროპორტიდან", "მივიდე",
-    # Arabic
-    "كيف أصل", "من المطار", "إلى المركز",
-)
-
-# ─── ACCOMMODATION / POI SIGNALS ─────────────────────────────────────────────
-# Hotel/hostel/accommodation queries → SEARCH (SerpAPI finds real listings).
-# NOT QUESTION — QUESTION intent allows HYBRID synthesis → LLM hallucinates hotels.
-# NOT MAPS_POI — POI tool finds geo points, not accommodation availability.
-# These MUST go to SEARCH to hit the hotel/accommodation anti-hallucination rule
-# in the SEARCH system prompt (rule 4: only name hotels from sources).
-_ACCOMMODATION_SIGNALS: tuple[str, ...] = (
-    # Russian
-    "отель", "отели", "гостиница", "гостиницы", "хостел", "апартаменты",
-    "дешевое жилье", "дешёвое жильё", "где остановиться", "где переночевать",
-    "бюджетное жилье", "бюджетный отель", "мини-отель",
-    # English
-    "hotel", "hotels", "hostel", "motel", "accommodation", "guesthouse",
-    "where to stay", "cheap stay", "budget hotel", "inn",
-    # German
-    "hotel", "unterkunft", "hostel",
-    # French
-    "hôtel", "hébergement",
-    # Spanish
-    "hotel", "alojamiento", "hostal",
-    # Turkish
-    "otel", "konaklama",
-    # Arabic
-    "فندق", "فنادق", "سكن",
-)
-
-# ─── EMOTIONAL SIGNALS ────────────────────────────────────────────────────────
-# Short exclamatory / expressive messages → EMOTIONAL intent.
-# Avoids misclassifying "wtf", "пиздец", "OMG" as SEARCH or QUESTION.
-_EMOTIONAL_SIGNALS: tuple[str, ...] = (
-    # Profanity / strong expletives (language-independent treatment)
-    "wtf", "omg", "holy shit", "oh my god", "oh my",
-    "пиздец", "блять", "блин", "чёрт", "да ладно", "нифига",
-    "ой", "ого", "вот это да", "не может быть", "серьёзно?",
-    "ничего себе", "ну и ну", "капец", "кошмар", "ужас",
-    # Frustration
-    "бесит", "надоело", "устал", "устала", "задолбал", "задолбало",
-    "annoying", "frustrating", "i give up", "so annoying",
-    # Surprise / disbelief
-    "seriously?", "no way", "are you kidding", "you're joking",
-    "что за", "это что", "ты серьёзно", "ты шутишь",
-    # Excitement
-    "наконец-то", "наконец то", "ура", "класс", "круто", "огонь",
-    "yay", "finally", "awesome", "amazing", "wow",
-    # Disappointment
-    "жаль", "обидно", "грустно", "расстроил", "расстроила",
-    "sad", "disappointed", "that's sad", "такая жалость",
-)
-
-# ─── MATH / EXAM KEYWORD PRE-CHECK ───────────────────────────────────────────
+# ─── MATH KEYWORD PRE-CHECK ──────────────────────────────────────────────────
+# Regex on digits/symbols — language-agnostic by nature, no strings needed.
 # Short mathematical expressions can have low pgvector score → fall to QUESTION.
-# Catch them early with keyword patterns.
 import re as _re
 _MATH_PATTERN = _re.compile(
     r"(?:"
@@ -388,6 +291,81 @@ _MATH_PATTERN = _re.compile(
     r")",
     _re.IGNORECASE,
 )
+
+
+# ─── LLM PRE-CLASSIFIER ──────────────────────────────────────────────────────
+# Replaces all hardcoded signal tuples (_WEATHER_SIGNALS, _ROUTE_SIGNALS,
+# _ACCOMMODATION_SIGNALS, _EMOTIONAL_SIGNALS).
+#
+# WHY: signal tuples are hardcoded per language. With 75 languages (lingua),
+# full coverage is impossible — any uncovered language causes misclassification.
+# LLM understands semantics in all languages without any language-specific strings.
+#
+# MODEL: llama-3.1-8b-instant (FAST tier) — low latency, called once per request.
+# POSITION: before embedding classifier, after math regex pre-check.
+#
+# Returns one of:
+#   "weather"       → Intent.WEATHER
+#   "route"         → Intent.SEARCH  (transit info, not Mapbox driving)
+#   "accommodation" → Intent.SEARCH  (anti-hallucination: only SerpAPI sources)
+#   "emotional"     → Intent.EMOTIONAL
+#   "none"          → proceed to embedding classifier
+#
+# Failure policy: any exception or unexpected response → "none" (pass through).
+# Never blocks the pipeline. Pre-check is best-effort, not authoritative.
+
+_PRE_CLASSIFIER_PROMPT = (
+    "Classify the intent of the following user message. "
+    "Reply with a JSON object ONLY — no markdown, no explanation:\n"
+    '{"pre_intent": "<label>"}\n\n'
+    "Labels (choose exactly one):\n"
+    "- \"weather\"       — asks about current weather, temperature, forecast, "
+    "wind, humidity, precipitation for any location\n"
+    "- \"route\"         — asks how to travel FROM one place TO another: "
+    "directions, transit options, bus/metro/train/taxi routes, travel time, "
+    "distance between two specific points, how to get from airport/station\n"
+    "- \"accommodation\" — asks about hotels, hostels, motels, guesthouses, "
+    "apartments, where to stay, cheap/budget/luxury lodging\n"
+    "- \"emotional\"     — expresses a strong emotion with no information request: "
+    "surprise, frustration, excitement, disappointment, profanity, exclamations\n"
+    "- \"none\"          — everything else (factual questions, code, math, "
+    "maps/location lookup, general chat, instructions, analysis)\n\n"
+    "CRITICAL: reply with JSON only. No text before or after.\n\n"
+    "Message: {text}"
+)
+
+async def _llm_pre_classify(text: str) -> str:
+    """
+    Run LLM pre-classification on the user message.
+    Returns one of: "weather", "route", "accommodation", "emotional", "none".
+    Always returns "none" on any failure — never raises.
+    """
+    import json
+    try:
+        from llm.groq_client import groq_client
+        prompt = _PRE_CLASSIFIER_PROMPT.format(text=text[:500])
+        response = await groq_client.complete(
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=20,
+            temperature=0.0,
+        )
+        raw = response.text.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+        data = json.loads(raw)
+        label = data.get("pre_intent", "none").strip().lower()
+        if label in {"weather", "route", "accommodation", "emotional", "none"}:
+            return label
+        logger.warning(
+            "_llm_pre_classify: unexpected label — defaulting to none",
+            extra={"label": label, "text_preview": text[:60]},
+        )
+        return "none"
+    except Exception as exc:
+        logger.warning(
+            "_llm_pre_classify: failed — passing through to embedding classifier",
+            extra={"error": str(exc), "text_preview": text[:60]},
+        )
+        return "none"
 
 
 async def classify(
@@ -407,34 +385,29 @@ async def classify(
     """
     fallback = _build_result(Intent.QUESTION, 0.70, lang, text)
 
-    # ── pre-checks ────────────────────────────────────────────────────────────
-    text_lower = text.lower()
-
-    # Weather pre-check: short non-Latin queries can miss embedding classifier.
-    if any(s in text_lower for s in _WEATHER_SIGNALS):
-        logger.info("classify: weather pre-signal → WEATHER", extra={"lang": lang})
-        return _build_result(Intent.WEATHER, 0.85, lang, text)
-
-    # Route queries → SEARCH (real transit info via SerpAPI, not just driving distance).
-    if any(s in text_lower for s in _ROUTE_SIGNALS):
-        logger.info("classify: route pre-signal → SEARCH", extra={"lang": lang})
-        return _build_result(Intent.SEARCH, 0.87, lang, text)
-
-    # Emotional signals → EMOTIONAL (avoid classifying "пиздец" as SEARCH).
-    if any(s in text_lower for s in _EMOTIONAL_SIGNALS):
-        logger.info("classify: emotional pre-signal → EMOTIONAL", extra={"lang": lang})
-        return _build_result(Intent.EMOTIONAL, 0.82, lang, text)
-
-    # Accommodation signals → SEARCH (SerpAPI + anti-hallucination rule in SEARCH prompt).
-    # Must NOT fall to QUESTION (HYBRID mode → LLM invents hotel names).
-    if any(s in text_lower for s in _ACCOMMODATION_SIGNALS):
-        logger.info("classify: accommodation pre-signal → SEARCH", extra={"lang": lang})
-        return _build_result(Intent.SEARCH, 0.85, lang, text)
-
-    # Math keyword pre-check: short expressions may have low pgvector score.
+    # ── math pre-check (language-agnostic regex) ──────────────────────────────
+    # Runs before LLM pre-classifier: regex is instant, no I/O cost.
     if _MATH_PATTERN.search(text):
-        logger.info("classify: math keyword pre-signal → MATH", extra={"lang": lang})
+        logger.info("classify: math regex pre-check → MATH", extra={"lang": lang})
         return _build_result(Intent.MATH, 0.85, lang, text)
+
+    # ── LLM pre-classifier (language-agnostic, all 75 lingua languages) ───────
+    # Replaces hardcoded signal tuples. One fast LLM call covers any language.
+    # Failure → "none" → falls through to embedding classifier (never blocks).
+    pre_label = await _llm_pre_classify(text)
+    if pre_label == "weather":
+        logger.info("classify: LLM pre-check → WEATHER", extra={"lang": lang})
+        return _build_result(Intent.WEATHER, 0.85, lang, text)
+    if pre_label == "route":
+        logger.info("classify: LLM pre-check → SEARCH (route)", extra={"lang": lang})
+        return _build_result(Intent.SEARCH, 0.87, lang, text)
+    if pre_label == "accommodation":
+        logger.info("classify: LLM pre-check → SEARCH (accommodation)", extra={"lang": lang})
+        return _build_result(Intent.SEARCH, 0.85, lang, text)
+    if pre_label == "emotional":
+        logger.info("classify: LLM pre-check → EMOTIONAL", extra={"lang": lang})
+        return _build_result(Intent.EMOTIONAL, 0.82, lang, text)
+    # pre_label == "none" → fall through to embedding classifier
 
     if supabase is None or hf_client is None:
         logger.warning("classify called without supabase/hf_client — using fallback")
