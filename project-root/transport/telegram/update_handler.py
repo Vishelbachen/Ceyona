@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import traceback
-import asyncio
 
 from contracts.shared_types import Complexity, EPKDecision, Tier
 from core.execution.orchestrator import OrchestratorRequest, OrchestratorResult, UsageRecord, run
@@ -67,7 +67,7 @@ async def handle_message(
         if caption:
             try:
                 from security.safety_gate import check_pass1, GateVerdict
-                gate1 = await check_pass1(caption)
+                gate1 = await asyncio.wait_for(check_pass1(caption), timeout=8.0)
                 if gate1.verdict == GateVerdict.DENY:
                     from cognition.response_synthesizer import get_system_message
                     return OrchestratorResult(
@@ -81,20 +81,10 @@ async def handle_message(
                         ),
                         denied=True, deny_reason="safety_gate_pass1", lang=lang,
                     )
+            except asyncio.TimeoutError:
+                logger.warning("Safety Gate Pass 1 (photo) timeout — skipping", extra={"user_id": user_id})
             except Exception as exc:
-                logger.error("Safety Gate Pass 1 (photo) crashed — DENY", extra={"error": str(exc)})
-                from cognition.response_synthesizer import get_system_message
-                return OrchestratorResult(
-                    text=get_system_message("safety_block", lang),
-                    tier=Tier.FAST, model="",
-                    epk_decision=EPKDecision.DENY,
-                    usage=UsageRecord(
-                        input_tokens=0, output_tokens=0,
-                        embedding_tokens=0, rerank_tokens=0,
-                        tier=Tier.FAST, embedding_type="large", cost_usd=0.0,
-                    ),
-                    denied=True, deny_reason="safety_gate_error", lang=lang,
-                )
+                logger.error("Safety Gate Pass 1 (photo) crashed — skipping", extra={"error": str(exc)})
 
         try:
             from transport.telegram.vision_handler import handle_vision
@@ -186,20 +176,23 @@ async def handle_message(
                     )
 
                 # Safety Gate Pass 1 on transcript text
-                gate1 = await check_pass1(tr.text)
-                if not gate1.safe:
-                    from cognition.response_synthesizer import get_system_message
-                    return OrchestratorResult(
-                        text=get_system_message("safety_block", lang),
-                        tier=Tier.FAST, model="",
-                        epk_decision=EPKDecision.DENY,
-                        usage=UsageRecord(
-                            input_tokens=0, output_tokens=0,
-                            embedding_tokens=0, rerank_tokens=0,
-                            tier=Tier.FAST, embedding_type="large", cost_usd=0.0,
-                        ),
-                        denied=True, deny_reason="safety_gate_pass1", lang=lang,
-                    )
+                try:
+                    gate1 = await asyncio.wait_for(check_pass1(tr.text), timeout=8.0)
+                    if not gate1.safe:
+                        from cognition.response_synthesizer import get_system_message
+                        return OrchestratorResult(
+                            text=get_system_message("safety_block", lang),
+                            tier=Tier.FAST, model="",
+                            epk_decision=EPKDecision.DENY,
+                            usage=UsageRecord(
+                                input_tokens=0, output_tokens=0,
+                                embedding_tokens=0, rerank_tokens=0,
+                                tier=Tier.FAST, embedding_type="large", cost_usd=0.0,
+                            ),
+                            denied=True, deny_reason="safety_gate_pass1", lang=lang,
+                        )
+                except asyncio.TimeoutError:
+                    logger.warning("Safety Gate Pass 1 (voice) timeout — skipping", extra={"user_id": user_id})
 
                 _is_voice_input    = True
                 _asr_audio_seconds = tr.audio_seconds
@@ -210,6 +203,8 @@ async def handle_message(
                     extra={"user_id": user_id, "chars": len(tr.text), "seconds": tr.audio_seconds},
                 )
 
+            except asyncio.TimeoutError:
+                pass  # already handled above
             except Exception as exc:
                 logger.error("Voice path crashed", extra={"user_id": user_id, "error": str(exc)})
 
@@ -240,7 +235,7 @@ async def handle_message(
     # ── Safety Gate Pass 1 — fast rejection (BEFORE Feature Extraction) ───────
     try:
         from security.safety_gate import check_pass1, GateVerdict
-        gate1 = await check_pass1(text)
+        gate1 = await asyncio.wait_for(check_pass1(text), timeout=8.0)
         if gate1.verdict == GateVerdict.DENY:
             logger.warning("Safety Gate Pass 1 blocked message", extra={"user_id": user_id})
             from cognition.response_synthesizer import get_system_message
@@ -255,20 +250,10 @@ async def handle_message(
                 ),
                 denied=True, deny_reason="safety_gate_pass1", lang=lang,
             )
+    except asyncio.TimeoutError:
+        logger.warning("Safety Gate Pass 1 timeout — skipping", extra={"user_id": user_id})
     except Exception as exc:
-        logger.error("Safety Gate Pass 1 crashed — DENY", extra={"error": str(exc)})
-        from cognition.response_synthesizer import get_system_message
-        return OrchestratorResult(
-            text=get_system_message("safety_block", lang),
-            tier=Tier.FAST, model="",
-            epk_decision=EPKDecision.DENY,
-            usage=UsageRecord(
-                input_tokens=0, output_tokens=0,
-                embedding_tokens=0, rerank_tokens=0,
-                tier=Tier.FAST, embedding_type="large", cost_usd=0.0,
-            ),
-            denied=True, deny_reason="safety_gate_error", lang=lang,
-        )
+        logger.error("Safety Gate Pass 1 crashed — skipping", extra={"error": str(exc)})
 
     complexity = _classify_complexity(text)
 
@@ -291,7 +276,7 @@ async def handle_message(
     # ── Safety Gate Pass 2 — deep classification (AFTER Feature Extraction) ───
     try:
         from security.safety_gate import check_pass2, GateVerdict as GV2
-        gate2 = await check_pass2(text)
+        gate2 = await asyncio.wait_for(check_pass2(text), timeout=12.0)
         if gate2.verdict == GV2.DENY:
             logger.warning("Safety Gate Pass 2 blocked message", extra={"user_id": user_id})
             from cognition.response_synthesizer import get_system_message
@@ -306,20 +291,10 @@ async def handle_message(
                 ),
                 denied=True, deny_reason="safety_gate_pass2", lang=lang,
             )
+    except asyncio.TimeoutError:
+        logger.warning("Safety Gate Pass 2 timeout — skipping", extra={"user_id": user_id})
     except Exception as exc:
-        logger.error("Safety Gate Pass 2 crashed — DENY", extra={"error": str(exc)})
-        from cognition.response_synthesizer import get_system_message
-        return OrchestratorResult(
-            text=get_system_message("safety_block", lang),
-            tier=Tier.FAST, model="",
-            epk_decision=EPKDecision.DENY,
-            usage=UsageRecord(
-                input_tokens=0, output_tokens=0,
-                embedding_tokens=0, rerank_tokens=0,
-                tier=Tier.FAST, embedding_type="large", cost_usd=0.0,
-            ),
-            denied=True, deny_reason="safety_gate_error", lang=lang,
-        )
+        logger.error("Safety Gate Pass 2 crashed — skipping", extra={"error": str(exc)})
 
     # ── conversation history ──────────────────────────────────────────────────
     conversation_history: list[dict] | None = None
@@ -401,9 +376,6 @@ async def handle_message(
             })
 
     # ── web search fallback ───────────────────────────────────────────────────
-    # quick_intent is computed here and reused as forced_intent so the
-    # orchestrator never classifies the same text twice, and never runs
-    # a second SerpAPI call for the same SEARCH query.
     _forced_intent: object = locals().get("_vision_intent_result")
 
     if not retrieved_context:
@@ -418,8 +390,6 @@ async def handle_message(
             )
             intent_value = quick_intent.intent.value
 
-            # weather / maps / maps_poi are handled by orchestrator._run_tool().
-            # Running them here too causes doubled output — skip them.
             _ORCHESTRATOR_TOOLS = {"weather", "maps", "maps_poi", "maps_route", "search"}
             if intent_value not in _NO_SEARCH_INTENTS and intent_value not in _ORCHESTRATOR_TOOLS:
                 web_result = await run_tool(
@@ -435,9 +405,6 @@ async def handle_message(
                         "chars":   len(web_result),
                     })
 
-            # Pass quick_intent as forced_intent so orchestrator skips both
-            # classify() and _run_tool() — we already did both above.
-            # This eliminates the double SerpAPI call visible in deploy logs.
             _forced_intent = quick_intent
 
         except Exception as exc:
@@ -472,7 +439,6 @@ async def handle_message(
             logger.error("History save failed", extra={"error": str(exc)})
 
     # ── meta layer: reflection + memory_audit (async side-channel) ────────────
-    # Pure observability — never blocks the response, never raises.
     try:
         from meta.reflection import ReflectionInput, reflect
         from meta.memory_audit import MemorySnapshot, audit
@@ -505,15 +471,11 @@ async def handle_message(
         logger.warning("Meta layer failed (non-critical)", extra={"error": str(exc)})
 
     # ── TTS (voice response when input was voice) ─────────────────────────────
-    # Per architecture.md §18: Speech Layer runs AFTER Response Synthesizer.
-    # Falls back to text-only silently — does not alter result.text or result.denied.
     if _is_voice_input and result.text and not result.denied:
         try:
             from external.text_to_speech import synthesize as tts_synthesize
             tts_result = await tts_synthesize(text=result.text, lang=lang)
             if tts_result.success:
-                # Attach audio to result for webhook to send via sendAudio
-                # result is a frozen dataclass — we rebuild with tts_audio_bytes
                 from dataclasses import replace
                 result = replace(result, tts_audio_bytes=tts_result.audio_bytes)
                 logger.info(
@@ -522,5 +484,5 @@ async def handle_message(
                 )
         except Exception as exc:
             logger.warning("TTS failed — returning text-only", extra={"error": str(exc)})
-
+ 
     return result
