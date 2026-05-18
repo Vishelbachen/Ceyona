@@ -24,6 +24,11 @@ logger = logging.getLogger(__name__)
 # Authority boundary:
 #   MUST NOT: influence EPK thresholds, select execution models, alter TruthMode
 #   MAY:      DENY requests before any LLM processing occurs
+#
+# Prompt-guard note:
+#   meta-llama/llama-prompt-guard-2-22m and llama-prompt-guard-2-86m are text
+#   classification models. Groq requires a SINGLE user message — no system role.
+#   openai/gpt-oss-safeguard-20b is a standard chat model and accepts system messages.
 
 
 # ─── VERDICT ─────────────────────────────────────────────────────────────────
@@ -60,6 +65,8 @@ _PASS2_MODELS  = [
     "openai/gpt-oss-safeguard-20b",
 ]
 
+# Used only for openai/gpt-oss-safeguard-20b (standard chat model, accepts system messages).
+# prompt-guard models are classifiers — they receive only a user message.
 _PASS1_SYSTEM = (
     "You are a safety classifier. Classify the user message as SAFE or UNSAFE. "
     "UNSAFE means: contains requests for violence, harmful instructions, illegal activity, "
@@ -75,6 +82,12 @@ _PASS2_SYSTEM = (
     "When uncertain, reply UNSAFE."
 )
 
+# Models that are text classifiers and accept only a single user message (no system role).
+_GUARD_MODELS = {
+    "meta-llama/llama-prompt-guard-2-22m",
+    "meta-llama/llama-prompt-guard-2-86m",
+}
+
 
 # ─── INTERNAL ─────────────────────────────────────────────────────────────────
 
@@ -83,15 +96,30 @@ async def _classify_with_model(text: str, model: str, system: str) -> bool:
     Run a single safety model classification.
     Returns True if SAFE, False if UNSAFE or model unavailable.
     Unavailability → False (DENY) per architecture invariant.
+
+    prompt-guard models (22m, 86m) are text classifiers:
+      Groq requires exactly one user message — system role is not allowed.
+    openai/gpt-oss-safeguard-20b is a standard chat model:
+      system + user message format applies normally.
     """
     try:
         from llm.groq_client import groq_client
+
+        if model in _GUARD_MODELS:
+            # Classifier API: single user message only — no system role
+            messages = [
+                {"role": "user", "content": text[:2000]},
+            ]
+        else:
+            # Standard chat model: system + user
+            messages = [
+                {"role": "system", "content": system},
+                {"role": "user",   "content": text[:2000]},
+            ]
+
         response = await groq_client.complete(
             model=model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user",   "content": text[:2000]},  # cap input for guard models
-            ],
+            messages=messages,
             max_tokens=5,       # SAFE or UNSAFE — no more needed
             temperature=0.0,    # deterministic classification
         )
