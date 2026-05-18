@@ -3,8 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from llm.groq_client import groq_client, LLMResponse
-from llm.model_router import DEEP_AGENT_MODEL, route_max_tokens
+from llm.fallback_handler import complete_with_fallback
 from contracts.shared_types import Tier
 
 logger = logging.getLogger(__name__)
@@ -22,22 +21,24 @@ class AgentResult:
 
 async def run(messages: list[dict], temperature: float = 0.7) -> AgentResult:
     """
-    Deep agent — groq/compound (Agent Layer, models1.md §6).
+    Deep agent — Tier.GENERAL via complete_with_fallback (models1.md §6).
 
-    Uses compound directly via groq_client — NOT complete_with_fallback.
-    Agent Layer models have tool-selection authority; tier fallback cascade
-    is not appropriate here. If compound fails, coordinator handles fallback
-    to fast_agent.
+    Routing: llama-3.3-70b-versatile → qwen/qwen3-32b → openai/gpt-oss-20b.
+    Uses complete_with_fallback — full General Tier cascade with 413 protection
+    and qwen thinking=False enforcement.
 
-    Previously used complete_with_fallback(Tier.GENERAL) which routed to
-    llama-3.3-70b-versatile — correct for General Tier but wrong for Agent Layer.
-    groq/compound is a distinct capability (multi-step tool-use) not a tier model.
+    NOTE: groq/compound is registered as DEEP_AGENT_MODEL in model_router.py
+    and is the intended long-term target for this agent (multi-step tool-use).
+    It is NOT used here because compound models require Groq tool-use API
+    with a `tools` parameter — calling them as plain chat-completion produces
+    empty or error responses ("DeepAgent failed" in Sentry).
+    Revert to compound when Groq tool-use API stabilises.
+    Tracked in: architecture.md §27, models1.md §6.
     """
     try:
-        response: LLMResponse = await groq_client.complete(
-            model=DEEP_AGENT_MODEL,
+        response = await complete_with_fallback(
+            tier=Tier.GENERAL,
             messages=messages,
-            max_tokens=route_max_tokens(Tier.GENERAL),
             temperature=temperature,
         )
         return AgentResult(
