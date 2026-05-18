@@ -36,25 +36,37 @@ async def _maps(query: str, lang: str = "en") -> str:
     return maps_service.format_geocode(feature, lang=lang)
 
 
-async def _extract_poi_parts_via_llm(query: str) -> tuple[str, str]:
+async def _extract_poi_parts_via_llm(query: str) -> tuple[str, str, bool]:
     """
     Use Groq to extract (category, location) from a POI query.
-    Falls back to (query, query) so Mapbox still tries something.
+    Returns (category, location, is_navigation).
+
+    is_navigation=True means the LLM determined this is a routing/transit query,
+    not a POI lookup. The caller redirects to _search() in that case.
+    This is the language-agnostic guard: works for all 75 lingua languages
+    without any hardcoded signal strings.
+
+    Falls back to (query, query, False) on LLM/parse failure so the caller
+    can still attempt a Mapbox search rather than silently failing.
     """
     try:
         from llm.groq_client import groq_client
         prompt = (
-            "Extract the POI category and location from the following query. "
-            "Reply with a JSON object ONLY, no extra text, no markdown: "
-            '{"category": "...", "location": ""}. '
-            "RULES:\n"
+            "Analyze the following query and reply with a JSON object ONLY — "
+            "no markdown, no explanation.\n\n"
+            "If the query asks HOW TO GET FROM one place TO ANOTHER "
+            "(navigation, directions, transit, transport, routes, travel time, distance between two points): "
+            'reply {"is_navigation": true, "category": "", "location": ""}.\n\n'
+            "Otherwise extract the POI category and location:\n"
+            '{"is_navigation": false, "category": "...", "location": "..."}.\n\n'
+            "RULES for category/location (only when is_navigation=false):\n"
             "1. category = what the user is looking for (e.g. 'cheap hotels', 'restaurants', 'pharmacies', 'ATMs').\n"
             "2. location = the FULL city or area name suitable for geocoding. "
             "Never return just 'center', 'downtown', 'центр', 'here'. "
             "Always return the actual city name, e.g. 'Voronezh', 'Saint Petersburg city center'.\n"
             "3. Include price qualifiers (cheap, budget, luxury, дешёвые) in category, NOT in location.\n"
             "4. If you cannot determine a field, use empty string \"\".\n"
-            "Output JSON only. No explanation.\n\n"
+            "Output JSON only.\n\n"
             f"Query: {query}"
         )
         response = await groq_client.complete(
@@ -66,10 +78,19 @@ async def _extract_poi_parts_via_llm(query: str) -> tuple[str, str]:
         raw = response.text
         raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
         data = json.loads(raw)
+
+        if data.get("is_navigation"):
+            logger.info(
+                "_extract_poi_parts_via_llm: navigation intent detected — redirecting to search",
+                extra={"query": query[:80]},
+            )
+            return "", "", True
+
         category = data.get("category", "").strip()
         location = data.get("location", "").strip()
         if category or location:
-            return category or query, location or query
+            return category or query, location or query, False
+
     except Exception as exc:
         logger.warning("_extract_poi_parts_via_llm failed", extra={"error": str(exc)})
 
@@ -80,14 +101,25 @@ async def _extract_poi_parts_via_llm(query: str) -> tuple[str, str]:
         query.strip(), re.IGNORECASE
     )
     if m:
-        return m.group(1).strip(), m.group(2).strip()
+        return m.group(1).strip(), m.group(2).strip(), False
 
-    return query, query
+    return query, query, False
 
 
 async def _maps_poi(query: str, lang: str = "en") -> str:
     from external.maps import maps_service
-    category, location = await _extract_poi_parts_via_llm(query)
+    category, location, is_navigation = await _extract_poi_parts_via_llm(query)
+
+    # Guard: embedding classifier misrouted a navigation query as MAPS_POI.
+    # LLM detected the true intent — redirect to web search (language-agnostic).
+    # Works for all 75 lingua languages without hardcoded signal strings.
+    if is_navigation:
+        logger.info(
+            "_maps_poi: navigation query misrouted as POI — redirecting to search",
+            extra={"query": query[:80], "lang": lang},
+        )
+        return await _search(query, lang)
+
     feature = await maps_service.search_poi(
         category=category,
         location=location,
