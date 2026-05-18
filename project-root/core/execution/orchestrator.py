@@ -550,16 +550,33 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
         tier = select_tier(estimated)
 
         # ── tool-only path ────────────────────────────────────────────────────
-        # Also applies when SEARCH returns structured hotel/POI data (marked with
-        # the "=== ДАННЫЕ ИЗ ПОИСКА ===" header from format_results).
-        # In that case LLM must NOT touch the data — it will hallucinate additions.
-        _structured_search = (
+        # Applies when:
+        # 1. Intent is in _TOOL_INTENTS (WEATHER, MAPS, MAPS_POI, MAPS_ROUTE)
+        # 2. SEARCH returns data — always goes tool-only to prevent LLM hallucination.
+        #    LLM must NOT synthesise over search results — it adds hotels/facts
+        #    from training data that were not in the actual search output.
+        #
+        # BUG FIX: previously checked request.retrieved_context for the structured
+        # header, but for SEARCH intent retrieved_context is always empty on
+        # orchestrator entry (search runs via _run_tool → tool_output).
+        # Fix: check tool_output directly for the structured header.
+        # Also: ALL search results go tool-only regardless of structured header —
+        # organic results also must not be re-synthesised by LLM (hallucination risk).
+        _is_search_with_results = (
+            intent_result.intent == Intent.SEARCH
+            and bool(tool_output)
+        )
+        # For pre-grounded SEARCH (update_handler already ran search → retrieved_context):
+        _is_pregrounded_search = (
             intent_result.intent == Intent.SEARCH
             and bool(request.retrieved_context)
-            and "=== ДАННЫЕ ИЗ ПОИСКА" in request.retrieved_context
         )
-        # For structured search: use retrieved_context directly (set by update_handler)
-        _tool_data = request.retrieved_context if _structured_search else tool_output
+        _structured_search = _is_search_with_results or _is_pregrounded_search
+        _tool_data = (
+            request.retrieved_context if _is_pregrounded_search
+            else tool_output if _is_search_with_results
+            else None
+        )
         if (intent_result.intent in _TOOL_INTENTS or _structured_search) and _tool_data:
             logger.info("Tool-only path", extra={
                 "intent": intent_result.intent,
