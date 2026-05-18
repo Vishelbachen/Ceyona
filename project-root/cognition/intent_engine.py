@@ -325,6 +325,32 @@ _ROUTE_SIGNALS: tuple[str, ...] = (
     "كيف أصل", "من المطار", "إلى المركز",
 )
 
+# ─── ACCOMMODATION / POI SIGNALS ─────────────────────────────────────────────
+# Hotel/hostel/accommodation queries → SEARCH (SerpAPI finds real listings).
+# NOT QUESTION — QUESTION intent allows HYBRID synthesis → LLM hallucinates hotels.
+# NOT MAPS_POI — POI tool finds geo points, not accommodation availability.
+# These MUST go to SEARCH to hit the hotel/accommodation anti-hallucination rule
+# in the SEARCH system prompt (rule 4: only name hotels from sources).
+_ACCOMMODATION_SIGNALS: tuple[str, ...] = (
+    # Russian
+    "отель", "отели", "гостиница", "гостиницы", "хостел", "апартаменты",
+    "дешевое жилье", "дешёвое жильё", "где остановиться", "где переночевать",
+    "бюджетное жилье", "бюджетный отель", "мини-отель",
+    # English
+    "hotel", "hotels", "hostel", "motel", "accommodation", "guesthouse",
+    "where to stay", "cheap stay", "budget hotel", "inn",
+    # German
+    "hotel", "unterkunft", "hostel",
+    # French
+    "hôtel", "hébergement",
+    # Spanish
+    "hotel", "alojamiento", "hostal",
+    # Turkish
+    "otel", "konaklama",
+    # Arabic
+    "فندق", "فنادق", "سكن",
+)
+
 # ─── EMOTIONAL SIGNALS ────────────────────────────────────────────────────────
 # Short exclamatory / expressive messages → EMOTIONAL intent.
 # Avoids misclassifying "wtf", "пиздец", "OMG" as SEARCH or QUESTION.
@@ -398,6 +424,12 @@ async def classify(
     if any(s in text_lower for s in _EMOTIONAL_SIGNALS):
         logger.info("classify: emotional pre-signal → EMOTIONAL", extra={"lang": lang})
         return _build_result(Intent.EMOTIONAL, 0.82, lang, text)
+
+    # Accommodation signals → SEARCH (SerpAPI + anti-hallucination rule in SEARCH prompt).
+    # Must NOT fall to QUESTION (HYBRID mode → LLM invents hotel names).
+    if any(s in text_lower for s in _ACCOMMODATION_SIGNALS):
+        logger.info("classify: accommodation pre-signal → SEARCH", extra={"lang": lang})
+        return _build_result(Intent.SEARCH, 0.85, lang, text)
 
     # Math keyword pre-check: short expressions may have low pgvector score.
     if _MATH_PATTERN.search(text):
