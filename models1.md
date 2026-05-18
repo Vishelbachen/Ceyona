@@ -573,4 +573,7 @@ Cross-reference with model assignments above to verify no gaps.
 | meta-llama/llama-prompt-guard-2-86m | Safety Gate Pass 2 | §1 |
 | openai/gpt-oss-safeguard-20b | Safety Gate Pass 2 | §1 |
 | whisper-large-v3 | ASR primary | §12 |
-| whisper-large-v3-turbo | ASR fast | 
+| whisper-large-v3-turbo | ASR fast | §12 |
+| canopylabs/orpheus-v1-english | TTS English | §12 |
+| canopylabs/orpheus-arabic-saudi | TTS Arabic | §12 |
+| allam-2-7b | Multilingual + FAST tier | §2, §12 |
