@@ -8,7 +8,7 @@ from lingua import Language, LanguageDetectorBuilder
 from app.settings import settings
 from transport.telegram.auth_middleware import verify_update, verify_webhook_secret
 from transport.telegram.callback_handler import CallbackAction, parse_callback
-from transport.telegram.message_router import UpdateType, classify_update
+from transport.telegram.message_router import UpdateType, classify_update, extract_text
 from transport.telegram.update_handler import handle_message
 
 # Build detector once at import time (expensive operation)
