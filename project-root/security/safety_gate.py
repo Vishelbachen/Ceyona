@@ -26,9 +26,10 @@ logger = logging.getLogger(__name__)
 #   MAY:      DENY requests before any LLM processing occurs
 #
 # Prompt-guard note:
-#   meta-llama/llama-prompt-guard-2-22m and llama-prompt-guard-2-86m are text
-#   classification models. Groq requires a SINGLE user message — no system role.
-#   openai/gpt-oss-safeguard-20b is a standard chat model and accepts system messages.
+#   meta-llama/llama-prompt-guard-2-22m and llama-prompt-guard-2-86m are BERT-based
+#   classifiers. Groq requires a SINGLE user message — no system role.
+#   They return "BENIGN" or "MALICIOUS" (not "SAFE"/"UNSAFE").
+#   openai/gpt-oss-safeguard-20b is a standard chat model: system + user, returns "SAFE"/"UNSAFE".
 
 
 # ─── VERDICT ─────────────────────────────────────────────────────────────────
@@ -59,8 +60,8 @@ class GateResult:
 
 # ─── MODEL ASSIGNMENTS ────────────────────────────────────────────────────────
 
-_PASS1_MODEL   = "meta-llama/llama-prompt-guard-2-22m"
-_PASS2_MODELS  = [
+_PASS1_MODEL  = "meta-llama/llama-prompt-guard-2-22m"
+_PASS2_MODELS = [
     "meta-llama/llama-prompt-guard-2-86m",
     "openai/gpt-oss-safeguard-20b",
 ]
@@ -82,7 +83,7 @@ _PASS2_SYSTEM = (
     "When uncertain, reply UNSAFE."
 )
 
-# Models that are text classifiers and accept only a single user message (no system role).
+# BERT-based classifier models: single user message, return "BENIGN" or "MALICIOUS"
 _GUARD_MODELS = {
     "meta-llama/llama-prompt-guard-2-22m",
     "meta-llama/llama-prompt-guard-2-86m",
@@ -94,13 +95,17 @@ _GUARD_MODELS = {
 async def _classify_with_model(text: str, model: str, system: str) -> bool:
     """
     Run a single safety model classification.
-    Returns True if SAFE, False if UNSAFE or model unavailable.
+    Returns True if SAFE/BENIGN, False if UNSAFE/MALICIOUS or model unavailable.
     Unavailability → False (DENY) per architecture invariant.
 
-    prompt-guard models (22m, 86m) are text classifiers:
-      Groq requires exactly one user message — system role is not allowed.
+    prompt-guard models (22m, 86m) are BERT classifiers:
+      - Groq requires exactly one user message — no system role.
+      - Response is "BENIGN" or "MALICIOUS" (not "SAFE"/"UNSAFE").
+      - They detect only prompt injection and jailbreak attacks.
+
     openai/gpt-oss-safeguard-20b is a standard chat model:
-      system + user message format applies normally.
+      - system + user message format.
+      - Response is "SAFE" or "UNSAFE".
     """
     try:
         from llm.groq_client import groq_client
@@ -120,11 +125,18 @@ async def _classify_with_model(text: str, model: str, system: str) -> bool:
         response = await groq_client.complete(
             model=model,
             messages=messages,
-            max_tokens=5,       # SAFE or UNSAFE — no more needed
+            max_tokens=5,       # BENIGN/MALICIOUS or SAFE/UNSAFE — no more needed
             temperature=0.0,    # deterministic classification
         )
         verdict = response.text.strip().upper()
-        return verdict.startswith("SAFE")
+
+        if model in _GUARD_MODELS:
+            # prompt-guard returns "BENIGN" (safe) or "MALICIOUS" (block)
+            return verdict == "BENIGN"
+        else:
+            # gpt-oss-safeguard returns "SAFE" or "UNSAFE"
+            return verdict.startswith("SAFE")
+
     except Exception as exc:
         logger.error(
             "Safety Gate model unavailable — defaulting to DENY",
@@ -160,7 +172,7 @@ async def check_pass2(text: str) -> GateResult:
     """
     Safety Gate Pass 2 — deep classification.
     Uses llama-prompt-guard-2-86m AND gpt-oss-safeguard-20b in parallel.
-    BOTH must return SAFE for Pass 2 to PASS.
+    BOTH must return SAFE/BENIGN for Pass 2 to PASS.
     Runs AFTER Feature Extraction, BEFORE EPK.
     Unavailability of either model → DENY.
     """
@@ -186,7 +198,7 @@ async def check_pass2(text: str) -> GateResult:
 
     safe_86m, safe_safeguard = results
 
-    # Both must agree SAFE
+    # Both must agree SAFE/BENIGN
     if not safe_86m:
         logger.warning("Safety Gate Pass 2: DENY by 86m", extra={"model": _PASS2_MODELS[0]})
         return GateResult(
