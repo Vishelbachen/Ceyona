@@ -1,5 +1,6 @@
 import logging
 import re
+from io import BytesIO
 
 import httpx
 from fastapi import APIRouter, Header, HTTPException, Request, status
@@ -39,6 +40,45 @@ async def _send_message(chat_id: int, text: str) -> None:
         )
 
 
+async def _send_audio(chat_id: int, audio_bytes: bytes) -> bool:
+    """
+    Send TTS audio to Telegram.
+
+    Returns:
+        bool: True if upload succeeded, False otherwise.
+    """
+    if not audio_bytes:
+        return False
+
+    try:
+        async with httpx.AsyncClient() as client:
+            files = {
+                "voice": (
+                    "response.ogg",
+                    BytesIO(audio_bytes),
+                    "audio/ogg",
+                )
+            }
+
+            data = {
+                "chat_id": str(chat_id),
+            }
+
+            response = await client.post(
+                f"{_TELEGRAM_API}/sendVoice",
+                data=data,
+                files=files,
+                timeout=30.0,
+            )
+
+            response.raise_for_status()
+            return True
+
+    except Exception:
+        logger.exception("Failed to send Telegram voice message")
+        return False
+
+
 async def _send_message_with_topup(chat_id: int, text: str, lang: str = "en") -> None:
     """Send message with an inline 'Top Up' button linking to TON wallet."""
     if not text:
@@ -68,28 +108,6 @@ async def _send_message_with_topup(chat_id: int, text: str, lang: str = "en") ->
             },
             timeout=10.0,
         )
-
-
-
-async def _send_voice(chat_id: int, audio_bytes: bytes, caption: str = "") -> bool:
-    """
-    Send a voice message via Telegram sendVoice.
-    Returns True on success, False on failure.
-    Falls back gracefully — caller sends text if this returns False.
-    """
-    try:
-        import io
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{_TELEGRAM_API}/sendVoice",
-                data={"chat_id": chat_id, "caption": caption},
-                files={"voice": ("voice.ogg", io.BytesIO(audio_bytes), "audio/ogg")},
-                timeout=30.0,
-            )
-            return response.status_code == 200
-    except Exception as exc:
-        logger.warning("_send_voice failed", extra={"error": str(exc)})
-        return False
 
 
 async def _answer_callback(callback_query_id: str, text: str = "") -> None:
@@ -361,16 +379,13 @@ async def telegram_webhook(
             except Exception:
                 pass  # non-critical, never block response
 
-            # TTS audio: send voice message if audio was synthesized, text as fallback
-            tts_bytes = getattr(result, "tts_audio_bytes", b"")
-            if tts_bytes:
-                sent_audio = await _send_voice(chat_id, tts_bytes)
-                if not sent_audio:
-                    # sendVoice failed — fall back to text silently
-                    logger.warning("sendVoice failed — falling back to text", extra={"chat_id": chat_id})
-                    await _send_message(chat_id, result.text)
-            else:
-                await _send_message(chat_id, result.text)
+            if result.tts_audio_bytes:
+        sent = await _send_audio(chat_id, result.tts_audio_bytes)
+
+        if not sent:
+            await _send_message(chat_id, result.text)
+    else:
+        await _send_message(chat_id, result.text)
 
     elif update_type == UpdateType.CALLBACK_QUERY:
         ctx = parse_callback(update, user_id)
