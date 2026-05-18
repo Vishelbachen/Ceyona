@@ -157,22 +157,23 @@ meta-llama/llama-4-scout-17b-16e-instruct     → long-context transformation (5
 
 ```
 groq/compound      → REGISTERED as DEEP_AGENT_MODEL in model_router.py
-                     NOT YET WIRED — deep_agent.py dispatches via complete_with_fallback(Tier.GENERAL)
-                     Current models: llama-3.3-70b-versatile → qwen/qwen3-32b → gpt-oss-20b
+                     NOT YET WIRED — requires `tools` parameter (Groq tool-use API)
+                     Calling as plain chat-completion → empty/error response
+                     Sentry: "DeepAgent failed" confirmed root cause
 
 groq/compound-mini → REGISTERED as FAST_AGENT_MODEL in model_router.py
-                     NOT YET WIRED — fast_agent.py dispatches via complete_with_fallback(Tier.FAST)
-                     Current model: llama-3.1-8b-instant
+                     NOT YET WIRED — same reason as compound
+                     Sentry: "FastAgent failed" confirmed root cause
 ```
 
-**Actual agent dispatch (current code):**
+**Actual agent dispatch (current code — ROLLBACK May 2026):**
 ```
-fast_agent.py     → Tier.FAST via complete_with_fallback()   — conversation, simple tasks
-deep_agent.py     → Tier.GENERAL via complete_with_fallback() — code, analysis, math, search
-creative_agent.py → Tier.GENERAL via complete_with_fallback(), temperature=0.9 — creative writing
+fast_agent.py     → Tier.FAST via complete_with_fallback()    — llama-3.1-8b-instant ✅
+deep_agent.py     → Tier.GENERAL via complete_with_fallback() — llama-3.3-70b-versatile cascade ✅
+creative_agent.py → Tier.GENERAL via complete_with_fallback(), temperature=0.9 ✅
 ```
 
-**compound wiring priority:** wire when Groq tool-use API stabilizes.
+**compound wiring priority:** wire when Groq tool-use API stabilises AND is tested with `tools` param.
 **Role:** tool selection authority, multi-step execution.
 **No policy authority.** No system governance. No Heavy Tier activation.
 
@@ -572,7 +573,4 @@ Cross-reference with model assignments above to verify no gaps.
 | meta-llama/llama-prompt-guard-2-86m | Safety Gate Pass 2 | §1 |
 | openai/gpt-oss-safeguard-20b | Safety Gate Pass 2 | §1 |
 | whisper-large-v3 | ASR primary | §12 |
-| whisper-large-v3-turbo | ASR fast | §12 |
-| canopylabs/orpheus-v1-english | TTS English | §12 |
-| canopylabs/orpheus-arabic-saudi | TTS Arabic | §12 |
-| allam-2-7b | Multilingual + FAST tier | §2, §12 |
+| whisper-large-v3-turbo | ASR fast | 
