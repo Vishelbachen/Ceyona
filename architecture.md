@@ -690,15 +690,17 @@ all other non-Latin via `llama-3.3-70b-versatile`, Latin-dominant → passthroug
 Integrated into `update_handler.py` after Safety Gate Pass 2. ✅
 
 ### Agent Layer — Compound Models (§6, §16)
-**Status: REGISTERED, NOT YET WIRED**
+**Status: REGISTERED, NOT YET WIRED — ROLLBACK DEPLOYED (May 2026)**
 `groq/compound` and `groq/compound-mini` are registered in `model_router.py`
-and `groq_client._CONTEXT_CHAR_LIMITS`. Agents currently dispatch via
-`complete_with_fallback(Tier.*)` (standard tier models), not compound tool-use models.
-Actual agents in use: `fast_agent.py` (Tier.FAST), `deep_agent.py` (Tier.GENERAL),
-`creative_agent.py` (Tier.GENERAL, temperature=0.9) — all via complete_with_fallback().
-`models1.md §6` updated to reflect NOT YET WIRED status.
-Impact: agents lack native tool-selection authority defined in models1.md §6.
-Priority: wire compound models when Groq tool-use API stabilizes.
+and `groq_client._CONTEXT_CHAR_LIMITS`.
+Root cause of failure: compound models require Groq tool-use API (`tools` parameter).
+Calling them as plain chat-completion (without `tools`) produces empty/error responses.
+Sentry evidence: repeated "DeepAgent failed" / "FastAgent failed" errors.
+Fix deployed: `fast_agent.py` → `complete_with_fallback(Tier.FAST)` ✅
+`deep_agent.py` → `complete_with_fallback(Tier.GENERAL)` ✅
+`creative_agent.py` → already used `complete_with_fallback(Tier.GENERAL)` ✅
+Actual agents in use: Tier.FAST (llama-3.1-8b-instant), Tier.GENERAL (llama-3.3-70b-versatile cascade).
+Priority: re-wire to compound models when Groq tool-use API stabilises and is tested.
 
 ### Speech Layer (§12)
 **Status: IMPLEMENTED (ASR + TTS), BILLING NOT YET WIRED**
