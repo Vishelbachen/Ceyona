@@ -194,10 +194,17 @@ async def check_pass2(text: str) -> GateResult:
     stripped = text.strip()
 
     # ── Fast-path: short messages almost never contain unambiguous harm ───────
-    # Threshold: 80 chars (fits "Йо, как оно?", "/balance", casual slang, etc.)
+    # Threshold: 160 chars — covers typical user queries including transport,
+    # hotel searches, weather, greetings, and balance checks.
+    # 80-char threshold caused false-positives on legitimate multi-word queries
+    # (e.g. "Как добраться до центра в Нью-Йорке..." = 119 chars → went to
+    # gpt-oss-safeguard which occasionally misclassified transport questions).
+    # 160 chars still blocks structurally suspicious inputs — real harm requests
+    # (weapon synthesis, jailbreaks) typically require specific technical language
+    # that triggers _HARM_MARKERS regardless of length.
     # Structural harm markers that override the fast-path even for short input:
     _HARM_MARKERS = ("bomb", "weapon", "synthesize", "manufacture", "exploit", "jailbreak")
-    is_short = len(stripped) <= 80
+    is_short = len(stripped) <= 160
     has_harm_marker = any(m in stripped.lower() for m in _HARM_MARKERS)
 
     if is_short and not has_harm_marker:
