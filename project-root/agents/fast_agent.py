@@ -3,8 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from llm.groq_client import groq_client, LLMResponse
-from llm.model_router import FAST_AGENT_MODEL, route_max_tokens
+from llm.fallback_handler import complete_with_fallback
 from contracts.shared_types import Tier
 
 logger = logging.getLogger(__name__)
@@ -22,21 +21,23 @@ class AgentResult:
 
 async def run(messages: list[dict], temperature: float = 0.7) -> AgentResult:
     """
-    Fast agent — groq/compound-mini (Agent Layer, models1.md §6).
+    Fast agent — Tier.FAST via complete_with_fallback (models1.md §6).
 
-    Uses compound-mini directly via groq_client — NOT complete_with_fallback.
-    Agent Layer models have tool-selection authority; tier fallback cascade
-    is not appropriate here. If compound-mini fails, coordinator handles fallback.
+    Routing: llama-3.1-8b-instant (primary, Fast Tier).
+    Uses complete_with_fallback — standard tier cascade with 413 protection.
 
-    Previously used complete_with_fallback(Tier.FAST) which routed to
-    llama-3.1-8b-instant — correct for Fast Tier but wrong for Agent Layer.
-    compound-mini is a distinct capability (tool-use) not a tier replacement.
+    NOTE: groq/compound-mini is registered as FAST_AGENT_MODEL in model_router.py
+    and is the intended long-term target for this agent (tool-use authority).
+    It is NOT used here because compound models require Groq tool-use API
+    with a `tools` parameter — calling them as plain chat-completion produces
+    empty or error responses ("DeepAgent failed" / "FastAgent failed" in Sentry).
+    Revert to compound-mini when Groq tool-use API stabilises.
+    Tracked in: architecture.md §27, models1.md §6.
     """
     try:
-        response: LLMResponse = await groq_client.complete(
-            model=FAST_AGENT_MODEL,
+        response = await complete_with_fallback(
+            tier=Tier.FAST,
             messages=messages,
-            max_tokens=route_max_tokens(Tier.FAST),
             temperature=temperature,
         )
         return AgentResult(
