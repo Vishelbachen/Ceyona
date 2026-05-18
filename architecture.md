@@ -720,10 +720,13 @@ non-empty → sendVoice (Telegram voice message)
 sendVoice failure → silent fallback to _send_message() (text)
 empty → text only ✅
 Speech Billing
-Status: SPECIFIED, NOT YET WIRED
-UsageEntry fields audio_seconds, tts_characters, tool_calls declared.
-Actual billing in usage_meter.record() for speech paths not yet wired.
-Priority: wire before speech features go to production.
+Status: PARTIAL FIX DEPLOYED (May 2026)
+UsageEntry fields audio_seconds, tts_characters, tool_calls declared. ✅
+usage_meter.record() now writes extended fields only when non-zero;
+on PGRST204 (schema cache miss) retries with core fields only — billing survives migration gap. ✅
+Supabase schema: columns NOT YET ADDED to usage_log table.
+Action required: run migrate_usage_log.sql in Supabase SQL Editor to fully close this gap.
+After migration: remove PGRST204 fallback path, update this status to IMPLEMENTED ✅.
 policy_registry.py
 Status: IMPLEMENTED — LIVE (May 2026)
 Previously dead code — nobody imported it. Now the true single source of truth:
