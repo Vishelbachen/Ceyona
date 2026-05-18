@@ -182,9 +182,8 @@ async def check_pass2(text: str) -> GateResult:
     on non-English casual text — removed from blocking path.
     Runs AFTER Feature Extraction, BEFORE EPK.
 
-    Fast-path: messages under 80 chars with no structural harm indicators
-    are passed through immediately without a model call — these are
-    overwhelmingly casual conversation and greetings.
+    No keyword pre-checks, no character-length heuristics.
+    gpt-oss-safeguard-20b is the sole classification authority for all input.
 
     Exception policy: model unavailability / timeout → PASS (not DENY).
     Safety Gate Pass 1 is already non-blocking. Hard DENY on Pass 2
@@ -193,28 +192,11 @@ async def check_pass2(text: str) -> GateResult:
     """
     stripped = text.strip()
 
-    # ── Fast-path: short messages almost never contain unambiguous harm ───────
-    # Threshold: 160 chars — covers typical user queries including transport,
-    # hotel searches, weather, greetings, and balance checks.
-    # 80-char threshold caused false-positives on legitimate multi-word queries
-    # (e.g. "Как добраться до центра в Нью-Йорке..." = 119 chars → went to
-    # gpt-oss-safeguard which occasionally misclassified transport questions).
-    # 160 chars still blocks structurally suspicious inputs — real harm requests
-    # (weapon synthesis, jailbreaks) typically require specific technical language
-    # that triggers _HARM_MARKERS regardless of length.
-    # Structural harm markers that override the fast-path even for short input:
-    _HARM_MARKERS = ("bomb", "weapon", "synthesize", "manufacture", "exploit", "jailbreak")
-    is_short = len(stripped) <= 160
-    has_harm_marker = any(m in stripped.lower() for m in _HARM_MARKERS)
-
-    if is_short and not has_harm_marker:
-        logger.debug(
-            "Safety Gate Pass 2: short-message fast-pass",
-            extra={"len": len(stripped)},
-        )
-        return GateResult(verdict=GateVerdict.PASS, model_used="pass2-fastpath")
-
-    # ── Full classification for longer or structurally suspicious messages ─────
+    # ── Full classification — all messages go to gpt-oss-safeguard-20b ─────
+    # No keyword pre-checks, no character-length heuristics.
+    # gpt-oss-safeguard-20b with _PASS2_SYSTEM is the sole classification
+    # authority. Heuristics cause false-positives ("bomb squad", "synthesize
+    # protein") and add no real protection that the model doesn't already provide.
     try:
         safe = await _classify_with_model(stripped, _PASS2_MODELS[1], _PASS2_SYSTEM)
     except Exception as exc:
