@@ -10,6 +10,8 @@ from cognition.response_synthesizer import SynthesisInput, synthesize
 from context.assembler import resolve_truth_mode
 from contracts.shared_types import Complexity, EPKDecision, Tier, TruthMode
 from core.kernel.cost_model import actual_cost, estimate_cost, estimate_output_tokens
+from observability.metrics import increment, gauge
+from observability.tracing import trace
 from core.kernel.decision_matrix import select_tier
 from core.kernel.execution_policy_kernel import EPKInput, evaluate
 from llm.heavy_input_shaper import ShaperInput, shape
@@ -224,15 +226,17 @@ async def _run_allow(
     strategy = select_strategy(intent_result.intent, tier)
     plan = plan_agents(intent_result.intent, tier, strategy)
 
-    coordination: CoordinationResult = await coordinate(
-        plan=plan,
-        messages=messages,
-        user_message=request.user_message,
-        temperature=strategy.temperature,
-        intent=intent_result.intent,
-        lang=lang,
-        tier=tier,
-    )
+    increment(f"orchestrator.tier.{tier.value.lower()}")
+    with trace("coordinator", tier=tier.value, intent=str(intent_result.intent)):
+        coordination: CoordinationResult = await coordinate(
+            plan=plan,
+            messages=messages,
+            user_message=request.user_message,
+            temperature=strategy.temperature,
+            intent=intent_result.intent,
+            lang=lang,
+            tier=tier,
+        )
 
     if coordination.blocked:
         return _denied_result(
@@ -296,15 +300,17 @@ async def _run_degraded(
     strategy = select_strategy(intent_result.intent, tier)
     plan = plan_agents(intent_result.intent, tier, strategy)
 
-    coordination: CoordinationResult = await coordinate(
-        plan=plan,
-        messages=messages,
-        user_message=request.user_message,
-        temperature=strategy.temperature,
-        intent=intent_result.intent,
-        lang=lang,
-        tier=tier,
-    )
+    increment(f"orchestrator.tier.{tier.value.lower()}")
+    with trace("coordinator", tier=tier.value, intent=str(intent_result.intent)):
+        coordination: CoordinationResult = await coordinate(
+            plan=plan,
+            messages=messages,
+            user_message=request.user_message,
+            temperature=strategy.temperature,
+            intent=intent_result.intent,
+            lang=lang,
+            tier=tier,
+        )
 
     if coordination.blocked:
         return _denied_result(
@@ -466,6 +472,9 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
         "balance": request.user_balance,
     })
 
+    increment("orchestrator.requests")
+    _run_start = __import__("time").perf_counter()
+
     try:
         # ── intent ───────────────────────────────────────────────────────────
         # Use pre-computed intent when available (e.g. from vision pipeline)
@@ -559,6 +568,8 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             "decision": epk_out.decision,
             "estimated_cost": f"{estimated:.6f}",
         })
+        increment(f"epk.decision.{epk_out.decision.value.lower()}")
+        gauge("epk.last_estimated_cost", estimated)
 
         if epk_out.decision == EPKDecision.DENY:
             return _denied_result(
@@ -652,6 +663,8 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
 
     except Exception as exc:
         logger.error("Orchestrator crashed", extra={"error": str(exc)}, exc_info=True)
+        increment("orchestrator.errors")
+        gauge("orchestrator.last_latency_ms", round((__import__("time").perf_counter() - _run_start) * 1000, 2))
         synthesis = synthesize(SynthesisInput(
             raw_text="",
             intent=None,
