@@ -122,15 +122,45 @@ async def retrieve(
         )
 
     # ── credibility weighting for memory documents ───────────────────────────
-    # Memory records don't have source URLs yet, so score_documents() is a
-    # pass-through. When MemoryRecord gains source_url, weighting activates.
+    # score_documents() is a pass-through today: MemoryRecord has no source_url
+    # yet (architecture.md §20, call site B — reserved).
+    # Logging the candidate count makes it observable when this activates.
+    pre_credibility_count = len(candidates)
     candidates = source_credibility.score_documents(candidates)
+    if len(candidates) != pre_credibility_count:
+        logger.info(
+            "source_credibility filtered memory candidates",
+            extra={"before": pre_credibility_count, "after": len(candidates)},
+        )
+    else:
+        logger.debug(
+            "source_credibility pass-through (no source_url on MemoryRecord yet)",
+            extra={"candidates": len(candidates)},
+        )
 
     # ── rerank if candidates available ────────────────────────────────────────
     if candidates:
-        reranked      = await cross_encoder.rerank(clean_query, candidates)
-        rerank_tokens = max(1, len(candidates) * len(clean_query) // 100)
-        top           = reranked[: query.rerank_top_k]
+        reranked = await cross_encoder.rerank(clean_query, candidates)
+        top      = reranked[: query.rerank_top_k]
+
+        # Fix §5.2: real rerank token-pair estimation.
+        # BGE-reranker-large scores (query, document) pairs.
+        # Approximation: 1 token ≈ 4 chars (conservative for mixed-language text).
+        # rerank_tokens = (query_tokens + avg_doc_tokens) * num_pairs
+        # This matches economic.md §1.5 billing unit: "per 1M token-pairs".
+        _query_tokens   = max(1, len(clean_query) // 4)
+        _candidate_texts = [c if isinstance(c, str) else c[0] for c in candidates]
+        _avg_doc_tokens  = max(1, sum(len(t) for t in _candidate_texts) // (4 * len(_candidate_texts)))
+        rerank_tokens    = (_query_tokens + _avg_doc_tokens) * len(candidates)
+        logger.debug(
+            "Rerank token estimation",
+            extra={
+                "query_tokens":   _query_tokens,
+                "avg_doc_tokens": _avg_doc_tokens,
+                "num_candidates": len(candidates),
+                "rerank_tokens":  rerank_tokens,
+            },
+        )
     else:
         top = []
 
