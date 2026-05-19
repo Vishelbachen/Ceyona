@@ -14,9 +14,10 @@ class TierConfig:
 @dataclass(frozen=True)
 class EPKConfig:
     """EPK thresholds — MUST match execution_policy_kernel.py exactly."""
-    deny_threshold:   float   # balance ≤ 0 or cost > balance → DENY
-    heavy_threshold:  float   # cost > this → HEAVY_REQUIRED
-    degrade_threshold: float  # cost > this → DEGRADED_MODE
+    deny_threshold:    float  # balance ≤ 0 or cost > balance → DENY
+    heavy_threshold:   float  # cost > this → HEAVY_REQUIRED
+    degrade_threshold: float  # cost > this → DEGRADED_MODE (synced with decision_matrix._GENERAL_CEILING)
+    fast_ceiling:      float  # below this → FAST tier (synced with decision_matrix._FAST_CEILING)
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,7 @@ RUNTIME = RuntimePolicy(
         deny_threshold=0.0001,   # effectively zero — synced with EPK._DENY_THRESHOLD
         heavy_threshold=0.008,   # synced with EPK._HEAVY_THRESHOLD
         degrade_threshold=0.003, # synced with EPK._DEGRADE_THRESHOLD and decision_matrix._GENERAL_CEILING
+        fast_ceiling=0.0005,     # synced with decision_matrix._FAST_CEILING
     ),
     tier_configs={
         Tier.FAST: TierConfig(
