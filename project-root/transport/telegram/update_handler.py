@@ -348,6 +348,27 @@ async def handle_message(
     except Exception as exc:
         logger.error("Safety Gate Pass 2 crashed — skipping", extra={"error": str(exc)})
 
+    # ── meta/analysis.py — pre-reasoning structural hints (§4 lifecycle) ────────
+    # Pure function, no I/O, never raises. Runs AFTER Pass 2 (normalized text),
+    # BEFORE orchestrator. Produces non-binding AnalysisReport for intent_engine.
+    # DEGRADED_MODE unknown at this point — lightweight=False (orchestrator will
+    # have EPK result; analysis runs pre-EPK with full mode as safe default).
+    _analysis_report = None
+    try:
+        from meta.analysis import analyse as _analyse
+        _analysis_report = _analyse(text, lightweight=False)
+        logger.debug(
+            "analysis.py complete",
+            extra={
+                "word_count":      _analysis_report.word_count,
+                "dominant_script": _analysis_report.dominant_script,
+                "hints":           [h.hint.value for h in _analysis_report.hints],
+            },
+        )
+    except Exception as exc:
+        # Non-critical — pipeline continues without hints
+        logger.warning("analysis.py failed (non-critical)", extra={"error": str(exc)})
+
     # ── conversation history ──────────────────────────────────────────────────
     conversation_history: list[dict] | None = None
     history_store = None
@@ -507,6 +528,7 @@ async def handle_message(
         rerank_tokens=rerank_tokens,
         forced_intent=_forced_intent,
         request_id=request_id,
+        analysis_report=_analysis_report,
     )
 
     result = await run(request)
