@@ -309,12 +309,28 @@ EPK authority сохранён: проверка структурно идент
 
 **Не сделано.** Минимальный test suite должен покрыть:
 - `core/kernel/` — EPK (Sealed layer), decision_matrix, cost_model
-- `security/safety_gate.py` — оба прохода non-blocking, PGRST204 fallback
+- `security/safety_gate.py` — оба прохода non-blocking
 - `meta/analysis.py` — только что подключён в pipeline
 - `payments/usage_meter.py` — PGRST204 fallback logic
 - `cognition/intent_engine.py` — analysis_hints integration
 
 **Action required:** создать `project-root/tests/` с минимальным pytest suite.
+
+### 11.3 ✅ `fly.toml` — обновлён до production machine spec (май 2026)
+~~`fly.toml` содержал `memory = '2gb'`, `cpu_kind = 'shared'` — не соответствовало
+фактической машине. При следующем `fly deploy` машина откатилась бы на 2GB.~~
+
+**Закрыто:** `fly.toml` обновлён:
+```toml
+[[vm]]
+  memory = '8gb'
+  cpu_kind = 'performance'
+  cpus = 1
+```
+Причина апгрейда: `healthcheck.py` (`full_health()`) выполняет Redis ping +
+Supabase query при каждом `/health` запросе (interval=30s). На 2GB shared CPU
+под нагрузкой healthcheck мог не укладываться в timeout=5s → машина перезапускалась.
+8GB performance-cpu-1x устраняет эту проблему.
 
 ---
 
@@ -358,6 +374,7 @@ EPK authority сохранён: проверка структурно идент
 | 10.4 | Нет request_id корреляции | ✅ Закрыто май 2026 |
 | 11.1 | ci.yml существует | ✅ |
 | 11.2 | Test suite отсутствует | 🔴 Не сделано |
+| 11.3 | fly.toml machine spec | ✅ Закрыто май 2026 |
 
 ### Открытые пункты по приоритету
 
