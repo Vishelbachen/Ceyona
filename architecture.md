@@ -1,5 +1,5 @@
 # CEYONA — CANONICAL ARCHITECTURE
-Version: 8.0 — Synchronized Edition
+Version: 8.1 — Safety Gate Observability Edition
 Status: Active Source of Truth
 Supersedes: architecture.md (all previous versions)
 
@@ -235,12 +235,12 @@ Canonical execution lifecycle:
 
 ```
 User Input
-→ Safety Gate (Pass 1 + Pass 2)
+→ Safety Gate (Pass 1 + Pass 2) [observability only — non-blocking]
 → Feature Extraction
 → Multilingual Normalization
 → EPK Policy Resolution
 → Memory + Embedding Retrieval + Reranker
-→ analysis.py (pre-reasoning hints)
+→ analysis.py (pre-reasoning hints) [NOT YET IMPLEMENTED — see §27]
 → Intent Classification
 → Execution Plan (via multi_agent_coordinator)
 → Model Resolution (via model_router)
@@ -269,7 +269,7 @@ EPK owns:
 - routing permissions
 - execution mode resolution
 - orchestration eligibility
-- safety activation
+- safety_agent activation (post-reasoning blocking authority)
 
 No runtime node may override EPK.
 
@@ -589,14 +589,18 @@ source_credibility MUST NOT:
 
 ## 21. SAFETY ACTIVATION
 
-**Safety Layer (input firewall):**
+**Safety Layer (input observability — NON-BLOCKING):**
 - meta-llama/llama-prompt-guard-2-22m (Pass 1, before Feature Extraction)
 - meta-llama/llama-prompt-guard-2-86m + openai/gpt-oss-safeguard-20b (Pass 2, after Feature Extraction)
-- deterministic, unavailability → DENY
-- distinct from safety_agent
+- both passes are non-blocking: log suspicious signals only, never DENY
+- rationale: prompt-guard models produce unacceptable false-positive rates on Russian,
+  Arabic, and short casual messages (e.g. "дешёвые отели в Воронеже", "В смысле?",
+  "Ты шутишь?") — blocking at this layer causes full outage for legitimate users
+- model unavailability → pass-through (observability degraded, execution continues)
 
-**safety_agent (post-reasoning semantic validation):**
+**safety_agent (post-reasoning semantic validation — SOLE BLOCKING AUTHORITY):**
 - runs inside coordinator, after primary reasoning
+- is the only layer that can block execution on safety grounds
 - activation rules:
   - ALLOW + use_consensus=True → runs before consensus
   - ALLOW + DEEP primary + no consensus → runs
@@ -605,7 +609,9 @@ source_credibility MUST NOT:
   - EMOTIONAL → skipped
   - default GENERAL (FAST primary, no fallback) → skipped
 
-These two systems do NOT duplicate each other.
+These two systems serve distinct roles and do NOT duplicate each other:
+- Safety Layer → input signal logging (observability only)
+- safety_agent → post-reasoning blocking authority (enforcement)
 
 ---
 
@@ -676,47 +682,63 @@ This section tracks known gaps between architecture specification and runtime im
 All gaps are intentional architectural decisions, not defects.
 
 ### Safety Gate (§21)
-**Status: IMPLEMENTED**
+**Status: OBSERVABILITY LAYER — NON-BLOCKING (May 2026)**
 `security/safety_gate.py` — Pass 1 (`llama-prompt-guard-2-22m`) and Pass 2
-(`llama-prompt-guard-2-86m` + `gpt-oss-safeguard-20b`) are implemented.
-Integrated into `update_handler.py`: Pass 1 before Feature Extraction,
-Pass 2 after Feature Extraction, before EPK.
-Unavailability → DENY with no fallback to ALLOW. ✅
+(`gpt-oss-safeguard-20b`) are integrated into `update_handler.py`.
+Both passes are non-blocking: suspicious signals are logged, execution always continues.
 
-### Multilingual Normalization (§23)
-**Status: IMPLEMENTED**
-`llm/multilingual_preprocessor.py` — Arabic via `allam-2-7b`,
-all other non-Latin via `llama-3.3-70b-versatile`, Latin-dominant → passthrough.
-Integrated into `update_handler.py` after Safety Gate Pass 2. ✅
+**Rationale for non-blocking design:**
+prompt-guard models and gpt-oss-safeguard-20b produce unacceptable false-positive rates
+on Russian, Arabic, and short casual text — blocking at input level causes full outage
+for legitimate users with no meaningful safety gain over what safety_agent provides.
 
-### Agent Layer — Compound Models (§6, §16)
-**Status: REGISTERED, NOT YET WIRED — ROLLBACK DEPLOYED (May 2026)**
-`groq/compound` and `groq/compound-mini` are registered in `model_router.py`
-and `groq_client._CONTEXT_CHAR_LIMITS`.
-Root cause of failure: compound models require Groq tool-use API (`tools` parameter).
-Calling them as plain chat-completion (without `tools`) produces empty/error responses.
+**Sole blocking authority: `safety_agent`** (post-reasoning, semantic, full context).
+Safety Gate is intentionally observability-only. This is not a defect — it is the
+correct architectural decision given the operational false-positive evidence.
+
+### analysis.py — pre-reasoning hints (§4 Execution Lifecycle, §11 META Layer)
+**Status: NOT YET IMPLEMENTED**
+`meta/analysis.py` — модуль существует и содержит логику pre-reasoning hints.
+В pipeline НЕ вызывается: ни orchestrator, ни update_handler, ни другие модули
+не импортируют analysis.py для inline вызова.
+
+Позиция по архитектуре: после Retrieval, перед Intent Classification.
+Активация по архитектуре: ALLOW/HEAVY → full, DEGRADED → lightweight, DENY → skip.
+Output: non-binding hints → intent_engine (zero authority, MAY be ignored).
+
+**Action required:** реализовать вызов analysis.py в pipeline или явно deprioritize.
+До реализации — lifecycle diagram (§4) содержит пометку [NOT YET IMPLEMENTED].
+Multilingual Normalization (§23)
+Status: IMPLEMENTED
+llm/multilingual_preprocessor.py — Arabic via allam-2-7b,
+all other non-Latin via llama-3.3-70b-versatile, Latin-dominant → passthrough.
+Integrated into update_handler.py after Safety Gate Pass 2. ✅
+Agent Layer — Compound Models (§6, §16)
+Status: REGISTERED, NOT YET WIRED — ROLLBACK DEPLOYED (May 2026)
+groq/compound and groq/compound-mini are registered in model_router.py
+and groq_client._CONTEXT_CHAR_LIMITS.
+Root cause of failure: compound models require Groq tool-use API (tools parameter).
+Calling them as plain chat-completion (without tools) produces empty/error responses.
 Sentry evidence: repeated "DeepAgent failed" / "FastAgent failed" errors.
-Fix deployed: `fast_agent.py` → `complete_with_fallback(Tier.FAST)` ✅
-`deep_agent.py` → `complete_with_fallback(Tier.GENERAL)` ✅
-`creative_agent.py` → already used `complete_with_fallback(Tier.GENERAL)` ✅
+Fix deployed: fast_agent.py → complete_with_fallback(Tier.FAST) ✅
+deep_agent.py → complete_with_fallback(Tier.GENERAL) ✅
+creative_agent.py → already used complete_with_fallback(Tier.GENERAL) ✅
 Actual agents in use: Tier.FAST (llama-3.1-8b-instant), Tier.GENERAL (llama-3.3-70b-versatile cascade).
 Priority: re-wire to compound models when Groq tool-use API stabilises and is tested.
-
-### Speech Layer (§12)
-**Status: IMPLEMENTED (ASR + TTS), BILLING NOT YET WIRED**
-`external/speech_to_text.py` — Whisper ASR via Groq API. ✅
-`external/text_to_speech.py` — Orpheus TTS via Groq API. ✅
-`transport/telegram/message_router.py` — `extract_voice()` / `has_voice()`. ✅
-`transport/telegram/update_handler.py` — voice path: download → ASR → Safety Gate Pass 1
-→ pipeline. TTS on response when `is_voice_input = True`. ✅
-**Gap:** `audio_seconds` and `tts_characters` are captured in TranscriptResult / SynthesisResult
-but not yet wired to `usage_meter.record()` for billing.
+Speech Layer (§12)
+Status: IMPLEMENTED (ASR + TTS), BILLING NOT YET WIRED
+external/speech_to_text.py — Whisper ASR via Groq API. ✅
+external/text_to_speech.py — Orpheus TTS via Groq API. ✅
+transport/telegram/message_router.py — extract_voice() / has_voice(). ✅
+transport/telegram/update_handler.py — voice path: download → ASR → Safety Gate Pass 1
+(observability only, non-blocking) → pipeline. TTS on response when is_voice_input = True. ✅
+Gap: audio_seconds and tts_characters are captured in TranscriptResult / SynthesisResult
+but not yet wired to usage_meter.record() for billing.
 Priority: wire before speech features go to production.
-
-### OrchestratorResult.tts_audio_bytes + Telegram sendVoice
-**Status: IMPLEMENTED (May 2026)**
-`OrchestratorResult` now declares `tts_audio_bytes: bytes = b""`. ✅
-`update_handler.py` sets field via `dataclasses.replace(result, tts_audio_bytes=...) after TTS synthesis. ✅
+OrchestratorResult.tts_audio_bytes + Telegram sendVoice
+Status: IMPLEMENTED (May 2026)
+OrchestratorResult now declares tts_audio_bytes: bytes = b"". ✅
+update_handler.py sets field via `dataclasses.replace(result, tts_audio_bytes=...) after TTS synthesis. ✅
 webhook.py now implements _send_voice() and checks tts_audio_bytes before sending:
 non-empty → sendVoice (Telegram voice message)
 sendVoice failure → silent fallback to _send_message() (text)
@@ -737,138 +759,111 @@ model_router.py reads RUNTIME.tier_configs[tier].max_output_tokens for _MAX_TOKE
 access_controller.py reads RUNTIME.default_balance_usd for _DEFAULT_BALANCE_USD ✅
 To change any threshold or default balance — edit policy_registry.py only.
 All three modules pick up the change automatically. No more scattered hardcoded values.
-
-
----
-
-## LAYER FREEZE STATUS (May 2026)
-
+LAYER FREEZE STATUS (May 2026)
 Статусы проставлены по результатам полного аудита кода (май 2026).
 Все файлы каждого слоя прочитаны и верифицированы против architecture.md v8.0.
-
-### Определения статусов
-
-**Sealed √** — authority boundary слоя (EPK, policy, kernel).
+Определения статусов
+Sealed √ — authority boundary слоя (EPK, policy, kernel).
 Изменения только через полное архитектурное ревью с обновлением architecture.md.
 Никаких правок "по удобству" или "для быстрого фикса".
-
-**Frozen √** — логика и интерфейсы стабильны. Слой соответствует архитектуре.
+Frozen √ — логика и интерфейсы стабильны. Слой соответствует архитектуре.
 Изменения допустимы только через явное архитектурное решение с обновлением §27.
-
-**Pending Fix** — известная проблема, слой не готов к заморозке.
+Pending Fix — известная проблема, слой не готов к заморозке.
 После фикса и верификации → переводится в Frozen √.
-
----
-
-### core/kernel/ — 🔒 Sealed √
-Файлы: `policy_registry.py`, `execution_policy_kernel.py`, `decision_matrix.py`, `cost_model.py`
+core/kernel/ — 🔒 Sealed √
+Файлы: policy_registry.py, execution_policy_kernel.py, decision_matrix.py, cost_model.py
 Верифицировано: май 2026.
 Все threshold'ы читаются из policy_registry.RUNTIME — нет хардкода.
 EPK порядок (DENY→HEAVY→DEGRADE→ALLOW) строго соответствует §5.
 MODEL_RATES синхронизированы с economic.md v5.1.
 MAX_OUTPUT_CAP ≠ _MAX_TOKENS — разные authority, правильно (§8).
-
-### security/ — ✅ Frozen √
-Файлы: `safety_gate.py`, `auth.py`, `rate_limiter.py`, `origin_guard.py`, `encryption.py`
-Верифицировано: май 2026. Фикс задеплоен (май 2026).
-Pass 1 non-blocking. Pass 2: новый промпт + short-message fastpath + exception→PASS.
-False-positive на русском/коротком тексте устранён.
-
-### core/execution/ — ✅ Frozen √
-Файлы: `orchestrator.py`
+security/ — ✅ Frozen √
+Файлы: safety_gate.py, auth.py, rate_limiter.py, origin_guard.py, encryption.py
+Верифицировано: май 2026.
+Safety Gate: оба прохода non-blocking (observability only) — см. §21 и §27 Safety Gate.
+Решение принято намеренно: false-positive rate на русском/арабском/коротком тексте
+делал blocking-режим неприемлемым для production. Единственный blocking authority — safety_agent.
+core/execution/ — ✅ Frozen √
+Файлы: orchestrator.py
 Верифицировано: май 2026.
 Не создаёт policy. _TOOL_INTENTS и _STRICT_INTENTS корректны.
 _structured_search путь предотвращает LLM-синтез поверх structured data.
 DENY/HEAVY/DEGRADED/ALLOW пути чистые, без скрытых ветвлений.
-
-### llm/ — ✅ Frozen √
-Файлы: `model_router.py`, `groq_client.py`, `fallback_handler.py`, `heavy_input_shaper.py`,
-`multilingual_preprocessor.py`, `prompt_engine.py`, `hf_client.py`
+llm/ — ✅ Frozen √
+Файлы: model_router.py, groq_client.py, fallback_handler.py, heavy_input_shaper.py,
+multilingual_preprocessor.py, prompt_engine.py, hf_client.py
 Верифицировано: май 2026.
 _MAX_TOKENS читается из policy_registry.RUNTIME.
 HF endpoint обновлён на router.huggingface.co.
 413-обработка с truncation retry в fallback_handler.
 qwen thinking=False применяется через requires_thinking_disabled().
-
-### agents/ — ✅ Frozen √
-Файлы: `fast_agent.py`, `deep_agent.py`, `creative_agent.py`, `safety_agent.py`, `consensus_engine.py`
+agents/ — ✅ Frozen √
+Файлы: fast_agent.py, deep_agent.py, creative_agent.py, safety_agent.py, consensus_engine.py
 Верифицировано: май 2026. Фикс задеплоен (май 2026).
 fast_agent и deep_agent откачены на complete_with_fallback(Tier.FAST/GENERAL).
-Причина: groq/compound требует `tools` параметр — plain chat-completion → пустой ответ.
+Причина: groq/compound требует tools параметр — plain chat-completion → пустой ответ.
 Sentry: "DeepAgent failed" устранён.
 Revert на compound/compound-mini: когда Groq tool-use API стабилизируется (см. §27 Agent Layer).
-
-### cognition/ — ✅ Frozen √
-Файлы: `intent_engine.py`, `reasoning_engine.py`, `multi_agent_coordinator.py`,
-`response_synthesizer.py`
+cognition/ — ✅ Frozen √
+Файлы: intent_engine.py, reasoning_engine.py, multi_agent_coordinator.py,
+response_synthesizer.py
 Верифицировано: май 2026.
 MATH self-correction: max 1 pass — bounded.
 safety_agent activation rules строго по §21.
 7-step synthesizer pipeline — порядок фиксирован, нарушение ломает cleanup chain.
-
-### meta/ — ✅ Frozen √
-Файлы: `analysis.py`, `correction.py`, `output_normalizer.py`, `reflection.py`, `memory_audit.py`
+meta/ — ✅ Frozen √ (кроме analysis.py — см. ниже)
+Файлы: analysis.py, correction.py, output_normalizer.py, reflection.py, memory_audit.py
 Верифицировано: май 2026.
-Все модули: pure functions, no I/O, never raise.
+Все модули (кроме analysis.py): pure functions, no I/O, never raise.
 correction и output_normalizer вызываются исключительно через synthesizer (steps 5, 6).
 Не имеют execution authority — только observability и cleanup.
-
-### payments/ — ✅ Frozen √
-Файлы: `usage_meter.py`, `access_controller.py`, `pricing_engine.py`, `ton_client.py`, `wallet_manager.py`
+analysis.py: NOT YET IMPLEMENTED — модуль существует, в pipeline не вызывается (см. §27 analysis.py gap).
+payments/ — ✅ Frozen √
+Файлы: usage_meter.py, access_controller.py, pricing_engine.py, ton_client.py, wallet_manager.py
 Верифицировано: май 2026. Фикс задеплоен (май 2026).
 usage_meter: PGRST204 fallback до выполнения migrate_usage_log.sql.
 После миграции: удалить fallback path, обновить статус Speech Billing в §27.
 _DEFAULT_BALANCE_USD читается из policy_registry.RUNTIME.
-
-### retrieval/ — ✅ Frozen √
-Файлы: `retrieval_engine.py`, `source_credibility.py`, `dense/`, `sparse/`, `reranker/`, `cache/`
+retrieval/ — ✅ Frozen √
+Файлы: retrieval_engine.py, source_credibility.py, dense/, sparse/, reranker/, cache/
 Верифицировано: май 2026.
 pgvector similarity_search теперь реально вызывается (BUG FIX — ранее candidates=[]).
 source_credibility активно блокирует BLOCKED/VERY_LOW — не advisory.
-
-### external/ — ✅ Frozen √
-Файлы: `search.py`, `maps.py`, `weather.py`, `web_tools.py`, `speech_to_text.py`, `text_to_speech.py`
+external/ — ✅ Frozen √
+Файлы: search.py, maps.py, weather.py, web_tools.py, speech_to_text.py, text_to_speech.py
 Верифицировано: май 2026.
 search.py: URL sanitization + _SUSPICIOUS_PATTERNS + structured header для tool-only пути.
 maps.py: _RHETORICAL_PATTERNS фильтр, LLM-based POI extraction, country bias.
 Speech billing: NOT YET WIRED (📋 gap, см. §27).
-
-### transport/telegram/ — ✅ Frozen √
-Файлы: `webhook.py`, `update_handler.py`, `vision_handler.py`, `message_router.py`,
-`auth_middleware.py`, `callback_handler.py`
+transport/telegram/ — ✅ Frozen √
+Файлы: webhook.py, update_handler.py, vision_handler.py, message_router.py,
+auth_middleware.py, callback_handler.py
 Верифицировано: май 2026.
 update_handler lifecycle строго соответствует §4 execution lifecycle.
 _send_voice() реализован, fallback на text при ошибке sendVoice.
-
-### memory/ — ✅ Frozen √
-Файлы: `conversation_history.py`, `supabase_store.py`, `vector_memory.py`
+memory/ — ✅ Frozen √
+Файлы: conversation_history.py, supabase_store.py, vector_memory.py
 Верифицировано: май 2026.
 _MAX_HISTORY_TOKENS=1200 (уменьшен с 2000 — исправлены 413 на llama-3.1-8b-instant).
 _trim_history_to_budget: drop oldest, keep newest.
-
-### context/, contracts/, i18n/, observability/, events/, infra/ — ✅ Frozen √
+context/, contracts/, i18n/, observability/, events/, infra/ — ✅ Frozen √
 Верифицировано: май 2026.
 resolve_truth_mode: STRICT/HYBRID/GENERATIVE маппинг корректен.
 shared_types: Tier, Complexity, EPKDecision, TruthMode — все enum'ы правильные.
 events/: parallel с memory write, независимые failure domains.
-
----
-
-### Что НЕ верифицировано в этом аудите
-- `vision_handler.py` — прочитан частично (ingress adapter, OUTSIDE EPK DAG по §15)
-- `i18n/strings.py` — не читался полностью (локализации, не архитектурная логика)
-- `infra/` — не читался (config_loader, env_validator, healthcheck — инфраструктура)
-- Тесты — в проекте отсутствуют (`.github/workflows/ci.yml` есть, но test suite не обнаружен)
-
----
-27. ANTI-DRIFT PRINCIPLES
+Что НЕ верифицировано в этом аудите
+vision_handler.py — прочитан частично (ingress adapter, OUTSIDE EPK DAG по §15)
+i18n/strings.py — не читался полностью (локализации, не архитектурная логика)
+infra/ — не читался (config_loader, env_validator, healthcheck — инфраструктура)
+Тесты — в проекте отсутствуют (.github/workflows/ci.yml есть, но test suite не обнаружен)
+ANTI-DRIFT PRINCIPLES
 Architecture MUST scale through:
 explicit contracts, bounded execution, centralized governance
 deterministic orchestration, synchronized policy layers
 Architecture MUST NOT scale through:
 emergent behavior, hidden coupling, implicit orchestration
 undocumented authority, runtime improvisation
-28. FINAL SYSTEM PRINCIPLE
+FINAL SYSTEM PRINCIPLE
 Ceyona is a governed orchestration system.
 It is NOT a collection of autonomous AI behaviors.
 The system succeeds only if:
