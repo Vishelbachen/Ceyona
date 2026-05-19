@@ -48,6 +48,7 @@ class CoordinationResult:
     output_tokens: int
     blocked: bool = False
     block_reason: str = ""
+    actual_tier: str = ""  # tier that actually executed (may be lower than requested on cascade)
 
 
 # ─── PLAN SELECTION ───────────────────────────────────────────────────────────
@@ -347,6 +348,7 @@ async def coordinate(
                     model=consensus.model,
                     input_tokens=consensus.input_tokens,
                     output_tokens=consensus.output_tokens,
+                    actual_tier=best_candidate.actual_tier,
                 )
 
         logger.warning("All consensus candidates failed — attempting fallback")
@@ -403,6 +405,7 @@ async def coordinate(
             model=primary_result.model,
             input_tokens=primary_result.input_tokens,
             output_tokens=primary_result.output_tokens,
+            actual_tier=primary_result.actual_tier,
         )
 
     # ── primary failed → fallback ─────────────────────────────────────────────
@@ -422,6 +425,7 @@ async def coordinate(
                 model=fallback_result.model,
                 input_tokens=fallback_result.input_tokens,
                 output_tokens=fallback_result.output_tokens,
+                actual_tier=fallback_result.actual_tier,
             )
 
         logger.error("Fallback agent also failed",
