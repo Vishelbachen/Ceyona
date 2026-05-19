@@ -241,12 +241,15 @@ async def _run_allow(
             epk_decision=epk_decision,
         )
 
+    # Use actual_tier for billing — may be lower than requested tier after cascade.
+    # audit.md §3.4 / §9.1: fallback cascade must not overbill at requested tier.
+    _billing_tier = coordination.actual_tier or tier
     cost = actual_cost(
         input_tokens=coordination.input_tokens,
         output_tokens=coordination.output_tokens,
         embedding_tokens=request.embedding_tokens,
         rerank_tokens=request.rerank_tokens,
-        tier=tier,
+        tier=_billing_tier,
         embedding_type=request.embedding_type,
     )
 
@@ -267,7 +270,7 @@ async def _run_allow(
             output_tokens=coordination.output_tokens,
             embedding_tokens=request.embedding_tokens,
             rerank_tokens=request.rerank_tokens,
-            tier=tier,
+            tier=_billing_tier,
             embedding_type=request.embedding_type,
             cost_usd=cost,
         ),
@@ -310,12 +313,15 @@ async def _run_degraded(
             epk_decision=epk_decision,
         )
 
+    # Use actual_tier for billing — may be lower than requested tier after cascade.
+    # audit.md §3.4 / §9.1: fallback cascade must not overbill at requested tier.
+    _billing_tier = coordination.actual_tier or tier
     cost = actual_cost(
         input_tokens=coordination.input_tokens,
         output_tokens=coordination.output_tokens,
         embedding_tokens=request.embedding_tokens,
         rerank_tokens=request.rerank_tokens,
-        tier=tier,
+        tier=_billing_tier,
         embedding_type=request.embedding_type,
     )
 
@@ -336,7 +342,7 @@ async def _run_degraded(
             output_tokens=coordination.output_tokens,
             embedding_tokens=request.embedding_tokens,
             rerank_tokens=request.rerank_tokens,
-            tier=tier,
+            tier=_billing_tier,
             embedding_type=request.embedding_type,
             cost_usd=cost,
         ),
@@ -403,12 +409,15 @@ async def _run_heavy(
             epk_decision=epk_decision,
         )
 
+    # Use actual_tier for billing — may be lower than requested tier after cascade.
+    # audit.md §3.4 / §9.1: fallback cascade must not overbill at requested tier.
+    _billing_tier = coordination.actual_tier or tier
     cost = actual_cost(
         input_tokens=coordination.input_tokens,
         output_tokens=coordination.output_tokens,
         embedding_tokens=request.embedding_tokens,
         rerank_tokens=request.rerank_tokens,
-        tier=tier,
+        tier=_billing_tier,
         embedding_type=request.embedding_type,
     )
 
@@ -429,7 +438,7 @@ async def _run_heavy(
             output_tokens=coordination.output_tokens,
             embedding_tokens=request.embedding_tokens,
             rerank_tokens=request.rerank_tokens,
-            tier=tier,
+            tier=_billing_tier,
             embedding_type=request.embedding_type,
             cost_usd=cost,
         ),
@@ -510,27 +519,17 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             )
 
         # ── estimate ─────────────────────────────────────────────────────────
-        # Adaptive tier for pre-execution cost estimation.
-        # SHORT casual messages (LOW complexity, < 500 tokens) → FAST rates.
-        # Everything else → GENERAL rates (conservative upper bound per §8).
-        # This eliminates false DEGRADED_MODE for short conversational queries
-        # without underestimating cost for complex or medium/high complexity requests.
-        _epk_tier = (
-            Tier.FAST
-            if request.complexity == Complexity.LOW and request.input_tokens < 500
-            else Tier.GENERAL
-        )
         estimated_output = estimate_output_tokens(
             request.input_tokens,
             request.complexity,
-            _epk_tier,
+            Tier.GENERAL,
         )
         estimated = estimate_cost(
             input_tokens=request.input_tokens,
             estimated_output_tokens=estimated_output,
             embedding_tokens=request.embedding_tokens,
             rerank_tokens=request.rerank_tokens,
-            tier=_epk_tier,
+            tier=Tier.GENERAL,
             embedding_type=request.embedding_type,
         )
 
