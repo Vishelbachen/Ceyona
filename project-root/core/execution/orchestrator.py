@@ -88,6 +88,8 @@ class OrchestratorResult:
     tts_audio_bytes: bytes = b""  # TTS audio — set by update_handler after speech synthesis
                                    # non-empty only when is_voice_input=True and TTS succeeded
                                    # webhook sends sendVoice when this is non-empty
+    audio_seconds: float = 0.0    # ASR billing: whisper transcription duration (set by update_handler)
+    tts_characters: int = 0        # TTS billing: orpheus character count (set by update_handler)
 
 
 # ─── INTERNAL HELPERS ─────────────────────────────────────────────────────────
