@@ -83,17 +83,19 @@ _GENERAL_CEILING = RUNTIME.epk.degrade_threshold   # 0.003
 ### 3.3 ✅ `update_handler.py` — web search authority перенесена в orchestrator (май 2026)
 ~~Двойной intent classification. `forced_intent` / `_already_grounded` coupling.~~
 
-**Закрыто (частично):** web search routing logic (`_NO_SEARCH_INTENTS`) перенесена из
-transport слоя в `core/execution/orchestrator.py`. `update_handler` больше не владеет
-решением о том, какие intents не требуют web search — это теперь явная ответственность
-orchestrator.
+**Закрыто:** web search routing logic (`_NO_SEARCH_INTENTS`) перенесена из transport слоя
+в `core/execution/orchestrator.py`. Web search вызывается внутри `orchestrator.run()`,
+после `classify()`, до EPK — authority однозначна.
+`update_handler` не выполняет intent classification и не вызывает web search.
 `forced_intent` / `_already_grounded` coupling устранён: `OrchestratorRequest` использует
 `vision_intent` (typed `IntentResult | None`) вместо неявных флагов.
-Верифицировано: `tests/test_orchestrator_web_search.py` — `_NO_SEARCH_INTENTS` живёт
-в orchestrator, отсутствует в `update_handler`.
 
-**Remaining gap (known):** полный вынос retrieval и pre-classification в отдельный
-pre-processor слой — отдельная задача, не блокирует production.
+Что остаётся в `update_handler` (Safety Gate, multilingual, analysis, history, retrieval) —
+это корректный pre-processing pipeline строго по architecture.md §4 execution lifecycle.
+Retrieval передаётся как `retrieved_context` в `OrchestratorRequest` — это параметр,
+не coupling. Вынос в отдельный pre-processor слой не даёт архитектурной выгоды.
+
+Верифицировано: `tests/test_orchestrator_web_search.py`.
 
 ### 3.4 ✅ `fallback_handler.py` — billing по actual_tier исправлен (май 2026)
 ~~Cascade HEAVY → GENERAL → FAST: billing шёл по изначальному tier, не фактическому.~~
@@ -359,7 +361,7 @@ Supabase query при каждом `/health` запросе (interval=30s). На
 | 2.3 | `decision_matrix` hardcoded пороги | ✅ Закрыто май 2026 |
 | 3.1 | EPK единственный policy authority | ✅ |
 | 3.2 | Coordinator — один call site | ✅ |
-| 3.3 | web search authority → orchestrator | ✅ Закрыто май 2026 |
+| 3.3 | web search authority → orchestrator, coupling устранён | ✅ Закрыто май 2026 |
 | 3.4 | fallback billing по actual_tier | ✅ Закрыто май 2026 |
 | 4.1 | MATH correction bounded | ✅ |
 | 4.2 | Consensus mutex с HEAVY | ✅ |
@@ -391,7 +393,6 @@ Supabase query при каждом `/health` запросе (interval=30s). На
 ### Открытые пункты по приоритету
 
 **⚠️ Known gaps (не блокируют production):**
-- §3.3 — полный вынос retrieval/pre-classification в pre-processor слой (remaining debt)
 - §4.3 — best_candidate по длине, не по качеству
 - §5.2 — rerank_tokens шумовая оценка
 - §5.3 — source_credibility pass-through для pgvector (активируется с source_url)
