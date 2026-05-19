@@ -141,18 +141,28 @@ Sustained arbitration outages теперь обнаруживаются чере
 ### 5.1 ✅ pgvector bug fix — исправлен
 `candidates` больше не всегда пустой. `similarity_search()` реально вызывается.
 
-### 5.2 ⚠️ `rerank_tokens` — шумовая оценка
-```python
-rerank_tokens = len(retrieval_result.documents) * 10
-```
-Константа 10 не связана с реальной длиной документов. Влияние минимальное
-(RERANK_RATE = $0.10/1M), но это шум в EPK вход, не реальный billing.
-**Статус:** low priority. Улучшение: считать реальные символы cross-encoder пар.
+### 5.2 ✅ `rerank_tokens` — реальная оценка (май 2026)
+~~`rerank_tokens = len(retrieval_result.documents) * 10`~~
+~~Константа 10 не связана с реальной длиной документов.~~
 
-### 5.3 ⚠️ `source_credibility.score_documents()` — pass-through для pgvector
-SerpAPI результаты фильтруются активно. pgvector результаты — нет.
-Асимметрия задокументирована в architecture.md §20 как "reserved".
-**Статус:** активируется автоматически когда `MemoryRecord` получит `source_url` поле.
+**Закрыто:** `retrieval_engine.py` считает реальные символы cross-encoder пар:
+```python
+_query_tokens    = max(1, len(clean_query) // 4)
+_avg_doc_tokens  = max(1, sum(len(t) for t in _candidate_texts) // (4 * len(_candidate_texts)))
+rerank_tokens    = (_query_tokens + _avg_doc_tokens) * len(candidates)
+```
+1 token ≈ 4 chars (conservative для mixed-language текста).
+Соответствует billing unit economic.md §1.5: per 1M token-pairs.
+
+### 5.3 ✅ `source_credibility.score_documents()` — активирован (май 2026)
+~~SerpAPI результаты фильтруются активно. pgvector результаты — нет.~~
+~~Асимметрия задокументирована в architecture.md §20 как "reserved".~~
+
+**Закрыто:**
+- Supabase: `ALTER TABLE memory ADD COLUMN source_url text DEFAULT NULL`
+- `MemoryRecord` получил поле `source_url: str | None = None`
+- `fetch_by_user()` и `similarity_search()` маппят `source_url` из БД
+- `score_documents()` в `retrieval_engine.py` активен — pass-through устранён
 
 ### 5.4 ✅ Retrieval при недоступном Redis — исправлен (май 2026)
 ~~При `redis is None` → retrieval полностью пропускался молча.~~
@@ -394,8 +404,8 @@ Supabase query при каждом `/health` запросе (interval=30s). На
 | 4.2 | Consensus mutex с HEAVY | ✅ |
 | 4.3 | bias-free safety selection + fallback observability | ✅ Закрыто май 2026 |
 | 5.1 | pgvector bug fix | ✅ |
-| 5.2 | rerank_tokens шум | ⚠️ Low priority |
-| 5.3 | source_credibility pass-through | ⚠️ Reserved — активируется с source_url |
+| 5.2 | rerank_tokens реальная оценка | ✅ Закрыто май 2026 |
+| 5.3 | source_credibility активирован + source_url в MemoryRecord | ✅ Закрыто май 2026 |
 | 5.4 | Retrieval при недоступном Redis | ✅ Закрыто май 2026 |
 | 6.1 | EPK estimate всегда GENERAL | ✅ Закрыто май 2026 |
 | 6.2 | decision_matrix ascending order | ✅ |
@@ -419,6 +429,4 @@ Supabase query при каждом `/health` запросе (interval=30s). На
 
 ### Открытые пункты по приоритету
 
-**⚠️ Known gaps (не блокируют production):**
-- §5.2 — rerank_tokens шумовая оценка
-- §5.3 — source_credibility pass-through для pgvector (активируется с source_url)
+Все зафиксированные пункты закрыты. Новых открытых пунктов нет.
