@@ -101,10 +101,19 @@ async def resolve(candidates: list[AgentResult]) -> ConsensusResult:
     except Exception as exc:
         logger.error("Consensus arbitration failed — using heuristic fallback",
                      extra={"error": str(exc)}, exc_info=True)
+        from observability.metrics import increment
+        increment("consensus.arbitration_failed")
 
-    # Heuristic fallback: longest response
+    # Heuristic fallback: longest response.
+    # Reached only when gpt-oss-120b arbitration fails (timeout, outage, rate limit).
+    # Length is an imperfect but honest signal when no arbiter is available.
+    # IMPORTANT: this is a degraded selection path — logged explicitly so monitoring
+    # can detect sustained arbitration outages. Fix audit §4.3 (silent downgrade).
     best = max(successful, key=lambda r: len(r.text))
-    logger.info("Consensus heuristic fallback", extra={"model": best.model})
+    logger.warning(
+        "Consensus degraded: arbitration unavailable — length heuristic used",
+        extra={"sources": len(successful), "model": best.model},
+    )
     return ConsensusResult(
         text=best.text,
         model=best.model,
