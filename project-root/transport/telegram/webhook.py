@@ -279,7 +279,11 @@ async def telegram_webhook(
     supabase = request.app.state.supabase
     hf_client = request.app.state.hf_client
 
-    logger.info("Incoming message", extra={"user_id": user_id, "lang": lang})
+    # Fix §10.4: generate request_id for full pipeline log correlation.
+    # Format: "{update_id}:{user_id}" — unique per Telegram update.
+    _update_id = str(update.get("update_id", ""))
+    request_id = f"{_update_id}:{user_id}" if _update_id else str(user_id)
+    logger.info("Incoming message", extra={"request_id": request_id, "user_id": user_id, "lang": lang})
 
     # ── rate limiting ─────────────────────────────────────────────────────────
     from cognition.response_synthesizer import get_system_message
@@ -323,7 +327,7 @@ async def telegram_webhook(
         _req_start = _time.perf_counter()
         increment("webhook.requests")
         try:
-            with trace("handle_message", user_id=str(user_id), lang=lang):
+            with trace("handle_message", request_id=request_id, user_id=str(user_id), lang=lang):
                 result = await handle_message(
                     update=update,
                     update_type=update_type,
@@ -333,6 +337,7 @@ async def telegram_webhook(
                     supabase=supabase,
                     redis=request.app.state.redis,
                     hf_client=hf_client,
+                    request_id=request_id,
                 )
         except Exception as exc:
             logger.error("handle_message crashed", extra={"error": str(exc)})
@@ -381,6 +386,14 @@ async def telegram_webhook(
             increment(f"webhook.denied.{result.deny_reason or 'unknown'}")
         else:
             increment("webhook.allowed")
+        logger.info("Request complete", extra={
+            "request_id": request_id,
+            "denied":     result.denied,
+            "tier":       result.tier.value if result.tier else "",
+            "model":      result.model,
+            "intent":     result.intent,
+            "cost_usd":   f"{result.usage.cost_usd:.6f}",
+        })
 
         if chat_id:
             # Low balance warning — show topup button when balance drops below $0.10
