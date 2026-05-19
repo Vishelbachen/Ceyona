@@ -21,6 +21,15 @@ logger = logging.getLogger(__name__)
 
 # ─── TRUTH ENFORCEMENT ────────────────────────────────────────────────────────
 
+# Intents for which web search is NOT useful and MUST NOT be triggered.
+# These are self-contained: they either generate freely (creative, code, math)
+# or are already routed to a dedicated tool by the orchestrator (weather, maps, search).
+# Owned here — not in transport layer.
+_NO_SEARCH_INTENTS = {
+    "creative", "conversation", "emotional", "code", "math",
+    "weather", "maps", "maps_poi", "maps_route", "search",
+}
+
 # Intents that MUST have retrieved context — no context = don't call LLM
 _STRICT_INTENTS = {
     Intent.SEARCH,
@@ -56,9 +65,10 @@ class OrchestratorRequest:
     has_code_block: bool = False
     has_json_shape: bool = False
     context_size: int = 0
-    # Optional pre-computed intent (e.g. from vision_handler).
-    # When set, orchestrator skips classify() to avoid duplicate work.
-    forced_intent: IntentResult | None = None
+    # Pre-computed intent from vision_handler (§15 ingress adapter).
+    # Set ONLY on the vision pipeline path — never from transport logic.
+    # When set, orchestrator skips classify() to avoid a duplicate call.
+    vision_intent: IntentResult | None = None
     supabase: object = None
     hf_client: object = None
     # Fix §10.4: request_id for log correlation across pipeline stages.
@@ -488,11 +498,12 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
 
     try:
         # ── intent ───────────────────────────────────────────────────────────
-        # Use pre-computed intent when available (e.g. from vision pipeline)
-        # to avoid classifying the same text twice.
-        if request.forced_intent is not None:
-            intent_result = request.forced_intent
-            logger.info("Intent (forced)", extra={
+        # Use pre-computed intent from vision_handler (§15) when available
+        # to avoid classifying the same text twice. For all other paths,
+        # classify here — single classification, single authority.
+        if request.vision_intent is not None:
+            intent_result = request.vision_intent
+            logger.info("Intent (vision)", extra={
                 "intent": intent_result.intent,
                 "confidence": intent_result.confidence,
             })
@@ -510,26 +521,44 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
                 "confidence": intent_result.confidence,
             })
 
+        # ── web search ───────────────────────────────────────────────────────
+        # Web search decision belongs to orchestrator — intent is known here,
+        # EPK is about to run, authority is unambiguous.
+        # Conditions: no retrieval context yet + intent benefits from search
+        # + user has non-zero balance (cheap pre-EPK guard, full check follows).
+        _retrieved_context = request.retrieved_context
+        if (
+            not _retrieved_context
+            and intent_result.intent.value not in _NO_SEARCH_INTENTS
+            and request.user_balance > 0
+        ):
+            try:
+                from external.web_tools import run_tool as _web_run_tool
+                web_result = await _web_run_tool(
+                    tool_name="search",
+                    params={"query": request.user_message, "lang": lang},
+                    lang=lang,
+                )
+                if web_result:
+                    _retrieved_context = web_result
+                    logger.info("Web search: context acquired", extra={
+                        "intent": intent_result.intent.value,
+                        "chars": len(web_result),
+                    })
+            except Exception as exc:
+                logger.warning("Web search failed — continuing without", extra={"error": str(exc)})
+
         # ── truth mode ───────────────────────────────────────────────────────
         truth_mode = resolve_truth_mode(intent_result.intent)
 
-        # ── STRICT: block if no context and no tool output available yet ─────
-        # (tool output comes next — we check after tool execution below)
-
         # ── tool execution ───────────────────────────────────────────────────
-        # Skip _run_tool when update_handler already ran this tool and populated
-        # retrieved_context (forced_intent path for SEARCH). Running it again
-        # doubles search output, inflates payload, causes 413s.
         tool_output: str | None = None
-        _already_grounded = bool(request.retrieved_context) and request.forced_intent is not None
-        if intent_result.requires_tools and not _already_grounded:
+        if intent_result.requires_tools:
             tool_output = await _run_tool(intent_result, lang)
-        elif _already_grounded and intent_result.requires_tools:
-            tool_output = request.retrieved_context
 
         # ── STRICT truth gate ─────────────────────────────────────────────────
         # For STRICT intents: if no retrieved context AND no tool output → block
-        has_grounding = bool(request.retrieved_context) or bool(tool_output)
+        has_grounding = bool(_retrieved_context) or bool(tool_output)
         if truth_mode == TruthMode.STRICT and not has_grounding:
             logger.info("Truth gate: STRICT intent with no grounding data", extra={
                 "intent": intent_result.intent,
@@ -599,30 +628,23 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
         tier = select_tier(estimated)
 
         # ── tool-only path ────────────────────────────────────────────────────
-        # Applies when:
-        # 1. Intent is in _TOOL_INTENTS (WEATHER, MAPS, MAPS_POI, MAPS_ROUTE)
-        # 2. SEARCH returns data — always goes tool-only to prevent LLM hallucination.
-        #    LLM must NOT synthesise over search results — it adds hotels/facts
-        #    from training data that were not in the actual search output.
-        #
-        # BUG FIX: previously checked request.retrieved_context for the structured
-        # header, but for SEARCH intent retrieved_context is always empty on
-        # orchestrator entry (search runs via _run_tool → tool_output).
-        # Fix: check tool_output directly for the structured header.
-        # Also: ALL search results go tool-only regardless of structured header —
-        # organic results also must not be re-synthesised by LLM (hallucination risk).
+        # WEATHER, MAPS, MAPS_POI, MAPS_ROUTE: structured data from tool,
+        # delivered directly to synthesizer — no LLM synthesis needed.
+        # SEARCH: web search result goes tool-only to prevent hallucination.
+        # LLM must NOT synthesise over search results.
+        # _retrieved_context may hold web search result (acquired above)
+        # or retrieval context from update_handler. Either way, tool-only.
         _is_search_with_results = (
             intent_result.intent == Intent.SEARCH
             and bool(tool_output)
         )
-        # For pre-grounded SEARCH (update_handler already ran search → retrieved_context):
-        _is_pregrounded_search = (
+        _is_search_context = (
             intent_result.intent == Intent.SEARCH
-            and bool(request.retrieved_context)
+            and bool(_retrieved_context)
         )
-        _structured_search = _is_search_with_results or _is_pregrounded_search
+        _structured_search = _is_search_with_results or _is_search_context
         _tool_data = (
-            request.retrieved_context if _is_pregrounded_search
+            _retrieved_context if _is_search_context
             else tool_output if _is_search_with_results
             else None
         )
@@ -649,7 +671,7 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             )
 
         # ── assemble retrieved context ────────────────────────────────────────
-        retrieved_context = request.retrieved_context or ""
+        retrieved_context = _retrieved_context or ""
         if tool_output:
             retrieved_context = (
                 f"{tool_output}\n\n{retrieved_context}".strip()
