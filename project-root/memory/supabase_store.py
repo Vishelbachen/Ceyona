@@ -27,6 +27,7 @@ class MemoryRecord:
     importance: float
     metadata: dict
     created_at: str
+    source_url: str | None = None  # §5.3: provenance for retrieval-originated records
 
 
 class SupabaseStore:
@@ -69,7 +70,7 @@ class SupabaseStore:
         try:
             query = (
                 self._db.table(_TABLE)
-                .select("id, user_id, content, mem_type, importance, metadata, created_at")
+                .select("id, user_id, content, mem_type, importance, metadata, created_at, source_url")
                 .eq("user_id", user_id)
                 .order("created_at", desc=True)
                 .limit(limit)
@@ -87,6 +88,7 @@ class SupabaseStore:
                     importance=row["importance"],
                     metadata=row["metadata"] or {},
                     created_at=row["created_at"],
+                    source_url=row.get("source_url"),
                 )
                 for row in (result.data or [])
             ]
@@ -132,6 +134,7 @@ class SupabaseStore:
                     importance=row.get("importance", 1.0),
                     metadata=row.get("metadata") or {},
                     created_at=row.get("created_at", ""),
+                    source_url=row.get("source_url"),
                 )
                 for row in (result.data or [])
             ]
