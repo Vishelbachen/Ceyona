@@ -235,11 +235,14 @@ Canonical execution lifecycle:
 
 ```
 User Input
-→ Safety Gate (Pass 1 + Pass 2) [observability only — non-blocking]
-→ Feature Extraction
-→ Multilingual Normalization
-→ EPK Policy Resolution
+→ Safety Gate Pass 1  [llama-prompt-guard-2-22m — observability only, non-blocking]
+→ Feature Extraction  [_classify_complexity: complexity, input_tokens estimation]
+→ Multilingual Normalization  [allam-2-7b → Arabic | llama-3.3-70b → other non-Latin]
+→ Safety Gate Pass 2  [gpt-oss-safeguard-20b — observability only, non-blocking]
+→ Conversation History Load
 → Memory + Embedding Retrieval + Reranker
+→ Web Search  [pre-EPK, balance-gated — skipped for zero-balance users]
+→ EPK Policy Resolution  [SOLE policy authority — inside orchestrator]
 → analysis.py (pre-reasoning hints) [NOT YET IMPLEMENTED — see §27]
 → Intent Classification
 → Execution Plan (via multi_agent_coordinator)
@@ -249,8 +252,27 @@ User Input
 → Verification Stage (safety_agent)
 → Response Synthesis (7-step pipeline)
 → META Normalization (correction + output_normalizer)
+→ History Save
+→ META Side-channel (reflection + memory_audit — async, non-blocking)
+→ TTS Synthesis  [voice responses only — skipped for text input]
 → Output
 ```
+
+### Порядок Safety Gate Pass 1 / Multilingual / Pass 2 — обоснование (Вариант А)
+
+Pass 1 стоит ДО Feature Extraction и Multilingual: это быстрый pre-filter на сыром
+input до любой обработки. Модель 22m — лёгкая, задержка минимальна.
+
+Multilingual Normalization стоит МЕЖДУ Pass 1 и Pass 2.
+Это архитектурно правильно по следующей причине:
+Pass 2 использует gpt-oss-safeguard-20b — LLM-based классификатор. Он значительно
+точнее работает с нормализованным текстом. Если пользователь пишет на арабском или
+другом нелатинском языке, Pass 2 получает уже нормализованный вариант — риск
+false-positive на экзотическом вводе снижается. Это также означает что у Pass 2 есть
+полный контекст Feature Extraction (complexity, is_voice_input) как дополнительные сигналы.
+
+Вариант Б (оба Gate до Multilingual) был бы симметричнее, но хуже по качеству
+классификации Pass 2 на нелатинских языках. Вариант А выбран намеренно.
 
 No hidden execution stages are allowed.
 No runtime node may insert undeclared execution phases.
@@ -697,17 +719,32 @@ Safety Gate is intentionally observability-only. This is not a defect — it is 
 correct architectural decision given the operational false-positive evidence.
 
 ### analysis.py — pre-reasoning hints (§4 Execution Lifecycle, §11 META Layer)
-**Status: NOT YET IMPLEMENTED**
-`meta/analysis.py` — модуль существует и содержит логику pre-reasoning hints.
-В pipeline НЕ вызывается: ни orchestrator, ни update_handler, ни другие модули
-не импортируют analysis.py для inline вызова.
+**Status: IMPLEMENTED (May 2026)**
+`meta/analysis.py` — полностью подключён в pipeline. ✅
 
-Позиция по архитектуре: после Retrieval, перед Intent Classification.
-Активация по архитектуре: ALLOW/HEAVY → full, DEGRADED → lightweight, DENY → skip.
-Output: non-binding hints → intent_engine (zero authority, MAY be ignored).
+**Реализованный flow (Вариант А — строго по архитектуре §4):**
+```
+update_handler.py
+  → meta/analysis.analyse(text, lightweight=False)   [после Pass 2, до orchestrator]
+  → AnalysisReport → OrchestratorRequest.analysis_report
+  → orchestrator.run()
+  → intent_engine.classify(..., analysis_hints=analysis_report)
+```
 
-**Action required:** реализовать вызов analysis.py в pipeline или явно deprioritize.
-До реализации — lifecycle diagram (§4) содержит пометку [NOT YET IMPLEMENTED].
+**Что делает analysis_hints в intent_engine.classify():**
+- `HAS_MATH` с confidence ≥ 0.80 → немедленный return MATH (пропускает LLM pre-check)
+- `IS_SHORT` или `IS_MULTILINGUAL` → повышает effective_min до max(текущий, 0.72)
+- `HAS_CODE_BLOCK` → снижает effective_min до min(текущий, 0.50)
+- Все hints non-binding — intent_engine может игнорировать их
+
+**Позиция в lifecycle:**
+После Safety Gate Pass 2 (нормализованный текст), перед Conversation History и Orchestrator.
+lightweight=False передаётся всегда из update_handler — EPK-сигнал (ALLOW/DEGRADED)
+недоступен до orchestrator, поэтому full-mode используется как safe default.
+
+**Свойства модуля (верифицированы аудитом):**
+Pure function, no I/O, no async, never raises. Zero execution authority.
+Все regex-паттерны скомпилированы один раз при импорте — latency < 1ms.
 Multilingual Normalization (§23)
 Status: IMPLEMENTED
 llm/multilingual_preprocessor.py — Arabic via allam-2-7b,
