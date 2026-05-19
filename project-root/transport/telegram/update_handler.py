@@ -379,25 +379,37 @@ async def handle_message(
     })
 
     # ── retrieval ─────────────────────────────────────────────────────────────
+    # Fix §5.4: previously gated on `supabase is not None and redis is not None`.
+    # Redis is optional cache — pgvector similarity search only needs Supabase.
+    # If Redis is unavailable: retrieval runs without cache (degraded, not skipped).
+    # If Supabase is unavailable: retrieval is skipped (pgvector requires it).
     retrieved_context = ""
     embedding_tokens  = 0
     rerank_tokens     = 0
 
-    if supabase is not None and redis is not None:
+    if supabase is not None:
+        if redis is None:
+            logger.warning(
+                "Retrieval: Redis unavailable — running without cache (degraded)",
+                extra={"user_id": user_id},
+            )
         try:
             from contracts.retrieval_contracts import RetrievalQuery
             from memory.supabase_store import SupabaseStore
-            from retrieval.cache.embedding_cache import EmbeddingCache
-            from retrieval.cache.query_cache import QueryCache
-            from retrieval.cache.rerank_cache import RerankCache
             from retrieval.retrieval_engine import RetrievalEngine
 
-            engine = RetrievalEngine(
-                supabase_store=SupabaseStore(supabase),
-                query_cache=QueryCache(redis),
-                embedding_cache=EmbeddingCache(redis),
-                rerank_cache=RerankCache(redis),
-            )
+            # Inject cache only when Redis is available.
+            # RetrievalEngine handles None values gracefully (no caching).
+            engine_kwargs: dict = {"supabase_store": SupabaseStore(supabase)}
+            if redis is not None:
+                from retrieval.cache.embedding_cache import EmbeddingCache
+                from retrieval.cache.query_cache import QueryCache
+                from retrieval.cache.rerank_cache import RerankCache
+                engine_kwargs["query_cache"]     = QueryCache(redis)
+                engine_kwargs["embedding_cache"] = EmbeddingCache(redis)
+                engine_kwargs["rerank_cache"]    = RerankCache(redis)
+
+            engine = RetrievalEngine(**engine_kwargs)
 
             retrieval_result = await engine.retrieve(RetrievalQuery(
                 text=text,
@@ -409,22 +421,31 @@ async def handle_message(
                 retrieved_context = "\n\n".join(
                     d.content for d in retrieval_result.documents if d.content
                 )
-                embedding_tokens = _estimate_tokens(text)
-                if retrieval_result.reranked:
-                    rerank_tokens = len(retrieval_result.documents) * 10
+                # Use token counts from retrieval_engine (real estimation, fixed §5.2).
+                # Do not recompute here — retrieval_engine owns this calculation.
+                embedding_tokens = retrieval_result.embedding_tokens
+                rerank_tokens    = retrieval_result.rerank_tokens
 
             logger.info("Retrieval done", extra={
-                "user_id":  user_id,
-                "docs":     len(retrieval_result.documents),
-                "reranked": retrieval_result.reranked,
-                "cached":   retrieval_result.cached,
-                "chars":    len(retrieved_context),
+                "user_id":       user_id,
+                "docs":          len(retrieval_result.documents),
+                "reranked":      retrieval_result.reranked,
+                "cached":        retrieval_result.cached,
+                "redis_cache":   redis is not None,
+                "chars":         len(retrieved_context),
+                "emb_tokens":    embedding_tokens,
+                "rerank_tokens": rerank_tokens,
             })
 
         except Exception as exc:
             logger.warning("Retrieval failed, continuing without context", extra={
                 "error": str(exc),
             })
+    else:
+        logger.warning(
+            "Retrieval skipped — Supabase unavailable (pgvector requires it)",
+            extra={"user_id": user_id},
+        )
 
     # ── web search fallback ───────────────────────────────────────────────────
     # Fix §9.2: web search previously ran before EPK — SerpAPI calls were made
