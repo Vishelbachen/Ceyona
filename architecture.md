@@ -486,6 +486,17 @@ Vision is ingress. Vision is not policy.
 Vision handler is OUTSIDE the EPK DAG by design — it is a second ingress path.
 Results feed back into the normal pipeline via update_handler with forced_intent.
 
+**Token governance (май 2026):**
+vision_handler makes a direct Groq call outside the EPK DAG.
+`max_tokens` for this call MUST be read from `policy_registry.RUNTIME`:
+```python
+RUNTIME.tier_configs[Tier.FAST].max_output_tokens
+```
+Rationale: extraction is a bounded, low-complexity call → FAST tier limit applies.
+Hardcoded `max_tokens` is a Single Policy Authority violation (§2.1) even outside EPK —
+token limits have one source of truth: `policy_registry.RUNTIME`.
+Fix applied: май 2026.
+
 ---
 
 ## 16. MULTI-AGENT COORDINATOR
@@ -589,15 +600,13 @@ SerpAPI results → search.py._filter_results() → source_credibility.filter_re
 → LLM receives only trusted sources
 ```
 
-**Call site B — retrieval/retrieval_engine.py (active)**:
+**Call site B — retrieval/retrieval_engine.py (reserved)**:
 ```
 pgvector similarity_search results → source_credibility.score_documents()
-    MemoryRecord.source_url populated → credibility scoring active
-    NULL source_url → pass-through (conversation-originated records)
+    Currently pass-through (MemoryRecord has no source_url yet)
+    Will activate when MemoryRecord gains source_url field
 → cross_encoder.rerank()
 ```
-MemoryRecord gains source_url field (май 2026): Supabase migration applied,
-supabase_store.py updated. score_documents() no longer a stub.
 
 source_credibility DOES actively block and filter — it is enforcement, not merely advisory.
 It is NOT in the retrieval pipeline between query_preprocessor and reranker.
@@ -798,6 +807,12 @@ model_router.py reads RUNTIME.tier_configs[tier].max_output_tokens for _MAX_TOKE
 access_controller.py reads RUNTIME.default_balance_usd for _DEFAULT_BALANCE_USD ✅
 To change any threshold or default balance — edit policy_registry.py only.
 All three modules pick up the change automatically. No more scattered hardcoded values.
+Test Suite (§11.2)
+Status: IMPLEMENTED ✅ (May 2026)
+tests/ — полный unit test suite. Все тесты pure unit, без внешних вызовов (Supabase, Redis, Groq, HF — всё мокируется на границе).
+Файлы: test_epk.py, test_analysis.py, test_usage_meter.py, test_safety_gate.py,
+test_intent_engine_hints.py, test_orchestrator_web_search.py, conftest.py
+CI: .github/workflows/ci.yml — pytest + ruff + critical import checks на каждый push/PR в main.
 LAYER FREEZE STATUS (May 2026)
 Статусы проставлены по результатам полного аудита кода (май 2026).
 Все файлы каждого слоя прочитаны и верифицированы против architecture.md v8.0.
@@ -880,16 +895,28 @@ auth_middleware.py, callback_handler.py
 Верифицировано: май 2026.
 update_handler lifecycle строго соответствует §4 execution lifecycle.
 _send_voice() реализован, fallback на text при ошибке sendVoice.
+vision_handler.py: полностью верифицирован (май 2026).
+  Соответствует §15: не выбирает модели, не обходит EPK, forced_intent → update_handler.
+  max_tokens читается из policy_registry.RUNTIME[Tier.FAST] (фикс §15, май 2026).
+  classifier fallback при ошибке → needs_pipeline=True (безопасный дефолт).
 memory/ — ✅ Frozen √
 Файлы: conversation_history.py, supabase_store.py, vector_memory.py
 Верифицировано: май 2026.
 _MAX_HISTORY_TOKENS=1200 (уменьшен с 2000 — исправлены 413 на llama-3.1-8b-instant).
 _trim_history_to_budget: drop oldest, keep newest.
+supabase_store.py: MemoryRecord получил source_url: str | None = None (§5.3, май 2026).
+  fetch_by_user() и similarity_search() маппят source_url из БД.
+  Supabase migration: ALTER TABLE memory ADD COLUMN source_url text DEFAULT NULL.
 context/, contracts/, i18n/, observability/, events/, infra/ — ✅ Frozen √
 Верифицировано: май 2026.
 resolve_truth_mode: STRICT/HYBRID/GENERATIVE маппинг корректен.
 shared_types: Tier, Complexity, EPKDecision, TruthMode — все enum'ы правильные.
 events/: parallel с memory write, независимые failure domains.
+i18n/strings.py: data-only файл (1322 строк локализаций), архитектурной логики нет.
+infra/: полностью верифицирован (май 2026).
+  env_validator.py: все обязательные env vars декларированы явно, sys.exit(1) при отсутствии.
+  healthcheck.py: redis + supabase ping, metrics_snapshot() — живой импорт, не мёртвый.
+  config_loader.py: инфраструктура, не архитектурная логика.
 ### observability/tracing.py — Log-based Tracing Contract (May 2026)
 **Status: IMPLEMENTED ✅**
 
@@ -928,10 +955,7 @@ Prometheus/StatsD export = separate future task — external adapter only,
 no changes to metrics.py required when that time comes.
 
 Что НЕ верифицировано в этом аудите
-vision_handler.py — прочитан частично (ingress adapter, OUTSIDE EPK DAG по §15)
-i18n/strings.py — не читался полностью (локализации, не архитектурная логика)
-infra/ — не читался (config_loader, env_validator, healthcheck — инфраструктура)
-Тесты — в проекте отсутствуют (.github/workflows/ci.yml есть, но test suite не обнаружен)
+Все слои верифицированы. Открытых пунктов нет.
 ANTI-DRIFT PRINCIPLES
 Architecture MUST scale through:
 explicit contracts, bounded execution, centralized governance
