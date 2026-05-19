@@ -135,6 +135,35 @@ async def handle_message(
 
         # ── CASE 1: descriptive — direct response, no pipeline ────────────────
         if not vision_result.needs_pipeline:
+            # Fix §9.3: vision fast-path previously bypassed EPK entirely.
+            # cost_usd was hardcoded to 0.001 and balance was never checked —
+            # zero-balance users received free vision responses.
+            # Now: run a balance guard before returning. We can't run a full EPK
+            # estimate here (no embedding_tokens, no complexity), so we use the
+            # hardcoded cost estimate ($0.001 ≈ llama-4-scout vision call) and
+            # check it against balance. EPK authority is preserved: the check is
+            # structurally identical to EPK rule #1 (balance <= 0 or cost > balance).
+            _vision_cost_usd = 0.001  # conservative estimate for llama-4-scout vision call
+            if user_balance <= 0 or _vision_cost_usd > user_balance:
+                logger.warning(
+                    "Vision fast-path: balance insufficient — denying",
+                    extra={"user_id": user_id, "balance": user_balance, "cost": _vision_cost_usd},
+                )
+                from cognition.response_synthesizer import get_system_message
+                return OrchestratorResult(
+                    text=get_system_message("insufficient_balance", lang),
+                    tier=Tier.FAST,
+                    model="",
+                    epk_decision=EPKDecision.DENY,
+                    usage=UsageRecord(
+                        input_tokens=0, output_tokens=0,
+                        embedding_tokens=0, rerank_tokens=0,
+                        tier=Tier.FAST, embedding_type="large", cost_usd=0.0,
+                    ),
+                    denied=True,
+                    deny_reason="insufficient_balance",
+                    lang=lang,
+                )
             logger.info("Vision fast-path: direct response", extra={"user_id": user_id})
             return OrchestratorResult(
                 text=vision_result.text,
@@ -145,7 +174,7 @@ async def handle_message(
                     input_tokens=_estimate_tokens(caption) + 500,
                     output_tokens=_estimate_tokens(vision_result.text),
                     embedding_tokens=0, rerank_tokens=0,
-                    tier=Tier.GENERAL, embedding_type="large", cost_usd=0.001,
+                    tier=Tier.GENERAL, embedding_type="large", cost_usd=_vision_cost_usd,
                 ),
                 denied=False,
                 deny_reason="",
@@ -398,6 +427,9 @@ async def handle_message(
             })
 
     # ── web search fallback ───────────────────────────────────────────────────
+    # Fix §9.2: web search previously ran before EPK — SerpAPI calls were made
+    # even for users with zero balance. Full EPK can't run here (embedding_tokens
+    # unknown), so we do a quick balance guard: deny before spending SerpAPI quota.
     _forced_intent: object = locals().get("_vision_intent_result")
 
     if not retrieved_context:
@@ -414,18 +446,23 @@ async def handle_message(
 
             _ORCHESTRATOR_TOOLS = {"weather", "maps", "maps_poi", "maps_route", "search"}
             if intent_value not in _NO_SEARCH_INTENTS and intent_value not in _ORCHESTRATOR_TOOLS:
-                web_result = await run_tool(
-                    tool_name="search",
-                    params={"query": text, "lang": lang},
-                    lang=lang,
-                )
-                if web_result:
-                    retrieved_context = web_result
-                    logger.info("Web search used", extra={
-                        "user_id": user_id,
-                        "intent":  intent_value,
-                        "chars":   len(web_result),
-                    })
+                # Quick balance guard — do not spend SerpAPI quota for zero-balance users.
+                # EPK will run a full cost check later; this is a cheap pre-filter only.
+                if user_balance <= 0:
+                    logger.info("Web search skipped — zero balance (pre-EPK guard)", extra={"user_id": user_id})
+                else:
+                    web_result = await run_tool(
+                        tool_name="search",
+                        params={"query": text, "lang": lang},
+                        lang=lang,
+                    )
+                    if web_result:
+                        retrieved_context = web_result
+                        logger.info("Web search used", extra={
+                            "user_id": user_id,
+                            "intent":  intent_value,
+                            "chars":   len(web_result),
+                        })
 
             _forced_intent = quick_intent
 
