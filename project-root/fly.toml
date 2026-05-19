@@ -1,8 +1,14 @@
+# fly.toml app configuration file generated for ceyona on 2026-05-19T08:45:10Z
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
 app = 'ceyona'
 primary_region = 'fra'
 
 [build]
   dockerfile = "Dockerfile"
+
   [build.args]
     CACHEBUST = "2"
 
@@ -16,6 +22,7 @@ primary_region = 'fra'
   auto_start_machines = true
   min_machines_running = 1
   processes = ['app']
+
   [http_service.concurrency]
     type = "requests"
     hard_limit = 25
@@ -29,6 +36,8 @@ primary_region = 'fra'
     timeout = "5s"
 
 [[vm]]
-  memory = '2gb'
-  cpu_kind = 'shared'
+  memory = '8gb'
+  cpu_kind = 'performance'
   cpus = 1
+  memory_mb = 8192
+  size = 'performance-cpu-1x'
