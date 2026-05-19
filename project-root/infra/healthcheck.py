@@ -27,8 +27,10 @@ async def check_supabase(supabase: Client) -> bool:
 async def full_health(redis: Redis, supabase: Client) -> dict:
     redis_ok = await check_redis(redis)
     sb_ok = await check_supabase(supabase)
+    from observability.metrics import snapshot as metrics_snapshot
     return {
         "redis": "ok" if redis_ok else "error",
         "supabase": "ok" if sb_ok else "error",
         "status": "ok" if (redis_ok and sb_ok) else "degraded",
+        "metrics": metrics_snapshot(),
     }
