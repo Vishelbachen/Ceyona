@@ -484,5 +484,5 @@ async def handle_message(
                 )
         except Exception as exc:
             logger.warning("TTS failed — returning text-only", extra={"error": str(exc)})
- 
+
     return result
