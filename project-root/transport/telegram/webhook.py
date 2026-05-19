@@ -9,6 +9,8 @@ from app.settings import settings
 from transport.telegram.auth_middleware import verify_update, verify_webhook_secret
 from transport.telegram.callback_handler import CallbackAction, parse_callback
 from transport.telegram.message_router import UpdateType, classify_update, extract_text
+from observability.metrics import increment, gauge, snapshot as metrics_snapshot
+from observability.tracing import trace
 from transport.telegram.update_handler import handle_message
 
 # Build detector once at import time (expensive operation)
@@ -317,25 +319,32 @@ async def telegram_webhook(
 
     # ── message handling ──────────────────────────────────────────────────────
     if update_type in (UpdateType.MESSAGE, UpdateType.EDITED_MESSAGE):
+        import time as _time
+        _req_start = _time.perf_counter()
+        increment("webhook.requests")
         try:
-            result = await handle_message(
-                update=update,
-                update_type=update_type,
-                user_id=user_id,
-                user_balance=user_balance,
-                lang=lang,
-                supabase=supabase,
-                redis=request.app.state.redis,
-                hf_client=hf_client,
-            )
+            with trace("handle_message", user_id=str(user_id), lang=lang):
+                result = await handle_message(
+                    update=update,
+                    update_type=update_type,
+                    user_id=user_id,
+                    user_balance=user_balance,
+                    lang=lang,
+                    supabase=supabase,
+                    redis=request.app.state.redis,
+                    hf_client=hf_client,
+                )
         except Exception as exc:
             logger.error("handle_message crashed", extra={"error": str(exc)})
+            increment("webhook.errors")
             if chat_id:
                 await _send_message(
                     chat_id,
                     get_system_message("no_response", lang),
                 )
             return {"ok": True}
+        finally:
+            gauge("webhook.last_latency_ms", round((_time.perf_counter() - _req_start) * 1000, 2))
 
         # ── billing ───────────────────────────────────────────────────────────
         if not result.denied and result.usage.cost_usd > 0:
@@ -366,6 +375,12 @@ async def telegram_webhook(
                 ))
             except Exception as exc:
                 logger.error("Billing failed", extra={"error": str(exc)})
+
+        # Track denied/allowed outcomes
+        if result.denied:
+            increment(f"webhook.denied.{result.deny_reason or 'unknown'}")
+        else:
+            increment("webhook.allowed")
 
         if chat_id:
             # Low balance warning — show topup button when balance drops below $0.10
