@@ -888,6 +888,43 @@ context/, contracts/, i18n/, observability/, events/, infra/ — ✅ Frozen √
 resolve_truth_mode: STRICT/HYBRID/GENERATIVE маппинг корректен.
 shared_types: Tier, Complexity, EPKDecision, TruthMode — все enum'ы правильные.
 events/: parallel с memory write, независимые failure domains.
+### observability/tracing.py — Log-based Tracing Contract (May 2026)
+**Status: IMPLEMENTED ✅**
+
+Tracing = structured JSON spans via stdlib logging. No OTLP collector required.
+
+**Design:**
+- `with trace(name, **tags)` — stable public contract, backend-agnostic
+- `trace_id` propagated via `contextvars` — asyncio-safe, callers never manage it
+- Nested spans inherit `trace_id`, record `parent_id`
+- `status: ok | error` set automatically on exception
+- Span output: `{"event": "span", "trace_id": ..., "span_id": ..., "parent_id": ..., "elapsed_ms": ..., "status": ...}`
+- `current_trace_id()` — public API for cross-module correlation
+
+**Dependencies:** `opentelemetry-api` and `opentelemetry-sdk` removed from
+`pyproject.toml` — were dead (declared, never imported).
+
+**OTLP migration path:** replace backend of `tracing.py` only.
+All call sites (`webhook.py`, `orchestrator.py`) remain unchanged.
+Collector (Jaeger, Grafana Tempo, Honeycomb) is a separate infrastructure task.
+
+### observability/metrics.py — Metrics Contract (May 2026)
+**Status: IMPLEMENTED ✅**
+`observability/metrics.py` — in-memory counters and gauges, exported via `GET /metrics`.
+
+**Canonical design (закрывает audit §7.3 / §10.1):**
+- `increment()` and `gauge()` are pure in-memory operations — no side effects, no I/O.
+- `snapshot()` is the sole export boundary, consumed by `GET /metrics` (app/main.py).
+- Metrics are per-process and reset on restart. No persistence layer is used by design.
+- Data is NOT aggregated across workers or instances (single-instance deployment).
+- Dead import `snapshot as metrics_snapshot` removed from `webhook.py`.
+
+**Explicit contract:**
+Metrics = ephemeral signal layer (observability), not state layer.
+MUST NOT participate in execution (no side effects in increment/gauge).
+Prometheus/StatsD export = separate future task — external adapter only,
+no changes to metrics.py required when that time comes.
+
 Что НЕ верифицировано в этом аудите
 vision_handler.py — прочитан частично (ingress adapter, OUTSIDE EPK DAG по §15)
 i18n/strings.py — не читался полностью (локализации, не архитектурная логика)
