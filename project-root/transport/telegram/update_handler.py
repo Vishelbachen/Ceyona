@@ -71,6 +71,7 @@ async def handle_message(
     supabase=None,
     redis=None,
     hf_client=None,
+    request_id: str = "",
 ) -> OrchestratorResult:
 
     # ── photo handling ────────────────────────────────────────────────────────
@@ -505,6 +506,7 @@ async def handle_message(
         embedding_tokens=embedding_tokens,
         rerank_tokens=rerank_tokens,
         forced_intent=_forced_intent,
+        request_id=request_id,
     )
 
     result = await run(request)
