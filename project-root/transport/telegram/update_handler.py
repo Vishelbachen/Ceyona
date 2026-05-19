@@ -14,8 +14,6 @@ from transport.telegram.message_router import (
 logger = logging.getLogger(__name__)
 
 _VISION_MODEL      = "meta-llama/llama-4-scout-17b-16e-instruct"
-_NO_SEARCH_INTENTS = {"creative", "conversation", "emotional", "code", "math"}
-
 
 def _estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
@@ -469,49 +467,6 @@ async def handle_message(
             extra={"user_id": user_id},
         )
 
-    # ── web search fallback ───────────────────────────────────────────────────
-    # Fix §9.2: web search previously ran before EPK — SerpAPI calls were made
-    # even for users with zero balance. Full EPK can't run here (embedding_tokens
-    # unknown), so we do a quick balance guard: deny before spending SerpAPI quota.
-    _forced_intent: object = locals().get("_vision_intent_result")
-
-    if not retrieved_context:
-        try:
-            from cognition.intent_engine import classify
-            from external.web_tools import run_tool
-
-            _pre_intent  = locals().get("_vision_intent_result")
-            quick_intent = (
-                _pre_intent if _pre_intent is not None
-                else await classify(text, lang=lang, supabase=supabase, hf_client=hf_client)
-            )
-            intent_value = quick_intent.intent.value
-
-            _ORCHESTRATOR_TOOLS = {"weather", "maps", "maps_poi", "maps_route", "search"}
-            if intent_value not in _NO_SEARCH_INTENTS and intent_value not in _ORCHESTRATOR_TOOLS:
-                # Quick balance guard — do not spend SerpAPI quota for zero-balance users.
-                # EPK will run a full cost check later; this is a cheap pre-filter only.
-                if user_balance <= 0:
-                    logger.info("Web search skipped — zero balance (pre-EPK guard)", extra={"user_id": user_id})
-                else:
-                    web_result = await run_tool(
-                        tool_name="search",
-                        params={"query": text, "lang": lang},
-                        lang=lang,
-                    )
-                    if web_result:
-                        retrieved_context = web_result
-                        logger.info("Web search used", extra={
-                            "user_id": user_id,
-                            "intent":  intent_value,
-                            "chars":   len(web_result),
-                        })
-
-            _forced_intent = quick_intent
-
-        except Exception as exc:
-            logger.warning("Web search failed", extra={"error": str(exc)})
-
     # ── run pipeline ──────────────────────────────────────────────────────────
 
     request = OrchestratorRequest(
@@ -526,7 +481,7 @@ async def handle_message(
         retrieved_context=retrieved_context,
         embedding_tokens=embedding_tokens,
         rerank_tokens=rerank_tokens,
-        forced_intent=_forced_intent,
+        vision_intent=locals().get("_vision_intent_result"),
         request_id=request_id,
         analysis_report=_analysis_report,
     )
