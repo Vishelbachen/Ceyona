@@ -61,6 +61,10 @@ class OrchestratorRequest:
     forced_intent: IntentResult | None = None
     supabase: object = None
     hf_client: object = None
+    # Fix §10.4: request_id for log correlation across pipeline stages.
+    # Format: "{update_id}:{user_id}" — set by webhook, propagated through pipeline.
+    # Allows correlating logs from webhook → update_handler → orchestrator → coordinator.
+    request_id: str = ""
 
 
 @dataclass
@@ -464,7 +468,10 @@ async def _run_heavy(
 async def run(request: OrchestratorRequest) -> OrchestratorResult:
     lang = request.lang or "en"
 
+    # Propagate request_id to all orchestrator-level logs for pipeline correlation.
+    _rid = request.request_id or ""
     logger.info("Orchestrator start", extra={
+        "request_id":  _rid,
         "message_len": len(request.user_message),
         "input_tokens": request.input_tokens,
         "complexity": request.complexity,
@@ -565,7 +572,8 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
         ))
 
         logger.info("EPK", extra={
-            "decision": epk_out.decision,
+            "request_id":     _rid,
+            "decision":       epk_out.decision,
             "estimated_cost": f"{estimated:.6f}",
         })
         increment(f"epk.decision.{epk_out.decision.value.lower()}")
