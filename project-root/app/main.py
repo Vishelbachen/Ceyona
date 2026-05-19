@@ -85,3 +85,16 @@ app.include_router(telegram_router)
 async def health(request: Request):
     from infra.healthcheck import full_health
     return await full_health(request.app.state.redis, request.app.state.supabase)
+
+
+@app.get("/metrics")
+async def metrics() -> dict:
+    """
+    Observability snapshot endpoint.
+
+    Returns in-memory counters and gauges accumulated since process start.
+    Data is per-process and resets on restart — no persistence by design.
+    See architecture.md §7 / audit §7.3 / §10.1.
+    """
+    from observability.metrics import snapshot
+    return snapshot()
