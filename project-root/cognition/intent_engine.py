@@ -374,6 +374,7 @@ async def classify(
     supabase=None,
     hf_client=None,
     conversation_history: list[dict] | None = None,
+    analysis_hints: "AnalysisReport | None" = None,
 ) -> IntentResult:
     """
     Classify user intent via BGE embedding + Supabase pgvector similarity.
@@ -382,8 +383,26 @@ async def classify(
       - supabase or hf_client not provided
       - embedding fails
       - no match above MIN_CONFIDENCE
+
+    analysis_hints: optional AnalysisReport from meta/analysis.py (pre-reasoning hints).
+    Non-binding — used to boost confidence for structurally clear intents and to
+    adjust effective_min threshold for short/multilingual input.
+    analysis_hints is never authoritative — it only adjusts probabilities.
     """
+    from meta.analysis import AnalysisReport, HintType
     fallback = _build_result(Intent.QUESTION, 0.70, lang, text)
+
+    # ── analysis_hints: math boost (structural signal, no I/O cost) ──────────
+    # If analysis detected HAS_MATH with high confidence → skip LLM pre-classifier
+    # and go straight to MATH intent. Faster and more reliable than regex alone.
+    if analysis_hints is not None and analysis_hints.has(HintType.HAS_MATH):
+        hint = analysis_hints.get(HintType.HAS_MATH)
+        if hint and hint.confidence >= 0.80:
+            logger.info(
+                "classify: analysis_hints HAS_MATH → MATH (skipping LLM pre-check)",
+                extra={"lang": lang, "confidence": hint.confidence},
+            )
+            return _build_result(Intent.MATH, 0.87, lang, text)
 
     # ── math pre-check (language-agnostic regex) ──────────────────────────────
     # Runs before LLM pre-classifier: regex is instant, no I/O cost.
@@ -445,8 +464,21 @@ async def classify(
         # spurious MAPS/WEATHER matches on unrecognised-language input.
         # Example: "Rigami sila maanna qanoq ippa?" (Inuktitut) was scoring
         # above 0.55 for MAPS due to accidental embedding similarity.
-        word_count = len(text.split())
+        #
+        # analysis_hints adjustment: if analysis detected IS_SHORT or IS_MULTILINGUAL,
+        # raise effective_min further — structural signal confirms low confidence is unreliable.
+        # If analysis detected HAS_CODE_BLOCK or HAS_URL, lower effective_min slightly —
+        # structural clarity supports the embedding result.
+        word_count = len(text.split()) if analysis_hints is None else analysis_hints.word_count
         effective_min = 0.75 if word_count < 6 else _MIN_CONFIDENCE
+
+        if analysis_hints is not None:
+            if analysis_hints.has(HintType.IS_SHORT) or analysis_hints.has(HintType.IS_MULTILINGUAL):
+                # Short or mixed-script input → raise bar to avoid spurious matches
+                effective_min = max(effective_min, 0.72)
+            if analysis_hints.has(HintType.HAS_CODE_BLOCK):
+                # Structural code signal → trust embedding result more
+                effective_min = min(effective_min, 0.50)
 
         if best_score < effective_min:
             logger.info("classify: best score below threshold", extra={
