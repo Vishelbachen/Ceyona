@@ -80,13 +80,20 @@ _GENERAL_CEILING = RUNTIME.epk.degrade_threshold   # 0.003
 ### 3.2 ✅ Coordinator вызывается только из orchestrator
 `multi_agent_coordinator.coordinate()` — один call site. Нет скрытых вызовов.
 
-### 3.3 ⚠️ `update_handler.py` — pre-orchestration логика (known architectural gap)
-`update_handler` выполняет до оркестратора: intent pre-classification, web search, retrieval.
-Создаёт де-факто двойной intent classification — один в `update_handler`, второй в
-`orchestrator` (если `forced_intent` не передан).
-`forced_intent` + `_already_grounded` флаги смягчают проблему, но coupling остаётся.
-**Статус:** задокументировано в architecture.md §4 как known design tradeoff.
-Полное устранение потребует выноса pre-orchestration логики в отдельный pre-processor слой.
+### 3.3 ✅ `update_handler.py` — web search authority перенесена в orchestrator (май 2026)
+~~Двойной intent classification. `forced_intent` / `_already_grounded` coupling.~~
+
+**Закрыто (частично):** web search routing logic (`_NO_SEARCH_INTENTS`) перенесена из
+transport слоя в `core/execution/orchestrator.py`. `update_handler` больше не владеет
+решением о том, какие intents не требуют web search — это теперь явная ответственность
+orchestrator.
+`forced_intent` / `_already_grounded` coupling устранён: `OrchestratorRequest` использует
+`vision_intent` (typed `IntentResult | None`) вместо неявных флагов.
+Верифицировано: `tests/test_orchestrator_web_search.py` — `_NO_SEARCH_INTENTS` живёт
+в orchestrator, отсутствует в `update_handler`.
+
+**Remaining gap (known):** полный вынос retrieval и pre-classification в отдельный
+pre-processor слой — отдельная задача, не блокирует production.
 
 ### 3.4 ✅ `fallback_handler.py` — billing по actual_tier исправлен (май 2026)
 ~~Cascade HEAVY → GENERAL → FAST: billing шёл по изначальному tier, не фактическому.~~
@@ -199,11 +206,15 @@ tts_characters: int = 0
 📋 Speech billing columns в Supabase: добавлены через `migrate_usage_log.sql` (май 2026).
 `usage_meter.py` имеет PGRST204 fallback на период до выполнения миграции.
 
-### 7.3 ⚠️ `observability/metrics.py` — in-memory sink без экспорта
-`increment()` и `gauge()` вызываются в orchestrator и webhook, но данные
-накапливаются только в памяти — нет экспорта в Prometheus/StatsD/Datadog.
-`snapshot()` доступен, но не подключён к внешнему sink.
-**Статус:** known gap. Данные не переживают перезапуск. Приоритет: средний.
+### 7.3 ✅ `observability/metrics.py` — `/metrics` endpoint добавлен (май 2026)
+~~`snapshot()` доступен, но не подключён к внешнему sink.~~
+
+**Закрыто:** `GET /metrics` добавлен в `app/main.py` — возвращает JSON snapshot.
+Мёртвый импорт `snapshot as metrics_snapshot` удалён из `webhook.py`.
+Явный контракт зафиксирован в `metrics.py` и `architecture.md §27`:
+Metrics are in-memory, per-process, reset on restart. No persistence layer by design.
+`increment()` и `gauge()` — pure in-memory, без side effects.
+Prometheus/StatsD — отдельная задача, external adapter, без изменений `metrics.py`.
 
 ---
 
@@ -270,10 +281,11 @@ EPK authority сохранён: проверка структурно идент
 
 ## 10. OBSERVABILITY COLLAPSE
 
-### 10.1 ⚠️ `metrics.py` — нет внешнего экспорта
-`increment()` и `gauge()` вызываются в production коде (orchestrator, webhook).
-Но данные живут только в памяти процесса — нет Prometheus/StatsD/Datadog экспорта.
-**Статус:** known gap. `snapshot()` API готов. Нужен sink + scrape endpoint.
+### 10.1 ✅ `metrics.py` — `/metrics` endpoint добавлен (май 2026)
+~~Нет внешнего экспорта. `snapshot()` API готов. Нужен sink + scrape endpoint.~~
+
+**Закрыто:** см. §7.3. `GET /metrics` в `app/main.py` — JSON snapshot.
+Prometheus/StatsD: отдельная будущая задача, не требует изменений `metrics.py`.
 
 ### 10.2 ⚠️ `tracing.py` — `trace()` вызывается, latency не экспортируется
 `trace()` вызывается в orchestrator (`coordinator` span) и webhook (`handle_message` span).
@@ -303,18 +315,18 @@ EPK authority сохранён: проверка структурно идент
 `project-root/.github/workflows/ci.yml`: Python 3.12, pip cache, import checks, ruff, pytest.
 Корректно настроен для push на main и pull_request.
 
-### 11.2 🔴 Test suite — отсутствует
-`ci.yml` запускает `pytest -q --tb=short`, но тестовых файлов (`test_*.py`, `conftest.py`)
-в проекте нет. CI упадёт на шаге `Run tests` с пустым результатом или ошибкой.
+### 11.2 ✅ Test suite — создан (май 2026)
+~~`pytest` запускался без тестовых файлов → CI падал.~~
 
-**Не сделано.** Минимальный test suite должен покрыть:
-- `core/kernel/` — EPK (Sealed layer), decision_matrix, cost_model
-- `security/safety_gate.py` — оба прохода non-blocking
-- `meta/analysis.py` — только что подключён в pipeline
-- `payments/usage_meter.py` — PGRST204 fallback logic
-- `cognition/intent_engine.py` — analysis_hints integration
-
-**Action required:** создать `project-root/tests/` с минимальным pytest suite.
+**Закрыто:** `project-root/tests/` создан, покрывает все обязательные области:
+- `test_epk.py` — `policy_registry`, `execution_policy_kernel`, `decision_matrix`, `cost_model` (Sealed layer)
+- `test_safety_gate.py` — оба прохода non-blocking, API errors не блокируют, UNSAFE → WARNING не DENY
+- `test_analysis.py` — публичный API, lightweight/full режимы, never raises
+- `test_usage_meter.py` — normal record, extended fields, PGRST204 fallback, double-failure path
+- `test_intent_engine_hints.py` — analysis_hints integration: HAS_MATH fast-path, effective_min adjustments
+- `test_orchestrator_web_search.py` — §3.3 верификация: `_NO_SEARCH_INTENTS` в orchestrator, не в transport
+- `conftest.py` — shared fixtures, asyncio marker
+Все тесты pure unit — no Supabase, Redis, Groq, HuggingFace. Внешний I/O замокан на границе.
 
 ### 11.3 ✅ `fly.toml` — обновлён до production machine spec (май 2026)
 ~~`fly.toml` содержал `memory = '2gb'`, `cpu_kind = 'shared'` — не соответствовало
@@ -347,7 +359,7 @@ Supabase query при каждом `/health` запросе (interval=30s). На
 | 2.3 | `decision_matrix` hardcoded пороги | ✅ Закрыто май 2026 |
 | 3.1 | EPK единственный policy authority | ✅ |
 | 3.2 | Coordinator — один call site | ✅ |
-| 3.3 | pre-orchestration логика в update_handler | ⚠️ Known gap |
+| 3.3 | web search authority → orchestrator | ✅ Закрыто май 2026 |
 | 3.4 | fallback billing по actual_tier | ✅ Закрыто май 2026 |
 | 4.1 | MATH correction bounded | ✅ |
 | 4.2 | Consensus mutex с HEAVY | ✅ |
@@ -361,30 +373,26 @@ Supabase query при каждом `/health` запросе (interval=30s). На
 | 6.3 | `_build_messages` GENERAL для FAST | ✅ Закрыто май 2026 |
 | 7.1 | UsageEntry поля не заполнялись | ✅ Закрыто май 2026 |
 | 7.2 | OrchestratorResult без speech fields | ✅ Закрыто май 2026 |
-| 7.3 | metrics.py — нет внешнего экспорта | ⚠️ Known gap |
+| 7.3 | metrics.py — `/metrics` endpoint | ✅ Закрыто май 2026 |
 | 8.1 | Safety Gate docs/runtime | ✅ Закрыто май 2026 |
 | 8.2 | architecture.md §4 lifecycle | ✅ Закрыто май 2026 |
 | 8.3 | analysis.py "automatic" | ✅ Закрыто май 2026 |
 | 9.1 | fallback billing overbilling | ✅ Закрыто май 2026 |
 | 9.2 | web search до EPK | ✅ Balance guard май 2026 |
 | 9.3 | vision fast-path bypass EPK | ✅ Balance guard май 2026 |
-| 10.1 | metrics.py нет экспорта | ⚠️ Known gap |
+| 10.1 | metrics.py — `/metrics` endpoint | ✅ Закрыто май 2026 |
 | 10.2 | tracing.py нет distributed export | ⚠️ Partial |
 | 10.3 | Safety Gate signals потеря | ✅ Закрыто май 2026 |
 | 10.4 | Нет request_id корреляции | ✅ Закрыто май 2026 |
 | 11.1 | ci.yml существует | ✅ |
-| 11.2 | Test suite отсутствует | 🔴 Не сделано |
+| 11.2 | Test suite создан | ✅ Закрыто май 2026 |
 | 11.3 | fly.toml machine spec | ✅ Закрыто май 2026 |
 
 ### Открытые пункты по приоритету
 
-**🔴 Критично:**
-- §11.2 — Test suite отсутствует. CI запускает `pytest` но тестов нет → CI падает.
-
 **⚠️ Known gaps (не блокируют production):**
-- §3.3 — pre-orchestration логика в update_handler (архитектурный debt)
+- §3.3 — полный вынос retrieval/pre-classification в pre-processor слой (remaining debt)
 - §4.3 — best_candidate по длине, не по качеству
 - §5.2 — rerank_tokens шумовая оценка
 - §5.3 — source_credibility pass-through для pgvector (активируется с source_url)
-- §7.3 / §10.1 — metrics.py без внешнего экспорта
 - §10.2 — distributed tracing не реализован
