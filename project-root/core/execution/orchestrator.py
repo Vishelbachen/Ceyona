@@ -65,6 +65,10 @@ class OrchestratorRequest:
     # Format: "{update_id}:{user_id}" — set by webhook, propagated through pipeline.
     # Allows correlating logs from webhook → update_handler → orchestrator → coordinator.
     request_id: str = ""
+    # analysis_report: pre-reasoning structural hints from meta/analysis.py (§4 lifecycle).
+    # Non-binding — passed to intent_engine.classify() for confidence adjustment only.
+    # None when analysis is unavailable (DENY path, error). Never authoritative.
+    analysis_report: object = None  # meta.analysis.AnalysisReport | None
 
 
 @dataclass
@@ -499,6 +503,7 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
                 supabase=request.supabase,
                 hf_client=request.hf_client,
                 conversation_history=request.conversation_history,
+                analysis_hints=request.analysis_report,
             )
             logger.info("Intent", extra={
                 "intent": intent_result.intent,
