@@ -114,13 +114,25 @@ Max 1 correction pass. Нет рекурсии.
 ### 4.2 ✅ Consensus — mutex с HEAVY
 `use_consensus=False` при `Tier.HEAVY`. Mutex соблюдён.
 
-### 4.3 ⚠️ best_candidate = longest text
-```python
-best_candidate = max(candidates, key=lambda r: len(r.text))
-```
-Выбор кандидата по длине, не по качеству. Открытый gap.
-**Статус:** low priority — на практике агенты редко дают сильно разные по длине ответы
-на один и тот же запрос. Потенциальное улучшение: score по perplexity или LLM-judge.
+### 4.3 ✅ Bias-free candidate selection для safety_agent + observability fallback (май 2026)
+~~`best_candidate = max(candidates, key=lambda r: len(r.text))` — выбор по длине.~~
+
+**Закрыто (два фикса):**
+
+**Фикс 1 — `cognition/multi_agent_coordinator.py`:**
+`best_candidate` заменён на `safety_candidate = candidates[0]` — первый выживший
+кандидат по позиции. `candidates` строится как `[primary_result, *validator_results]`,
+поэтому primary всегда первый если он выжил. Если primary упал — он отсутствует
+в candidates, следующий по позиции принимается без bias по длине.
+Позиционный выбор детерминирован, не смещён, не делегирует доверие router.
+`actual_tier` в `CoordinationResult` обновлён на `candidates[0].actual_tier`.
+
+**Фикс 2 — `agents/consensus_engine.py`:**
+Fallback по длине (аварийный путь при падении gpt-oss-120b) сохранён как честная
+эвристика, но перестал быть silent downgrade:
+- `increment("consensus.arbitration_failed")` — счётчик в metrics
+- `logger.warning(...)` вместо `logger.info(...)` — мониторинг видит деградацию
+Sustained arbitration outages теперь обнаруживаются через `/metrics`.
 
 ---
 
@@ -365,7 +377,7 @@ Supabase query при каждом `/health` запросе (interval=30s). На
 | 3.4 | fallback billing по actual_tier | ✅ Закрыто май 2026 |
 | 4.1 | MATH correction bounded | ✅ |
 | 4.2 | Consensus mutex с HEAVY | ✅ |
-| 4.3 | best_candidate = longest | ⚠️ Low priority |
+| 4.3 | bias-free safety selection + fallback observability | ✅ Закрыто май 2026 |
 | 5.1 | pgvector bug fix | ✅ |
 | 5.2 | rerank_tokens шум | ⚠️ Low priority |
 | 5.3 | source_credibility pass-through | ⚠️ Reserved — активируется с source_url |
@@ -393,7 +405,6 @@ Supabase query при каждом `/health` запросе (interval=30s). На
 ### Открытые пункты по приоритету
 
 **⚠️ Known gaps (не блокируют production):**
-- §4.3 — best_candidate по длине, не по качеству
 - §5.2 — rerank_tokens шумовая оценка
 - §5.3 — source_credibility pass-through для pgvector (активируется с source_url)
 - §10.2 — distributed tracing не реализован
