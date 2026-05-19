@@ -191,8 +191,11 @@ def _build_messages(
     intent_result,
     retrieved_context: str,
     truth_mode: TruthMode,
+    tier: Tier = Tier.GENERAL,
 ) -> list[dict]:
-    strategy = select_strategy(intent_result.intent, Tier.GENERAL)
+    # Use real tier so FAST requests get lightweight instruction_prefix,
+    # not the heavy GENERAL strategy prompt. Fixes audit §1.3 + §6.3.
+    strategy = select_strategy(intent_result.intent, tier)
     user_msg = (
         f"{strategy.instruction_prefix} {request.user_message}".strip()
         if strategy.instruction_prefix
@@ -521,17 +524,28 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             )
 
         # ── estimate ─────────────────────────────────────────────────────────
+        # Adaptive tier for EPK estimation (fixes audit §6.1):
+        # Short LOW-complexity requests are estimated at FAST rates (~10x cheaper).
+        # Larger or complex requests fall back to GENERAL (conservative, safe overestimate).
+        # This prevents legitimate short queries from hitting DEGRADED_MODE.
+        from core.kernel.policy_registry import RUNTIME as _RT
+        _fast_token_threshold = 300  # input tokens below which FAST estimate applies
+        _estimate_tier = (
+            Tier.FAST
+            if request.complexity == Complexity.LOW and request.input_tokens < _fast_token_threshold
+            else Tier.GENERAL
+        )
         estimated_output = estimate_output_tokens(
             request.input_tokens,
             request.complexity,
-            Tier.GENERAL,
+            _estimate_tier,
         )
         estimated = estimate_cost(
             input_tokens=request.input_tokens,
             estimated_output_tokens=estimated_output,
             embedding_tokens=request.embedding_tokens,
             rerank_tokens=request.rerank_tokens,
-            tier=Tier.GENERAL,
+            tier=_estimate_tier,
             embedding_type=request.embedding_type,
         )
 
@@ -620,7 +634,7 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             )
 
         # ── build messages with truth mode ────────────────────────────────────
-        messages = _build_messages(request, intent_result, retrieved_context, truth_mode)
+        messages = _build_messages(request, intent_result, retrieved_context, truth_mode, tier)
 
         logger.info("Truth mode", extra={
             "mode": truth_mode,
