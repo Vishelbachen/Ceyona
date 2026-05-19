@@ -29,6 +29,6 @@ primary_region = 'fra'
     timeout = "5s"
 
 [[vm]]
-  memory = '2gb'
+  memory = '8gb'
   cpu_kind = 'shared'
   cpus = 1
