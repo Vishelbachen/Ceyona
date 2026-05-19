@@ -780,9 +780,9 @@ external/text_to_speech.py — Orpheus TTS via Groq API. ✅
 transport/telegram/message_router.py — extract_voice() / has_voice(). ✅
 transport/telegram/update_handler.py — voice path: download → ASR → Safety Gate Pass 1
 (observability only, non-blocking) → pipeline. TTS on response when is_voice_input = True. ✅
-Gap: audio_seconds and tts_characters are captured in TranscriptResult / SynthesisResult
-but not yet wired to usage_meter.record() for billing.
-Priority: wire before speech features go to production.
+audio_seconds and tts_characters wired to OrchestratorResult and UsageEntry (май 2026). ✅
+update_handler.py: _asr_audio_seconds and _tts_characters set on result via dataclasses.replace()
+before return — webhook.py receives real values, not zeros.
 OrchestratorResult.tts_audio_bytes + Telegram sendVoice
 Status: IMPLEMENTED (May 2026)
 OrchestratorResult now declares tts_audio_bytes: bytes = b"". ✅
@@ -792,13 +792,13 @@ non-empty → sendVoice (Telegram voice message)
 sendVoice failure → silent fallback to _send_message() (text)
 empty → text only ✅
 Speech Billing
-Status: PARTIAL FIX DEPLOYED (May 2026)
+Status: IMPLEMENTED ✅ (май 2026)
 UsageEntry fields audio_seconds, tts_characters, tool_calls declared. ✅
-usage_meter.record() now writes extended fields only when non-zero;
-on PGRST204 (schema cache miss) retries with core fields only — billing survives migration gap. ✅
-Supabase schema: columns NOT YET ADDED to usage_log table.
-Action required: run migrate_usage_log.sql in Supabase SQL Editor to fully close this gap.
-After migration: remove PGRST204 fallback path, update this status to IMPLEMENTED ✅.
+Supabase migration applied: audio_seconds FLOAT8, tts_characters BIGINT, tool_calls BIGINT. ✅
+update_handler.py: _asr_audio_seconds и _tts_characters wire на OrchestratorResult перед return. ✅
+webhook.py: audio_seconds и tts_characters передаются в UsageEntry. ✅
+usage_meter.record(): пишет extended fields когда non-zero; PGRST204 fallback оставлен
+как защитный слой на случай schema cache miss — не удалять.
 policy_registry.py
 Status: IMPLEMENTED — LIVE (May 2026)
 Previously dead code — nobody imported it. Now the true single source of truth:
@@ -874,9 +874,9 @@ correction и output_normalizer вызываются исключительно 
 analysis.py: NOT YET IMPLEMENTED — модуль существует, в pipeline не вызывается (см. §27 analysis.py gap).
 payments/ — ✅ Frozen √
 Файлы: usage_meter.py, access_controller.py, pricing_engine.py, ton_client.py, wallet_manager.py
-Верифицировано: май 2026. Фикс задеплоен (май 2026).
-usage_meter: PGRST204 fallback до выполнения migrate_usage_log.sql.
-После миграции: удалить fallback path, обновить статус Speech Billing в §27.
+Верифицировано: май 2026.
+usage_meter: PGRST204 fallback сохранён как защитный слой (schema cache miss protection).
+Speech Billing полностью закрыт (май 2026) — см. §27.
 _DEFAULT_BALANCE_USD читается из policy_registry.RUNTIME.
 retrieval/ — ✅ Frozen √
 Файлы: retrieval_engine.py, source_credibility.py, dense/, sparse/, reranker/, cache/
