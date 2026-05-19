@@ -71,6 +71,9 @@ async def complete_with_fallback(
 
     Special handling:
       - qwen/qwen3-32b: thinking mode explicitly disabled at call site
+      - response.actual_tier reflects the tier that actually executed,
+        which may be lower than the requested tier after cascade.
+        Callers MUST use response.actual_tier for billing (not the requested tier).
     """
     current_tier: Tier | None = tier
     current_messages = messages
@@ -101,13 +104,21 @@ async def complete_with_fallback(
 
             for attempt in range(max_retries + 1):
                 try:
-                    return await groq_client.complete(
+                    response = await groq_client.complete(
                         model=model,
                         messages=current_messages,
                         max_tokens=max_tokens,
                         temperature=temperature,
                         **extra_params,
                     )
+                    if current_tier != tier:
+                        logger.warning("Cascade used lower tier for billing", extra={
+                            "requested_tier": tier,
+                            "actual_tier":    current_tier,
+                            "model":          model,
+                        })
+                    from dataclasses import replace
+                    return replace(response, actual_tier=current_tier)
                 except Exception as exc:
                     if _is_413(exc):
                         truncated = _truncate_messages(current_messages)
@@ -117,13 +128,15 @@ async def complete_with_fallback(
                             })
                             current_messages = truncated
                             try:
-                                return await groq_client.complete(
+                                response = await groq_client.complete(
                                     model=model,
                                     messages=current_messages,
                                     max_tokens=max_tokens,
                                     temperature=temperature,
                                     **extra_params,
                                 )
+                                from dataclasses import replace
+                                return replace(response, actual_tier=current_tier)
                             except Exception as exc2:
                                 logger.warning("LLM call failed after truncation", extra={
                                     "tier": current_tier, "model": model, "error": str(exc2),
