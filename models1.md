@@ -1,5 +1,5 @@
 # CEYONA — MODEL REGISTRY
-Version: 7.1 — Synchronized Edition
+Version: 7.2 — Safety Gate Observability Edition
 Status: Active Source of Truth
 Supersedes: models.md, models2.md (all previous versions)
 
@@ -33,28 +33,38 @@ Quota exhaustion on HF does NOT trigger Groq fallback — it degrades retrieval 
 
 ---
 
-## 1. SAFETY LAYER (deterministic cascade — FIRST GATE)
+## 1. SAFETY LAYER (input observability — NON-BLOCKING)
 
 **Provider: Groq**
 *Prices: economic.md §1.2*
 
 ```
-meta-llama/llama-prompt-guard-2-22m    → FAST REJECTION FILTER (Pass 1)
-meta-llama/llama-prompt-guard-2-86m    → DEEP CLASSIFICATION FILTER (Pass 2)
-openai/gpt-oss-safeguard-20b           → FINAL ENFORCEMENT MODEL (Pass 2, combined with 86m)
+meta-llama/llama-prompt-guard-2-22m    → SIGNAL LOGGER (Pass 1)
+meta-llama/llama-prompt-guard-2-86m    → SIGNAL LOGGER (Pass 2)
+openai/gpt-oss-safeguard-20b           → SIGNAL LOGGER (Pass 2, observability)
 ```
 
-**Role:** constraint evaluation only. NO generation. NO reasoning synthesis.
+**Role:** input signal logging only. NO generation. NO reasoning synthesis. NO blocking.
 
 **Execution order:**
 - 22m: BEFORE Feature Extraction
 - 86m + safeguard-20b: AFTER Feature Extraction, BEFORE EPK
 
-**Unavailability rule:** Safety model unavailable → DENY by default. NO fallback to ALLOW.
+**Blocking policy: NON-BLOCKING.**
+Both passes always return PASS. Suspicious signals are logged for monitoring only.
+
+**Rationale:** prompt-guard models and gpt-oss-safeguard-20b produce unacceptable
+false-positive rates on Russian, Arabic, and short casual messages — blocking at
+input level causes full outage for legitimate users without meaningful safety gain.
+
+**Unavailability rule:** Safety model unavailable → pass-through. Observability
+degrades, execution continues. No DENY on model unavailability.
+
+**Sole blocking authority: safety_agent** (post-reasoning, semantic, full context).
 
 **Critical distinction:**
-- Safety Layer → input firewall, deterministic, blocks harmful input before processing
-- safety_agent → semantic validator, post-reasoning, catches unsafe emergent content
+- Safety Layer → input signal observability (non-blocking)
+- safety_agent → post-reasoning semantic validator, BLOCKING authority
 - These are NOT duplicates. Both are required.
 
 ---
@@ -271,7 +281,7 @@ correction + output_normalizer are EXCLUDED from META side-channel DAG.
 
 ```
 meta/
-├── analysis.py           PRE-REASONING step (auto DAG, before intent_engine)
+├── analysis.py           PRE-REASONING step (auto DAG, before intent_engine) [NOT YET IMPLEMENTED]
 ├── reflection.py         POST-EXECUTION side-channel
 ├── correction.py         INLINE — owned meta/, executed by synthesizer step 5 ONLY
 ├── output_normalizer.py  INLINE — owned meta/, executed by synthesizer step 6 ONLY
@@ -285,9 +295,12 @@ meta/
 meta = semantic quality (is the answer logical? complete? contradictory?).
 
 ### analysis.py
-- Position: pre-reasoning DAG step (automatic, not called by Orchestrator explicitly)
-- Activation: ALLOW/HEAVY_REQUIRED (full), DEGRADED (lightweight), DENY (skip)
-- Output: non-binding hints → intent_engine (zero authority, MAY be ignored)
+**Status: NOT YET IMPLEMENTED**
+- Position: pre-reasoning DAG step (automatic, before intent_engine)
+- Activation (intended): ALLOW/HEAVY_REQUIRED (full), DEGRADED (lightweight), DENY (skip)
+- Output (intended): non-binding hints → intent_engine (zero authority, MAY be ignored)
+- Current state: module exists, is NOT called anywhere in the pipeline
+- Action required: wire into pipeline or explicitly deprioritize
 
 ### reflection.py
 - Position: post-execution side-channel (async, non-blocking)
@@ -439,10 +452,10 @@ Consensus SKIP (mutex) ❌
 
 ```
 INPUT
-↓ Safety Gate Pass 1 (meta-llama/llama-prompt-guard-2-22m)   [unavailable → DENY]
+↓ Safety Gate Pass 1 (meta-llama/llama-prompt-guard-2-22m)   [non-blocking, observability only]
 ↓ Feature Extraction (+ is_voice_input)
 ↓ Safety Gate Pass 2 (meta-llama/llama-prompt-guard-2-86m + openai/gpt-oss-safeguard-20b)
-                                                              [unavailable → DENY]
+                                                              [non-blocking, observability only]
 ↓ Auth / Rate Limit / Event Log
 ↓ Multilingual Normalization
     allam-2-7b                → Arabic
@@ -453,7 +466,7 @@ INPUT
     DEGRADED_MODE   ↓
     HEAVY_REQUIRED  ↓
 ↓ Memory + Embedding Retrieval [HuggingFace] + Reranker [HuggingFace]  [skip on DENY]
-↓ analysis.py                              [skip on DENY]
+↓ analysis.py                              [NOT YET IMPLEMENTED — skip on DENY]
     ALLOW / HEAVY → full | DEGRADED → lightweight
 ↓ Intent Engine                            [skip on DENY]
 ↓ Reasoning Engine                         [ALLOW / HEAVY only]
