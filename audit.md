@@ -301,10 +301,25 @@ EPK authority сохранён: проверка структурно идент
 **Закрыто:** см. §7.3. `GET /metrics` в `app/main.py` — JSON snapshot.
 Prometheus/StatsD: отдельная будущая задача, не требует изменений `metrics.py`.
 
-### 10.2 ⚠️ `tracing.py` — `trace()` вызывается, latency не экспортируется
-`trace()` вызывается в orchestrator (`coordinator` span) и webhook (`handle_message` span).
-Логирует `elapsed_ms` в stdout. Нет structured span export (Jaeger, OTLP).
-**Статус:** partial — observability через логи есть, distributed tracing нет.
+### 10.2 ✅ `tracing.py` — structured JSON spans + trace_id propagation (май 2026)
+~~`elapsed_ms` в stdout. Нет structured span export.~~
+
+**Закрыто:** `observability/tracing.py` переписан — log-based distributed tracing:
+- `trace_id` генерируется на корневом span, наследуется вложенными через `contextvars`
+- `span_id` уникален на каждый span, `parent_id` фиксирует вложенность
+- Span эмитируется как structured JSON в `extra["span_json"]` — читается `fly logs`
+  и любым JSON-aware log aggregator (Grafana Loki, Datadog)
+- `status: ok | error` — span помечается при исключении автоматически
+- `current_trace_id()` — публичный API для корреляции из других модулей
+- Интерфейс `with trace(name, **tags)` не изменился — `webhook.py` и `orchestrator.py`
+  не тронуты
+
+`opentelemetry-api` и `opentelemetry-sdk` удалены из `pyproject.toml` —
+были мёртвыми зависимостями (задекларированы, нигде не импортировались).
+
+**OTLP migration path:** заменить backend реализации `tracing.py` —
+все call sites остаются без изменений. Collector не нужен до появления
+Jaeger / Grafana Tempo / Honeycomb в инфраструктуре.
 
 ### 10.3 ✅ Safety Gate signals — разделены по типу (май 2026)
 ~~UNSAFE сигнал мог быть потерян молча при API ошибке.~~
@@ -395,7 +410,7 @@ Supabase query при каждом `/health` запросе (interval=30s). На
 | 9.2 | web search до EPK | ✅ Balance guard май 2026 |
 | 9.3 | vision fast-path bypass EPK | ✅ Balance guard май 2026 |
 | 10.1 | metrics.py — `/metrics` endpoint | ✅ Закрыто май 2026 |
-| 10.2 | tracing.py нет distributed export | ⚠️ Partial |
+| 10.2 | structured JSON spans + trace_id propagation | ✅ Закрыто май 2026 |
 | 10.3 | Safety Gate signals потеря | ✅ Закрыто май 2026 |
 | 10.4 | Нет request_id корреляции | ✅ Закрыто май 2026 |
 | 11.1 | ci.yml существует | ✅ |
@@ -407,4 +422,3 @@ Supabase query при каждом `/health` запросе (interval=30s). На
 **⚠️ Known gaps (не блокируют production):**
 - §5.2 — rerank_tokens шумовая оценка
 - §5.3 — source_credibility pass-through для pgvector (активируется с source_url)
-- §10.2 — distributed tracing не реализован
