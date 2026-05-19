@@ -17,6 +17,7 @@ class AgentResult:
     output_tokens: int
     success: bool
     error: str = ""
+    actual_tier: str = ""  # tier that actually executed (may differ from requested on cascade)
 
 
 async def run(messages: list[dict], temperature: float = 0.7) -> AgentResult:
@@ -46,6 +47,7 @@ async def run(messages: list[dict], temperature: float = 0.7) -> AgentResult:
             input_tokens=response.input_tokens,
             output_tokens=response.output_tokens,
             success=bool(response.text.strip()),
+            actual_tier=response.actual_tier,
         )
     except Exception as exc:
         logger.error("FastAgent failed", extra={"error": str(exc)})
