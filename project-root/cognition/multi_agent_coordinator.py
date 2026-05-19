@@ -324,12 +324,18 @@ async def coordinate(
             if _agent_succeeded(r)
         ]
 
-        # safety_agent: LAST before Consensus
+        # safety_agent: LAST before Consensus.
+        # Candidate selection for safety check: first surviving candidate by position
+        # (primary is always first in the list — [primary_result, *validator_results]).
+        # Position-based selection is deterministic and unbiased: it does not favour
+        # longer responses, does not defer to router authority, and preserves the
+        # original plan ordering. If primary failed it is absent from candidates,
+        # so we naturally fall to the next survivor. Fix audit §4.3.
         if candidates:
-            best_candidate = max(candidates, key=lambda r: len(r.text))
+            safety_candidate = candidates[0]
             safety: SafetyResult = safety_check(SafetyInput(
                 reasoning_plan=reasoning_plan,
-                draft_response=best_candidate.text,
+                draft_response=safety_candidate.text,
                 user_message=user_message,
             ))
             if safety.verdict == SafetyVerdict.BLOCK:
@@ -348,7 +354,7 @@ async def coordinate(
                     model=consensus.model,
                     input_tokens=consensus.input_tokens,
                     output_tokens=consensus.output_tokens,
-                    actual_tier=best_candidate.actual_tier,
+                    actual_tier=candidates[0].actual_tier,
                 )
 
         logger.warning("All consensus candidates failed — attempting fallback")
