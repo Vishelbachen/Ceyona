@@ -530,6 +530,7 @@ async def handle_message(
         logger.warning("Meta layer failed (non-critical)", extra={"error": str(exc)})
 
     # ── TTS (voice response when input was voice) ─────────────────────────────
+    _tts_characters = 0
     if _is_voice_input and result.text and not result.denied:
         try:
             from external.text_to_speech import synthesize as tts_synthesize
@@ -537,11 +538,23 @@ async def handle_message(
             if tts_result.success:
                 from dataclasses import replace
                 result = replace(result, tts_audio_bytes=tts_result.audio_bytes)
+                _tts_characters = tts_result.char_count
                 logger.info(
                     "TTS synthesis complete",
                     extra={"chars": tts_result.char_count, "model": tts_result.model_used},
                 )
         except Exception as exc:
             logger.warning("TTS failed — returning text-only", extra={"error": str(exc)})
+
+    # ── wire speech billing fields onto result ────────────────────────────────
+    # audio_seconds and tts_characters are captured in local vars above.
+    # They must be set on OrchestratorResult so webhook.py can pass them
+    # to UsageEntry — otherwise speech billing always records 0.
+    if _asr_audio_seconds or _tts_characters:
+        from dataclasses import replace as _replace
+        result = _replace(result,
+            audio_seconds=_asr_audio_seconds,
+            tts_characters=_tts_characters,
+        )
 
     return result
