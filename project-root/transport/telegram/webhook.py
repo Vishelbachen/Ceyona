@@ -9,7 +9,7 @@ from app.settings import settings
 from transport.telegram.auth_middleware import verify_update, verify_webhook_secret
 from transport.telegram.callback_handler import CallbackAction, parse_callback
 from transport.telegram.message_router import UpdateType, classify_update, extract_text
-from observability.metrics import increment, gauge, snapshot as metrics_snapshot
+from observability.metrics import increment, gauge
 from observability.tracing import trace
 from transport.telegram.update_handler import handle_message
 
