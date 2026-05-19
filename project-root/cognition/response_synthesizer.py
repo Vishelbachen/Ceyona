@@ -55,8 +55,23 @@ def _convert_latex_to_plaintext(text: str) -> str:
     Convert LaTeX math expressions to readable Unicode plaintext.
     Telegram does not render LaTeX — raw commands display as literal text.
     Called before stripping delimiters so inner content is converted first.
+
+    Code blocks (``` and inline `) are extracted before LaTeX conversion
+    and restored afterwards — underscore inside code must never be treated
+    as a LaTeX subscript marker.
     """
     import re
+
+    # ── protect code blocks from LaTeX substitution ───────────────────────
+    _placeholders: list[str] = []
+
+    def _stash(m: re.Match) -> str:
+        _placeholders.append(m.group(0))
+        return f"\x00CODE{len(_placeholders) - 1}\x00"
+
+    # fenced blocks first (``` ... ```), then inline `...`
+    text = re.sub(r"```[\s\S]*?```", _stash, text)
+    text = re.sub(r"`[^`\n]+`", _stash, text)
 
     # ── superscripts / subscripts ─────────────────────────────────────────
     # Full superscript map: digits, signs, letters with Unicode coverage
@@ -129,6 +144,10 @@ def _convert_latex_to_plaintext(text: str) -> str:
 
     # ── strip lone braces left over ───────────────────────────────────────
     text = re.sub(r"(?<!\\)[{}]", "", text)
+
+    # ── restore protected code blocks ─────────────────────────────────────
+    for i, block in enumerate(_placeholders):
+        text = text.replace(f"\x00CODE{i}\x00", block)
 
     return text
 
