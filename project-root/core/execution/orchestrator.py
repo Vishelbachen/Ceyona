@@ -510,17 +510,27 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             )
 
         # ── estimate ─────────────────────────────────────────────────────────
+        # Adaptive tier for pre-execution cost estimation.
+        # SHORT casual messages (LOW complexity, < 500 tokens) → FAST rates.
+        # Everything else → GENERAL rates (conservative upper bound per §8).
+        # This eliminates false DEGRADED_MODE for short conversational queries
+        # without underestimating cost for complex or medium/high complexity requests.
+        _epk_tier = (
+            Tier.FAST
+            if request.complexity == Complexity.LOW and request.input_tokens < 500
+            else Tier.GENERAL
+        )
         estimated_output = estimate_output_tokens(
             request.input_tokens,
             request.complexity,
-            Tier.GENERAL,
+            _epk_tier,
         )
         estimated = estimate_cost(
             input_tokens=request.input_tokens,
             estimated_output_tokens=estimated_output,
             embedding_tokens=request.embedding_tokens,
             rerank_tokens=request.rerank_tokens,
-            tier=Tier.GENERAL,
+            tier=_epk_tier,
             embedding_type=request.embedding_type,
         )
 
