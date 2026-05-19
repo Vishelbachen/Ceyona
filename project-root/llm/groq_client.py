@@ -13,6 +13,7 @@ class LLMResponse:
     input_tokens: int
     output_tokens: int
     model: str
+    actual_tier: str = ""   # tier that actually executed (may differ from requested on cascade)
 
 
 # ── Context window limits per model (input tokens) ───────────────────────────
