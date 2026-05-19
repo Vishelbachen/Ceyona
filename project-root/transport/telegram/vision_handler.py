@@ -7,6 +7,8 @@ from dataclasses import dataclass
 import httpx
 
 from app.settings import settings
+from contracts.shared_types import Tier
+from core.kernel.policy_registry import RUNTIME
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +133,7 @@ async def handle_vision(
 
     payload = {
         "model": _VISION_MODEL,
-        "max_tokens": 1024,
+        "max_tokens": RUNTIME.tier_configs[Tier.FAST].max_output_tokens,  # §15: reads from policy_registry, not hardcoded
         "temperature": 0.1,      # low: extraction must be faithful, not creative
         "messages": [
             {"role": "system", "content": _EXTRACTION_SYSTEM},
