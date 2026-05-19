@@ -589,13 +589,15 @@ SerpAPI results → search.py._filter_results() → source_credibility.filter_re
 → LLM receives only trusted sources
 ```
 
-**Call site B — retrieval/retrieval_engine.py (reserved)**:
+**Call site B — retrieval/retrieval_engine.py (active)**:
 ```
 pgvector similarity_search results → source_credibility.score_documents()
-    Currently pass-through (MemoryRecord has no source_url yet)
-    Will activate when MemoryRecord gains source_url field
+    MemoryRecord.source_url populated → credibility scoring active
+    NULL source_url → pass-through (conversation-originated records)
 → cross_encoder.rerank()
 ```
+MemoryRecord gains source_url field (май 2026): Supabase migration applied,
+supabase_store.py updated. score_documents() no longer a stub.
 
 source_credibility DOES actively block and filter — it is enforcement, not merely advisory.
 It is NOT in the retrieval pipeline between query_preprocessor and reranker.
