@@ -28,16 +28,38 @@ def _estimate_history_tokens(history: list[dict] | None) -> int:
 
 
 def _classify_complexity(text: str) -> Complexity:
-    has_code = "```" in text or "    " in text
-    has_json = "{" in text and "}" in text
-    length   = len(text)
+    """
+    Classify message complexity for EPK cost estimation.
+
+    Previous heuristic was noisy: 4 spaces anywhere = HIGH,
+    any "{}" = HIGH. This caused false DEGRADED_MODE for casual messages.
+
+    Fixed (audit §1.2):
+    - Code block detection: only fenced blocks (```), not indentation
+    - JSON detection: requires both braces AND colon (key:value pattern)
+    - Length threshold raised: 800 chars (previously 500 gave too many MEDIUM)
+    - Results are logged so the signal is observable
+    """
+    stripped = text.strip()
+    length   = len(stripped)
+
+    has_code = "```" in stripped
+    has_json = "{" in stripped and "}" in stripped and ":" in stripped
+
     if has_code and has_json:
-        return Complexity.CRITICAL
-    if has_code or has_json:
-        return Complexity.HIGH
-    if length > 500:
-        return Complexity.MEDIUM
-    return Complexity.LOW
+        complexity = Complexity.CRITICAL
+    elif has_code or has_json:
+        complexity = Complexity.HIGH
+    elif length > 800:
+        complexity = Complexity.MEDIUM
+    else:
+        complexity = Complexity.LOW
+
+    logger.debug(
+        "Complexity classified",
+        extra={"complexity": complexity, "length": length, "has_code": has_code, "has_json": has_json},
+    )
+    return complexity
 
 
 async def handle_message(
