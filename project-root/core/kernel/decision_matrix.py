@@ -1,12 +1,17 @@
 from contracts.shared_types import Tier
+from core.kernel.policy_registry import RUNTIME
 
 # ─── TIER THRESHOLDS (USD) ───────────────────────────────────────────────────
+# Read from policy_registry.RUNTIME — single source of truth.
+# Changing thresholds: edit policy_registry.py ONLY.
+# Both values are auto-synced here — no manual synchronization needed.
+#
+# Synchronization contract (economic.md §6):
+#   _FAST_CEILING    == RUNTIME.epk.fast_ceiling      (0.0005)
+#   _GENERAL_CEILING == RUNTIME.epk.degrade_threshold (0.003)
 
-# ASCENDING ORDER IS MANDATORY.
-# Previous values (0.05 / 0.003) were inverted — GENERAL tier was unreachable.
-# Fixed in economic.md v5.0.
-_FAST_CEILING:    float = 0.0005  # below $0.0005 → FAST  (~≤5000 combined tokens at FAST rates)
-_GENERAL_CEILING: float = 0.003   # below $0.003  → GENERAL (synced with EPK _DEGRADE_THRESHOLD)
+_FAST_CEILING:    float = RUNTIME.epk.fast_ceiling
+_GENERAL_CEILING: float = RUNTIME.epk.degrade_threshold
 
 
 def select_tier(estimated_cost: float) -> Tier:
