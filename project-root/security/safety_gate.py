@@ -168,9 +168,14 @@ async def _classify_with_model(text: str, model: str, system: str) -> bool:
             return verdict.startswith("SAFE")
 
     except Exception as exc:
+        # Fix §10.3: API error must be logged as a distinct event type.
+        # "Safety Gate signal lost" is different from "model returned UNSAFE":
+        #   - signal lost  → monitoring should alert on repeated API failures
+        #   - UNSAFE signal → monitoring should track suspicious input patterns
+        # Both are non-blocking — but they have different operational meanings.
         logger.error(
-            "Safety Gate model error (observability only — not blocking)",
-            extra={"model": model, "error": str(exc)},
+            "Safety Gate signal lost — model API error (observability degraded)",
+            extra={"model": model, "error": str(exc), "event": "safety_signal_lost"},
         )
         return True  # error in observability path → do not block
 
