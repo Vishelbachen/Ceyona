@@ -21,10 +21,13 @@ logger = logging.getLogger(__name__)
 
 # ─── TRUTH ENFORCEMENT ────────────────────────────────────────────────────────
 
-# Intents for which web search is NOT useful and MUST NOT be triggered.
-# These are self-contained: they either generate freely (creative, code, math)
-# or are already routed to a dedicated tool by the orchestrator (weather, maps)
-# or to compound_agent which handles its own tool execution (search, maps_poi).
+# Intents for which pre-EPK web search MUST NOT be triggered.
+# Two categories:
+#   (a) self-contained intents: generate freely without external data
+#       (creative, conversation, emotional, code, math)
+#   (b) agentic tool intents: compound_agent owns their own tool execution
+#       (search, weather, maps, maps_poi, maps_route) — compound decides
+#       what to search and how; pre-EPK search would duplicate or conflict.
 # Owned here — not in transport layer.
 _NO_SEARCH_INTENTS = {
     "creative", "conversation", "emotional", "code", "math",
@@ -33,6 +36,23 @@ _NO_SEARCH_INTENTS = {
 
 # Intents that MUST have retrieved context — no context = don't call LLM
 _STRICT_INTENTS = {
+    Intent.SEARCH,
+    Intent.WEATHER,
+    Intent.MAPS,
+    Intent.MAPS_POI,
+    Intent.MAPS_ROUTE,
+}
+
+# All tool intents that go through compound_agent (agentic path).
+# compound_agent owns tool execution + reasoning over retrieved data for ALL of these.
+# Rationale: every data-driven intent requires LLM reasoning to:
+#   - interpret and validate retrieved data
+#   - handle edge cases, partial results, and failures gracefully
+#   - apply nuance (e.g. weather suitability, route alternatives, POI relevance)
+# Deterministic formatters (format_current, format_geocode, format_route) are still
+# used INSIDE compound_agent._execute_tool() — they produce structured text that the
+# compound model then reasons over before delivering the final response.
+_AGENTIC_INTENTS = {
     Intent.SEARCH,
     Intent.WEATHER,
     Intent.MAPS,
@@ -171,20 +191,7 @@ def _empty_usage(
 
 # ─── TOOL RUNNER ──────────────────────────────────────────────────────────────
 
-# Intents whose tool output is returned directly to user WITHOUT LLM synthesis.
-# WEATHER, MAPS, MAPS_ROUTE: structured data formatted by deterministic formatters
-# (format_current, format_geocode, format_route) — no LLM synthesis needed or wanted.
-# These never reach compound_agent; tool-only path is the correct and intended path.
-#
-# INTENTIONALLY EXCLUDED from this set (use compound_agent via agentic path):
-#   SEARCH   — raw search snippets must be synthesized by compound model end-to-end.
-#   MAPS_POI — POI data requires LLM reasoning to present coherently.
-# These two go to compound_agent via plan_agents() → coordinator → compound_agent.
-_TOOL_INTENTS = {
-    Intent.WEATHER,
-    Intent.MAPS,
-    Intent.MAPS_ROUTE,
-}
+
 
 
 async def _run_tool(intent_result, lang: str) -> str | None:
@@ -635,36 +642,6 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
 
         # ── tier ─────────────────────────────────────────────────────────────
         tier = select_tier(estimated)
-
-        # ── tool-only path ────────────────────────────────────────────────────
-        # WEATHER, MAPS, MAPS_ROUTE: structured data from deterministic formatters
-        # (format_current, format_geocode, format_route) — delivered directly to
-        # synthesizer without LLM synthesis. Correct for these intents.
-        #
-        # SEARCH and MAPS_POI: NOT here — they go to compound_agent (agentic path).
-        # compound_agent owns tool execution + synthesis for those intents.
-        # _structured_search is intentionally removed: SEARCH with retrieved_context
-        # must go through compound for synthesis, not tool-only bypass.
-        if intent_result.intent in _TOOL_INTENTS and tool_output:
-            logger.info("Tool-only path", extra={
-                "intent": intent_result.intent,
-            })
-            synthesis = synthesize(SynthesisInput(
-                raw_text=tool_output,
-                intent=intent_result.intent,
-                tier=tier,
-                lang=lang,
-            ))
-            return OrchestratorResult(
-                text=synthesis.text,
-                tier=tier,
-                model="tool",
-                epk_decision=epk_out.decision,
-                usage=_empty_usage(request, tier),
-                lang=lang,
-                intent=intent_result.intent.value,
-                tool_used=True,
-            )
 
         # ── assemble retrieved context ────────────────────────────────────────
         retrieved_context = _retrieved_context or ""
