@@ -243,7 +243,7 @@ User Input
 → Memory + Embedding Retrieval + Reranker
 → Web Search  [pre-EPK, balance-gated — skipped for zero-balance users]
 → EPK Policy Resolution  [SOLE policy authority — inside orchestrator]
-→ analysis.py (pre-reasoning hints) [NOT YET IMPLEMENTED — see §27]
+→ analysis.py (pre-reasoning hints) [IMPLEMENTED ✅ — see §27]
 → Intent Classification
 → Execution Plan (via multi_agent_coordinator)
 → Model Resolution (via model_router)
@@ -774,7 +774,7 @@ creative_agent.py → already used complete_with_fallback(Tier.GENERAL) ✅
 Actual agents in use: Tier.FAST (llama-3.1-8b-instant), Tier.GENERAL (llama-3.3-70b-versatile cascade).
 Priority: re-wire to compound models when Groq tool-use API stabilises and is tested.
 Speech Layer (§12)
-Status: IMPLEMENTED (ASR + TTS), BILLING NOT YET WIRED
+Status: IMPLEMENTED ✅ (ASR + TTS + Billing, май 2026)
 external/speech_to_text.py — Whisper ASR via Groq API. ✅
 external/text_to_speech.py — Orpheus TTS via Groq API. ✅
 transport/telegram/message_router.py — extract_voice() / has_voice(). ✅
@@ -871,7 +871,7 @@ meta/ — ✅ Frozen √ (кроме analysis.py — см. ниже)
 Все модули (кроме analysis.py): pure functions, no I/O, never raise.
 correction и output_normalizer вызываются исключительно через synthesizer (steps 5, 6).
 Не имеют execution authority — только observability и cleanup.
-analysis.py: NOT YET IMPLEMENTED — модуль существует, в pipeline не вызывается (см. §27 analysis.py gap).
+analysis.py: IMPLEMENTED ✅ — вызывается в update_handler.py до orchestrator, результат передаётся в OrchestratorRequest.analysis_report (см. §27).
 payments/ — ✅ Frozen √
 Файлы: usage_meter.py, access_controller.py, pricing_engine.py, ton_client.py, wallet_manager.py
 Верифицировано: май 2026.
@@ -888,7 +888,7 @@ external/ — ✅ Frozen √
 Верифицировано: май 2026.
 search.py: URL sanitization + _SUSPICIOUS_PATTERNS + structured header для tool-only пути.
 maps.py: _RHETORICAL_PATTERNS фильтр, LLM-based POI extraction, country bias.
-Speech billing: NOT YET WIRED (📋 gap, см. §27).
+Speech billing: IMPLEMENTED ✅ (май 2026, см. §27).
 transport/telegram/ — ✅ Frozen √
 Файлы: webhook.py, update_handler.py, vision_handler.py, message_router.py,
 auth_middleware.py, callback_handler.py
