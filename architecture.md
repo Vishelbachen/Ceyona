@@ -779,6 +779,26 @@ Supported tools: web_search, get_weather, geocode.
 Tool execution delegates to: search_service, weather_service, maps_service (existing singletons).
 Fallback: AgentType.DEEP (llama-3.3-70b-versatile) — activated if compound fails.
 No policy authority. No model selection. Returns AgentResult — same contract as fast/deep agents.
+
+Execution ownership split (May 2026 — закрывает conflict_ownership gap):
+  _TOOL_INTENTS (WEATHER, MAPS, MAPS_ROUTE) → orchestrator tool-only path.
+    Reason: format_current / format_geocode / format_route return final text — no LLM synthesis needed.
+    These never reach compound_agent.
+  _AGENTIC_INTENTS (SEARCH, MAPS_POI) → compound_agent via agentic path.
+    Reason: require end-to-end LLM reasoning over retrieved data.
+    SEARCH: compound decides what to search and how to present results.
+    MAPS_POI: compound reasons about which POIs are relevant and presents them.
+    Orchestrator _NO_SEARCH_INTENTS prevents pre-EPK web search for these —
+    compound owns tool execution itself.
+
+Billing gap — CLOSED (May 2026):
+  tool_calls: int now flows through the complete billing chain without gaps:
+    compound_agent._run_compound() counts each tool call → AgentResult.tool_calls
+    → CoordinationResult.tool_calls (coordinator aggregates)
+    → OrchestratorResult.tool_calls (all three execution paths: _run_allow, _run_degraded, _run_heavy)
+    → webhook.py passes tool_calls to UsageEntry.tool_calls
+    → usage_meter.record() writes to Supabase usage_log.
+  UsageEntry.tool_calls field and Supabase column were already declared — no migration needed.
 Speech Layer (§12)
 Status: IMPLEMENTED ✅ (ASR + TTS + Billing, май 2026)
 external/speech_to_text.py — Whisper ASR via Groq API. ✅
@@ -847,8 +867,11 @@ core/execution/ — ✅ Frozen √
 Файлы: orchestrator.py
 Верифицировано: май 2026.
 Не создаёт policy. _TOOL_INTENTS и _STRICT_INTENTS корректны.
-_structured_search путь предотвращает LLM-синтез поверх structured data.
+_TOOL_INTENTS: {WEATHER, MAPS, MAPS_ROUTE} — детерминированные форматтеры, tool-only path.
+  SEARCH и MAPS_POI намеренно исключены — идут на compound_agent через agentic path (май 2026).
+_structured_search path удалён — больше не нужен (SEARCH теперь compound ownership).
 DENY/HEAVY/DEGRADED/ALLOW пути чистые, без скрытых ветвлений.
+tool_calls из CoordinationResult прокидывается в OrchestratorResult во всех трёх путях.
 llm/ — ✅ Frozen √
 Файлы: model_router.py, groq_client.py, fallback_handler.py, heavy_input_shaper.py,
 multilingual_preprocessor.py, prompt_engine.py, hf_client.py
@@ -866,6 +889,8 @@ compound_agent: tool-use execution loop (IMPLEMENTED ✅, май 2026).
   run_fast() → groq/compound-mini, run_deep() → groq/compound.
   Bounded: _MAX_TOOL_ROUNDS=3. Fallback: AgentType.DEEP.
   Поддерживаемые tools: web_search, get_weather, geocode.
+  AgentResult.tool_calls: int — billing counter, flows to CoordinationResult → OrchestratorResult → UsageEntry.
+  Billing gap закрыт (май 2026) — tool_calls chain замкнут без разрывов.
 cognition/ — ✅ Frozen √
 Файлы: intent_engine.py, reasoning_engine.py, multi_agent_coordinator.py,
 response_synthesizer.py
