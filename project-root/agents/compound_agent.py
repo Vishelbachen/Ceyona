@@ -20,6 +20,7 @@ Supported tools:
   get_weather → external.weather.WeatherService.get_current()
   geocode     → external.maps.MapsService.geocode()
   get_route   → external.maps.MapsService.get_route()
+  get_route   → external.maps.MapsService.get_route()
 """
 
 import json
@@ -280,9 +281,16 @@ async def _run_compound(
                 temperature=temperature,
             )
         except Exception as exc:
+            # Log full error so we can diagnose compound model availability issues
+            # (e.g. groq/compound-mini 404, API key issues, rate limits)
             logger.error(
                 "compound_agent: API call failed",
-                extra={"model": model, "round": round_num, "error": str(exc)},
+                extra={
+                    "model":  model,
+                    "round":  round_num,
+                    "error":  str(exc),
+                    "type":   type(exc).__name__,
+                },
             )
             return AgentResult(
                 text="", model=model, input_tokens=total_input_tokens,
