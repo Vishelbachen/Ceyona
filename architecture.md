@@ -762,9 +762,14 @@ llm/multilingual_preprocessor.py — Arabic via allam-2-7b,
 all other non-Latin via llama-3.3-70b-versatile, Latin-dominant → passthrough.
 Integrated into update_handler.py after Safety Gate Pass 2. ✅
 Agent Layer — Compound Models (§6, §16)
-Status: IMPLEMENTED ✅ (May 2026)
+Status: IMPLEMENTED ✅ (May 2026, updated архитектурное решение: unified agentic path)
 groq/compound and groq/compound-mini are wired as the primary execution path
-for tool-use intents (SEARCH, WEATHER, MAPS, MAPS_POI, MAPS_ROUTE).
+for ALL tool-use intents (SEARCH, WEATHER, MAPS, MAPS_POI, MAPS_ROUTE).
+
+Architecture decision (май 2026): ALL data-driven intents go through compound_agent.
+Rationale: every external data type requires LLM reasoning — not just formatting.
+The tool-only bypass path (WEATHER, MAPS, MAPS_ROUTE → deterministic formatters → output)
+is REMOVED. compound_agent now owns tool execution + reasoning for all five intents.
 
 Implementation:
   llm/groq_client.py          — ToolCall, ToolCallResponse dataclasses;
@@ -773,23 +778,24 @@ Implementation:
                                  run_fast() → groq/compound-mini (Tier.FAST);
                                  run_deep() → groq/compound (Tier.GENERAL).
   multi_agent_coordinator.py  — AgentType.COMPOUND_FAST / COMPOUND_DEEP;
-                                 tool intents route to compound, fallback=AgentType.DEEP.
+                                 ALL five tool intents route to compound, fallback=AgentType.DEEP.
 
-Supported tools: web_search, get_weather, geocode.
+Supported tools: web_search, get_weather, geocode, get_route.
+  get_route added (май 2026): compound calls MapsService.get_route() directly
+  for routing queries, enabling reasoning over route data (alternatives, context, caveats).
 Tool execution delegates to: search_service, weather_service, maps_service (existing singletons).
 Fallback: AgentType.DEEP (llama-3.3-70b-versatile) — activated if compound fails.
 No policy authority. No model selection. Returns AgentResult — same contract as fast/deep agents.
 
-Execution ownership split (May 2026 — закрывает conflict_ownership gap):
-  _TOOL_INTENTS (WEATHER, MAPS, MAPS_ROUTE) → orchestrator tool-only path.
-    Reason: format_current / format_geocode / format_route return final text — no LLM synthesis needed.
-    These never reach compound_agent.
-  _AGENTIC_INTENTS (SEARCH, MAPS_POI) → compound_agent via agentic path.
-    Reason: require end-to-end LLM reasoning over retrieved data.
-    SEARCH: compound decides what to search and how to present results.
-    MAPS_POI: compound reasons about which POIs are relevant and presents them.
-    Orchestrator _NO_SEARCH_INTENTS prevents pre-EPK web search for these —
-    compound owns tool execution itself.
+Execution ownership (май 2026 — unified):
+  ALL five intents (SEARCH, WEATHER, MAPS, MAPS_POI, MAPS_ROUTE) → compound_agent via agentic path.
+    Reason: compound owns tool execution + LLM reasoning over retrieved data end-to-end.
+    Deterministic formatters (format_current, format_geocode, format_route) remain inside
+    compound_agent._execute_tool() — they produce structured text for compound to reason over.
+  _TOOL_INTENTS set REMOVED from orchestrator — no more tool-only bypass.
+  _AGENTIC_INTENTS declared in orchestrator for documentation clarity.
+  Orchestrator _NO_SEARCH_INTENTS prevents pre-EPK web search for all five —
+  compound owns tool execution itself.
 
 Billing gap — CLOSED (May 2026):
   tool_calls: int now flows through the complete billing chain without gaps:
