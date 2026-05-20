@@ -525,3 +525,150 @@ Compound не видит STRICT gate — это EPK-level policy, не agent-lev
 Если compound не нашёл grounding data — возвращает AgentResult(success=False) →
 coordinator пробует fallback → оркестратор может вернуть no_grounded_data через
 STRICT truth gate если has_grounding=False после всего pipeline.
+---
+
+## 13. OBSERVED BUGS — тестирование май 2026
+
+Зафиксированы по скриншотам живых сессий. Статус: **OPEN**, подлежат исправлению.
+
+---
+
+### 13.1 🔴 OPEN — Все tool intents → «сервис временно недоступен»
+
+**Наблюдение:**
+Поиск отелей, маршруты из аэропорта, погода в Сан-Франциско, погода в Молдове —
+все запросы с tool execution возвращают одно и то же:
+> 🔍 Не удалось получить актуальную информацию прямо сейчас — сервис поиска временно недоступен.
+
+**Причина (предположительная):**
+compound_agent пытается вызвать `web_search` / `get_weather` / `get_route`, но tool execution
+падает — API ключ, недоступность Groq compound endpoint (beta/waitlist), таймаут.
+Fallback в coordinator → AgentType.DEEP без tool context → synthesizer отдаёт i18n строку
+`search_unavailable`.
+
+Дополнительный риск: после наших изменений (unified agentic path, май 2026) WEATHER/MAPS/MAPS_ROUTE
+тоже переведены на compound. Если compound endpoint недоступен — **весь** tool-traffic падает.
+Раньше WEATHER/MAPS работали через детерминированные форматтеры независимо от compound.
+
+**Что проверить:**
+- Доступность `groq/compound` и `groq/compound-mini` через Groq API
+- Ключи SerpAPI / OpenWeatherMap / Mapbox в `app/settings.py`
+- Логи `compound_agent._run_compound()` — на каком tool call round падает
+- `fallback_handler.py` — что происходит при AgentResult(success=False)
+
+**Влияние:** критическое. Все data-driven интенты отдают error вместо ответа.
+
+---
+
+### 13.2 🔴 OPEN — Потеря контекста разговора
+
+**Наблюдение:**
+- «Вот, нашла» → бот переводит фразу как idiomatic expression вместо понимания контекста
+- «Походу да» → бот переводит вместо интерпретации как согласия
+- Поиск аниме: после 3+ уточнений бот снова просит описать сюжет
+
+**Причина (code-level):**
+`_MAX_HISTORY_TOKENS = 1200` в `conversation_history.py` — агрессивный обрезатель.
+System prompt для tool/STRICT интентов весит ~1300-1800 токенов (задокументировано там же).
+После trim history сокращается до 0-2 реплик. Compound получает почти пустую историю.
+
+Отдельно: `_llm_pre_classify(text)` в `intent_engine.py` получает только текущее сообщение
+без истории. Короткий follow-up «Вот, нашла» → pre-classifier не понимает контекст →
+не может вернуть правильный intent.
+
+**Влияние:** серьёзное. Бот воспринимается как «без памяти» уже через 2-3 хода.
+
+---
+
+### 13.3 🟡 OPEN — Reasoning chain-of-thought утекает в финальный ответ
+
+**Наблюдение:**
+Ответы содержат внутренний reasoning format:
+```
+Constraints: 1. ... 2. ...
+Candidates: - ...
+Verification: - ...
+Verification table: Поле | Значение
+```
+
+**Причина:**
+`reasoning_engine.py` `instruction_prefix` для MATH/ANALYSIS требует «list ALL constraints»,
+«show verification table». `response_synthesizer.py` не фильтрует CoT структуру.
+
+Для vision запросов: `vision_handler` передаёт extracted text в pipeline →
+classifier видит структурированный текст → классифицирует как MATH/ANALYSIS →
+reasoning format применяется и весь CoT попадает в ответ пользователю.
+
+**Влияние:** ответы выглядят как отладочный вывод, не как ответ ассистента.
+
+---
+
+### 13.4 🟡 OPEN — Classifier теряет контекст на follow-up сообщениях
+
+**Наблюдение:**
+«Вот, нашла» / «Туговатый у тебя поиск)» / «Реально поисковик сдох)» после диалога →
+classifier видит изолированную фразу → CONVERSATION → бот отвечает не по контексту.
+
+**Причина:**
+`_llm_pre_classify(text)` получает только `text[:500]` без истории.
+`classify()` принимает `conversation_history` параметр, но в pre-classifier он не передаётся.
+Embedding classifier тоже работает на изолированном тексте.
+
+**Решение-кандидат:**
+Передавать последние 2-3 реплики из `conversation_history` в `_llm_pre_classify` как контекст.
+«[Предыдущий контекст: ...]\n\nТекущее сообщение: {text}»
+
+**Влияние:** серьёзное для conversational UX. Любой follow-up теряет контекст.
+
+---
+
+### 13.5 🟡 OPEN — SEARCH не оптимизирует запрос для поиска
+
+**Наблюдение:**
+Описательный поиск аниме («глава якудзы подставляет к своей дочери охранника, умерли родители») →
+3 попытки, не находит «Ojou to Banken-kun». Когда пользователь сам называет — бот сразу находит.
+
+**Причина:**
+compound_agent передаёт user message как query в `web_search` без переформулирования.
+Русскоязычный описательный запрос → SerpAPI → нерелевантные результаты.
+`_MAX_TOOL_ROUNDS = 3` — три попытки, но запрос почти не меняется.
+
+**Решение-кандидат:**
+В SEARCH system prompt явно инструктировать compound:
+«Переформулируй описание в оптимальный поисковый запрос на английском языке, используй ключевые слова».
+
+**Влияние:** умеренное. Поиск по описанию — частый и ожидаемый сценарий.
+
+---
+
+### 13.6 🟢 ПРОВЕРЕНО — 25 000 × 40 000 = 1 000 000 000 (не баг)
+
+Бот ответил 1 000 000 000. Это математически верно: 25 × 10³ × 40 × 10³ = 1000 × 10⁶ = 10⁹.
+CoT format в ответе — проблема 13.3, не математическая ошибка.
+
+---
+
+### 13.7 🟢 НИЗКИЙ — Грузинский: fallback-строка некорректна по смыслу
+
+**Наблюдение:**
+«რა ამინდია ამ წუთას მოლდოვაში?» → «სანდო ინფორმაცია ვერ მოიძება. გთხოვთ დააზუსტოთ კითხვა.»
+(«Уточните вопрос» — хотя вопрос чёткий).
+
+**Причина:**
+Та же, что 13.1 (compound failure). Плюс: i18n строка `search_unavailable` для `ka`
+формулирует отказ как «запрос неясен», а не «технический сбой».
+
+**Влияние:** низкое, но создаёт неверное впечатление.
+
+---
+
+### СВОДНАЯ ТАБЛИЦА ОТКРЫТЫХ БАГОВ
+
+| # | Приоритет | Описание | Файлы |
+|---|---|---|---|
+| 13.1 | 🔴 КРИТИЧЕСКИЙ | Все tool intents → «сервис недоступен» | compound_agent, groq_client, settings |
+| 13.2 | 🔴 СЕРЬЁЗНЫЙ | Потеря контекста (history trim слишком агрессивна + pre-classifier без истории) | conversation_history, intent_engine |
+| 13.3 | 🟡 СРЕДНИЙ | CoT reasoning format в финальном ответе | response_synthesizer, reasoning_engine, vision_handler |
+| 13.4 | 🟡 СРЕДНИЙ | Classifier теряет контекст на follow-up фразах | intent_engine._llm_pre_classify |
+| 13.5 | 🟡 СРЕДНИЙ | SEARCH не переформулирует описательный запрос | compound_agent, SEARCH system prompt |
+| 13.7 | 🟢 НИЗКИЙ | Грузинский: i18n fallback-строка некорректна по смыслу | i18n/strings.py |
