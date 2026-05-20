@@ -52,6 +52,7 @@ class CoordinationResult:
     blocked: bool = False
     block_reason: str = ""
     actual_tier: str = ""  # tier that actually executed (may be lower than requested on cascade)
+    tool_calls: int = 0   # total compound tool calls executed — flows to billing
 
 
 # ─── PLAN SELECTION ───────────────────────────────────────────────────────────
@@ -359,12 +360,15 @@ async def coordinate(
         if candidates:
             consensus: ConsensusResult = await resolve(candidates)
             if consensus.text:
+                # Sum tool_calls from all successful candidates (compound may have fired multiple)
+                _total_tool_calls = sum(getattr(r, "tool_calls", 0) for r in candidates)
                 return CoordinationResult(
                     text=consensus.text,
                     model=consensus.model,
                     input_tokens=consensus.input_tokens,
                     output_tokens=consensus.output_tokens,
                     actual_tier=candidates[0].actual_tier,
+                    tool_calls=_total_tool_calls,
                 )
 
         logger.warning("All consensus candidates failed — attempting fallback")
@@ -422,6 +426,7 @@ async def coordinate(
             input_tokens=primary_result.input_tokens,
             output_tokens=primary_result.output_tokens,
             actual_tier=primary_result.actual_tier,
+            tool_calls=getattr(primary_result, "tool_calls", 0),
         )
 
     # ── primary failed → fallback ─────────────────────────────────────────────
@@ -442,6 +447,7 @@ async def coordinate(
                 input_tokens=fallback_result.input_tokens,
                 output_tokens=fallback_result.output_tokens,
                 actual_tier=fallback_result.actual_tier,
+                tool_calls=getattr(fallback_result, "tool_calls", 0),
             )
 
         logger.error("Fallback agent also failed",
