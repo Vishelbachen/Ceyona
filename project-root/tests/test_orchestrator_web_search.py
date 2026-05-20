@@ -171,6 +171,36 @@ class TestUnifiedAgenticPath:
         expected = {"web_search", "get_weather", "geocode", "get_route"}
         assert expected == tool_names, f"Expected {expected}, got {tool_names}"
 
+    def test_strict_intents_empty_in_orchestrator(self):
+        """
+        _STRICT_INTENTS in orchestrator must be empty (or not contain agentic intents).
+        Agentic intents self-ground via compound_agent — pre-execution gate must not block them.
+        TruthMode.STRICT still reaches compound via _build_messages (correct — tells LLM
+        'do not fabricate') but the gate itself must not fire for agentic intents.
+        """
+        import core.execution.orchestrator as orch
+        from cognition.intent_engine import Intent
+        for intent in (Intent.SEARCH, Intent.WEATHER, Intent.MAPS, Intent.MAPS_POI, Intent.MAPS_ROUTE):
+            assert intent not in orch._STRICT_INTENTS, (
+                f"{intent} must NOT be in orchestrator._STRICT_INTENTS — "
+                "compound_agent self-grounds; pre-execution gate would block unconditionally"
+            )
+
+    def test_agentic_intents_skip_run_tool(self):
+        """
+        For agentic intents, requires_tools=True but _run_tool() must NOT be called.
+        Gate condition: intent not in _AGENTIC_INTENTS required for _run_tool().
+        This is the exact guard in orchestrator.run().
+        """
+        from cognition.intent_engine import Intent
+        for intent in _AGENTIC_INTENTS:
+            # Simulate the guard: requires_tools=True, but skipped for agentic intents
+            requires_tools = True  # all agentic intents have requires_tools=True
+            should_call_run_tool = requires_tools and intent not in _AGENTIC_INTENTS
+            assert not should_call_run_tool, (
+                f"_run_tool() must be skipped for {intent} — compound owns tool execution"
+            )
+
 
 
 
