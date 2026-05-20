@@ -218,6 +218,7 @@ async def _run_compound(
 
     total_input_tokens  = 0
     total_output_tokens = 0
+    total_tool_calls    = 0  # compound tool calls executed — billing counter
 
     for round_num in range(_MAX_TOOL_ROUNDS + 1):
         try:
@@ -236,6 +237,7 @@ async def _run_compound(
             return AgentResult(
                 text="", model=model, input_tokens=total_input_tokens,
                 output_tokens=total_output_tokens, success=False, error=str(exc),
+                tool_calls=total_tool_calls,
             )
 
         total_input_tokens  += result.input_tokens
@@ -249,6 +251,7 @@ async def _run_compound(
                 input_tokens=total_input_tokens,
                 output_tokens=total_output_tokens,
                 success=bool(result.text.strip()),
+                tool_calls=total_tool_calls,
             )
 
         # Model requested tool calls
@@ -262,6 +265,7 @@ async def _run_compound(
                     text="", model=model, input_tokens=total_input_tokens,
                     output_tokens=total_output_tokens, success=False,
                     error=f"max_tool_rounds_exceeded ({_MAX_TOOL_ROUNDS})",
+                    tool_calls=total_tool_calls,
                 )
 
             logger.info(
@@ -278,6 +282,7 @@ async def _run_compound(
             for tc in result.tool_calls:
                 tool_text = await _execute_tool(tc.name, tc.arguments, lang)
                 tool_results.append((tc.id, tool_text))
+            total_tool_calls += len(result.tool_calls)  # billing: count each call
 
             # Append assistant message + tool results to conversation
             tool_messages = _build_tool_result_messages(
@@ -295,6 +300,7 @@ async def _run_compound(
             text="", model=model, input_tokens=total_input_tokens,
             output_tokens=total_output_tokens, success=False,
             error="unexpected_result_type",
+            tool_calls=total_tool_calls,
         )
 
     # Should be unreachable — loop exits via return inside
@@ -302,6 +308,7 @@ async def _run_compound(
         text="", model=model, input_tokens=total_input_tokens,
         output_tokens=total_output_tokens, success=False,
         error="loop_exhausted",
+        tool_calls=total_tool_calls,
     )
 
 
