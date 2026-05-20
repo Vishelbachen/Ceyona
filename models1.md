@@ -182,7 +182,7 @@ Tier.GENERAL → AgentType.COMPOUND_DEEP  (groq/compound)
 Fallback     → AgentType.DEEP           (llama-3.3-70b-versatile — plain text synthesis)
 ```
 
-**Supported tools:** web_search, get_weather, geocode
+**Supported tools:** web_search, get_weather, geocode, get_route
 **Max tool rounds:** 3 (bounded — §2.2)
 **Role:** tool selection authority, multi-step execution.
 **No policy authority.** No system governance. No Heavy Tier activation.
