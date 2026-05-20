@@ -8,7 +8,16 @@ logger = logging.getLogger(__name__)
 
 # ─── INTENT → TRUTH MODE MAPPING ─────────────────────────────────────────────
 
-# Intents that MUST have grounded data — no context = block
+# Intents that resolve to TruthMode.STRICT.
+# STRICT mode instructs the LLM: "do not fabricate — only use retrieved data".
+# This is correct and intentional for all data-driven intents.
+#
+# IMPORTANT: TruthMode.STRICT here does NOT mean "block if no pre-fetched context".
+# The pre-execution truth gate in orchestrator.py is separate and explicitly
+# excludes agentic intents (WEATHER, MAPS, MAPS_POI, MAPS_ROUTE, SEARCH) —
+# because compound_agent self-grounds by calling tools during its reasoning loop.
+# The STRICT instruction still reaches compound via _build_messages(), which is
+# correct: it tells compound "do not invent data, use what your tools return".
 _STRICT_INTENTS = {
     Intent.SEARCH,
     Intent.WEATHER,
