@@ -5,6 +5,7 @@ import logging
 from dataclasses import dataclass, field
 from enum import Enum
 
+import agents.compound_agent as compound_agent
 import agents.creative_agent as creative_agent
 import agents.deep_agent as deep_agent
 import agents.fast_agent as fast_agent
@@ -22,9 +23,11 @@ logger = logging.getLogger(__name__)
 # ─── AGENT IDENTIFIERS ────────────────────────────────────────────────────────
 
 class AgentType(str, Enum):
-    FAST     = "fast"
-    DEEP     = "deep"
-    CREATIVE = "creative"
+    FAST          = "fast"
+    DEEP          = "deep"
+    CREATIVE      = "creative"
+    COMPOUND_FAST = "compound_fast"   # groq/compound-mini — tool-use, single-step
+    COMPOUND_DEEP = "compound_deep"   # groq/compound     — tool-use, multi-step
 
 
 # ─── PLAN CONTRACT ────────────────────────────────────────────────────────────
@@ -118,11 +121,12 @@ def plan_agents(
             temperature=strategy.temperature,
         )
 
-    # Tool-result synthesis intents — need DEEP to properly synthesise
-    # external data (search snippets, route data, weather) into a coherent answer.
-    # Previously fell through to default FAST with no fallback:
-    #   FAST agent (llama-3.1-8b, 512 tokens) received 5 search snippets +
-    #   system prompt → context overflow or empty response → coordinator blocked.
+    # Tool-result synthesis intents — compound models handle external data natively
+    # via tool-use API.  compound-mini (fast) for FAST tier, compound (deep) for GENERAL.
+    # Fallback: DEEP agent (llama-3.3-70b-versatile) — handles tool results as plain text
+    # if compound is unavailable or returns an error.
+    # Previously used DEEP agent unconditionally — that worked but wasted synthesis tokens
+    # on data the model already retrieved.  Now compound closes the loop end-to-end.
     if intent in (
         Intent.SEARCH,
         Intent.WEATHER,
@@ -130,9 +134,10 @@ def plan_agents(
         Intent.MAPS_POI,
         Intent.MAPS_ROUTE,
     ):
+        primary = AgentType.COMPOUND_FAST if tier == Tier.FAST else AgentType.COMPOUND_DEEP
         return AgentPlan(
-            primary=AgentType.DEEP,
-            fallback=AgentType.FAST,
+            primary=primary,
+            fallback=AgentType.DEEP,   # plain-text fallback — always available
             use_consensus=False,
             parallel_validators=[],
             temperature=strategy.temperature,
@@ -164,6 +169,7 @@ async def _run_agent(
     agent_type: AgentType,
     messages: list[dict],
     temperature: float,
+    lang: str = "en",
 ) -> AgentResult:
     """
     Dispatch to the correct agent module based on AgentType.
@@ -171,6 +177,10 @@ async def _run_agent(
     a failed AgentResult so the coordinator can handle fallback/blocking.
     """
     try:
+        if agent_type == AgentType.COMPOUND_DEEP:
+            return await compound_agent.run_deep(messages=messages, lang=lang, temperature=temperature)
+        if agent_type == AgentType.COMPOUND_FAST:
+            return await compound_agent.run_fast(messages=messages, lang=lang, temperature=temperature)
         if agent_type == AgentType.DEEP:
             return await deep_agent.run(messages=messages, temperature=temperature)
         if agent_type == AgentType.CREATIVE:
@@ -306,13 +316,13 @@ async def coordinate(
     """
 
     # ── primary agent ─────────────────────────────────────────────────────────
-    primary_result = await _run_agent(plan.primary, messages, temperature)
+    primary_result = await _run_agent(plan.primary, messages, temperature, lang=lang)
 
     # ── consensus path (ALLOW only) ───────────────────────────────────────────
     if plan.use_consensus:
         if plan.parallel_validators:
             tasks = [
-                _run_agent(vt, messages, temperature)
+                _run_agent(vt, messages, temperature, lang=lang)
                 for vt in plan.parallel_validators
             ]
             validator_results: list[AgentResult] = await asyncio.gather(*tasks)
@@ -422,7 +432,7 @@ async def coordinate(
 
     if plan.fallback is not None and plan.fallback != plan.primary:
         logger.info("Trying fallback agent", extra={"agent": plan.fallback})
-        fallback_result = await _run_agent(plan.fallback, messages, temperature)
+        fallback_result = await _run_agent(plan.fallback, messages, temperature, lang=lang)
 
         if _agent_succeeded(fallback_result):
             logger.info("Fallback agent succeeded")
