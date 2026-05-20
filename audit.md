@@ -426,7 +426,53 @@ Supabase query при каждом `/health` запросе (interval=30s). На
 | 11.1 | ci.yml существует | ✅ |
 | 11.2 | Test suite создан | ✅ Закрыто май 2026 |
 | 11.3 | fly.toml machine spec | ✅ Закрыто май 2026 |
+| 12.1 | tool_calls billing gap | ✅ Закрыто май 2026 |
+| 12.2 | Execution ownership conflict SEARCH/MAPS_POI | ✅ Закрыто май 2026 |
 
 ### Открытые пункты по приоритету
 
 Все зафиксированные пункты закрыты. Новых открытых пунктов нет.
+
+---
+
+## 12. COMPOUND AGENT — BILLING & OWNERSHIP (май 2026)
+
+### 12.1 ✅ tool_calls billing gap — закрыт (май 2026)
+~~tool_calls: int объявлен в UsageEntry и Supabase, но в webhook.py не передавался.
+compound web_search вызовы не биллились. Revenue leak.~~
+
+**Закрыто:** chain замкнут без разрывов:
+```
+compound_agent._run_compound() — total_tool_calls += len(result.tool_calls) за каждый round
+→ AgentResult.tool_calls: int
+→ CoordinationResult.tool_calls: int (coordinator агрегирует из primary/fallback/consensus)
+→ OrchestratorResult.tool_calls: int (_run_allow, _run_degraded, _run_heavy — все три пути)
+→ webhook.py: meter.record(UsageEntry(..., tool_calls=result.tool_calls))
+→ Supabase usage_log.tool_calls
+```
+UsageEntry.tool_calls и Supabase колонка уже были объявлены — миграции не требуется.
+
+### 12.2 ✅ Execution ownership conflict — закрыт (май 2026)
+~~SEARCH и MAPS_POI: два параллельных пути к одному результату.
+Оркестратор перехватывал их в tool-only / _structured_search path раньше compound.
+compound_agent был недостижим для этих интентов. plan_agents() → coordinator
+→ compound_agent никогда не вызывался для SEARCH/MAPS_POI.~~
+
+**Закрыто:** Execution ownership разделён чётко:
+
+**_TOOL_INTENTS (WEATHER, MAPS, MAPS_ROUTE) → оркестратор → детерминированные форматтеры.**
+format_current / format_geocode / format_route уже возвращают финальный текст.
+LLM там не нужен. tool-only path корректен и намерен для этих интентов.
+
+**SEARCH, MAPS_POI → compound_agent через agentic path (plan_agents → coordinator).**
+SEARCH: compound сам решает что искать и как синтезировать результаты.
+MAPS_POI: compound reasoning нужен для релевантности и представления.
+_structured_search path удалён из оркестратора — больше не нужен.
+_NO_SEARCH_INTENTS включает "search" и "maps_poi" — pre-EPK web search не запускается
+для этих интентов (compound сам владеет tool execution).
+
+**STRICT truth gate сохранён в оркестраторе как policy (§2.1).**
+Compound не видит STRICT gate — это EPK-level policy, не agent-level logic.
+Если compound не нашёл grounding data — возвращает AgentResult(success=False) →
+coordinator пробует fallback → оркестратор может вернуть no_grounded_data через
+STRICT truth gate если has_grounding=False после всего pipeline.
