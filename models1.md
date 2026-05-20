@@ -162,28 +162,28 @@ meta-llama/llama-4-scout-17b-16e-instruct     → long-context transformation (5
 
 ## 6. AGENT LAYER (tool-use execution fabric)
 
-**Provider: Groq (compound models registered, not yet wired)**
+**Provider: Groq (compound models wired ✅)**
 *Prices: economic.md §1.3*
 
 ```
-groq/compound      → REGISTERED as DEEP_AGENT_MODEL in model_router.py
-                     NOT YET WIRED — requires `tools` parameter (Groq tool-use API)
-                     Calling as plain chat-completion → empty/error response
-                     Sentry: "DeepAgent failed" confirmed root cause
+groq/compound      → IMPLEMENTED ✅ as AgentType.COMPOUND_DEEP
+                     agents/compound_agent.run_deep()
+                     Tier.GENERAL path — multi-step tool use
 
-groq/compound-mini → REGISTERED as FAST_AGENT_MODEL in model_router.py
-                     NOT YET WIRED — same reason as compound
-                     Sentry: "FastAgent failed" confirmed root cause
+groq/compound-mini → IMPLEMENTED ✅ as AgentType.COMPOUND_FAST
+                     agents/compound_agent.run_fast()
+                     Tier.FAST path — single-step tool use
 ```
 
-**Actual agent dispatch (current code — ROLLBACK May 2026):**
+**Agent dispatch for tool intents (SEARCH, WEATHER, MAPS, MAPS_POI, MAPS_ROUTE):**
 ```
-fast_agent.py     → Tier.FAST via complete_with_fallback()    — llama-3.1-8b-instant ✅
-deep_agent.py     → Tier.GENERAL via complete_with_fallback() — llama-3.3-70b-versatile cascade ✅
-creative_agent.py → Tier.GENERAL via complete_with_fallback(), temperature=0.9 ✅
+Tier.FAST    → AgentType.COMPOUND_FAST  (groq/compound-mini)
+Tier.GENERAL → AgentType.COMPOUND_DEEP  (groq/compound)
+Fallback     → AgentType.DEEP           (llama-3.3-70b-versatile — plain text synthesis)
 ```
 
-**compound wiring priority:** wire when Groq tool-use API stabilises AND is tested with `tools` param.
+**Supported tools:** web_search, get_weather, geocode
+**Max tool rounds:** 3 (bounded — §2.2)
 **Role:** tool selection authority, multi-step execution.
 **No policy authority.** No system governance. No Heavy Tier activation.
 
@@ -580,8 +580,8 @@ Cross-reference with model assignments above to verify no gaps.
 | openai/gpt-oss-20b | GENERAL tier | §3 |
 | openai/gpt-oss-120b | HEAVY tier primary + Consensus | §4, §8 |
 | meta-llama/llama-4-scout-17b-16e-instruct | HEAVY tier secondary + Vision | §4, §12 |
-| groq/compound | Agent Layer (deep_agent) | §6 |
-| groq/compound-mini | Agent Layer (fast_agent) | §6 |
+| groq/compound | Agent Layer (compound_agent deep) | §6 |
+| groq/compound-mini | Agent Layer (compound_agent fast) | §6 |
 | meta-llama/llama-prompt-guard-2-22m | Safety Gate Pass 1 | §1 |
 | meta-llama/llama-prompt-guard-2-86m | Safety Gate Pass 2 | §1 |
 | openai/gpt-oss-safeguard-20b | Safety Gate Pass 2 | §1 |
