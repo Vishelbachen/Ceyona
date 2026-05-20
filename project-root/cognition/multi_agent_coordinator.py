@@ -122,12 +122,18 @@ def plan_agents(
             temperature=strategy.temperature,
         )
 
-    # Tool-result synthesis intents — compound models handle external data natively
-    # via tool-use API.  compound-mini (fast) for FAST tier, compound (deep) for GENERAL.
-    # Fallback: DEEP agent (llama-3.3-70b-versatile) — handles tool results as plain text
-    # if compound is unavailable or returns an error.
-    # Previously used DEEP agent unconditionally — that worked but wasted synthesis tokens
-    # on data the model already retrieved.  Now compound closes the loop end-to-end.
+    # All data-driven intents — compound_agent owns tool execution AND reasoning.
+    # Architecture decision (май 2026): ALL tool intents go through compound, without
+    # exception.  Rationale: every external data type (search results, weather data,
+    # geocoding, routes, POI lists) requires LLM reasoning to:
+    #   - validate and interpret retrieved data (not just format it)
+    #   - handle partial results, failures, and edge cases with context
+    #   - apply nuance appropriate to the user's actual question
+    # Deterministic formatters (format_current, format_route etc.) remain inside
+    # compound_agent._execute_tool() — they produce structured text that compound
+    # then reasons over.  The tool-only bypass path is removed from orchestrator.
+    # compound-mini (fast) for FAST tier, compound (deep) for GENERAL.
+    # Fallback: DEEP agent (llama-3.3-70b-versatile) — plain-text, always available.
     if intent in (
         Intent.SEARCH,
         Intent.WEATHER,
