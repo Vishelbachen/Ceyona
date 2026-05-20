@@ -23,7 +23,8 @@ logger = logging.getLogger(__name__)
 
 # Intents for which web search is NOT useful and MUST NOT be triggered.
 # These are self-contained: they either generate freely (creative, code, math)
-# or are already routed to a dedicated tool by the orchestrator (weather, maps, search).
+# or are already routed to a dedicated tool by the orchestrator (weather, maps)
+# or to compound_agent which handles its own tool execution (search, maps_poi).
 # Owned here — not in transport layer.
 _NO_SEARCH_INTENTS = {
     "creative", "conversation", "emotional", "code", "math",
@@ -110,6 +111,7 @@ class OrchestratorResult:
                                    # webhook sends sendVoice when this is non-empty
     audio_seconds: float = 0.0    # ASR billing: whisper transcription duration (set by update_handler)
     tts_characters: int = 0        # TTS billing: orpheus character count (set by update_handler)
+    tool_calls: int = 0            # compound tool calls executed — billing counter (set by orchestrator)
 
 
 # ─── INTERNAL HELPERS ─────────────────────────────────────────────────────────
@@ -170,14 +172,18 @@ def _empty_usage(
 # ─── TOOL RUNNER ──────────────────────────────────────────────────────────────
 
 # Intents whose tool output is returned directly to user WITHOUT LLM synthesis.
-# WEATHER and MAPS: structured data already formatted by the tool — no synthesis needed.
-# SEARCH is intentionally NOT here: raw search snippets must be synthesised by LLM.
-# MAPS_POI is intentionally NOT here: POI data needs LLM to present it coherently.
+# WEATHER, MAPS, MAPS_ROUTE: structured data formatted by deterministic formatters
+# (format_current, format_geocode, format_route) — no LLM synthesis needed or wanted.
+# These never reach compound_agent; tool-only path is the correct and intended path.
+#
+# INTENTIONALLY EXCLUDED from this set (use compound_agent via agentic path):
+#   SEARCH   — raw search snippets must be synthesized by compound model end-to-end.
+#   MAPS_POI — POI data requires LLM reasoning to present coherently.
+# These two go to compound_agent via plan_agents() → coordinator → compound_agent.
 _TOOL_INTENTS = {
     Intent.WEATHER,
     Intent.MAPS,
-    Intent.MAPS_POI,    # tool output goes straight to synthesizer — no LLM
-    Intent.MAPS_ROUTE,  # same: format_route/format_poi is the final answer
+    Intent.MAPS_ROUTE,
 }
 
 
@@ -304,6 +310,7 @@ async def _run_allow(
         lang=lang,
         intent=intent_result.intent.value,
         tool_used=bool(intent_result.tool_name),
+        tool_calls=coordination.tool_calls,
     )
 
 
@@ -378,6 +385,7 @@ async def _run_degraded(
         lang=lang,
         intent=intent_result.intent.value,
         tool_used=bool(intent_result.tool_name),
+        tool_calls=coordination.tool_calls,
     )
 
 
@@ -474,6 +482,7 @@ async def _run_heavy(
         lang=lang,
         intent=intent_result.intent.value,
         tool_used=bool(intent_result.tool_name),
+        tool_calls=coordination.tool_calls,
     )
 
 
@@ -628,33 +637,20 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
         tier = select_tier(estimated)
 
         # ── tool-only path ────────────────────────────────────────────────────
-        # WEATHER, MAPS, MAPS_POI, MAPS_ROUTE: structured data from tool,
-        # delivered directly to synthesizer — no LLM synthesis needed.
-        # SEARCH: web search result goes tool-only to prevent hallucination.
-        # LLM must NOT synthesise over search results.
-        # _retrieved_context may hold web search result (acquired above)
-        # or retrieval context from update_handler. Either way, tool-only.
-        _is_search_with_results = (
-            intent_result.intent == Intent.SEARCH
-            and bool(tool_output)
-        )
-        _is_search_context = (
-            intent_result.intent == Intent.SEARCH
-            and bool(_retrieved_context)
-        )
-        _structured_search = _is_search_with_results or _is_search_context
-        _tool_data = (
-            _retrieved_context if _is_search_context
-            else tool_output if _is_search_with_results
-            else None
-        )
-        if (intent_result.intent in _TOOL_INTENTS or _structured_search) and _tool_data:
+        # WEATHER, MAPS, MAPS_ROUTE: structured data from deterministic formatters
+        # (format_current, format_geocode, format_route) — delivered directly to
+        # synthesizer without LLM synthesis. Correct for these intents.
+        #
+        # SEARCH and MAPS_POI: NOT here — they go to compound_agent (agentic path).
+        # compound_agent owns tool execution + synthesis for those intents.
+        # _structured_search is intentionally removed: SEARCH with retrieved_context
+        # must go through compound for synthesis, not tool-only bypass.
+        if intent_result.intent in _TOOL_INTENTS and tool_output:
             logger.info("Tool-only path", extra={
                 "intent": intent_result.intent,
-                "structured": _structured_search,
             })
             synthesis = synthesize(SynthesisInput(
-                raw_text=_tool_data,
+                raw_text=tool_output,
                 intent=intent_result.intent,
                 tier=tier,
                 lang=lang,
