@@ -51,20 +51,15 @@ SHAPER_MODEL    = "llama-3.1-8b-instant"
 # Agent Layer (models.md §AGENT LAYER) — tool-use execution fabric.
 # These are NOT tier models — they have tool selection authority.
 #
-# ARCHITECTURE DECISION (май 2026):
-# groq/compound and groq/compound-mini are NOT publicly available on Groq API
-# (compound-mini: pricing TBD, not listed; compound: private beta).
-# Calling them returns 404/401 → compound_agent falls to success=False → search_unavailable.
+# CONFIRMED (май 2026): groq/compound и groq/compound-mini подтверждены
+# ДОСТУПНЫМИ на аккаунте (см. available_models list, models1.md §22).
+# Предыдущая гипотеза о недоступности (404/401) — ОПРОВЕРГНУТА.
+# Причина бага 13.1 — не модели. Диагноз: audit.md §13.1 (уточнённый).
 #
-# Replacement: standard Groq models that support function calling via the same
-# tool-use API (tool_choice="auto", tools=[...]).
-# llama-3.1-8b-instant   — fast, low latency, supports function calling
-# llama-3.3-70b-versatile — deep reasoning, multi-step, supports function calling
-#
-# No changes to compound_agent.py or groq_client.complete_with_tools() needed —
-# the tool-use API contract is identical for all Groq models that support it.
-FAST_AGENT_MODEL = "llama-3.1-8b-instant"    # replaces groq/compound-mini
-DEEP_AGENT_MODEL = "llama-3.3-70b-versatile"  # replaces groq/compound
+# groq/compound-mini → AgentType.COMPOUND_FAST (Tier.FAST path)
+# groq/compound      → AgentType.COMPOUND_DEEP (Tier.GENERAL path)
+FAST_AGENT_MODEL = "groq/compound-mini"   # AgentType.COMPOUND_FAST
+DEEP_AGENT_MODEL = "groq/compound"        # AgentType.COMPOUND_DEEP
 
 # Consensus arbiter — only active when Heavy Tier is NOT active (mutex)
 CONSENSUS_MODEL = "openai/gpt-oss-120b"
