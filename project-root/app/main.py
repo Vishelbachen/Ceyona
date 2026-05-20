@@ -105,6 +105,9 @@ async def models():
 
     models = await groq_client._client.models.list()
 
+    ids = sorted(m.id for m in models.data)
+
     return {
-        "available_models": [m.id for m in models.data]
+        "count": len(ids),
+        "available_models": ids,
     }
