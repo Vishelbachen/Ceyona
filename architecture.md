@@ -762,17 +762,23 @@ llm/multilingual_preprocessor.py — Arabic via allam-2-7b,
 all other non-Latin via llama-3.3-70b-versatile, Latin-dominant → passthrough.
 Integrated into update_handler.py after Safety Gate Pass 2. ✅
 Agent Layer — Compound Models (§6, §16)
-Status: REGISTERED, NOT YET WIRED — ROLLBACK DEPLOYED (May 2026)
-groq/compound and groq/compound-mini are registered in model_router.py
-and groq_client._CONTEXT_CHAR_LIMITS.
-Root cause of failure: compound models require Groq tool-use API (tools parameter).
-Calling them as plain chat-completion (without tools) produces empty/error responses.
-Sentry evidence: repeated "DeepAgent failed" / "FastAgent failed" errors.
-Fix deployed: fast_agent.py → complete_with_fallback(Tier.FAST) ✅
-deep_agent.py → complete_with_fallback(Tier.GENERAL) ✅
-creative_agent.py → already used complete_with_fallback(Tier.GENERAL) ✅
-Actual agents in use: Tier.FAST (llama-3.1-8b-instant), Tier.GENERAL (llama-3.3-70b-versatile cascade).
-Priority: re-wire to compound models when Groq tool-use API stabilises and is tested.
+Status: IMPLEMENTED ✅ (May 2026)
+groq/compound and groq/compound-mini are wired as the primary execution path
+for tool-use intents (SEARCH, WEATHER, MAPS, MAPS_POI, MAPS_ROUTE).
+
+Implementation:
+  llm/groq_client.py          — ToolCall, ToolCallResponse dataclasses;
+                                 GroqClient.complete_with_tools() method.
+  agents/compound_agent.py    — tool execution loop (bounded: _MAX_TOOL_ROUNDS=3);
+                                 run_fast() → groq/compound-mini (Tier.FAST);
+                                 run_deep() → groq/compound (Tier.GENERAL).
+  multi_agent_coordinator.py  — AgentType.COMPOUND_FAST / COMPOUND_DEEP;
+                                 tool intents route to compound, fallback=AgentType.DEEP.
+
+Supported tools: web_search, get_weather, geocode.
+Tool execution delegates to: search_service, weather_service, maps_service (existing singletons).
+Fallback: AgentType.DEEP (llama-3.3-70b-versatile) — activated if compound fails.
+No policy authority. No model selection. Returns AgentResult — same contract as fast/deep agents.
 Speech Layer (§12)
 Status: IMPLEMENTED ✅ (ASR + TTS + Billing, май 2026)
 external/speech_to_text.py — Whisper ASR via Groq API. ✅
@@ -852,12 +858,14 @@ HF endpoint обновлён на router.huggingface.co.
 413-обработка с truncation retry в fallback_handler.
 qwen thinking=False применяется через requires_thinking_disabled().
 agents/ — ✅ Frozen √
-Файлы: fast_agent.py, deep_agent.py, creative_agent.py, safety_agent.py, consensus_engine.py
-Верифицировано: май 2026. Фикс задеплоен (май 2026).
-fast_agent и deep_agent откачены на complete_with_fallback(Tier.FAST/GENERAL).
-Причина: groq/compound требует tools параметр — plain chat-completion → пустой ответ.
-Sentry: "DeepAgent failed" устранён.
-Revert на compound/compound-mini: когда Groq tool-use API стабилизируется (см. §27 Agent Layer).
+Файлы: fast_agent.py, deep_agent.py, creative_agent.py, safety_agent.py, consensus_engine.py,
+compound_agent.py
+Верифицировано: май 2026.
+fast_agent и deep_agent: complete_with_fallback(Tier.FAST/GENERAL) — plain text synthesis.
+compound_agent: tool-use execution loop (IMPLEMENTED ✅, май 2026).
+  run_fast() → groq/compound-mini, run_deep() → groq/compound.
+  Bounded: _MAX_TOOL_ROUNDS=3. Fallback: AgentType.DEEP.
+  Поддерживаемые tools: web_search, get_weather, geocode.
 cognition/ — ✅ Frozen √
 Файлы: intent_engine.py, reasoning_engine.py, multi_agent_coordinator.py,
 response_synthesizer.py
