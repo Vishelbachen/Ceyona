@@ -98,3 +98,13 @@ async def metrics() -> dict:
     """
     from observability.metrics import snapshot
     return snapshot()
+
+@app.get("/models")
+async def models():
+    from llm.groq_client import groq_client
+
+    models = await groq_client._client.models.list()
+
+    return {
+        "available_models": [m.id for m in models.data]
+    }
