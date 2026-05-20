@@ -427,6 +427,19 @@ TruthMode defines factual generation permissions.
 - generalized knowledge
 - MUST still avoid fabricated claims
 
+**STRICT and agentic intents — critical distinction:**
+TruthMode.STRICT is assigned to WEATHER, MAPS, MAPS_POI, MAPS_ROUTE, SEARCH by `resolve_truth_mode()`.
+This instructs the LLM: "do not fabricate — only use what your tools return."
+This is correct and must remain.
+
+However, the pre-execution truth gate in orchestrator.py is separate:
+it checks `has_grounding = bool(retrieved_context) or bool(tool_output)` BEFORE compound executes.
+Agentic intents are excluded from `_STRICT_INTENTS` in the orchestrator gate —
+because compound_agent self-grounds by calling tools during its reasoning loop.
+The STRICT instruction still reaches compound via `_build_messages()` — it just
+does not trigger a pre-execution block that would fire unconditionally (compound
+has not had a chance to run yet at gate time).
+
 ---
 
 ## 11. MAPS / GEO / SEARCH POLICY
