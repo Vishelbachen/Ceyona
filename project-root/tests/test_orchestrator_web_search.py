@@ -12,7 +12,7 @@ import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
 from contracts.shared_types import Complexity, Tier
-from core.execution.orchestrator import OrchestratorRequest, _NO_SEARCH_INTENTS
+from core.execution.orchestrator import OrchestratorRequest, _NO_SEARCH_INTENTS, _AGENTIC_INTENTS
 
 
 # ─── _NO_SEARCH_INTENTS lives in orchestrator ─────────────────────────────────
@@ -138,6 +138,41 @@ class TestWebSearchZeroBalanceGuard:
 
 
 # ─── update_handler: no classify() or run_tool() for web search ───────────────
+
+class TestUnifiedAgenticPath:
+    """
+    Unified agentic path (май 2026): ALL tool intents go through compound_agent.
+    _TOOL_INTENTS is removed. _AGENTIC_INTENTS covers all five intents.
+    """
+
+    def test_agentic_intents_covers_all_five(self):
+        """All five data-driven intents must be in _AGENTIC_INTENTS."""
+        from cognition.intent_engine import Intent
+        for intent in (Intent.SEARCH, Intent.WEATHER, Intent.MAPS, Intent.MAPS_POI, Intent.MAPS_ROUTE):
+            assert intent in _AGENTIC_INTENTS, f"{intent} must be in _AGENTIC_INTENTS"
+
+    def test_tool_intents_removed_from_orchestrator(self):
+        """_TOOL_INTENTS must no longer exist — tool-only bypass path removed."""
+        import core.execution.orchestrator as orch
+        assert not hasattr(orch, "_TOOL_INTENTS"), (
+            "_TOOL_INTENTS must be removed — all tool intents now use agentic path"
+        )
+
+    def test_get_route_in_compound_tools(self):
+        """compound_agent must declare get_route as a supported tool."""
+        from agents.compound_agent import _TOOL_SCHEMAS
+        tool_names = [t["function"]["name"] for t in _TOOL_SCHEMAS]
+        assert "get_route" in tool_names, "get_route must be in compound_agent _TOOL_SCHEMAS"
+
+    def test_compound_tools_complete(self):
+        """compound_agent must support all four tools."""
+        from agents.compound_agent import _TOOL_SCHEMAS
+        tool_names = {t["function"]["name"] for t in _TOOL_SCHEMAS}
+        expected = {"web_search", "get_weather", "geocode", "get_route"}
+        assert expected == tool_names, f"Expected {expected}, got {tool_names}"
+
+
+
 
 class TestUpdateHandlerIsCleanTransport:
     def test_no_classify_import_for_web_search(self):
