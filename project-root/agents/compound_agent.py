@@ -19,6 +19,7 @@ Supported tools:
   web_search  → external.search.SearchService.search()
   get_weather → external.weather.WeatherService.get_current()
   geocode     → external.maps.MapsService.geocode()
+  get_route   → external.maps.MapsService.get_route()
 """
 
 import json
@@ -118,6 +119,42 @@ _TOOL_SCHEMAS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_route",
+            "description": (
+                "Get driving directions and route info between two places. "
+                "Use for: 'how to get from X to Y', distance, travel time, route planning."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "origin": {
+                        "type": "string",
+                        "description": (
+                            "Starting point — full geocodable place name "
+                            "(e.g. 'Moscow Kremlin', 'Voronezh train station'). "
+                            "Never use vague terms like 'center' or 'station' without the city name."
+                        ),
+                    },
+                    "destination": {
+                        "type": "string",
+                        "description": (
+                            "Destination — full geocodable place name. "
+                            "Include city name always."
+                        ),
+                    },
+                    "lang": {
+                        "type": "string",
+                        "description": "BCP-47 language code for the response.",
+                        "default": "en",
+                    },
+                },
+                "required": ["origin", "destination"],
+            },
+        },
+    },
 ]
 
 
@@ -161,6 +198,19 @@ async def _execute_tool(name: str, arguments: str, lang: str) -> str:
             if feature is None:
                 return f"[geocode: location not found for '{query}']"
             return maps_service.format_geocode(feature, lang=req_lang)
+
+        if name == "get_route":
+            origin      = args.get("origin", "")
+            destination = args.get("destination", "")
+            req_lang    = args.get("lang", lang)
+            if not origin or not destination:
+                return "[get_route: origin and destination are required]"
+            route = await maps_service.get_route(
+                origin=origin, destination=destination, lang=req_lang
+            )
+            if route is None:
+                return maps_service.format_route_not_found(req_lang)
+            return maps_service.format_route(route, lang=req_lang)
 
         logger.warning("compound_agent: unknown tool requested",
                        extra={"tool": name})
@@ -316,7 +366,7 @@ async def run_fast(messages: list[dict], lang: str = "en", temperature: float = 
     """
     Compound fast agent — groq/compound-mini (FAST_AGENT_MODEL).
     Single-step tool use, low latency.
-    Used for: SEARCH, WEATHER, MAPS intents on Tier.FAST path.
+    Used for: SEARCH, WEATHER, MAPS, MAPS_POI, MAPS_ROUTE intents on Tier.FAST path.
     """
     return await _run_compound(
         model=FAST_AGENT_MODEL,
@@ -331,7 +381,7 @@ async def run_deep(messages: list[dict], lang: str = "en", temperature: float = 
     """
     Compound deep agent — groq/compound (DEEP_AGENT_MODEL).
     Multi-step tool use, deeper reasoning.
-    Used for: SEARCH, WEATHER, MAPS intents on Tier.GENERAL/HEAVY path.
+    Used for: SEARCH, WEATHER, MAPS, MAPS_POI, MAPS_ROUTE intents on Tier.GENERAL/HEAVY path.
     """
     return await _run_compound(
         model=DEEP_AGENT_MODEL,
