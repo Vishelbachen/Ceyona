@@ -185,9 +185,15 @@ Fallback     → AgentType.DEEP           (llama-3.3-70b-versatile — plain tex
 **Supported tools:** web_search, get_weather, geocode, get_route
 
 **Agent models (май 2026):**
-- FAST_AGENT_MODEL: `llama-3.1-8b-instant` (replaces unavailable `groq/compound-mini`)
-- DEEP_AGENT_MODEL: `llama-3.3-70b-versatile` (replaces unavailable `groq/compound`)
-- Both support Groq function calling API identically — no compound_agent changes needed.
+- FAST_AGENT_MODEL: `groq/compound-mini` — AgentType.COMPOUND_FAST
+- DEEP_AGENT_MODEL: `groq/compound` — AgentType.COMPOUND_DEEP
+
+**⚠️ БАГ 13.1 OPEN:** tool intents падают в «сервис недоступен».
+Причина НЕ в недоступности моделей — groq/compound и groq/compound-mini
+подтверждены ДОСТУПНЫМИ на аккаунте (см. §22). Диагноз уточнён в audit.md §13.1.
+Вероятные причины: SERPAPI_KEY / OPENWEATHER_API_KEY не заполнены, либо
+compound-mini требует другой параметр tool_choice, либо таймаут.
+Нужны реальные логи с fly.io: `fly logs -a имя_приложения | grep compound_agent`
 **Max tool rounds:** 3 (bounded — §2.2)
 **Role:** tool selection authority, multi-step execution.
 **No policy authority.** No system governance. No Heavy Tier activation.
