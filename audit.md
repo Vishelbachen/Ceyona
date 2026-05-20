@@ -556,6 +556,25 @@ Fallback в coordinator → AgentType.DEEP без tool context → synthesizer �
 - Логи `compound_agent._run_compound()` — на каком tool call round падает
 - `fallback_handler.py` — что происходит при AgentResult(success=False)
 
+
+
+**Причина (уточнена май 2026):**
+Первоначальная гипотеза (модели недоступны) — опровергнута: groq/compound и
+groq/compound-mini подтверждены доступными на аккаунте.
+
+Реальная причина требует диагностики по логам fly.io.
+Кандидаты:
+1. compound-mini не поддерживает tool_choice="auto" — возможно требует другой параметр
+2. SERPAPI_KEY / OPENWEATHER_API_KEY не заполнены в fly.io secrets →
+   search/weather возвращают [] → compound получает пустой tool result → success=False
+3. Таймаут compound endpoint (>20s) — httpx.ReadTimeout в _execute_tool
+4. compound-mini возвращает finish_reason отличный от "tool_calls" и "stop" —
+   неожиданный тип → defensive return success=False в _run_compound
+
+**Что проверить в логах fly.io:**
+fly logs | grep "compound_agent"
+Ищем: "API call failed", "tool execution failed", "unexpected result type"
+
 **Влияние:** критическое. Все data-driven интенты отдают error вместо ответа.
 
 ---
