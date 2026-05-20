@@ -377,6 +377,7 @@ async def telegram_webhook(
                     intent=result.intent,
                     audio_seconds=result.audio_seconds,
                     tts_characters=result.tts_characters,
+                    tool_calls=result.tool_calls,
                 ))
             except Exception as exc:
                 logger.error("Billing failed", extra={"error": str(exc)})
