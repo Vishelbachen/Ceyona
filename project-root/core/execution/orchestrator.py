@@ -34,14 +34,18 @@ _NO_SEARCH_INTENTS = {
     "weather", "maps", "maps_poi", "maps_route", "search",
 }
 
-# Intents that MUST have retrieved context — no context = don't call LLM
-_STRICT_INTENTS = {
-    Intent.SEARCH,
-    Intent.WEATHER,
-    Intent.MAPS,
-    Intent.MAPS_POI,
-    Intent.MAPS_ROUTE,
-}
+# Intents that MUST have retrieved context — no context = don't call LLM.
+# IMPORTANT: agentic intents (WEATHER, MAPS, MAPS_POI, MAPS_ROUTE, SEARCH)
+# are NOT in this set. Rationale:
+#   - compound_agent guarantees its own grounding by calling tools internally.
+#   - The STRICT gate runs BEFORE compound executes — tool_output is always
+#     None at that point for agentic intents, so including them here would
+#     block every weather/maps/search request unconditionally.
+#   - Grounding responsibility for agentic intents belongs to compound_agent,
+#     not to the pre-EPK orchestrator gate.
+# This set is intentionally empty for now — kept for future non-agentic
+# STRICT intents (e.g. AVAILABILITY, SCHEDULE) if added later.
+_STRICT_INTENTS: set[Intent] = set()
 
 # All tool intents that go through compound_agent (agentic path).
 # compound_agent owns tool execution + reasoning over retrieved data for ALL of these.
@@ -568,12 +572,19 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
         truth_mode = resolve_truth_mode(intent_result.intent)
 
         # ── tool execution ───────────────────────────────────────────────────
+        # Agentic intents (WEATHER, MAPS, MAPS_POI, MAPS_ROUTE, SEARCH) do NOT
+        # use _run_tool() here. compound_agent owns tool execution for all of them
+        # and calls tools internally during its reasoning loop.
+        # _run_tool() is kept for any future non-agentic tool intents only.
         tool_output: str | None = None
-        if intent_result.requires_tools:
+        if intent_result.requires_tools and intent_result.intent not in _AGENTIC_INTENTS:
             tool_output = await _run_tool(intent_result, lang)
 
         # ── STRICT truth gate ─────────────────────────────────────────────────
-        # For STRICT intents: if no retrieved context AND no tool output → block
+        # Guards non-agentic STRICT intents (e.g. future AVAILABILITY, SCHEDULE)
+        # that require pre-fetched context before LLM synthesis.
+        # Agentic intents are excluded from _STRICT_INTENTS (see definition above) —
+        # they self-ground via compound_agent and must not be blocked here.
         has_grounding = bool(_retrieved_context) or bool(tool_output)
         if truth_mode == TruthMode.STRICT and not has_grounding:
             logger.info("Truth gate: STRICT intent with no grounding data", extra={
