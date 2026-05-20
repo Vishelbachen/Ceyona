@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from groq import AsyncGroq
 
@@ -14,6 +14,34 @@ class LLMResponse:
     output_tokens: int
     model: str
     actual_tier: str = ""   # tier that actually executed (may differ from requested on cascade)
+
+
+@dataclass(frozen=True)
+class ToolCall:
+    """Single tool invocation requested by a compound model."""
+    id: str        # Groq tool_call.id — must be echoed in tool result message
+    name: str      # function name, e.g. "web_search"
+    arguments: str # JSON string of arguments as returned by Groq
+
+
+@dataclass(frozen=True)
+class ToolCallResponse:
+    """
+    Response from a compound model when it requests tool execution.
+
+    Returned by GroqClient.complete_with_tools() instead of LLMResponse
+    when the model decides to call a tool rather than produce text.
+
+    Callers MUST:
+      1. Execute every tool_calls entry.
+      2. Append the assistant message + tool results to messages.
+      3. Call complete_with_tools() again to get the final text.
+    """
+    tool_calls: list[ToolCall]
+    input_tokens: int
+    output_tokens: int
+    model: str
+    raw_message: dict = field(default_factory=dict)  # full assistant message for history
 
 
 # ── Context window limits per model (input tokens) ───────────────────────────
@@ -129,6 +157,88 @@ class GroqClient:
         choice = response.choices[0]
         usage = response.usage
 
+        return LLMResponse(
+            text=choice.message.content or "",
+            input_tokens=usage.prompt_tokens,
+            output_tokens=usage.completion_tokens,
+            model=response.model,
+        )
+
+    async def complete_with_tools(
+        self,
+        model: str,
+        messages: list[dict],
+        tools: list[dict],
+        max_tokens: int = 1200,
+        temperature: float = 0.7,
+    ) -> LLMResponse | ToolCallResponse:
+        """
+        Call a compound model with tool definitions.
+
+        Returns:
+          - LLMResponse     when the model produces a text response.
+          - ToolCallResponse when the model requests tool execution.
+
+        Caller pattern:
+          result = await groq_client.complete_with_tools(model, messages, tools)
+          if isinstance(result, ToolCallResponse):
+              # execute tools, append results, call again
+          else:
+              # final text answer
+
+        Raises on API errors — callers should catch and handle.
+        """
+        char_limit = _CONTEXT_CHAR_LIMITS.get(model, _DEFAULT_CHAR_LIMIT)
+        messages = _truncate_messages(messages, char_limit)
+
+        response = await self._client.chat.completions.create(
+            model=model,
+            messages=messages,
+            tools=tools,
+            tool_choice="auto",
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+
+        choice = response.choices[0]
+        usage  = response.usage
+
+        # Model requested tool execution
+        if choice.finish_reason == "tool_calls" and choice.message.tool_calls:
+            raw_tool_calls = choice.message.tool_calls
+            tool_calls = [
+                ToolCall(
+                    id=tc.id,
+                    name=tc.function.name,
+                    arguments=tc.function.arguments,
+                )
+                for tc in raw_tool_calls
+            ]
+            # Build raw_message for conversation history injection
+            raw_message = {
+                "role": "assistant",
+                "content": choice.message.content,  # may be None
+                "tool_calls": [
+                    {
+                        "id":       tc.id,
+                        "type":     "function",
+                        "function": {
+                            "name":      tc.function.name,
+                            "arguments": tc.function.arguments,
+                        },
+                    }
+                    for tc in raw_tool_calls
+                ],
+            }
+            return ToolCallResponse(
+                tool_calls=tool_calls,
+                input_tokens=usage.prompt_tokens,
+                output_tokens=usage.completion_tokens,
+                model=response.model,
+                raw_message=raw_message,
+            )
+
+        # Model produced a text answer directly
         return LLMResponse(
             text=choice.message.content or "",
             input_tokens=usage.prompt_tokens,
