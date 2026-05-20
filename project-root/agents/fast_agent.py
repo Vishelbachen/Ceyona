@@ -18,6 +18,7 @@ class AgentResult:
     success: bool
     error: str = ""
     actual_tier: str = ""  # tier that actually executed (may differ from requested on cascade)
+    tool_calls: int = 0   # compound tool calls executed (web_search, get_weather, geocode)
 
 
 async def run(messages: list[dict], temperature: float = 0.7) -> AgentResult:
