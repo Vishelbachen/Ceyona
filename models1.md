@@ -183,6 +183,11 @@ Fallback     → AgentType.DEEP           (llama-3.3-70b-versatile — plain tex
 ```
 
 **Supported tools:** web_search, get_weather, geocode, get_route
+
+**Agent models (май 2026):**
+- FAST_AGENT_MODEL: `llama-3.1-8b-instant` (replaces unavailable `groq/compound-mini`)
+- DEEP_AGENT_MODEL: `llama-3.3-70b-versatile` (replaces unavailable `groq/compound`)
+- Both support Groq function calling API identically — no compound_agent changes needed.
 **Max tool rounds:** 3 (bounded — §2.2)
 **Role:** tool selection authority, multi-step execution.
 **No policy authority.** No system governance. No Heavy Tier activation.
