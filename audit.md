@@ -385,6 +385,36 @@ Supabase query при каждом `/health` запросе (interval=30s). На
 
 ---
 
+## 12. UNIFIED AGENTIC PATH
+
+### 12.1 ✅ Tool-only bypass path удалён (май 2026)
+
+**Решение:** все пять data-driven интентов (SEARCH, WEATHER, MAPS, MAPS_POI, MAPS_ROUTE)
+теперь идут через compound_agent без исключений.
+
+**Изменения:**
+- `orchestrator.py`: `_TOOL_INTENTS` удалён, `_AGENTIC_INTENTS` задекларирован (все 5).
+  Tool-only bypass (WEATHER/MAPS/MAPS_ROUTE → форматтер → выход) удалён.
+- `compound_agent.py`: добавлен `get_route` tool schema + `_execute_tool()` handler.
+  Теперь compound вызывает `MapsService.get_route()` напрямую.
+- `multi_agent_coordinator.py`: комментарий обновлён — unified agentic path задокументирован.
+- Supported tools: `web_search`, `get_weather`, `geocode`, **`get_route`**.
+
+**Обоснование:**
+Детерминированные форматтеры (format_current, format_geocode, format_route) производят
+структурированный текст — и это правильно. Но доставка этого текста напрямую пользователю,
+минуя LLM reasoning, означает что бот не может:
+- интерпретировать данные в контексте вопроса ("стоит ли ехать в горы?")
+- верифицировать полноту и корректность retrieved data
+- корректно обработать частичные результаты или failure
+- добавить nuance ("ветер 15 м/с — это сильный ветер для пляжа")
+
+Compound получает форматированный результат как tool output, и делает reasoning над ним
+перед ответом пользователю. Форматтеры остаются в `compound_agent._execute_tool()` —
+они не исчезли, они стали input для reasoning, а не финальным output.
+
+---
+
 ## СВОДКА
 
 | # | Категория | Статус |
@@ -398,6 +428,7 @@ Supabase query при каждом `/health` запросе (interval=30s). На
 | 2.3 | `decision_matrix` hardcoded пороги | ✅ Закрыто май 2026 |
 | 3.1 | EPK единственный policy authority | ✅ |
 | 3.2 | Coordinator — один call site | ✅ |
+| **NEW** | **Unified agentic path для всех tool intents** | **✅ Закрыто май 2026** |
 | 3.3 | web search authority → orchestrator, coupling устранён | ✅ Закрыто май 2026 |
 | 3.4 | fallback billing по actual_tier | ✅ Закрыто май 2026 |
 | 4.1 | MATH correction bounded | ✅ |
