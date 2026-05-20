@@ -413,9 +413,26 @@ Compound получает форматированный результат ка
 перед ответом пользователю. Форматтеры остаются в `compound_agent._execute_tool()` —
 они не исчезли, они стали input для reasoning, а не финальным output.
 
----
+### 12.2 ✅ STRICT truth gate — agentic интенты исключены (май 2026)
 
-## СВОДКА
+**Проблема:** `_STRICT_INTENTS` в orchestrator содержал все пять agentic интентов.
+STRICT gate проверяет `has_grounding = bool(tool_output) or bool(retrieved_context)`
+ДО того, как compound_agent успевает выполниться. При `tool_output=None` (legacy `_run_tool`
+больше не вызывается для agentic интентов) → gate блокировал бы все запросы на погоду,
+маршруты и поиск с `no_grounded_data`.
+
+**Решение:**
+- `_STRICT_INTENTS` в orchestrator → пустое множество (`set()`). Задокументировано
+  как placeholder для будущих non-agentic STRICT интентов (AVAILABILITY, SCHEDULE).
+- `_run_tool()` вызывается только для `intent not in _AGENTIC_INTENTS` — agentic
+  интенты полностью исключены из legacy tool path.
+- `TruthMode.STRICT` остаётся в `context/assembler.py` для всех пяти интентов —
+  это LLM-инструкция "не выдумывай", она доходит до compound через `_build_messages()`.
+  Это правильно и не меняется.
+- `assembler.py` получил явный комментарий: STRICT здесь = LLM policy, не pre-execution gate.
+
+**Инвариант:** grounding для agentic интентов обеспечивает compound_agent изнутри.
+Orchestrator gate не может и не должен это проверять — compound ещё не запустился.
 
 | # | Категория | Статус |
 |---|---|---|
@@ -429,6 +446,7 @@ Compound получает форматированный результат ка
 | 3.1 | EPK единственный policy authority | ✅ |
 | 3.2 | Coordinator — один call site | ✅ |
 | **NEW** | **Unified agentic path для всех tool intents** | **✅ Закрыто май 2026** |
+| **NEW** | **STRICT gate — agentic интенты исключены** | **✅ Закрыто май 2026** |
 | 3.3 | web search authority → orchestrator, coupling устранён | ✅ Закрыто май 2026 |
 | 3.4 | fallback billing по actual_tier | ✅ Закрыто май 2026 |
 | 4.1 | MATH correction bounded | ✅ |
