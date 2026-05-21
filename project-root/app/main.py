@@ -111,3 +111,39 @@ async def models():
         "count": len(ids),
         "available_models": ids,
     }
+
+@app.get("/providers")
+async def providers(request: Request):
+    from llm.groq_client import groq_client
+
+    status = {}
+
+    # ── Redis ───────────────────────────────────────────
+    try:
+        await request.app.state.redis.ping()
+        status["redis"] = "ok"
+    except Exception as exc:
+        status["redis"] = f"error: {exc}"
+
+    # ── Supabase ────────────────────────────────────────
+    try:
+        request.app.state.supabase.table("healthcheck").select("*").limit(1).execute()
+        status["supabase"] = "ok"
+    except Exception as exc:
+        status["supabase"] = f"error: {exc}"
+
+    # ── Groq ────────────────────────────────────────────
+    try:
+        await groq_client._client.models.list()
+        status["groq"] = "ok"
+    except Exception as exc:
+        status["groq"] = f"error: {exc}"
+
+    # ── HuggingFace ────────────────────────────────────
+    try:
+        request.app.state.hf_client
+        status["huggingface"] = "ok"
+    except Exception as exc:
+        status["huggingface"] = f"error: {exc}"
+
+    return status
