@@ -1,0 +1,43 @@
+version: 2
+
+updates:
+  # ── Python dependencies ──────────────────────────────────────
+  - package-ecosystem: "pip"
+    directory: "/project-root"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Europe/Moscow"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "python"
+    # Group all non-breaking updates into one PR per week
+    groups:
+      python-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+    # Don't auto-merge major version bumps — review manually
+    ignore:
+      - dependency-name: "pydantic"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "fastapi"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "aiogram"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "groq"
+        update-types: ["version-update:semver-major"]
+
+  # ── GitHub Actions versions ──────────────────────────────────
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+      - "github-actions"
