@@ -185,7 +185,6 @@ class TestEmbeddingCache:
     @pytest.mark.asyncio
     async def test_get_returns_vector_on_hit(self):
         import json
-
         from retrieval.cache.embedding_cache import EmbeddingCache
         vector = [0.1, 0.2, 0.3]
         redis = self._make_redis()
@@ -253,7 +252,6 @@ class TestQueryCache:
     @pytest.mark.asyncio
     async def test_get_hit_returns_data(self):
         import json
-
         from retrieval.cache.query_cache import QueryCache
         data = [{"content": "doc1", "score": 0.9}]
         redis = self._make_redis()
@@ -310,7 +308,6 @@ class TestRerankCache:
     @pytest.mark.asyncio
     async def test_get_hit_returns_tuples(self):
         import json
-
         from retrieval.cache.rerank_cache import RerankCache
         data = [{"content": "doc1", "score": 0.9}, {"content": "doc2", "score": 0.5}]
         redis = self._make_redis()
@@ -492,7 +489,7 @@ class TestBM25Engine:
 # ══════════════════════════════════════════════════════════════════════════════
 # retrieval/reranker/cross_encoder.py
 # ══════════════════════════════════════════════════════════════════════════════
- 
+
 class TestCrossEncoder:
     @pytest.mark.asyncio
     async def test_empty_candidates_returns_empty(self):
@@ -500,55 +497,55 @@ class TestCrossEncoder:
         enc = CrossEncoder()
         result = await enc.rerank("query", [])
         assert result == []
- 
+
     @pytest.mark.asyncio
     async def test_rerank_returns_sorted_by_score(self):
         from retrieval.reranker.cross_encoder import CrossEncoder
         enc = CrossEncoder()
         candidates = ["doc_low", "doc_high", "doc_mid"]
         scores = [0.2, 0.9, 0.5]
- 
+
         with patch("retrieval.reranker.cross_encoder.hf_client") as mock_hf:
             mock_hf.rerank = AsyncMock(return_value=scores)
             result = await enc.rerank("query", candidates)
- 
+
         assert result[0][0] == "doc_high"
         assert result[0][1] == pytest.approx(0.9)
         assert result[-1][0] == "doc_low"
- 
+
     @pytest.mark.asyncio
     async def test_rerank_fallback_on_error(self):
         """On HF client error, returns candidates with score 0.0."""
         from retrieval.reranker.cross_encoder import CrossEncoder
         enc = CrossEncoder()
         candidates = ["doc_a", "doc_b"]
- 
+
         with patch("retrieval.reranker.cross_encoder.hf_client") as mock_hf:
             mock_hf.rerank = AsyncMock(side_effect=Exception("HF timeout"))
             result = await enc.rerank("query", candidates)
- 
+
         assert len(result) == 2
         for content, score in result:
             assert content in candidates
             assert score == 0.0
- 
+
     @pytest.mark.asyncio
     async def test_rerank_single_candidate(self):
         from retrieval.reranker.cross_encoder import CrossEncoder
         enc = CrossEncoder()
- 
+
         with patch("retrieval.reranker.cross_encoder.hf_client") as mock_hf:
             mock_hf.rerank = AsyncMock(return_value=[0.75])
             result = await enc.rerank("query", ["only doc"])
- 
+
         assert len(result) == 1
         assert result[0] == ("only doc", 0.75)
- 
- 
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # transport/telegram/webhook.py — internal helpers
 # ══════════════════════════════════════════════════════════════════════════════
- 
+
 class TestWebhookHelpers:
     @pytest.mark.asyncio
     async def test_send_message_empty_text_skips(self):
@@ -557,7 +554,7 @@ class TestWebhookHelpers:
         with patch("transport.telegram.webhook.httpx.AsyncClient") as mock_client:
             await _send_message(chat_id=1, text="")
             mock_client.assert_not_called()
- 
+
     @pytest.mark.asyncio
     async def test_send_message_makes_post(self):
         from transport.telegram.webhook import _send_message
@@ -568,14 +565,14 @@ class TestWebhookHelpers:
         with patch("transport.telegram.webhook.httpx.AsyncClient", return_value=mock_cm):
             await _send_message(chat_id=123, text="hello")
         mock_cm.post.assert_awaited_once()
- 
+
     @pytest.mark.asyncio
     async def test_send_message_with_topup_empty_skips(self):
         from transport.telegram.webhook import _send_message_with_topup
         with patch("transport.telegram.webhook.httpx.AsyncClient") as mock_client:
             await _send_message_with_topup(chat_id=1, text="")
             mock_client.assert_not_called()
- 
+
     @pytest.mark.asyncio
     async def test_send_message_with_topup_sends_keyboard(self):
         from transport.telegram.webhook import _send_message_with_topup
@@ -588,7 +585,7 @@ class TestWebhookHelpers:
         call_kwargs = mock_cm.post.call_args
         body = call_kwargs.kwargs.get("json") or call_kwargs[1].get("json") or call_kwargs[0][1]
         assert "reply_markup" in body
- 
+
     @pytest.mark.asyncio
     async def test_send_voice_returns_false_on_exception(self):
         from transport.telegram.webhook import _send_voice
@@ -600,7 +597,7 @@ class TestWebhookHelpers:
             mock_client.return_value = mock_cm
             result = await _send_voice(chat_id=1, audio_bytes=b"audio")
         assert result is False
- 
+
     @pytest.mark.asyncio
     async def test_send_voice_returns_true_on_200(self):
         from transport.telegram.webhook import _send_voice
@@ -613,7 +610,7 @@ class TestWebhookHelpers:
         with patch("transport.telegram.webhook.httpx.AsyncClient", return_value=mock_cm):
             result = await _send_voice(chat_id=1, audio_bytes=b"audio")
         assert result is True
- 
+
     @pytest.mark.asyncio
     async def test_answer_callback_makes_post(self):
         from transport.telegram.webhook import _answer_callback
