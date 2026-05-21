@@ -1,0 +1,45 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.0
+    hooks:
+      - id: ruff
+        args: [--fix, --ignore, "E402,E501,B005,F601,F841,B905,B007"]
+        files: ^project-root/
+
+  - repo: https://github.com/PyCQA/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        args: [--profile, black, --skip-gitignore]
+        files: ^project-root/
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+        files: \.(yml|yaml)$
+      - id: check-toml
+        files: \.toml$
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      - id: mixed-line-ending
+        args: [--fix=lf]
+
+  - repo: local
+    hooks:
+      - id: forbidden-imports
+        name: Architecture layer boundary check
+        language: python
+        entry: python project-root/scripts/check_imports.py
+        files: ^project-root/.*\.py$
+        pass_filenames: false
+
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.35.1
+    hooks:
+      - id: yamllint
+        args: [-d, "{extends: relaxed, rules: {line-length: {max: 120}}}"]
+        files: \.(yml|yaml)$
