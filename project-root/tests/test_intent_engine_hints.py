@@ -103,7 +103,7 @@ class TestEffectiveMinLogic:
 
     def test_mixed_script_produces_is_multilingual_hint(self):
         from meta.analysis import _full_analysis
-        result = _full_analysis("Hello Привет مرحبا mixed script text here now yes")
+        result = _full_analysis("Hi Привет مرحبا كيف حالك текст")
         assert result.has(HintType.IS_MULTILINGUAL)
 
     def test_code_block_produces_has_code_block_hint(self):
