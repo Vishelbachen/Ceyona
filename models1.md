@@ -389,7 +389,7 @@ Monitor HF usage separately from Groq usage.
 **Provider: none (internal logic, no model calls)**
 `retrieval/source_credibility.py`
 
-**Primary call site:** external/search.py → filters SerpAPI results BEFORE LLM exposure.
+**Primary call site:** external/search.py → filters web search results (Tavily / SerpAPI / SearXNG) BEFORE LLM exposure.
 **Secondary call site:** retrieval_engine.py → reserved hook for memory document scoring (pass-through today).
 
 NOT positioned between query_preprocessor and reranker in the retrieval pipeline.
@@ -601,3 +601,44 @@ Cross-reference with model assignments above to verify no gaps.
 | canopylabs/orpheus-v1-english | TTS English | §12 |
 | canopylabs/orpheus-arabic-saudi | TTS Arabic | §12 |
 | allam-2-7b | Multilingual + FAST tier | §2, §12 |
+
+---
+
+## 23. SEARCH PROVIDERS (external — NOT Groq models)
+
+Search providers are external services used by `external/search.py`.
+They are NOT Groq models. They are NOT registered in the Groq available_models list.
+They do NOT appear in §22. This is expected and correct.
+
+**Three-tier fallback chain (architecture §28):**
+
+```
+Priority  Provider  Key/URL            Tier
+1         Tavily    TAVILY_API_KEY     primary  — LLM-optimised, 1000 req/mo free
+2         SerpAPI   SERPAPI_KEY        secondary — hotel pack support, 250 req/mo free
+3         SearXNG   SEARXNG_URL        tertiary  — self-hosted meta-search, no rate limit
+```
+
+**Configuration:**
+- All three configured via `app/settings.py` and environment variables
+- SearXNG runs as Docker sidecar (`docker-compose.yml`) on `ai-network`
+- SEARXNG_SECRET_KEY required in docker-compose for stable JSON API
+
+**source_credibility** (§14) applies uniformly to results from all three providers.
+
+**Cost tracking:** see economic.md §1.3 for provider cost breakdown.
+Provider costs are operational (external), not billed to user balance.
+
+---
+
+## 24. HEALTHCHECK
+
+`infra/healthcheck.py` — infrastructure liveness check.
+
+**Not a model. Not a tier. Not an agent.**
+Listed here for completeness of runtime authority boundaries (§19).
+
+**Role:** verify Redis and Supabase connectivity on each `/health` request.
+**Constraint:** must respond within fly.io timeout (5s). Sub-check budgets: 3s each.
+**Implementation:** asyncio.wait_for + asyncio.gather (concurrent, bounded).
+See architecture.md §29 for canonical rules.
