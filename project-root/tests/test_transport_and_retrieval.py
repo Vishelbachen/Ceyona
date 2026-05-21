@@ -241,38 +241,38 @@ class TestEstimateHistoryTokens:
 
 class TestClassifyComplexity:
     def test_short_text_is_low(self):
-        from contracts.shared_types import Complexity
         from transport.telegram.update_handler import _classify_complexity
+        from contracts.shared_types import Complexity
         assert _classify_complexity("hello world") == Complexity.LOW
 
     def test_long_text_is_medium(self):
-        from contracts.shared_types import Complexity
         from transport.telegram.update_handler import _classify_complexity
+        from contracts.shared_types import Complexity
         text = "a" * 900
         assert _classify_complexity(text) == Complexity.MEDIUM
 
     def test_code_block_is_high(self):
-        from contracts.shared_types import Complexity
         from transport.telegram.update_handler import _classify_complexity
+        from contracts.shared_types import Complexity
         text = "here is code:\n```python\nprint('hi')\n```"
         assert _classify_complexity(text) == Complexity.HIGH
 
     def test_json_is_high(self):
-        from contracts.shared_types import Complexity
         from transport.telegram.update_handler import _classify_complexity
+        from contracts.shared_types import Complexity
         text = 'send {"key": "value"} to the server'
         assert _classify_complexity(text) == Complexity.HIGH
 
     def test_code_and_json_is_critical(self):
-        from contracts.shared_types import Complexity
         from transport.telegram.update_handler import _classify_complexity
+        from contracts.shared_types import Complexity
         text = '```json\n{"key": "value"}\n```'
         assert _classify_complexity(text) == Complexity.CRITICAL
 
     def test_braces_without_colon_not_json(self):
         # {} without : should NOT trigger JSON detection
-        from contracts.shared_types import Complexity
         from transport.telegram.update_handler import _classify_complexity
+        from contracts.shared_types import Complexity
         text = "use {} and {}"
         assert _classify_complexity(text) == Complexity.LOW
 
@@ -307,8 +307,8 @@ def _make_text_update(text="Hello"):
 @pytest.mark.asyncio
 async def test_handle_message_empty_text_returns_denied():
     """Empty update returns denied result with empty_message reason."""
-    from transport.telegram.message_router import UpdateType
     from transport.telegram.update_handler import handle_message
+    from transport.telegram.message_router import UpdateType
 
     update = {"message": {}}  # no text
     with (
@@ -346,27 +346,28 @@ async def test_handle_message_normal_flow():
     gate_verdict.verdict = None   # not GateVerdict.DENY
     gate_verdict.safe = True
 
+    mock_hist_inst = AsyncMock()
+    mock_hist_inst.get_history = AsyncMock(return_value=[])
+    mock_hist_inst.append = AsyncMock()
+
+    mock_hist_cls = MagicMock(return_value=mock_hist_inst)
+
+    ml_result = MagicMock()
+    ml_result.was_normalized = False
+
     with (
         patch("transport.telegram.update_handler.asyncio.wait_for", return_value=gate_verdict),
         patch("transport.telegram.update_handler.run", new_callable=AsyncMock, return_value=ok_result),
-        patch("transport.telegram.update_handler.ConversationHistory") as mock_hist,
-        patch("transport.telegram.update_handler.ml_preprocess", new_callable=AsyncMock) as mock_ml,
+        patch("memory.conversation_history.ConversationHistory", mock_hist_cls),
+        patch("llm.multilingual_preprocessor.preprocess", new_callable=AsyncMock, return_value=ml_result),
     ):
-        mock_hist_inst = AsyncMock()
-        mock_hist_inst.get_history = AsyncMock(return_value=[])
-        mock_hist_inst.append = AsyncMock()
-        mock_hist.return_value = mock_hist_inst
-
-        ml_result = MagicMock()
-        ml_result.was_normalized = False
-        mock_ml.return_value = ml_result
-
         result = await handle_message(
             update=update,
             update_type=UpdateType.MESSAGE,
             user_id=42,
             user_balance=1.0,
             lang="en",
+            supabase=MagicMock(),
         )
 
     assert result.text == "Sunny today"
@@ -382,18 +383,18 @@ async def test_handle_message_safety_gate_timeout_continues():
     update = _make_text_update("normal question")
     ok_result = _make_ok_result("answer")
 
+    mock_hist_inst2 = AsyncMock()
+    mock_hist_inst2.get_history = AsyncMock(return_value=[])
+    mock_hist_inst2.append = AsyncMock()
+    mock_hist_cls2 = MagicMock(return_value=mock_hist_inst2)
+
     with (
         patch("transport.telegram.update_handler.asyncio.wait_for",
               side_effect=asyncio.TimeoutError()),
         patch("transport.telegram.update_handler.run",
               new_callable=AsyncMock, return_value=ok_result),
-        patch("transport.telegram.update_handler.ConversationHistory") as mock_hist,
+        patch("memory.conversation_history.ConversationHistory", mock_hist_cls2),
     ):
-        mock_hist_inst = AsyncMock()
-        mock_hist_inst.get_history = AsyncMock(return_value=[])
-        mock_hist_inst.append = AsyncMock()
-        mock_hist.return_value = mock_hist_inst
-
         result = await handle_message(
             update=update,
             update_type=UpdateType.MESSAGE,
@@ -432,7 +433,7 @@ async def test_handle_message_vision_path_direct_response_zero_balance():
 
     with (
         patch("transport.telegram.update_handler.asyncio.wait_for", return_value=gate_verdict),
-        patch("transport.telegram.update_handler.handle_vision",
+        patch("transport.telegram.vision_handler.handle_vision",
               new_callable=AsyncMock, return_value=vision_result),
     ):
         result = await handle_message(
@@ -473,7 +474,7 @@ async def test_handle_message_vision_path_direct_response_sufficient_balance():
 
     with (
         patch("transport.telegram.update_handler.asyncio.wait_for", return_value=gate_verdict),
-        patch("transport.telegram.update_handler.handle_vision",
+        patch("transport.telegram.vision_handler.handle_vision",
               new_callable=AsyncMock, return_value=vision_result),
     ):
         result = await handle_message(
@@ -568,7 +569,6 @@ class TestDetectLang:
 
     def test_profile_lang_strips_region(self):
         from transport.telegram.webhook import _detect_lang
-
         # "en-US" → "en"
         update = {"message": {"from": {"language_code": "en-US"}}}
         result = _detect_lang(update)
@@ -701,7 +701,7 @@ class TestVisionHandlerHelpers:
             patch("transport.telegram.vision_handler._download_image",
                   new_callable=AsyncMock, return_value=b"fake_bytes"),
             patch("transport.telegram.vision_handler.httpx.AsyncClient") as mock_client,
-            patch("transport.telegram.vision_handler.classify",
+            patch("cognition.intent_engine.classify",
                   new_callable=AsyncMock, return_value=mock_intent_result),
         ):
             mock_cm = AsyncMock()
@@ -741,7 +741,7 @@ class TestVisionHandlerHelpers:
             patch("transport.telegram.vision_handler._download_image",
                   new_callable=AsyncMock, return_value=b"fake_bytes"),
             patch("transport.telegram.vision_handler.httpx.AsyncClient") as mock_client,
-            patch("transport.telegram.vision_handler.classify",
+            patch("cognition.intent_engine.classify",
                   new_callable=AsyncMock, return_value=mock_intent_result),
         ):
             mock_cm = AsyncMock()
@@ -849,7 +849,7 @@ class TestRetrievalEngine:
             patch("retrieval.retrieval_engine.bge_engine") as mock_bge,
             patch("retrieval.retrieval_engine.cross_encoder") as mock_reranker,
             patch("retrieval.retrieval_engine.source_credibility") as mock_cred,
-            patch("retrieval.retrieval_engine.SupabaseStore") as mock_store_cls,
+            patch("memory.supabase_store.SupabaseStore") as mock_store_cls,
         ):
             mock_bge.embed = AsyncMock(return_value=fake_embed_result)
 
@@ -946,7 +946,7 @@ class TestAccessController:
 
     @pytest.mark.asyncio
     async def test_get_balance_new_user_creates_default(self):
-        from payments.access_controller import _DEFAULT_BALANCE_USD, AccessController
+        from payments.access_controller import AccessController, _DEFAULT_BALANCE_USD
         supabase = self._make_supabase([])  # no rows → new user
         ac = AccessController(supabase)
         result = await ac.get_balance(user_id=99)
@@ -955,7 +955,7 @@ class TestAccessController:
 
     @pytest.mark.asyncio
     async def test_get_balance_db_error_returns_default(self):
-        from payments.access_controller import _DEFAULT_BALANCE_USD, AccessController
+        from payments.access_controller import AccessController, _DEFAULT_BALANCE_USD
         supabase = MagicMock()
         supabase.table.side_effect = Exception("db down")
         ac = AccessController(supabase)
@@ -998,7 +998,6 @@ class TestAccessController:
     @pytest.mark.asyncio
     async def test_deduct_db_error_returns_false(self):
         from payments.access_controller import AccessController
-
         # get_balance OK but update fails
         result = MagicMock()
         result.data = [{"balance_usd": 1.00}]
@@ -1073,11 +1072,7 @@ class TestRateLimiter:
         assert get_rate_limiter() is None
 
     def test_init_rate_limiter_sets_instance(self):
-        from security.rate_limiter import (
-            RateLimiter,
-            get_rate_limiter,
-            init_rate_limiter,
-        )
+        from security.rate_limiter import RateLimiter, init_rate_limiter, get_rate_limiter
         fake_redis = MagicMock()
         limiter = init_rate_limiter(fake_redis, rpm=20)
         assert isinstance(limiter, RateLimiter)
@@ -1086,7 +1081,6 @@ class TestRateLimiter:
     @pytest.mark.asyncio
     async def test_custom_rpm_respected(self):
         from security.rate_limiter import RateLimiter
-
         # count=3, rpm=3 → denied (3 >= 3)
         redis = self._make_redis(zcard_count=3)
         limiter = RateLimiter(redis, rpm=3)
