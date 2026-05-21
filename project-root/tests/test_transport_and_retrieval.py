@@ -241,38 +241,38 @@ class TestEstimateHistoryTokens:
 
 class TestClassifyComplexity:
     def test_short_text_is_low(self):
-        from contracts.shared_types import Complexity
         from transport.telegram.update_handler import _classify_complexity
+        from contracts.shared_types import Complexity
         assert _classify_complexity("hello world") == Complexity.LOW
 
     def test_long_text_is_medium(self):
-        from contracts.shared_types import Complexity
         from transport.telegram.update_handler import _classify_complexity
+        from contracts.shared_types import Complexity
         text = "a" * 900
         assert _classify_complexity(text) == Complexity.MEDIUM
 
     def test_code_block_is_high(self):
-        from contracts.shared_types import Complexity
         from transport.telegram.update_handler import _classify_complexity
+        from contracts.shared_types import Complexity
         text = "here is code:\n```python\nprint('hi')\n```"
         assert _classify_complexity(text) == Complexity.HIGH
 
     def test_json_is_high(self):
-        from contracts.shared_types import Complexity
         from transport.telegram.update_handler import _classify_complexity
+        from contracts.shared_types import Complexity
         text = 'send {"key": "value"} to the server'
         assert _classify_complexity(text) == Complexity.HIGH
 
     def test_code_and_json_is_critical(self):
-        from contracts.shared_types import Complexity
         from transport.telegram.update_handler import _classify_complexity
+        from contracts.shared_types import Complexity
         text = '```json\n{"key": "value"}\n```'
         assert _classify_complexity(text) == Complexity.CRITICAL
 
     def test_braces_without_colon_not_json(self):
         # {} without : should NOT trigger JSON detection
-        from contracts.shared_types import Complexity
         from transport.telegram.update_handler import _classify_complexity
+        from contracts.shared_types import Complexity
         text = "use {} and {}"
         assert _classify_complexity(text) == Complexity.LOW
 
@@ -307,8 +307,8 @@ def _make_text_update(text="Hello"):
 @pytest.mark.asyncio
 async def test_handle_message_empty_text_returns_denied():
     """Empty update returns denied result with empty_message reason."""
-    from transport.telegram.message_router import UpdateType
     from transport.telegram.update_handler import handle_message
+    from transport.telegram.message_router import UpdateType
 
     update = {"message": {}}  # no text
     with (
@@ -569,7 +569,6 @@ class TestDetectLang:
 
     def test_profile_lang_strips_region(self):
         from transport.telegram.webhook import _detect_lang
-
         # "en-US" → "en"
         update = {"message": {"from": {"language_code": "en-US"}}}
         result = _detect_lang(update)
@@ -692,9 +691,12 @@ class TestVisionHandlerHelpers:
         mock_resp.raise_for_status = MagicMock()
         mock_resp.json = MagicMock(return_value=groq_response)
 
+        # Import the real Intent enum so the comparison in vision_handler works:
+        #   needs_pipeline = intent_result.intent != Intent.CONVERSATION
+        # must evaluate to False (equal), so we set intent to the real enum member.
+        from cognition.intent_engine import Intent
         mock_intent_result = MagicMock()
-        # CONVERSATION intent → needs_pipeline=False
-        type(mock_intent_result).intent = PropertyMock(return_value="CONVERSATION")
+        type(mock_intent_result).intent = PropertyMock(return_value=Intent.CONVERSATION)
 
         with (
             patch("transport.telegram.vision_handler._get_file_url",
@@ -733,8 +735,9 @@ class TestVisionHandlerHelpers:
         mock_resp.raise_for_status = MagicMock()
         mock_resp.json = MagicMock(return_value=groq_response)
 
+        from cognition.intent_engine import Intent as _Intent
         mock_intent_result = MagicMock()
-        type(mock_intent_result).intent = PropertyMock(return_value="MATH")
+        type(mock_intent_result).intent = PropertyMock(return_value=_Intent.MATH)
 
         with (
             patch("transport.telegram.vision_handler._get_file_url",
@@ -947,7 +950,7 @@ class TestAccessController:
 
     @pytest.mark.asyncio
     async def test_get_balance_new_user_creates_default(self):
-        from payments.access_controller import _DEFAULT_BALANCE_USD, AccessController
+        from payments.access_controller import AccessController, _DEFAULT_BALANCE_USD
         supabase = self._make_supabase([])  # no rows → new user
         ac = AccessController(supabase)
         result = await ac.get_balance(user_id=99)
@@ -956,7 +959,7 @@ class TestAccessController:
 
     @pytest.mark.asyncio
     async def test_get_balance_db_error_returns_default(self):
-        from payments.access_controller import _DEFAULT_BALANCE_USD, AccessController
+        from payments.access_controller import AccessController, _DEFAULT_BALANCE_USD
         supabase = MagicMock()
         supabase.table.side_effect = Exception("db down")
         ac = AccessController(supabase)
@@ -999,7 +1002,6 @@ class TestAccessController:
     @pytest.mark.asyncio
     async def test_deduct_db_error_returns_false(self):
         from payments.access_controller import AccessController
-
         # get_balance OK but update fails
         result = MagicMock()
         result.data = [{"balance_usd": 1.00}]
@@ -1074,11 +1076,7 @@ class TestRateLimiter:
         assert get_rate_limiter() is None
 
     def test_init_rate_limiter_sets_instance(self):
-        from security.rate_limiter import (
-            RateLimiter,
-            get_rate_limiter,
-            init_rate_limiter,
-        )
+        from security.rate_limiter import RateLimiter, init_rate_limiter, get_rate_limiter
         fake_redis = MagicMock()
         limiter = init_rate_limiter(fake_redis, rpm=20)
         assert isinstance(limiter, RateLimiter)
@@ -1087,7 +1085,6 @@ class TestRateLimiter:
     @pytest.mark.asyncio
     async def test_custom_rpm_respected(self):
         from security.rate_limiter import RateLimiter
-
         # count=3, rpm=3 → denied (3 >= 3)
         redis = self._make_redis(zcard_count=3)
         limiter = RateLimiter(redis, rpm=3)
