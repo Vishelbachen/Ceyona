@@ -83,6 +83,18 @@ groq/compound-mini → fast_agent.py  → pricing TBD (not publicly listed, May 
 Compound tool calls (web search) are billed separately per call, not per token.
 usage_meter.py MUST record tool call counts alongside token counts.
 
+**Search provider costs (external, NOT Groq-billed):**
+```
+Tavily   (primary)   → free tier: 1000 req/mo | paid: $0.015/req above limit
+SerpAPI  (secondary) → free tier: 100 searches/mo | paid plans from $50/mo
+SearXNG  (tertiary)  → self-hosted: infrastructure cost only (Docker sidecar)
+                       public instances: free, but unstable — not for production
+```
+Search provider costs are NOT deducted from user balance (external cost stream).
+They are operational costs tracked separately from Groq/HF billing.
+Compound tool call count (billed to user at $5.00/1000) covers the Groq API cost,
+not the search provider API cost.
+
 ### 1.4 Speech Layer (Groq-hosted)
 
 ```
