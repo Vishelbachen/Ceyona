@@ -368,17 +368,43 @@ async def handle_message(
         logger.warning("analysis.py failed (non-critical)", extra={"error": str(exc)})
 
     # ── conversation history ──────────────────────────────────────────────────
+    # Select token budget before loading history.
+    # Tier is unknown here (EPK runs after retrieval), so we use the same
+    # heuristic as orchestrator._estimate_tier:
+    #   LOW complexity + short message → likely FAST tier → smaller budget
+    #   everything else → GENERAL/HEAVY → larger budget
+    # This avoids the aggressive 1200-token cap that was cutting history to
+    # 0-2 turns and causing bug 13.2 (context loss).
+    from memory.conversation_history import (
+        ConversationHistory,
+        FAST_HISTORY_BUDGET,
+        GENERAL_HISTORY_BUDGET,
+    )
+    _message_tokens_pre = _estimate_tokens(text)
+    _history_budget = (
+        FAST_HISTORY_BUDGET
+        if complexity == Complexity.LOW and _message_tokens_pre < 300
+        else GENERAL_HISTORY_BUDGET
+    )
+    logger.debug("History budget selected", extra={
+        "budget":     _history_budget,
+        "complexity": complexity,
+        "msg_tokens": _message_tokens_pre,
+    })
+
     conversation_history: list[dict] | None = None
     history_store = None
 
     if supabase is not None:
         try:
-            from memory.conversation_history import ConversationHistory
             history_store = ConversationHistory(supabase)
-            conversation_history = await history_store.get_history(user_id)
+            conversation_history = await history_store.get_history(
+                user_id, token_budget=_history_budget
+            )
             logger.info("History loaded", extra={
-                "user_id": user_id,
-                "turns":   len(conversation_history),
+                "user_id":       user_id,
+                "turns":         len(conversation_history),
+                "token_budget":  _history_budget,
             })
         except Exception as exc:
             logger.error("History load failed", extra={"error": str(exc)})
