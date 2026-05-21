@@ -284,7 +284,7 @@ async def telegram_webhook(
     logger.info("Incoming message", extra={"request_id": request_id, "user_id": user_id, "lang": lang})
 
     # ── rate limiting ─────────────────────────────────────────────────────────
-    from cognition.response_synthesizer import get_system_message
+    from i18n.t import get_system_message
     from security.rate_limiter import get_rate_limiter
 
     limiter = get_rate_limiter()
