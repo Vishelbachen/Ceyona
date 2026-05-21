@@ -14,14 +14,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Install ruff
         run: pip install ruff
-
       - name: Auto-fix imports and style
         run: |
           ruff check project-root --fix --ignore E402,E501,B005,F601,F841,B905,B007 || true
-
       - name: Commit fixes if any
         run: |
           git config user.name "github-actions[bot]"
@@ -72,26 +69,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install flyctl
-        run: curl -L https://fly.io/install.sh | sh && echo "/root/.fly/bin" >> $GITHUB_PATH
+        uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Create app if not exists
-        run: |
-          fly apps list --org personal | grep -q "ceyona-searxng" \
-            || fly apps create ceyona-searxng --org personal
+        run: flyctl apps list --org personal | grep -q "ceyona-searxng" || flyctl apps create ceyona-searxng --org personal
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       - name: Create volume if not exists
-        run: |
-          fly volumes list --app ceyona-searxng | grep -q "searxng_data" \
-            || fly volumes create searxng_data --region fra --size 1 --app ceyona-searxng --yes
+        run: flyctl volumes list --app ceyona-searxng | grep -q "searxng_data" || flyctl volumes create searxng_data --region fra --size 1 --app ceyona-searxng --yes
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       - name: Deploy SearXNG
-        run: fly deploy --app ceyona-searxng --config fly.toml
+        run: flyctl deploy --app ceyona-searxng --config fly.toml
         working-directory: searxng
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
       - name: Set SEARXNG_URL in main app
-        run: |
-          fly secrets set SEARXNG_URL="https://ceyona-searxng.fly.dev" --app ceyona
+        run: flyctl secrets set SEARXNG_URL="https://ceyona-searxng.fly.dev" --app ceyona
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
