@@ -3,8 +3,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from llm.fallback_handler import complete_with_fallback
 from contracts.shared_types import Tier
+from llm.fallback_handler import complete_with_fallback
 
 logger = logging.getLogger(__name__)
 

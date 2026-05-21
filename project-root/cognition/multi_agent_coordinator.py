@@ -11,11 +11,12 @@ import agents.deep_agent as deep_agent
 import agents.fast_agent as fast_agent
 from agents.consensus_engine import ConsensusResult, resolve
 from agents.fast_agent import AgentResult
-from agents.safety_agent import SafetyInput, SafetyResult, SafetyVerdict, check as safety_check
+from agents.safety_agent import SafetyInput, SafetyResult, SafetyVerdict
+from agents.safety_agent import check as safety_check
 from cognition.intent_engine import Intent
 from cognition.reasoning_engine import ReasoningMode, ReasoningStrategy
-from i18n.t import t as _t
 from contracts.shared_types import Tier
+from i18n.t import t as _t
 
 logger = logging.getLogger(__name__)
 

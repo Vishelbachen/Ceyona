@@ -6,19 +6,16 @@ These tests verify the module works correctly before and after wiring.
 
 All tests are pure — no I/O, no mocks needed.
 """
-import pytest
 
 from meta.analysis import (
-    analyse,
-    AnalysisReport,
     AnalysisHint,
+    AnalysisReport,
     HintType,
+    _dominant_script,
     _full_analysis,
     _lightweight_analysis,
-    _detect_scripts,
-    _dominant_script,
+    analyse,
 )
-
 
 # ─── analyse() public API ─────────────────────────────────────────────────────
 

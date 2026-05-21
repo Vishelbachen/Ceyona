@@ -8,12 +8,12 @@ Verifies:
 - vision_intent replaces forced_intent in OrchestratorRequest
 - zero-balance guard respected in orchestrator web search path
 """
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
 
-from contracts.shared_types import Complexity, Tier
-from core.execution.orchestrator import OrchestratorRequest, _NO_SEARCH_INTENTS, _AGENTIC_INTENTS
-
+from contracts.shared_types import Complexity
+from core.execution.orchestrator import _AGENTIC_INTENTS, _NO_SEARCH_INTENTS, OrchestratorRequest
 
 # ─── _NO_SEARCH_INTENTS lives in orchestrator ─────────────────────────────────
 
@@ -192,7 +192,6 @@ class TestUnifiedAgenticPath:
         Gate condition: intent not in _AGENTIC_INTENTS required for _run_tool().
         This is the exact guard in orchestrator.run().
         """
-        from cognition.intent_engine import Intent
         for intent in _AGENTIC_INTENTS:
             # Simulate the guard: requires_tools=True, but skipped for agentic intents
             requires_tools = True  # all agentic intents have requires_tools=True
@@ -212,6 +211,7 @@ class TestUpdateHandlerIsCleanTransport:
         but the web-search-driven classify block is gone.)
         """
         import inspect
+
         import transport.telegram.update_handler as uh
         source = inspect.getsource(uh)
 
@@ -223,6 +223,7 @@ class TestUpdateHandlerIsCleanTransport:
     def test_forced_intent_not_in_source(self):
         """forced_intent must be removed from update_handler entirely."""
         import inspect
+
         import transport.telegram.update_handler as uh
         source = inspect.getsource(uh)
         assert "forced_intent" not in source

@@ -4,7 +4,6 @@ from enum import Enum
 from cognition.intent_engine import Intent
 from contracts.shared_types import Tier
 
-
 # ─── STRATEGY DEFINITIONS ────────────────────────────────────────────────────
 
 class ReasoningMode(str, Enum):

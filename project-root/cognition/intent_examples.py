@@ -316,6 +316,7 @@ async def seed_intent_examples(supabase, hf_client, force: bool = False) -> int:
         Количество загруженных примеров.
     """
     import logging
+
     from llm.hf_client import BGE_LARGE
 
     logger = logging.getLogger(__name__)

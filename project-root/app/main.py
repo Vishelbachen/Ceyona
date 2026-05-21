@@ -78,6 +78,7 @@ app = FastAPI(
 )
 
 from transport.telegram.webhook import router as telegram_router  # noqa: E402
+
 app.include_router(telegram_router)
 
 

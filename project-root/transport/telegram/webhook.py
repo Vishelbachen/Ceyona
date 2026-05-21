@@ -6,11 +6,11 @@ from fastapi import APIRouter, Header, HTTPException, Request, status
 from lingua import Language, LanguageDetectorBuilder
 
 from app.settings import settings
+from observability.metrics import gauge, increment
+from observability.tracing import trace
 from transport.telegram.auth_middleware import verify_update, verify_webhook_secret
 from transport.telegram.callback_handler import CallbackAction, parse_callback
 from transport.telegram.message_router import UpdateType, classify_update, extract_text
-from observability.metrics import increment, gauge
-from observability.tracing import trace
 from transport.telegram.update_handler import handle_message
 
 # Build detector once at import time (expensive operation)
@@ -45,7 +45,6 @@ async def _send_message_with_topup(chat_id: int, text: str, lang: str = "en") ->
     """Send message with an inline 'Top Up' button linking to TON wallet."""
     if not text:
         return
-    from app.settings import settings
     from i18n.t import t as _t
 
     topup_label = _t("topup_button", lang)

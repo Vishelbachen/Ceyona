@@ -8,12 +8,11 @@ Key scenarios:
   4. Core retry also fails — returns False
   5. Unrelated exception — returns False immediately
 """
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import MagicMock, patch, call
-from dataclasses import replace
 
 from payments.usage_meter import UsageEntry, UsageMeter
-
 
 # ─── fixtures ─────────────────────────────────────────────────────────────────
 

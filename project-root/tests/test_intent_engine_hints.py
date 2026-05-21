@@ -8,11 +8,8 @@ These tests cover ONLY the analysis_hints parameter and its effect on:
 
 Uses mocks for all I/O — pure unit tests.
 """
-import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
 
-from meta.analysis import AnalysisReport, AnalysisHint, HintType
-
+from meta.analysis import AnalysisHint, AnalysisReport, HintType
 
 # ─── helpers ──────────────────────────────────────────────────────────────────
 

@@ -8,9 +8,10 @@ logger = logging.getLogger(__name__)
 async def bootstrap() -> dict:
     from redis.asyncio import from_url as redis_from_url
     from supabase import create_client
+
     from events.event_bus import event_bus
-    from events.event_store import EventStore
     from events.event_dispatcher import setup_dispatcher
+    from events.event_store import EventStore
 
     # ─── Redis ──────────────────────────────────────────
     redis = redis_from_url(

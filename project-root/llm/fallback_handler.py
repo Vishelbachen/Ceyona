@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 
 from contracts.shared_types import Tier
-from llm.groq_client import groq_client, LLMResponse
+from llm.groq_client import LLMResponse, groq_client
 from llm.model_router import get_tier_models, requires_thinking_disabled, route_max_tokens
 
 logger = logging.getLogger(__name__)

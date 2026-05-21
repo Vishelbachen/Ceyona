@@ -48,7 +48,6 @@ _SERP_LANG_MAP: dict[str, str] = {
 # ─── SOURCE CREDIBILITY ───────────────────────────────────────────────────────
 from retrieval.source_credibility import source_credibility as _credibility
 
-
 # ─── URL SANITIZATION ─────────────────────────────────────────────────────────
 
 def _sanitize_url(url: str) -> str:

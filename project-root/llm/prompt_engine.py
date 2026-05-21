@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from contracts.shared_types import TruthMode
 from i18n.t import lang_instruction as _lang_instruction

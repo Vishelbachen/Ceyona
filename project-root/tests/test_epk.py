@@ -5,21 +5,18 @@ Covers: policy_registry, execution_policy_kernel, decision_matrix, cost_model.
 These are the most critical tests in the suite.
 A regression here means the billing and access control policy is broken.
 """
-import pytest
 
-from contracts.shared_types import EPKDecision, Tier, Complexity
-from core.kernel.policy_registry import RUNTIME
-from core.kernel.execution_policy_kernel import EPKInput, EPKOutput, evaluate
-from core.kernel.decision_matrix import select_tier, _FAST_CEILING, _GENERAL_CEILING
+from contracts.shared_types import Complexity, EPKDecision, Tier
 from core.kernel.cost_model import (
-    estimate_output_tokens,
-    estimate_cost,
-    actual_cost,
-    MODEL_RATES,
     MAX_OUTPUT_CAP,
-    COMPLEXITY_MULTIPLIER,
+    MODEL_RATES,
+    actual_cost,
+    estimate_cost,
+    estimate_output_tokens,
 )
-
+from core.kernel.decision_matrix import _FAST_CEILING, _GENERAL_CEILING, select_tier
+from core.kernel.execution_policy_kernel import EPKInput, evaluate
+from core.kernel.policy_registry import RUNTIME
 
 # ─── policy_registry ──────────────────────────────────────────────────────────
 

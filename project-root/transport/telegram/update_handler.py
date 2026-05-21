@@ -7,8 +7,12 @@ import traceback
 from contracts.shared_types import Complexity, EPKDecision, Tier
 from core.execution.orchestrator import OrchestratorRequest, OrchestratorResult, UsageRecord, run
 from transport.telegram.message_router import (
-    UpdateType, extract_text, extract_photo, has_photo,
-    has_voice, extract_voice,
+    UpdateType,
+    extract_photo,
+    extract_text,
+    extract_voice,
+    has_photo,
+    has_voice,
 )
 
 logger = logging.getLogger(__name__)
@@ -87,7 +91,7 @@ async def handle_message(
         # Safety Gate Pass 1 on caption (photo text)
         if caption:
             try:
-                from security.safety_gate import check_pass1, GateVerdict
+                from security.safety_gate import GateVerdict, check_pass1
                 gate1 = await asyncio.wait_for(check_pass1(caption), timeout=8.0)
                 if gate1.verdict == GateVerdict.DENY:
                     from cognition.response_synthesizer import get_system_message
@@ -195,9 +199,9 @@ async def handle_message(
 
         if voice_file_id:
             try:
-                from security.safety_gate import check_pass1
-                from external.speech_to_text import download_telegram_voice, transcribe
                 from app.settings import settings
+                from external.speech_to_text import download_telegram_voice, transcribe
+                from security.safety_gate import check_pass1
 
                 audio_bytes, filename = await download_telegram_voice(
                     file_id=voice_file_id,
@@ -284,7 +288,7 @@ async def handle_message(
 
     # ── Safety Gate Pass 1 — fast rejection (BEFORE Feature Extraction) ───────
     try:
-        from security.safety_gate import check_pass1, GateVerdict
+        from security.safety_gate import GateVerdict, check_pass1
         gate1 = await asyncio.wait_for(check_pass1(text), timeout=8.0)
         if gate1.verdict == GateVerdict.DENY:
             logger.warning("Safety Gate Pass 1 blocked message", extra={"user_id": user_id})
@@ -312,7 +316,8 @@ async def handle_message(
     # before retrieval and EPK. Latin-script languages pass through unchanged.
     # Position: after text extraction, before retrieval — per architecture.md §4.
     try:
-        from llm.multilingual_preprocessor import PreprocessorInput, preprocess as ml_preprocess
+        from llm.multilingual_preprocessor import PreprocessorInput
+        from llm.multilingual_preprocessor import preprocess as ml_preprocess
         ml_result = await ml_preprocess(PreprocessorInput(text=text, lang=lang))
         if ml_result.was_normalized:
             logger.info("Multilingual normalization applied", extra={
@@ -325,7 +330,8 @@ async def handle_message(
 
     # ── Safety Gate Pass 2 — deep classification (AFTER Feature Extraction) ───
     try:
-        from security.safety_gate import check_pass2, GateVerdict as GV2
+        from security.safety_gate import GateVerdict as GV2
+        from security.safety_gate import check_pass2
         gate2 = await asyncio.wait_for(check_pass2(text), timeout=12.0)
         if gate2.verdict == GV2.DENY:
             logger.warning("Safety Gate Pass 2 blocked message", extra={"user_id": user_id})
@@ -376,9 +382,9 @@ async def handle_message(
     # This avoids the aggressive 1200-token cap that was cutting history to
     # 0-2 turns and causing bug 13.2 (context loss).
     from memory.conversation_history import (
-        ConversationHistory,
         FAST_HISTORY_BUDGET,
         GENERAL_HISTORY_BUDGET,
+        ConversationHistory,
     )
     _message_tokens_pre = _estimate_tokens(text)
     _history_budget = (
@@ -525,8 +531,8 @@ async def handle_message(
 
     # ── meta layer: reflection + memory_audit (async side-channel) ────────────
     try:
-        from meta.reflection import ReflectionInput, reflect
         from meta.memory_audit import MemorySnapshot, audit
+        from meta.reflection import ReflectionInput, reflect
 
         ref_input = ReflectionInput(
             intent=str(result.epk_decision),

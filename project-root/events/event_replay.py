@@ -2,7 +2,7 @@ import logging
 from typing import Awaitable, Callable
 
 from events.event_store import EventStore
-from events.event_types import BaseEvent, EventName
+from events.event_types import EventName
 
 logger = logging.getLogger(__name__)
 

@@ -1,8 +1,8 @@
 import logging
 
+from cognition.intent_engine import Intent
 from contracts.context_contracts import AssembledContext, ContextRequest
 from contracts.shared_types import TruthMode
-from cognition.intent_engine import Intent
 
 logger = logging.getLogger(__name__)
 

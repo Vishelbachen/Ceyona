@@ -94,6 +94,7 @@ async def transcribe(
 
     try:
         import httpx
+
         from app.settings import settings
 
         # Convert OGG/OGA (Telegram voice) to WAV — Groq Whisper does not accept OGG/Opus

@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 # external service does NOT kill the entire tool dispatcher.
 
 async def _weather(query: str, lang: str = "en") -> str:
-    from external.weather import weather_service, _extract_city
+    from external.weather import _extract_city, weather_service
     city = await _extract_city(query)
     if not city:
         return ""

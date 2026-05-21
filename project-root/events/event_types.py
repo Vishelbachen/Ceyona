@@ -3,7 +3,6 @@ from datetime import datetime, timezone
 from enum import Enum
 from uuid import uuid4
 
-
 # ─── EVENT NAMES ─────────────────────────────────────────────────────────────
 
 class EventName(str, Enum):

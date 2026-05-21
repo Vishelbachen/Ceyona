@@ -4,9 +4,9 @@ import logging
 from dataclasses import dataclass
 
 from agents.fast_agent import AgentResult
+from contracts.shared_types import Tier
 from llm.groq_client import groq_client
 from llm.model_router import CONSENSUS_MODEL, route_max_tokens
-from contracts.shared_types import Tier
 
 logger = logging.getLogger(__name__)
 

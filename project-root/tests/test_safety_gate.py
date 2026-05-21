@@ -7,18 +7,18 @@ regardless of input or model response.
 
 All Groq API calls are mocked — these are pure unit tests.
 """
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
 
 from security.safety_gate import (
-    GateVerdict,
+    _PASS2_MODELS,
     GateResult,
+    GateVerdict,
+    _classify_with_model,
     check_pass1,
     check_pass2,
-    _classify_with_model,
-    _PASS2_MODELS,
 )
-
 
 # ─── check_pass1 ──────────────────────────────────────────────────────────────
 

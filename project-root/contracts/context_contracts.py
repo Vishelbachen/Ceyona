@@ -1,4 +1,5 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+
 from contracts.retrieval_contracts import RetrievedDocument
 
 

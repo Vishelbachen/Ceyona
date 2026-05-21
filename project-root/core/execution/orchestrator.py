@@ -10,12 +10,12 @@ from cognition.response_synthesizer import SynthesisInput, synthesize
 from context.assembler import resolve_truth_mode
 from contracts.shared_types import Complexity, EPKDecision, Tier, TruthMode
 from core.kernel.cost_model import actual_cost, estimate_cost, estimate_output_tokens
-from observability.metrics import increment, gauge
-from observability.tracing import trace
 from core.kernel.decision_matrix import select_tier
 from core.kernel.execution_policy_kernel import EPKInput, evaluate
 from llm.heavy_input_shaper import ShaperInput, shape
 from llm.prompt_engine import PromptContext, build_messages
+from observability.metrics import gauge, increment
+from observability.tracing import trace
 
 logger = logging.getLogger(__name__)
 
@@ -605,7 +605,6 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
         # Short LOW-complexity requests are estimated at FAST rates (~10x cheaper).
         # Larger or complex requests fall back to GENERAL (conservative, safe overestimate).
         # This prevents legitimate short queries from hitting DEGRADED_MODE.
-        from core.kernel.policy_registry import RUNTIME as _RT
         _fast_token_threshold = 300  # input tokens below which FAST estimate applies
         _estimate_tier = (
             Tier.FAST

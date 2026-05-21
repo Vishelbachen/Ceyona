@@ -2,6 +2,7 @@ import json
 import logging
 
 from redis.asyncio import Redis
+
 from retrieval.cache.ttl_policy import EMBEDDING_CACHE_TTL
 
 logger = logging.getLogger(__name__)

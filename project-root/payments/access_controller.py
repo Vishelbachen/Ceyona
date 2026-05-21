@@ -2,6 +2,7 @@ import logging
 from dataclasses import dataclass
 
 from supabase import Client
+
 from core.kernel.policy_registry import RUNTIME
 
 logger = logging.getLogger(__name__)

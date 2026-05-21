@@ -1,9 +1,6 @@
-import hashlib
 import hmac
 import logging
 from dataclasses import dataclass
-
-from app.settings import settings
 
 logger = logging.getLogger(__name__)
 

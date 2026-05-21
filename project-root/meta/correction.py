@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 
-
 # ─── BOILERPLATE PATTERNS TO STRIP ────────────────────────────────────────────
 # These are common LLM preamble / sign-off artifacts that add no value.
 # Matched case-insensitively at the start or end of the response.

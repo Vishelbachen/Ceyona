@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
 
 from contracts.retrieval_contracts import (
     RetrievalQuery,
@@ -9,8 +8,8 @@ from contracts.retrieval_contracts import (
     RetrievedDocument,
 )
 from retrieval.dense.bge_engine import bge_engine
-from retrieval.reranker.cross_encoder import cross_encoder
 from retrieval.query_preprocessor import preprocess
+from retrieval.reranker.cross_encoder import cross_encoder
 from retrieval.source_credibility import source_credibility
 
 logger = logging.getLogger(__name__)

@@ -27,13 +27,12 @@ import json
 import logging
 
 from agents.fast_agent import AgentResult
-from cognition.intent_engine import Intent
+from contracts.shared_types import Tier
 from external.maps import maps_service
 from external.search import search_service
 from external.weather import weather_service
 from llm.groq_client import LLMResponse, ToolCallResponse, groq_client
 from llm.model_router import DEEP_AGENT_MODEL, FAST_AGENT_MODEL, route_max_tokens
-from contracts.shared_types import Tier
 
 logger = logging.getLogger(__name__)
 
