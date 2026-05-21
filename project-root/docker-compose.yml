@@ -61,9 +61,19 @@ services:
 
     environment:
       - SEARXNG_BASE_URL=http://searxng:8080
+      # Secret key required — without it SearXNG logs warnings and may reject JSON API requests.
+      # Generate with: openssl rand -hex 32
+      - SEARXNG_SECRET_KEY=${SEARXNG_SECRET_KEY:-changeme_generate_with_openssl_rand_hex_32}
 
     volumes:
       - searxng_data:/etc/searxng
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
     networks:
       - ai-network
