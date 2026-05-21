@@ -28,13 +28,12 @@ class Settings(BaseSettings):
     redis_url: str = Field("redis://localhost:6379", description="Redis connection URL")
 
     # ─── EXTERNAL SERVICES ──────────────────────────────
-    brevo_api_key: str = Field("", description="Brevo API key")
+    brevo_api_key: str = Field("", description="Brevo email API key")
     mapbox_token: str = Field("", description="Mapbox token")
     openweather_api_key: str = Field("", description="OpenWeather API key")
     serpapi_key: str = Field("", description="SerpAPI key")
-    tavily_api_key: str = Field("")
-    searxng_url: str = Field("")
-    tavily_api_key: str = Field("", description="Tavily API key")
+    tavily_api_key: str = Field("", description="Tavily search API key")
+    searxng_url: str = Field("", description="SearXNG instance URL")
     sentry_dsn: str = Field("", description="Sentry DSN")
 
     # ─── ECONOMY / TON ──────────────────────────────────
