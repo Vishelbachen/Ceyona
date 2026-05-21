@@ -8,27 +8,38 @@ from supabase import Client
 logger = logging.getLogger(__name__)
 
 _TABLE = "conversation_history"
-_MAX_HISTORY = 20
 
-# Real token budget for history on FAST tier (llama-3.1-8b-instant, 6000 TPM):
+# SQL fetch limit — upper bound only, token budget trims below this.
+# 40 turns × ~280 tokens/turn ≈ 11 200 tokens — well above any budget.
+# Previously was 20 turns and acted as a hard cap independent of tokens.
+_MAX_HISTORY_FETCH = 40
+
+# Tier-dependent token budgets for conversation history.
 #
-# Actual system prompt breakdown (measured, not estimated):
-#   lang_instruction:     ~100 tokens
-#   formatting rules:     ~150 tokens
-#   no-cutoff mandate:    ~80 tokens
-#   intent system prompt: ~200-400 tokens
-#   truth enforcement:    ~300 tokens (HYBRID) or ~350 tokens (STRICT)
-#   retrieved context:    ~500-800 tokens (when present)
-#   ─────────────────────────────────────────────────────
-#   Total system:         ~1300-1800 tokens realistically
+# Budget calculation (FAST tier — llama-3.1-8b-instant, 6000 TPM):
+#   system prompt total:  ~1300-1800 tokens
+#   output cap (FAST):    ~1024 tokens
+#   user message:         ~100-300 tokens
+#   safety buffer:        300 tokens
+#   ──────────────────────────────────────
+#   available for history: 6000 - 1800 - 1024 - 300 - 300 = ~1200 tokens (conservative)
+#   → raised to 1800: headroom for shorter system prompts and brief messages
 #
-# Output max (FAST tier): 1024 tokens
-# User message:           ~100-300 tokens
-# Safety buffer:          300 tokens
+# Budget calculation (GENERAL / HEAVY tier — llama-3.3-70b-versatile, 12 000 TPM):
+#   system prompt total:  ~1300-1800 tokens
+#   output cap (GENERAL): ~3072 tokens
+#   user message:         ~100-300 tokens
+#   safety buffer:        500 tokens
+#   ──────────────────────────────────────────
+#   available for history: 12000 - 1800 - 3072 - 300 - 500 = ~6328 tokens
+#   → capped at 3500: keeps context meaningful without ballooning cost
 #
-# History budget: 6000 - 1800 - 1024 - 300 - 300 = ~1200 tokens (conservative)
-# Previously was 2000 — caused 413 errors on llama-3.1-8b-instant.
-_MAX_HISTORY_TOKENS = 1200
+# Tier is unknown at history load time (EPK runs after retrieval).
+# Caller passes the appropriate budget based on complexity heuristic
+# (same logic as orchestrator._estimate_tier): LOW + short → FAST_BUDGET,
+# otherwise GENERAL_BUDGET.
+FAST_HISTORY_BUDGET    = 1800   # ~6-7 pairs (avg ~280 tokens/turn)
+GENERAL_HISTORY_BUDGET = 3500   # ~12-15 pairs
 
 
 @dataclass
@@ -43,7 +54,7 @@ def _estimate_tokens(text: str) -> int:
 
 def _trim_history_to_budget(
     turns: list[dict],
-    token_budget: int = _MAX_HISTORY_TOKENS,
+    token_budget: int,
 ) -> list[dict]:
     """
     Trim history from the oldest end to fit within token budget.
@@ -82,7 +93,8 @@ class ConversationHistory:
     async def get_history(
         self,
         user_id: int,
-        limit: int = _MAX_HISTORY,
+        token_budget: int = GENERAL_HISTORY_BUDGET,
+        limit: int = _MAX_HISTORY_FETCH,
     ) -> list[dict]:
         try:
             result = (
@@ -96,12 +108,13 @@ class ConversationHistory:
             rows = result.data or []
             rows.reverse()
             turns = [{"role": r["role"], "content": r["content"]} for r in rows]
-            trimmed = _trim_history_to_budget(turns)
+            trimmed = _trim_history_to_budget(turns, token_budget)
             if len(trimmed) < len(turns):
                 logger.info("History trimmed", extra={
-                    "user_id": user_id,
-                    "original": len(turns),
-                    "trimmed": len(trimmed),
+                    "user_id":      user_id,
+                    "original":     len(turns),
+                    "trimmed":      len(trimmed),
+                    "token_budget": token_budget,
                 })
             return trimmed
         except Exception as exc:
