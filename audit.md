@@ -691,3 +691,101 @@ CoT format в ответе — проблема 13.3, не математиче�
 | 13.4 | 🟡 СРЕДНИЙ | Classifier теряет контекст на follow-up фразах | intent_engine._llm_pre_classify |
 | 13.5 | 🟡 СРЕДНИЙ | SEARCH не переформулирует описательный запрос | compound_agent, SEARCH system prompt |
 | 13.7 | 🟢 НИЗКИЙ | Грузинский: i18n fallback-строка некорректна по смыслу | i18n/strings.py |
+
+---
+
+## 14. SEARCH PROVIDER — THREE-TIER FALLBACK (май 2026)
+
+### 14.1 ✅ Three-tier search fallback — реализован (май 2026)
+
+**Изменение:** `external/search.py` переписан с трёхуровневым fallback chain:
+
+```
+1. Tavily   (primary)   — LLM-optimised, structured content, 1000 req/mo free
+2. SerpAPI  (secondary) — reliable reserve, 250 req/mo free, hotel pack support
+3. SearXNG  (tertiary)  — meta-search, no limit, self-hosted, last resort
+```
+
+Каждый провайдер пропускается молча если ключ/URL не сконфигурирован.
+First success wins. Caller (compound_agent) не видит выбор провайдера.
+
+**`app/settings.py`:** добавлены поля:
+- `tavily_api_key: str = Field("", ...)` — primary search provider
+- `searxng_url: str = Field("", ...)` — tertiary provider URL
+
+`serpapi_key` уже был объявлен.
+
+**`docker-compose.yml`:** добавлен сервис `searxng` с:
+- `SEARXNG_SECRET_KEY` (без него JSON API нестабилен)
+- healthcheck: `wget /healthz`
+- сеть `ai-network` (изолирована от внешнего)
+
+**`.env` / `.env.example`:** секция `# Search providers` добавлена:
+```
+TAVILY_API_KEY=
+SERPAPI_KEY=
+SEARXNG_URL=http://searxng:8080
+SEARXNG_SECRET_KEY=  # openssl rand -hex 32
+```
+
+**`app/main.py` `/providers` endpoint:**
+- Добавлена проверка `settings.searxng_url` → `status["searxng"]`
+- Добавлен raw env check `SEARXNG_URL`
+
+---
+
+## 15. HEALTHCHECK — TIMEOUT FIX (май 2026)
+
+### 15.1 ✅ healthcheck.py — asyncio.wait_for добавлен (май 2026)
+
+**Проблема:**
+`full_health()` в `infra/healthcheck.py` вызывал `asyncio.to_thread(supabase_query)`
+без timeout. Supabase sync client при холодном старте или сетевой задержке мог
+зависать > 5s → fly.io healthcheck (timeout=5s) получал 504 → машина перезапускалась.
+Healthcheck был переписан ранее (to_thread вместо sync call), но ошибка не ушла
+именно из-за отсутствия deadline.
+
+**Исправление:**
+```python
+_REDIS_TIMEOUT    = 3.0  # seconds
+_SUPABASE_TIMEOUT = 3.0  # seconds
+
+# check_redis:
+await asyncio.wait_for(redis.ping(), timeout=_REDIS_TIMEOUT)
+
+# check_supabase:
+await asyncio.wait_for(
+    asyncio.to_thread(lambda: supabase.table("user_balances")...execute()),
+    timeout=_SUPABASE_TIMEOUT,
+)
+
+# full_health — concurrent (было sequential):
+redis_ok, sb_ok = await asyncio.gather(check_redis(redis), check_supabase(supabase))
+```
+
+Проверки теперь идут **параллельно** через `asyncio.gather` — total latency = max, не сумма.
+При timeout каждый check возвращает False с ERROR логом. Fly.io получает ответ в < 5s.
+
+### 15.2 ✅ main.py /providers — Supabase call исправлен (май 2026)
+
+**Проблема:**
+`/providers` endpoint вызывал `supabase.table("healthcheck").select(...)` — двойная ошибка:
+1. Таблица `healthcheck` не существует в схеме (должна быть `user_balances`)
+2. Вызов синхронный без `to_thread` — блокировал event loop FastAPI
+
+**Исправление:**
+```python
+await asyncio.to_thread(
+    lambda: request.app.state.supabase.table("user_balances").select("user_id").limit(1).execute()
+)
+```
+
+---
+
+### СВОДНАЯ ТАБЛИЦА — дополнение
+
+| # | Приоритет | Описание | Статус |
+|---|---|---|---|
+| 14.1 | ✅ | Three-tier search: Tavily → SerpAPI → SearXNG | Закрыто май 2026 |
+| 15.1 | ✅ | healthcheck timeout → fly restarts | Закрыто май 2026 |
+| 15.2 | ✅ | /providers: wrong table + sync blocking call | Закрыто май 2026 |
