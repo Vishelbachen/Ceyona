@@ -72,7 +72,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install flyctl
-        uses: superfly/flyctl-actions/setup-flyctl@master
+        run: curl -L https://fly.io/install.sh | sh && echo "/root/.fly/bin" >> $GITHUB_PATH
       - name: Create app if not exists
         run: |
           fly apps list --org personal | grep -q "ceyona-searxng" \
