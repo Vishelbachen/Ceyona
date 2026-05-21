@@ -1,9 +1,8 @@
 import logging
 from dataclasses import dataclass
 
-from supabase import Client
-
 from payments.pricing_engine import apply_margin
+from supabase import Client
 
 logger = logging.getLogger(__name__)
 

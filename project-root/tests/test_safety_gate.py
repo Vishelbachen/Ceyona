@@ -10,7 +10,6 @@ All Groq API calls are mocked — these are pure unit tests.
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from security.safety_gate import (
     _PASS2_MODELS,
     GateResult,

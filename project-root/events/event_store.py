@@ -2,9 +2,8 @@ import json
 import logging
 from datetime import timezone
 
-from redis.asyncio import Redis
-
 from events.event_types import BaseEvent
+from redis.asyncio import Redis
 
 logger = logging.getLogger(__name__)
 

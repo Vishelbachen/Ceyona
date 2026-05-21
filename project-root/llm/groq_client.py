@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from groq import AsyncGroq
-
 from app.settings import settings
+from groq import AsyncGroq
 
 
 @dataclass(frozen=True)

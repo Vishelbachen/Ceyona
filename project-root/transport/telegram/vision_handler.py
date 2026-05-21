@@ -5,7 +5,6 @@ import logging
 from dataclasses import dataclass
 
 import httpx
-
 from app.settings import settings
 from contracts.shared_types import Tier
 from core.kernel.policy_registry import RUNTIME

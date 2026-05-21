@@ -1,6 +1,5 @@
-from cryptography.fernet import Fernet
-
 from app.settings import settings
+from cryptography.fernet import Fernet
 
 
 def _fernet() -> Fernet:

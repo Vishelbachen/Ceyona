@@ -2,10 +2,9 @@ import logging
 import re
 
 import httpx
+from app.settings import settings
 from fastapi import APIRouter, Header, HTTPException, Request, status
 from lingua import Language, LanguageDetectorBuilder
-
-from app.settings import settings
 from observability.metrics import gauge, increment
 from observability.tracing import trace
 from transport.telegram.auth_middleware import verify_update, verify_webhook_secret

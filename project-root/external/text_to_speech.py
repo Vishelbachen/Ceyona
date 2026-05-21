@@ -172,7 +172,6 @@ async def synthesize(
 
     try:
         import httpx
-
         from app.settings import settings
 
         # Groq TTS endpoint (OpenAI-compatible audio/speech).

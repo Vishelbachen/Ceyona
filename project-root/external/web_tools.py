@@ -29,6 +29,7 @@ async def _search(query: str, lang: str = "en") -> str:
 
 async def _maps(query: str, lang: str = "en") -> str:
     from external.maps import maps_service
+
     # Pass query directly to Mapbox; it handles any language natively.
     feature = await maps_service.geocode(query, lang=lang)
     if not feature:

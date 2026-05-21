@@ -113,6 +113,7 @@ class TestEffectiveMinLogic:
 
     def test_long_latin_text_no_is_short(self):
         from meta.analysis import _full_analysis
+
         # 25 words — above IS_SHORT threshold (20)
         result = _full_analysis(("word " * 25).strip())
         assert not result.has(HintType.IS_SHORT)

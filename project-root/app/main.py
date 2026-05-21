@@ -2,9 +2,8 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
-
 from app.bootstrap import bootstrap, shutdown
+from fastapi import FastAPI, Request
 from infra.env_validator import validate
 from observability.logger import setup_logging
 from observability.sentry import init_sentry

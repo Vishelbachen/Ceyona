@@ -1,7 +1,6 @@
 import logging
 
 import jwt
-
 from app.settings import settings
 
 logger = logging.getLogger(__name__)

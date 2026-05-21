@@ -1,10 +1,9 @@
 import logging
 
-from supabase import Client
-
 from payments.access_controller import AccessController
 from payments.pricing_engine import nano_to_usd
 from payments.ton_client import TonTransaction, ton_client
+from supabase import Client
 
 logger = logging.getLogger(__name__)
 

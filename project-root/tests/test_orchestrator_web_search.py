@@ -11,9 +11,12 @@ Verifies:
 from unittest.mock import MagicMock, patch
 
 import pytest
-
 from contracts.shared_types import Complexity
-from core.execution.orchestrator import _AGENTIC_INTENTS, _NO_SEARCH_INTENTS, OrchestratorRequest
+from core.execution.orchestrator import (
+    _AGENTIC_INTENTS,
+    _NO_SEARCH_INTENTS,
+    OrchestratorRequest,
+)
 
 # ─── _NO_SEARCH_INTENTS lives in orchestrator ─────────────────────────────────
 
@@ -96,6 +99,7 @@ class TestWebSearchZeroBalanceGuard:
         # Patch at the orchestrator's import site
         with patch("external.web_tools.run_tool", new=mock_web_tool):
             from core.execution.orchestrator import _NO_SEARCH_INTENTS
+
             # Simulate: intent value NOT in no-search list, but balance = 0
             # The guard condition: user_balance > 0 must block the call
             balance = 0.0

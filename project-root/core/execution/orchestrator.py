@@ -4,7 +4,11 @@ import logging
 from dataclasses import dataclass
 
 from cognition.intent_engine import Intent, IntentResult, classify
-from cognition.multi_agent_coordinator import CoordinationResult, coordinate, plan_agents
+from cognition.multi_agent_coordinator import (
+    CoordinationResult,
+    coordinate,
+    plan_agents,
+)
 from cognition.reasoning_engine import select_strategy
 from cognition.response_synthesizer import SynthesisInput, synthesize
 from context.assembler import resolve_truth_mode

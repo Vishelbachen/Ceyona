@@ -11,7 +11,6 @@ Key scenarios:
 from unittest.mock import MagicMock
 
 import pytest
-
 from payments.usage_meter import UsageEntry, UsageMeter
 
 # ─── fixtures ─────────────────────────────────────────────────────────────────
