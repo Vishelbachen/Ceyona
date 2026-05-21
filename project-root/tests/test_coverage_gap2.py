@@ -185,6 +185,7 @@ class TestEmbeddingCache:
     @pytest.mark.asyncio
     async def test_get_returns_vector_on_hit(self):
         import json
+
         from retrieval.cache.embedding_cache import EmbeddingCache
         vector = [0.1, 0.2, 0.3]
         redis = self._make_redis()
@@ -252,6 +253,7 @@ class TestQueryCache:
     @pytest.mark.asyncio
     async def test_get_hit_returns_data(self):
         import json
+
         from retrieval.cache.query_cache import QueryCache
         data = [{"content": "doc1", "score": 0.9}]
         redis = self._make_redis()
@@ -308,6 +310,7 @@ class TestRerankCache:
     @pytest.mark.asyncio
     async def test_get_hit_returns_tuples(self):
         import json
+
         from retrieval.cache.rerank_cache import RerankCache
         data = [{"content": "doc1", "score": 0.9}, {"content": "doc2", "score": 0.5}]
         redis = self._make_redis()
