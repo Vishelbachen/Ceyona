@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     supabase_service_role_key: str = Field(..., description="Supabase service role key")
     redis_url: str = Field("redis://localhost:6379", description="Redis connection URL")
 
-    # ─── EXTERNAL SERVICES ──────────────────────────────
+    ─ EXTERNAL SERVICES ──────────────────────────────
     brevo_api_key: str = Field("", description="Brevo email API key")
     mapbox_token: str = Field("", description="Mapbox token")
     openweather_api_key: str = Field("", description="OpenWeather API key")
