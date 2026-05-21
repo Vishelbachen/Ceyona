@@ -130,7 +130,10 @@ async def providers(request: Request):
 
     # ── Supabase ────────────────────────────────────────
     try:
-        request.app.state.supabase.table("healthcheck").select("*").limit(1).execute()
+        # Supabase Python client is synchronous — must run in thread to avoid blocking event loop
+        await asyncio.to_thread(
+            lambda: request.app.state.supabase.table("user_balances").select("user_id").limit(1).execute()
+        )
         status["supabase"] = "ok"
     except Exception:
         status["supabase"] = "error"
@@ -223,6 +226,15 @@ async def providers(request: Request):
     except Exception:
         status["tavily"] = "error"
 
+    # ── SearXNG ─────────────────────────────────────────
+    try:
+        if settings.searxng_url:
+            status["searxng"] = "ok"
+        else:
+            status["searxng"] = "missing"
+    except Exception:
+        status["searxng"] = "error"
+
     # ── Sentry ──────────────────────────────────────────
     try:
         if settings.sentry_dsn:
@@ -271,6 +283,7 @@ async def providers(request: Request):
     status["SENTRY_DSN"] = "ok" if settings.sentry_dsn else "missing"
     status["SERPAPI_KEY"] = "ok" if settings.serpapi_key else "missing"
     status["TAVILY_API_KEY"] = "ok" if settings.tavily_api_key else "missing"
+    status["SEARXNG_URL"] = "ok" if settings.searxng_url else "missing"
     status["SUPABASE_ANON_KEY"] = "ok" if settings.supabase_anon_key else "missing"
     status["SUPABASE_SERVICE_ROLE_KEY"] = "ok" if settings.supabase_service_role_key else "missing"
     status["SUPABASE_URL"] = "ok" if settings.supabase_url else "missing"
