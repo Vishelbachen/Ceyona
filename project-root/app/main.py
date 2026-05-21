@@ -99,6 +99,7 @@ async def metrics() -> dict:
     from observability.metrics import snapshot
     return snapshot()
 
+
 @app.get("/models")
 async def models():
     from llm.groq_client import groq_client
@@ -111,6 +112,7 @@ async def models():
         "count": len(ids),
         "available_models": ids,
     }
+
 
 @app.get("/providers")
 async def providers(request: Request):
