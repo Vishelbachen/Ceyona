@@ -1,5 +1,21 @@
 [importlinter]
-root_package = project_root
+root_packages =
+    core
+    cognition
+    agents
+    transport
+    retrieval
+    meta
+    memory
+    payments
+    observability
+    infra
+    security
+    context
+    contracts
+    events
+    llm
+    external
 include_external_packages = True
 
 
