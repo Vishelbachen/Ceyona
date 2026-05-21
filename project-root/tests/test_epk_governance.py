@@ -9,7 +9,6 @@ These tests are ARCHITECTURE TESTS — they catch:
 - MAX_OUTPUT_CAP vs _MAX_TOKENS confusion (architecture.md §8)
 """
 
-import pytest
 
 
 # ─── Threshold constants (from economic.md §5-6, policy_registry) ────────────
