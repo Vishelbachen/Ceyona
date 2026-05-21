@@ -132,8 +132,6 @@ forbidden_modules =
 [contract:canonical_layer_order]
 name = Canonical layer order must be respected
 type = layers
-containers =
-    project_root
 layers =
     transport
     agents
