@@ -1,0 +1,129 @@
+[importlinter]
+root_package = project_root
+include_external_packages = True
+
+
+[contract:transport_no_cognition_internals]
+name = Transport cannot access cognition internals directly
+type = forbidden
+source_modules =
+    transport
+forbidden_modules =
+    cognition.reasoning_engine
+    cognition.multi_agent_coordinator
+    cognition.response_synthesizer
+
+
+[contract:agents_no_infra_payments]
+name = Agents cannot access infra or payments directly
+type = forbidden
+source_modules =
+    agents
+forbidden_modules =
+    infra
+    payments
+    transport
+
+
+[contract:meta_no_execution_authority]
+name = META layer cannot control execution
+type = forbidden
+source_modules =
+    meta
+forbidden_modules =
+    core.execution
+    core.kernel.execution_policy_kernel
+    core.kernel.decision_matrix
+    agents.fast_agent
+    agents.deep_agent
+    agents.compound_agent
+    agents.creative_agent
+
+
+[contract:retrieval_no_transport_or_speech]
+name = Retrieval cannot depend on transport or speech layers
+type = forbidden
+source_modules =
+    retrieval
+forbidden_modules =
+    transport
+    external.speech_to_text
+    external.text_to_speech
+    cognition.reasoning_engine
+
+
+[contract:contracts_purity]
+name = Contracts layer must be pure (no runtime deps)
+type = forbidden
+source_modules =
+    contracts
+forbidden_modules =
+    transport
+    infra
+    payments
+    agents
+    cognition
+    retrieval
+    external
+    memory
+    llm
+
+
+[contract:observability_read_only]
+name = Observability cannot drive execution or cognition
+type = forbidden
+source_modules =
+    observability
+forbidden_modules =
+    core.execution
+    cognition
+    agents
+    payments
+    transport
+
+
+[contract:infra_no_business_logic]
+name = Infra cannot reach into cognition, agents or payments
+type = forbidden
+source_modules =
+    infra
+forbidden_modules =
+    cognition
+    agents
+    payments
+    llm
+    retrieval
+
+
+[contract:cost_model_router_independence]
+name = cost_model and model_router must not import each other
+type = forbidden
+source_modules =
+    core.kernel.cost_model
+forbidden_modules =
+    llm.model_router
+
+
+[contract:model_router_cost_model_independence]
+name = model_router must not import cost_model
+type = forbidden
+source_modules =
+    llm.model_router
+forbidden_modules =
+    core.kernel.cost_model
+
+
+[contract:canonical_layer_order]
+name = Canonical layer order must be respected
+type = layers
+containers =
+    project_root
+layers =
+    transport
+    agents
+    cognition
+    core.execution
+    llm
+    retrieval | external | memory
+    core.kernel
+    contracts | context | events
