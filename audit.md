@@ -579,7 +579,7 @@ fly logs | grep "compound_agent"
 
 ---
 
-### 13.2 🔴 OPEN — Потеря контекста разговора
+### 13.2 ✅ CLOSED — Потеря контекста разговора (история) (май 2026)
 
 **Наблюдение:**
 - «Вот, нашла» → бот переводит фразу как idiomatic expression вместо понимания контекста
@@ -593,9 +593,36 @@ System prompt для tool/STRICT интентов весит ~1300-1800 токе
 
 Отдельно: `_llm_pre_classify(text)` в `intent_engine.py` получает только текущее сообщение
 без истории. Короткий follow-up «Вот, нашла» → pre-classifier не понимает контекст →
-не может вернуть правильный intent.
+не может вернуть правильный intent. (Часть 2 — остаётся в 13.4 OPEN.)
 
-**Влияние:** серьёзное. Бот воспринимается как «без памяти» уже через 2-3 хода.
+**Исправление (часть 1 — history budget):**
+
+`memory/conversation_history.py` — убран захардкоженный `_MAX_HISTORY_TOKENS = 1200`.
+Введены tier-зависимые константы:
+```python
+FAST_HISTORY_BUDGET    = 1800   # ~6-7 пар (~280 tokens/turn)
+GENERAL_HISTORY_BUDGET = 3500   # ~12-15 пар
+```
+`get_history()` принимает `token_budget` как параметр (default = GENERAL_HISTORY_BUDGET).
+SQL fetch limit поднят с 20 до 40 turns (`_MAX_HISTORY_FETCH`).
+
+`transport/telegram/update_handler.py` — выбор бюджета перед вызовом `get_history()`:
+```python
+_history_budget = (
+    FAST_HISTORY_BUDGET
+    if complexity == Complexity.LOW and _message_tokens_pre < 300
+    else GENERAL_HISTORY_BUDGET
+)
+conversation_history = await history_store.get_history(
+    user_id, token_budget=_history_budget
+)
+```
+Эвристика идентична `orchestrator._estimate_tier` (audit §6.1) — единый подход.
+Tier в этой точке ещё неизвестен (EPK не запустился), поэтому используем complexity.
+Логируются: `token_budget`, `turns` — для диагностики.
+
+**Результат:** бот получает 6-7 пар на FAST и 12-15 пар на GENERAL/HEAVY
+вместо 0-2 пар при старом бюджете 1200 токенов.
 
 ---
 
@@ -686,7 +713,7 @@ CoT format в ответе — проблема 13.3, не математиче�
 | # | Приоритет | Описание | Файлы |
 |---|---|---|---|
 | 13.1 | 🔴 КРИТИЧЕСКИЙ | Все tool intents → «сервис недоступен» | compound_agent, groq_client, settings |
-| 13.2 | 🔴 СЕРЬЁЗНЫЙ | Потеря контекста (history trim слишком агрессивна + pre-classifier без истории) | conversation_history, intent_engine |
+| 13.2 | ✅ | Потеря контекста — history budget исправлен (FAST=1800, GENERAL=3500) | conversation_history, update_handler |
 | 13.3 | 🟡 СРЕДНИЙ | CoT reasoning format в финальном ответе | response_synthesizer, reasoning_engine, vision_handler |
 | 13.4 | 🟡 СРЕДНИЙ | Classifier теряет контекст на follow-up фразах | intent_engine._llm_pre_classify |
 | 13.5 | 🟡 СРЕДНИЙ | SEARCH не переформулирует описательный запрос | compound_agent, SEARCH system prompt |
