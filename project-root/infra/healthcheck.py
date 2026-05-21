@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from redis.asyncio import Redis
@@ -17,7 +18,10 @@ async def check_redis(redis: Redis) -> bool:
 
 async def check_supabase(supabase: Client) -> bool:
     try:
-        supabase.table("user_balances").select("user_id").limit(1).execute()
+        # Supabase Python client is synchronous — must run in thread to avoid blocking event loop
+        await asyncio.to_thread(
+            lambda: supabase.table("user_balances").select("user_id").limit(1).execute()
+        )
         return True
     except Exception as exc:
         logger.error("Supabase healthcheck failed", extra={"error": str(exc)})
