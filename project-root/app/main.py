@@ -114,6 +114,7 @@ async def models():
 
 @app.get("/providers")
 async def providers(request: Request):
+    from app.settings import settings
     from llm.groq_client import groq_client
 
     status = {}
@@ -122,28 +123,158 @@ async def providers(request: Request):
     try:
         await request.app.state.redis.ping()
         status["redis"] = "ok"
-    except Exception as exc:
-        status["redis"] = f"error: {exc}"
+    except Exception:
+        status["redis"] = "error"
 
     # ── Supabase ────────────────────────────────────────
     try:
         request.app.state.supabase.table("healthcheck").select("*").limit(1).execute()
         status["supabase"] = "ok"
-    except Exception as exc:
-        status["supabase"] = f"error: {exc}"
+    except Exception:
+        status["supabase"] = "error"
 
     # ── Groq ────────────────────────────────────────────
     try:
         await groq_client._client.models.list()
         status["groq"] = "ok"
-    except Exception as exc:
-        status["groq"] = f"error: {exc}"
+    except Exception:
+        status["groq"] = "error"
 
-    # ── HuggingFace ────────────────────────────────────
+    # ── HuggingFace ─────────────────────────────────────
     try:
-        request.app.state.hf_client
-        status["huggingface"] = "ok"
-    except Exception as exc:
-        status["huggingface"] = f"error: {exc}"
+        if settings.hf_token:
+            status["huggingface"] = "ok"
+        else:
+            status["huggingface"] = "missing"
+    except Exception:
+        status["huggingface"] = "error"
+
+    # ── Telegram ────────────────────────────────────────
+    try:
+        if settings.bot_token:
+            status["telegram"] = "ok"
+        else:
+            status["telegram"] = "missing"
+    except Exception:
+        status["telegram"] = "error"
+
+    # ── Brevo ───────────────────────────────────────────
+    try:
+        if settings.brevo_api_key:
+            status["brevo"] = "ok"
+        else:
+            status["brevo"] = "missing"
+    except Exception:
+        status["brevo"] = "error"
+
+    # ── Encryption ──────────────────────────────────────
+    try:
+        if settings.encryption_key:
+            status["encryption"] = "ok"
+        else:
+            status["encryption"] = "missing"
+    except Exception:
+        status["encryption"] = "error"
+
+    # ── JWT ─────────────────────────────────────────────
+    try:
+        if settings.jwt_secret:
+            status["jwt"] = "ok"
+        else:
+            status["jwt"] = "missing"
+    except Exception:
+        status["jwt"] = "error"
+
+    # ── Mapbox ──────────────────────────────────────────
+    try:
+        if settings.mapbox_token:
+            status["mapbox"] = "ok"
+        else:
+            status["mapbox"] = "missing"
+    except Exception:
+        status["mapbox"] = "error"
+
+    # ── OpenWeather ─────────────────────────────────────
+    try:
+        if settings.openweather_api_key:
+            status["openweather"] = "ok"
+        else:
+            status["openweather"] = "missing"
+    except Exception:
+        status["openweather"] = "error"
+
+    # ── SerpAPI ─────────────────────────────────────────
+    try:
+        if settings.serpapi_key:
+            status["serpapi"] = "ok"
+        else:
+            status["serpapi"] = "missing"
+    except Exception:
+        status["serpapi"] = "error"
+
+    # ── Tavily ──────────────────────────────────────────
+    try:
+        if settings.tavily_api_key:
+            status["tavily"] = "ok"
+        else:
+            status["tavily"] = "missing"
+    except Exception:
+        status["tavily"] = "error"
+
+    # ── Sentry ──────────────────────────────────────────
+    try:
+        if settings.sentry_dsn:
+            status["sentry"] = "ok"
+        else:
+            status["sentry"] = "missing"
+    except Exception:
+        status["sentry"] = "error"
+
+    # ── TON Wallet ──────────────────────────────────────
+    try:
+        if settings.ton_wallet:
+            status["ton_wallet"] = "ok"
+        else:
+            status["ton_wallet"] = "missing"
+    except Exception:
+        status["ton_wallet"] = "error"
+
+    # ── Webhook ─────────────────────────────────────────
+    try:
+        if settings.webhook_url:
+            status["webhook"] = "ok"
+        else:
+            status["webhook"] = "missing"
+    except Exception:
+        status["webhook"] = "error"
+
+    # ── Allowed Origins ─────────────────────────────────
+    try:
+        if settings.allowed_origins:
+            status["cors"] = "ok"
+        else:
+            status["cors"] = "missing"
+    except Exception:
+        status["cors"] = "error"
+
+    # ── Raw env presence checks ─────────────────────────
+    status["BOT_TOKEN"] = "ok" if settings.bot_token else "missing"
+    status["BREVO_API_KEY"] = "ok" if settings.brevo_api_key else "missing"
+    status["ENCRYPTION_KEY"] = "ok" if settings.encryption_key else "missing"
+    status["GROQ_API_KEY"] = "ok" if settings.groq_api_key else "missing"
+    status["JWT_SECRET"] = "ok" if settings.jwt_secret else "missing"
+    status["MAPBOX_TOKEN"] = "ok" if settings.mapbox_token else "missing"
+    status["OPENWEATHER_API_KEY"] = "ok" if settings.openweather_api_key else "missing"
+    status["REDIS_URL"] = "ok" if settings.redis_url else "missing"
+    status["SENTRY_DSN"] = "ok" if settings.sentry_dsn else "missing"
+    status["SERPAPI_KEY"] = "ok" if settings.serpapi_key else "missing"
+    status["TAVILY_API_KEY"] = "ok" if settings.tavily_api_key else "missing"
+    status["SUPABASE_ANON_KEY"] = "ok" if settings.supabase_anon_key else "missing"
+    status["SUPABASE_SERVICE_ROLE_KEY"] = "ok" if settings.supabase_service_role_key else "missing"
+    status["SUPABASE_URL"] = "ok" if settings.supabase_url else "missing"
+    status["TON_WALLET"] = "ok" if settings.ton_wallet else "missing"
+    status["WEBHOOK_URL"] = "ok" if settings.webhook_url else "missing"
+    status["HF_TOKEN"] = "ok" if settings.hf_token else "missing"
+    status["ALLOWED_ORIGINS"] = "ok" if settings.allowed_origins else "missing"
 
     return status
