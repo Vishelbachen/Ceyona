@@ -17,7 +17,7 @@ _REQUIRED = [
     "redis_url",
     "mapbox_token",  # required: geocoding, maps
     # Search providers: at least one of tavily_api_key / serpapi_key should be set,
-    # but neither is hard-required here — missing both degrades search gracefully.
+    # but neither is hard-required — missing both degrades search gracefully.
 ]
 
 
