@@ -15,8 +15,9 @@ _REQUIRED = [
     "supabase_url",
     "supabase_service_role_key",
     "redis_url",
-    "serpapi_key",   # required: search, maps_poi, hotel/place queries
     "mapbox_token",  # required: geocoding, maps
+    # Search providers: at least one of tavily_api_key / serpapi_key should be set,
+    # but neither is hard-required here — missing both degrades search gracefully.
 ]
 
 
