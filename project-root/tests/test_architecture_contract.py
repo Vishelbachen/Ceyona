@@ -9,7 +9,6 @@ No live services needed — pure AST analysis.
 
 import ast
 import pathlib
-import sys
 
 import pytest
 
