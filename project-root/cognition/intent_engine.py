@@ -4,7 +4,12 @@ import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import TYPE_CHECKING
+
 from i18n.t import lang_instruction as _lang_directive
+
+if TYPE_CHECKING:
+    from meta.analysis import AnalysisReport
 
 logger = logging.getLogger(__name__)
 
@@ -281,6 +286,7 @@ def _build_result(
 # Regex on digits/symbols — language-agnostic by nature, no strings needed.
 # Short mathematical expressions can have low pgvector score → fall to QUESTION.
 import re as _re
+
 _MATH_PATTERN = _re.compile(
     r"(?:"
     r"\d+\s*[\+\-\*\/\^]\s*\d+"       # arithmetic: 2+2, 3*4
@@ -389,7 +395,7 @@ async def classify(
     adjust effective_min threshold for short/multilingual input.
     analysis_hints is never authoritative — it only adjusts probabilities.
     """
-    from meta.analysis import AnalysisReport, HintType
+    from meta.analysis import HintType
     fallback = _build_result(Intent.QUESTION, 0.70, lang, text)
 
     # ── analysis_hints: math boost (structural signal, no I/O cost) ──────────
