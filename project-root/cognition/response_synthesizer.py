@@ -15,10 +15,16 @@ _TELEGRAM_MAX_CHARS = 4096
 
 # ─── PUBLIC API ───────────────────────────────────────────────────────────────
 
+# DEPRECATED: use i18n.t.get_system_message instead.
+# These helpers are pure i18n wrappers — they do not belong in cognition/.
+# Kept here for backward compatibility only. transport/ must NOT import from here
+# (architecture.md §19: transport → cognition is forbidden).
+# Canonical location: i18n/t.py
 def get_system_message(key: str, lang: str) -> str:
     return _t(key, lang) or "⚠️ An error occurred."
 
 
+# DEPRECATED: use i18n.t.format_balance_message instead.
 def format_balance_message(balance: float, lang: str) -> str:
     return _t("balance_display", lang, amount=f"{balance:.2f}")
 
