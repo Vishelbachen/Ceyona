@@ -607,12 +607,15 @@ The synthesizer is the final response authority.
 
 **Call site A — external/search.py (primary)**:
 ```
-SerpAPI results → search.py._filter_results() → source_credibility.filter_results()
+Search provider results (Tavily / SerpAPI / SearXNG)
+    → search.py._filter_results() → source_credibility.filter_results()
     BLOCKED tier → rejected entirely
     VERY_LOW tier → rejected
     LOW and above → passed (max 5 results)
 → LLM receives only trusted sources
 ```
+Provider selection is internal to search.py (three-tier fallback chain — see §28).
+source_credibility filters results regardless of which provider produced them.
 
 **Call site B — retrieval/retrieval_engine.py (reserved)**:
 ```
@@ -624,7 +627,7 @@ pgvector similarity_search results → source_credibility.score_documents()
 
 source_credibility DOES actively block and filter — it is enforcement, not merely advisory.
 It is NOT in the retrieval pipeline between query_preprocessor and reranker.
-It is NOT called by retrieval_engine for SerpAPI results.
+It is NOT called by retrieval_engine for web search results (search.py owns that path).
 
 source_credibility MUST NOT:
 - mutate retrieval artifacts beyond filtering
@@ -732,6 +735,8 @@ This document specifies rules — `audit.md` tracks what has been done and what 
 **Key architectural decisions recorded in audit.md:**
 - §12.1: Unified agentic path — все tool intents через compound_agent (май 2026)
 - §12.2: STRICT truth gate — agentic интенты исключены из pre-execution gate (май 2026)
+- §14.1: Three-tier search fallback — Tavily → SerpAPI → SearXNG (май 2026)
+- §15.1: healthcheck timeout fix — asyncio.wait_for + concurrent gather (май 2026)
 - §11.x–12.x: предыдущие audit items (billing, epk, coordinator, safety gate)
 
 **Open bugs (май 2026):** см. audit.md §13.
@@ -757,3 +762,62 @@ runtime remains subordinate to architecture
 retrieval remains grounded
 orchestration remains bounded
 Architecture governs the system. Runtime executes the system.
+
+---
+
+## 28. SEARCH PROVIDER POLICY
+
+`external/search.py` implements a three-tier fallback chain for web search:
+
+```
+1. Tavily   (primary)   — LLM-optimised structured results, 1000 req/mo free
+                          API key: TAVILY_API_KEY
+2. SerpAPI  (secondary) — reliable reserve, hotel pack support, 250 req/mo free
+                          API key: SERPAPI_KEY
+3. SearXNG  (tertiary)  — meta-search (Google/Bing/DDG aggregated), no rate limit
+                          self-hosted via docker-compose.yml, URL: SEARXNG_URL
+```
+
+**Fallback rule:** each provider tried in order. First success wins.
+Provider silently skipped if its key/URL is not configured in settings.
+Caller (compound_agent) sees only `search_service.search()` — provider selection is internal.
+
+**source_credibility** filters ALL provider results uniformly before LLM exposure (§20).
+
+**Configuration authority:**
+- `app/settings.py` declares `tavily_api_key`, `serpapi_key`, `searxng_url`
+- `docker-compose.yml` runs SearXNG as a sidecar service on `ai-network`
+- `SEARXNG_SECRET_KEY` MUST be set — without it SearXNG JSON API is unstable
+
+**Provider MAY:** supply search results as grounding data.
+**Provider MUST NOT:** alter orchestration, redefine TruthMode, mutate EPK.
+
+---
+
+## 29. HEALTHCHECK POLICY
+
+`infra/healthcheck.py` is the sole implementation of `/health`.
+
+**Fly.io constraint:** `/health` timeout = 5s (fly.toml `[[http_service.checks]]`).
+All sub-checks MUST complete with margin. Budget: 3s per check.
+
+**Canonical implementation:**
+```python
+_REDIS_TIMEOUT    = 3.0   # asyncio.wait_for deadline
+_SUPABASE_TIMEOUT = 3.0   # asyncio.wait_for deadline
+
+# Checks run concurrently — total latency = max(redis, supabase), not sum
+redis_ok, sb_ok = await asyncio.gather(
+    check_redis(redis),      # asyncio.wait_for(redis.ping(), 3.0)
+    check_supabase(supabase) # asyncio.wait_for(to_thread(query), 3.0)
+)
+```
+
+**Supabase check MUST use `asyncio.to_thread`** — supabase-py client is synchronous.
+Direct sync call in async context blocks the FastAPI event loop.
+**Supabase check MUST use `asyncio.wait_for`** — to_thread alone has no deadline.
+
+**Table queried:** `user_balances` (production table, always exists).
+MUST NOT query non-existent or test-only tables.
+
+healthcheck MUST NOT: influence EPK, alter routing, affect execution policy.
