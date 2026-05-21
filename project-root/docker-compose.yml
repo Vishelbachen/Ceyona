@@ -37,7 +37,7 @@ services:
       redis-server
       --appendonly yes
       --maxmemory 512mb
-      --maxmemory-policy allkeys-lru
+      --maxmemory-policy volatile-lru
 
     volumes:
       - redis_data:/data
@@ -51,9 +51,27 @@ services:
     networks:
       - ai-network
 
+  searxng:
+    image: searxng/searxng:latest
+
+    restart: unless-stopped
+
+    ports:
+      - "8888:8080"
+
+    environment:
+      - SEARXNG_BASE_URL=http://searxng:8080
+
+    volumes:
+      - searxng_data:/etc/searxng
+
+    networks:
+      - ai-network
+
 networks:
   ai-network:
     driver: bridge
 
 volumes:
   redis_data:
+  searxng_data:
