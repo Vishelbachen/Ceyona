@@ -99,7 +99,7 @@ async def handle_message(
                 from security.safety_gate import GateVerdict, check_pass1
                 gate1 = await asyncio.wait_for(check_pass1(caption), timeout=8.0)
                 if gate1.verdict == GateVerdict.DENY:
-                    from cognition.response_synthesizer import get_system_message
+                    from i18n.t import get_system_message
                     return OrchestratorResult(
                         text=get_system_message("safety_block", lang),
                         tier=Tier.FAST, model=gate1.model_used,
@@ -125,7 +125,7 @@ async def handle_message(
             )
         except Exception as exc:
             logger.error(f"Vision handler crashed: {exc!r}\n{traceback.format_exc()}")
-            from cognition.response_synthesizer import get_system_message
+            from i18n.t import get_system_message
             return OrchestratorResult(
                 text=get_system_message("vision_error", lang),
                 tier=Tier.FAST,
@@ -157,7 +157,7 @@ async def handle_message(
                     "Vision fast-path: balance insufficient — denying",
                     extra={"user_id": user_id, "balance": user_balance, "cost": _vision_cost_usd},
                 )
-                from cognition.response_synthesizer import get_system_message
+                from i18n.t import get_system_message
                 return OrchestratorResult(
                     text=get_system_message("insufficient_balance", lang),
                     tier=Tier.FAST,
@@ -221,7 +221,7 @@ async def handle_message(
 
                 if not tr.success or not tr.text:
                     logger.warning("ASR failed", extra={"user_id": user_id})
-                    from cognition.response_synthesizer import get_system_message
+                    from i18n.t import get_system_message
                     return OrchestratorResult(
                         text=get_system_message("no_response", lang),
                         tier=Tier.FAST, model="",
@@ -238,7 +238,7 @@ async def handle_message(
                 try:
                     gate1 = await asyncio.wait_for(check_pass1(tr.text), timeout=8.0)
                     if not gate1.safe:
-                        from cognition.response_synthesizer import get_system_message
+                        from i18n.t import get_system_message
                         return OrchestratorResult(
                             text=get_system_message("safety_block", lang),
                             tier=Tier.FAST, model="",
@@ -297,7 +297,7 @@ async def handle_message(
         gate1 = await asyncio.wait_for(check_pass1(text), timeout=8.0)
         if gate1.verdict == GateVerdict.DENY:
             logger.warning("Safety Gate Pass 1 blocked message", extra={"user_id": user_id})
-            from cognition.response_synthesizer import get_system_message
+            from i18n.t import get_system_message
             return OrchestratorResult(
                 text=get_system_message("safety_block", lang),
                 tier=Tier.FAST, model=gate1.model_used,
@@ -340,7 +340,7 @@ async def handle_message(
         gate2 = await asyncio.wait_for(check_pass2(text), timeout=12.0)
         if gate2.verdict == GV2.DENY:
             logger.warning("Safety Gate Pass 2 blocked message", extra={"user_id": user_id})
-            from cognition.response_synthesizer import get_system_message
+            from i18n.t import get_system_message
             return OrchestratorResult(
                 text=get_system_message("safety_block", lang),
                 tier=Tier.FAST, model=gate2.model_used,
