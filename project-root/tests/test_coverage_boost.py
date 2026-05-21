@@ -13,8 +13,8 @@ Targets (from CI coverage report):
 All tests are pure unit — no I/O, no Groq, no Supabase, no HuggingFace.
 """
 
-import sys
 import pathlib
+import sys
 
 import pytest
 
@@ -55,6 +55,7 @@ class TestSharedTypes:
 
     def test_tier_is_string_enum(self):
         from contracts.shared_types import Tier
+
         # str-based Enum: can be compared to strings
         assert Tier.FAST == "FAST"
 
@@ -108,8 +109,8 @@ class TestI18nT:
 
     def test_get_system_message_and_response_synthesizer_agree(self):
         """i18n.t.get_system_message must return same value as cognition version."""
-        from i18n.t import get_system_message as i18n_gsm
         from cognition.response_synthesizer import get_system_message as cog_gsm
+        from i18n.t import get_system_message as i18n_gsm
         assert i18n_gsm("no_response", "ru") == cog_gsm("no_response", "ru")
         assert i18n_gsm("safety_block", "en") == cog_gsm("safety_block", "en")
 
@@ -120,60 +121,60 @@ class TestI18nT:
 
 class TestSourceCredibilityEvaluate:
     def test_explicit_blocked_domain(self):
-        from retrieval.source_credibility import evaluate, TrustTier
+        from retrieval.source_credibility import TrustTier, evaluate
         score = evaluate("https://all-routes.ru/some/path")
         assert score.tier == TrustTier.BLOCKED
         assert score.is_blocked is True
         assert score.reason == "explicit_registry"
 
     def test_explicit_authoritative_domain(self):
-        from retrieval.source_credibility import evaluate, TrustTier
+        from retrieval.source_credibility import TrustTier, evaluate
         score = evaluate("https://openweathermap.org/api")
         assert score.tier == TrustTier.AUTHORITATIVE
         assert score.is_blocked is False
 
     def test_explicit_high_domain(self):
-        from retrieval.source_credibility import evaluate, TrustTier
+        from retrieval.source_credibility import TrustTier, evaluate
         score = evaluate("https://booking.com/hotel/ru")
         assert score.tier == TrustTier.HIGH
 
     def test_explicit_medium_domain(self):
-        from retrieval.source_credibility import evaluate, TrustTier
+        from retrieval.source_credibility import TrustTier, evaluate
         score = evaluate("https://en.wikipedia.org/wiki/Test")
         assert score.tier == TrustTier.MEDIUM
 
     def test_explicit_very_low_domain(self):
-        from retrieval.source_credibility import evaluate, TrustTier
+        from retrieval.source_credibility import TrustTier, evaluate
         score = evaluate("https://otvet.mail.ru/question/123")
         assert score.tier == TrustTier.VERY_LOW
 
     def test_www_prefix_stripped(self):
-        from retrieval.source_credibility import evaluate, TrustTier
+        from retrieval.source_credibility import TrustTier, evaluate
         score = evaluate("https://www.booking.com/hotel")
         assert score.tier == TrustTier.HIGH
 
     def test_gov_pattern_authoritative(self):
-        from retrieval.source_credibility import evaluate, TrustTier
+        from retrieval.source_credibility import TrustTier, evaluate
         score = evaluate("https://example.gov.ru/page")
         assert score.tier == TrustTier.AUTHORITATIVE
 
     def test_gov_tld_authoritative(self):
-        from retrieval.source_credibility import evaluate, TrustTier
+        from retrieval.source_credibility import TrustTier, evaluate
         score = evaluate("https://agency.gov/info")
         assert score.tier == TrustTier.AUTHORITATIVE
 
     def test_edu_tld_high(self):
-        from retrieval.source_credibility import evaluate, TrustTier
+        from retrieval.source_credibility import TrustTier, evaluate
         score = evaluate("https://mit.edu/research")
         assert score.tier == TrustTier.HIGH
 
     def test_seo_pattern_very_low(self):
-        from retrieval.source_credibility import evaluate, TrustTier
+        from retrieval.source_credibility import TrustTier, evaluate
         score = evaluate("https://top-rating-otzyv.com/article")
         assert score.tier == TrustTier.VERY_LOW
 
     def test_unknown_domain_defaults_medium(self):
-        from retrieval.source_credibility import evaluate, TrustTier
+        from retrieval.source_credibility import TrustTier, evaluate
         score = evaluate("https://some-totally-unknown-domain-xyz123.com/page")
         assert score.tier == TrustTier.MEDIUM
         assert score.reason == "unknown_domain"
@@ -273,7 +274,7 @@ class TestSourceCredibilityScoreDocuments:
 
 class TestSourceCredibilitySingleton:
     def test_singleton_evaluate(self):
-        from retrieval.source_credibility import source_credibility, TrustTier
+        from retrieval.source_credibility import TrustTier, source_credibility
         score = source_credibility.evaluate("https://openweathermap.org/")
         assert score.tier == TrustTier.AUTHORITATIVE
 
@@ -295,46 +296,46 @@ class TestSourceCredibilitySingleton:
 
 class TestModelRouter:
     def test_route_model_fast(self):
-        from llm.model_router import route_model
         from contracts.shared_types import Tier
+        from llm.model_router import route_model
         assert route_model(Tier.FAST) == "llama-3.1-8b-instant"
 
     def test_route_model_general(self):
-        from llm.model_router import route_model
         from contracts.shared_types import Tier
+        from llm.model_router import route_model
         assert route_model(Tier.GENERAL) == "llama-3.3-70b-versatile"
 
     def test_route_model_heavy(self):
-        from llm.model_router import route_model
         from contracts.shared_types import Tier
+        from llm.model_router import route_model
         assert route_model(Tier.HEAVY) == "openai/gpt-oss-120b"
 
     def test_route_max_tokens_fast_less_than_general(self):
-        from llm.model_router import route_max_tokens
         from contracts.shared_types import Tier
+        from llm.model_router import route_max_tokens
         assert route_max_tokens(Tier.FAST) < route_max_tokens(Tier.GENERAL)
 
     def test_route_max_tokens_general_less_than_heavy(self):
-        from llm.model_router import route_max_tokens
         from contracts.shared_types import Tier
+        from llm.model_router import route_max_tokens
         assert route_max_tokens(Tier.GENERAL) < route_max_tokens(Tier.HEAVY)
 
     def test_get_tier_models_fast_nonempty(self):
-        from llm.model_router import get_tier_models
         from contracts.shared_types import Tier
+        from llm.model_router import get_tier_models
         models = get_tier_models(Tier.FAST)
         assert len(models) >= 1
         assert "llama-3.1-8b-instant" in models
 
     def test_get_tier_models_general_has_multiple(self):
-        from llm.model_router import get_tier_models
         from contracts.shared_types import Tier
+        from llm.model_router import get_tier_models
         models = get_tier_models(Tier.GENERAL)
         assert len(models) >= 2
 
     def test_get_tier_models_heavy_has_two(self):
-        from llm.model_router import get_tier_models
         from contracts.shared_types import Tier
+        from llm.model_router import get_tier_models
         models = get_tier_models(Tier.HEAVY)
         assert len(models) >= 2
 
@@ -348,24 +349,25 @@ class TestModelRouter:
 
     def test_constants_exported(self):
         from llm.model_router import (
-            FAST_AGENT_MODEL, DEEP_AGENT_MODEL, CONSENSUS_MODEL,
-            SHAPER_MODEL, WHISPER_PRIMARY, WHISPER_FAST,
+            CONSENSUS_MODEL,
+            DEEP_AGENT_MODEL,
+            FAST_AGENT_MODEL,
         )
         assert FAST_AGENT_MODEL == "groq/compound-mini"
         assert DEEP_AGENT_MODEL == "groq/compound"
         assert CONSENSUS_MODEL == "openai/gpt-oss-120b"
 
     def test_max_tokens_positive(self):
-        from llm.model_router import route_max_tokens
         from contracts.shared_types import Tier
+        from llm.model_router import route_max_tokens
         for tier in Tier:
             assert route_max_tokens(tier) > 0
 
     def test_max_tokens_greater_than_estimation_cap(self):
         """architecture.md §8: _MAX_TOKENS > MAX_OUTPUT_CAP — they must NOT be equal."""
-        from llm.model_router import route_max_tokens
-        from core.kernel.cost_model import MAX_OUTPUT_CAP
         from contracts.shared_types import Tier
+        from core.kernel.cost_model import MAX_OUTPUT_CAP
+        from llm.model_router import route_max_tokens
         for tier in (Tier.FAST, Tier.GENERAL, Tier.HEAVY):
             assert route_max_tokens(tier) > MAX_OUTPUT_CAP[tier], (
                 f"{tier}: model_router._MAX_TOKENS ({route_max_tokens(tier)}) "
@@ -379,34 +381,35 @@ class TestModelRouter:
 
 class TestCostModelAdditional:
     def test_estimate_output_tokens_capped(self):
-        from core.kernel.cost_model import estimate_output_tokens, MAX_OUTPUT_CAP
         from contracts.shared_types import Complexity, Tier
+        from core.kernel.cost_model import MAX_OUTPUT_CAP, estimate_output_tokens
+
         # Very large input should be capped
         result = estimate_output_tokens(100_000, Complexity.CRITICAL, Tier.FAST)
         assert result == MAX_OUTPUT_CAP[Tier.FAST]
 
     def test_estimate_output_tokens_low_complexity(self):
-        from core.kernel.cost_model import estimate_output_tokens
         from contracts.shared_types import Complexity, Tier
+        from core.kernel.cost_model import estimate_output_tokens
         result = estimate_output_tokens(100, Complexity.LOW, Tier.GENERAL)
         assert result == int(100 * 1.2)  # 120
 
     def test_estimate_cost_zero_inputs(self):
-        from core.kernel.cost_model import estimate_cost
         from contracts.shared_types import Tier
+        from core.kernel.cost_model import estimate_cost
         cost = estimate_cost(0, 0, 0, 0, Tier.FAST)
         assert cost == 0.0
 
     def test_estimate_cost_embedding_small_type(self):
-        from core.kernel.cost_model import estimate_cost, EMBEDDING_RATES
         from contracts.shared_types import Tier
+        from core.kernel.cost_model import estimate_cost
         cost_large = estimate_cost(0, 0, 1_000_000, 0, Tier.FAST, embedding_type="large")
         cost_small = estimate_cost(0, 0, 1_000_000, 0, Tier.FAST, embedding_type="small")
         assert cost_large > cost_small
 
     def test_actual_cost_equals_estimate_when_same_tokens(self):
-        from core.kernel.cost_model import estimate_cost, actual_cost
         from contracts.shared_types import Tier
+        from core.kernel.cost_model import actual_cost, estimate_cost
         kwargs = dict(input_tokens=500, output_tokens=300, embedding_tokens=100, rerank_tokens=50, tier=Tier.GENERAL)
         est = estimate_cost(500, 300, 100, 50, Tier.GENERAL)
         act = actual_cost(**kwargs)
@@ -414,13 +417,13 @@ class TestCostModelAdditional:
 
     def test_heavy_cheaper_output_than_general(self):
         """economic.md: gpt-oss-120b output $0.60 < llama-3.3-70b output $0.79"""
-        from core.kernel.cost_model import MODEL_RATES
         from contracts.shared_types import Tier
+        from core.kernel.cost_model import MODEL_RATES
         assert MODEL_RATES[Tier.HEAVY]["output"] < MODEL_RATES[Tier.GENERAL]["output"]
 
     def test_all_tiers_have_rates(self):
-        from core.kernel.cost_model import MODEL_RATES
         from contracts.shared_types import Tier
+        from core.kernel.cost_model import MODEL_RATES
         for tier in (Tier.FAST, Tier.GENERAL, Tier.HEAVY):
             assert "input" in MODEL_RATES[tier]
             assert "output" in MODEL_RATES[tier]
