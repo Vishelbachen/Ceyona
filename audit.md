@@ -1,6 +1,6 @@
 # CEYONA — ARCHITECTURE AUDIT
 **Дата:** май 2026
-**Проверено:** architecture.md v8.1, models1.md v7.1, economic.md v5.1 + весь runtime код
+**Проверено:** architecture.md v8.3, models.md v7.3, economic.md v5.2 + весь runtime код
 **Статус:** все архитектурные пункты закрыты. Открыто: 5 UX/качество багов + 2 архитектурных gap.
 
 Обозначения: ✅ Закрыто | ⚠️ Открыто | 🔴 Критично | 🟡 Средний | 🟢 Низкий | 📋 Запланировано
