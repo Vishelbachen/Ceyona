@@ -1,993 +1,155 @@
 # CEYONA — ARCHITECTURE AUDIT
-**Дата:** май 2026  
-**Проверено:** architecture.md v8.1, models1.md v7.1, economic.md v5.1 + весь runtime код  
-**Статус:** 10 категорий × верификация кода. Последнее обновление: май 2026.
+**Дата:** май 2026
+**Проверено:** architecture.md v8.1, models1.md v7.1, economic.md v5.1 + весь runtime код
+**Статус:** все архитектурные пункты закрыты. Открыто: 5 UX/качество багов + 2 архитектурных gap.
 
-Обозначения: ✅ Закрыто | ⚠️ Открыто / known gap | 🔴 Критично | 📋 Not yet wired (намеренно)
-
----
-
-## 1. HIDDEN NONDETERMINISM
-
-### 1.1 ✅ EPK — детерминирован
-`execution_policy_kernel.py` читает пороги из `policy_registry.RUNTIME`.
-Порядок строгий: DENY → HEAVY → DEGRADE → ALLOW. Нет случайности.
-
-### 1.2 ✅ `_classify_complexity()` — исправлен (май 2026)
-~~Четыре пробела = HIGH. Любой `{}` = HIGH. Шумовой классификатор.~~
-
-**Закрыто:** переписан в `update_handler.py`:
-- Code detection: только fenced blocks (` ``` `), не отступы
-- JSON detection: `{` + `}` + `:` — требует key:value паттерн
-- Length threshold повышен до 800 chars (было 500)
-- Результат логируется: `complexity`, `length`, `has_code`, `has_json`
-
-### 1.3 ✅ `_build_messages()` — hardcoded `Tier.GENERAL` исправлен (май 2026)
-~~`select_strategy(intent, Tier.GENERAL)` для всех путей включая FAST.~~
-
-**Закрыто:** `_build_messages()` принимает реальный `tier` как параметр.
-FAST-запросы получают lightweight `instruction_prefix`, HEAVY — тяжёлый.
-Фиксирует audit §1.3 и §6.3 одновременно.
-
-### 1.4 ✅ MATH self-correction — bounded
-Максимум 1 correction pass. Сработает только при `Intent.MATH`. Детерминировано.
+Обозначения: ✅ Закрыто | ⚠️ Открыто | 🔴 Критично | 🟡 Средний | 🟢 Низкий | 📋 Запланировано
 
 ---
 
-## 2. GOVERNANCE THEATER
+## ОТКРЫТЫЕ ПРОБЛЕМЫ
 
-### 2.1 ✅ Safety Gate — docs/runtime gap закрыт (май 2026)
-~~architecture.md говорил DENY, runtime всегда возвращал PASS.~~
+### 🔴 13.1 — Все tool intents → «сервис временно недоступен»
 
-**Закрыто:** `architecture.md §21` и `§27` обновлены — Safety Gate официально
-задокументирован как **observability-only layer (non-blocking)**. Обоснование:
-prompt-guard модели дают неприемлемый false-positive rate на русском/арабском/коротком
-тексте. Единственный blocking authority — `safety_agent` (post-reasoning, §21).
-`safety_gate.py` содержит полное обоснование в docstring.
+**Симптом:** поиск, маршруты, погода — всегда возвращают `search_unavailable`.
 
-### 2.2 ✅ `analysis.py` — реализован (май 2026)
-~~Объявлен как pre-reasoning DAG step, нигде не вызывается. Мёртвый модуль.~~
+**Предполагаемые причины:**
+- SERPAPI_KEY / OPENWEATHER_API_KEY не заполнены в fly.io secrets
+- compound-mini не поддерживает `tool_choice="auto"` с текущими параметрами
+- httpx.ReadTimeout в `_execute_tool`
+- unexpected `finish_reason` → defensive `success=False` в `_run_compound`
 
-**Закрыто:** подключён через Вариант А (строго по архитектуре §4):
-```
-update_handler.py → analyse(text) [после Pass 2, до orchestrator]
-→ AnalysisReport → OrchestratorRequest.analysis_report
-→ orchestrator.run() → intent_engine.classify(analysis_hints=...)
-```
-В `intent_engine.classify()`:
-- `HAS_MATH` confidence ≥ 0.80 → немедленный return MATH (пропускает LLM pre-check)
-- `IS_SHORT` или `IS_MULTILINGUAL` → повышает effective_min до max(текущий, 0.72)
-- `HAS_CODE_BLOCK` → снижает effective_min до min(текущий, 0.50)
+**Диагностика:** `fly logs | grep "compound_agent"` — искать `"API call failed"`, `"tool execution failed"`.
 
-### 2.3 ✅ `decision_matrix.py` — читает из `policy_registry` (май 2026)
-~~Пороги hardcoded `0.0005` / `0.003`. При изменении EPK — рассинхронизация молча.~~
-
-**Закрыто:** `decision_matrix.py` импортирует `RUNTIME` из `policy_registry`:
-```python
-from core.kernel.policy_registry import RUNTIME
-_FAST_CEILING    = RUNTIME.epk.fast_ceiling        # 0.0005
-_GENERAL_CEILING = RUNTIME.epk.degrade_threshold   # 0.003
-```
-Теперь изменение порога в `policy_registry.py` автоматически подхватывается.
+**Влияние:** критическое — все data-driven интенты деградируют.
 
 ---
 
-## 3. ORCHESTRATION CENTRALIZATION
+### 🟡 13.3 — CoT reasoning format утекает в финальный ответ (частично)
 
-### 3.1 ✅ EPK — единственный policy authority
-Оркестратор не создаёт policy, не выбирает модели напрямую. Чистая реализация.
+**Симптом:** ответы содержат `Constraints / Candidates / Verification table`.
 
-### 3.2 ✅ Coordinator вызывается только из orchestrator
-`multi_agent_coordinator.coordinate()` — один call site. Нет скрытых вызовов.
+**Причина:** `_strip_cot_artifacts()` не покрывает все сценарии (vision → MATH/ANALYSIS classification).
 
-### 3.3 ✅ `update_handler.py` — web search authority перенесена в orchestrator (май 2026)
-~~Двойной intent classification. `forced_intent` / `_already_grounded` coupling.~~
-
-**Закрыто:** web search routing logic (`_NO_SEARCH_INTENTS`) перенесена из transport слоя
-в `core/execution/orchestrator.py`. Web search вызывается внутри `orchestrator.run()`,
-после `classify()`, до EPK — authority однозначна.
-`update_handler` не выполняет intent classification и не вызывает web search.
-`forced_intent` / `_already_grounded` coupling устранён: `OrchestratorRequest` использует
-`vision_intent` (typed `IntentResult | None`) вместо неявных флагов.
-
-Что остаётся в `update_handler` (Safety Gate, multilingual, analysis, history, retrieval) —
-это корректный pre-processing pipeline строго по architecture.md §4 execution lifecycle.
-Retrieval передаётся как `retrieved_context` в `OrchestratorRequest` — это параметр,
-не coupling. Вынос в отдельный pre-processor слой не даёт архитектурной выгоды.
-
-Верифицировано: `tests/test_orchestrator_web_search.py`.
-
-### 3.4 ✅ `fallback_handler.py` — billing по actual_tier исправлен (май 2026)
-~~Cascade HEAVY → GENERAL → FAST: billing шёл по изначальному tier, не фактическому.~~
-
-**Закрыто:** `coordination.actual_tier` передаётся из `fallback_handler` в
-`CoordinationResult`. Все три пути (`_run_allow`, `_run_degraded`, `_run_heavy`)
-используют `_billing_tier = coordination.actual_tier or tier` для billing.
+**Частично закрыто:** двухрежимный фикс в `response_synthesizer.py` (май 2026) закрыл infinite loop (13.1→17.1). Остаточные случаи — vision-input через reasoning_engine.
 
 ---
 
-## 4. EMERGENT COMPLEXITY
+### 🟡 13.4 — Classifier теряет контекст на follow-up сообщениях
 
-### 4.1 ✅ MATH correction loop — bounded
-Max 1 correction pass. Нет рекурсии.
+**Симптом:** «Вот, нашла» / «Туговатый поиск» → CONVERSATION вместо правильного intent.
 
-### 4.2 ✅ Consensus — mutex с HEAVY
-`use_consensus=False` при `Tier.HEAVY`. Mutex соблюдён.
+**Причина:** `_llm_pre_classify(text)` получает только `text[:500]` без истории.
 
-### 4.3 ✅ Bias-free candidate selection для safety_agent + observability fallback (май 2026)
-~~`best_candidate = max(candidates, key=lambda r: len(r.text))` — выбор по длине.~~
-
-**Закрыто (два фикса):**
-
-**Фикс 1 — `cognition/multi_agent_coordinator.py`:**
-`best_candidate` заменён на `safety_candidate = candidates[0]` — первый выживший
-кандидат по позиции. `candidates` строится как `[primary_result, *validator_results]`,
-поэтому primary всегда первый если он выжил. Если primary упал — он отсутствует
-в candidates, следующий по позиции принимается без bias по длине.
-Позиционный выбор детерминирован, не смещён, не делегирует доверие router.
-`actual_tier` в `CoordinationResult` обновлён на `candidates[0].actual_tier`.
-
-**Фикс 2 — `agents/consensus_engine.py`:**
-Fallback по длине (аварийный путь при падении gpt-oss-120b) сохранён как честная
-эвристика, но перестал быть silent downgrade:
-- `increment("consensus.arbitration_failed")` — счётчик в metrics
-- `logger.warning(...)` вместо `logger.info(...)` — мониторинг видит деградацию
-Sustained arbitration outages теперь обнаруживаются через `/metrics`.
+**Решение-кандидат:** передавать последние 2–3 реплики как контекст в pre-classifier.
 
 ---
 
-## 5. RETRIEVAL INSTABILITY
+### 🟡 13.5 — SEARCH не переформулирует описательный запрос
 
-### 5.1 ✅ pgvector bug fix — исправлен
-`candidates` больше не всегда пустой. `similarity_search()` реально вызывается.
+**Симптом:** «глава якудзы подставляет к дочери охранника» — 3 попытки, не находит тайтл.
 
-### 5.2 ✅ `rerank_tokens` — реальная оценка (май 2026)
-~~`rerank_tokens = len(retrieval_result.documents) * 10`~~
-~~Константа 10 не связана с реальной длиной документов.~~
+**Причина:** compound передаёт user message как-есть в `web_search` без rewrite.
 
-**Закрыто:** `retrieval_engine.py` считает реальные символы cross-encoder пар:
-```python
-_query_tokens    = max(1, len(clean_query) // 4)
-_avg_doc_tokens  = max(1, sum(len(t) for t in _candidate_texts) // (4 * len(_candidate_texts)))
-rerank_tokens    = (_query_tokens + _avg_doc_tokens) * len(candidates)
-```
-1 token ≈ 4 chars (conservative для mixed-language текста).
-Соответствует billing unit economic.md §1.5: per 1M token-pairs.
-
-### 5.3 ✅ `source_credibility.score_documents()` — активирован (май 2026)
-~~SerpAPI результаты фильтруются активно. pgvector результаты — нет.~~
-~~Асимметрия задокументирована в architecture.md §20 как "reserved".~~
-
-**Закрыто:**
-- Supabase: `ALTER TABLE memory ADD COLUMN source_url text DEFAULT NULL`
-- `MemoryRecord` получил поле `source_url: str | None = None`
-- `fetch_by_user()` и `similarity_search()` маппят `source_url` из БД
-- `score_documents()` в `retrieval_engine.py` активен — pass-through устранён
-
-### 5.4 ✅ Retrieval при недоступном Redis — исправлен (май 2026)
-~~При `redis is None` → retrieval полностью пропускался молча.~~
-
-**Закрыто:** retrieval теперь гейтируется только на `supabase is not None`.
-Redis — опциональный кэш. При `redis is None` retrieval продолжается без кэша
-(degraded mode), логируется WARNING. При `supabase is None` — пропускается с явным
-WARNING (pgvector требует Supabase).
+**Решение-кандидат:** инструкция в SEARCH system prompt — переформулировать в keyword query на английском.
 
 ---
 
-## 6. TIER INFLATION
+### 🟡 17.2 — Epistemic gap: TruthMode как execution flag
 
-### 6.1 ✅ EPK estimate tier — adaptive (май 2026)
-~~EPK всегда оценивал по `Tier.GENERAL` → ~10x завышение для коротких запросов.~~
+**Проблема:** нет `confidence_score`, `contradiction_detection`, `hallucination_risk` на уровне pipeline.
+Система может уверенно галлюцинировать — особенно критично при multi-agent coordination.
 
-**Закрыто:** adaptive `_estimate_tier` в `orchestrator.run()`:
-```python
-_estimate_tier = (
-    Tier.FAST
-    if request.complexity == Complexity.LOW and request.input_tokens < 300
-    else Tier.GENERAL
-)
-```
-Короткие LOW-complexity запросы оцениваются по FAST rates. Снижает ложные
-DEGRADED_MODE для обычного чата.
+**Решение-кандидат:** `TruthAssessmentPipeline` собрать из существующих компонентов
+(`consensus_engine.py`, `source_credibility.py`, `reflection.py`, `analysis.py`).
 
-### 6.2 ✅ decision_matrix — ascending order исправлен
-`0.0005 < 0.003` — корректно. Прежний баг (GENERAL unreachable) устранён.
-
-### 6.3 ✅ `_build_messages()` — tier mismatch исправлен (май 2026)
-~~FAST-запросы получали GENERAL `instruction_prefix`. Модель 8B получала инструкции для 70B.~~
-
-**Закрыто:** см. §1.3 — `_build_messages()` принимает реальный tier.
+**Статус:** требует отдельного проектирования, не быстрый фикс.
 
 ---
 
-## 7. FAKE BOUNDED CONTEXTS
+### 🟢 13.7 — Грузинский: i18n fallback некорректен по смыслу
 
-### 7.1 ✅ `UsageEntry` — все поля заполняются (май 2026)
-~~`intent`, `audio_seconds`, `tts_characters` никогда не передавались в `UsageEntry`.~~
+**Симптом:** чёткий вопрос на грузинском → «уточните вопрос» вместо «технический сбой».
 
-**Закрыто:** `webhook.py` передаёт:
-```python
-await meter.record(UsageEntry(
-    ...
-    intent=result.intent,           # ✅
-    audio_seconds=result.audio_seconds,     # ✅
-    tts_characters=result.tts_characters,   # ✅
-))
-```
-`OrchestratorResult` объявляет `audio_seconds` и `tts_characters` как поля,
-заполняемые `update_handler` после TTS synthesis.
-
-### 7.2 ✅ `OrchestratorResult` — speech fields добавлены (май 2026)
-~~TTS char_count логировался, но не доходил до billing pipeline.~~
-
-**Закрыто:** `OrchestratorResult` объявляет:
-```python
-audio_seconds: float = 0.0
-tts_characters: int = 0
-```
-`update_handler` заполняет их после TTS synthesis через `dataclasses.replace()`.
-`webhook.py` читает и передаёт в `UsageEntry`.
-📋 Speech billing columns в Supabase: добавлены через `migrate_usage_log.sql` (май 2026).
-`usage_meter.py` имеет PGRST204 fallback на период до выполнения миграции.
-
-### 7.3 ✅ `observability/metrics.py` — `/metrics` endpoint добавлен (май 2026)
-~~`snapshot()` доступен, но не подключён к внешнему sink.~~
-
-**Закрыто:** `GET /metrics` добавлен в `app/main.py` — возвращает JSON snapshot.
-Мёртвый импорт `snapshot as metrics_snapshot` удалён из `webhook.py`.
-Явный контракт зафиксирован в `metrics.py` и `architecture.md §27`:
-Metrics are in-memory, per-process, reset on restart. No persistence layer by design.
-`increment()` и `gauge()` — pure in-memory, без side effects.
-Prometheus/StatsD — отдельная задача, external adapter, без изменений `metrics.py`.
+**Причина:** `search_unavailable` строка для `ka` формулирует отказ как неясность запроса.
 
 ---
 
-## 8. RUNTIME/DOCS DIVERGENCE
+## ИСТОРИЯ РЕШЕНИЙ
 
-### 8.1 ✅ Safety Gate: docs/runtime gap закрыт (май 2026)
-~~architecture.md §21 говорил DENY, runtime всегда возвращал PASS.~~
+Все архитектурные проблемы закрыты в мае 2026. Краткая сводка по категориям:
 
-**Закрыто:** см. §2.1. `architecture.md §21` и `§27` обновлены.
-Non-blocking observability layer задокументирован с полным обоснованием.
+### Нондетерминизм и классификация (§1)
+- `_classify_complexity()` переписан: code detection только по fenced blocks, JSON требует key:value паттерн, threshold поднят до 800 chars.
+- `_build_messages()` принимает реальный `tier` — FAST/HEAVY получают разные instruction_prefix.
 
-### 8.2 ✅ `architecture.md §4` lifecycle — обновлён (май 2026)
-~~Pass 1 и Pass 2 показаны вместе. Multilingual после обоих. History/Retrieval/Web Search не упомянуты.~~
+### Governance theater (§2)
+- Safety Gate задокументирован как **observability-only** (non-blocking) — false-positive rate на коротком/русском/арабском тексте неприемлем. Единственный blocking authority — `safety_agent`.
+- `analysis.py` подключён: `update_handler → analyse() → OrchestratorRequest.analysis_report → intent_engine.classify(analysis_hints=...)`.
+- `decision_matrix.py` читает пороги из `policy_registry.RUNTIME` вместо hardcoded значений.
 
-**Закрыто:** `§4` переписан — полный explicit lifecycle с обоснованием порядка
-(Вариант А: Multilingual между Pass 1 и Pass 2):
-```
-Pass 1 → Feature Extraction → Multilingual → Pass 2
-→ History → Retrieval → Web Search → EPK → ... → History Save → META → TTS → Output
-```
-Добавлен подраздел с обоснованием: Pass 2 (gpt-oss-safeguard-20b) работает точнее
-на нормализованном тексте → Multilingual перед Pass 2 снижает false-positive rate.
+### Orchestration (§3, §9, §12)
+- Web search routing перенесена из transport в `orchestrator.run()`.
+- `forced_intent` / `_already_grounded` coupling устранён — заменён на `vision_intent: IntentResult | None`.
+- Billing cascade (HEAVY→GENERAL→FAST) исправлен: используется `actual_tier` из `CoordinationResult`.
+- Unified agentic path: все 5 tool intents (SEARCH, WEATHER, MAPS, MAPS_POI, MAPS_ROUTE) через `compound_agent`. `_STRICT_INTENTS` → пустое множество (STRICT = LLM policy, не pre-execution gate).
 
-### 8.3 ✅ `analysis.py` — gap закрыт (май 2026)
-~~models1.md §11: "automatic" — механизм не документирован, вызова нет.~~
+### Retrieval (§5)
+- pgvector `similarity_search()` bug исправлен.
+- `rerank_tokens` считает реальные символы (1 token ≈ 4 chars).
+- `source_credibility.score_documents()` активирован для pgvector результатов; `source_url` добавлен в `MemoryRecord`.
+- Retrieval при `redis is None` не пропускается — деградирует без кэша с WARNING.
 
-**Закрыто:** см. §2.2. Явный вызов в `update_handler.py`, `architecture.md §4` и `§27` обновлены.
+### Tier inflation (§6)
+- `_estimate_tier` в `orchestrator.run()`: LOW complexity + <300 input tokens → оценка по FAST rates.
 
----
+### Billing completeness (§7)
+- `UsageEntry` заполняется полностью: `intent`, `audio_seconds`, `tts_characters`, `tool_calls`.
+- `OrchestratorResult` объявляет speech fields; `update_handler` заполняет через `dataclasses.replace()`.
+- Speech billing columns добавлены через `migrate_usage_log.sql`; PGRST204 fallback до миграции.
 
-## 9. HIDDEN AUTHORITY PATHS
+### Observability (§10)
+- `GET /metrics` добавлен в `main.py` — JSON snapshot. In-memory, per-process, без persistence (by design).
+- `tracing.py` переписан: structured JSON spans, `trace_id` через `contextvars`, `parent_id`, `status: ok|error`. OpenTelemetry deps удалены как мёртвые.
+- Safety Gate signals разделены: API error → `safety_signal_lost` (ERROR), UNSAFE → WARNING.
+- `request_id = "{update_id}:{user_id}"` сквозная корреляция через весь pipeline.
 
-### 9.1 ✅ `fallback_handler` — billing по actual_tier (май 2026)
-~~Cascade HEAVY → GENERAL → FAST: пользователь мог получить FAST-качество при HEAVY-billing.~~
+### CI / Tests (§11, §16)
+- Test suite создан: EPK, safety gate, analysis, usage meter, intent hints, web search routing. Все pure unit, без внешних зависимостей.
+- Coverage поднят с 41% до ≥60% добавлением тестов transport/retrieval/payments/cache.
+- `fly.toml` обновлён до `8gb / performance-cpu-1x` (healthcheck не укладывался в 5s timeout на 2GB shared).
 
-**Закрыто:** см. §3.4. `actual_tier` из `CoordinationResult` используется для billing
-во всех трёх execution paths.
+### Search provider (§14)
+- Three-tier fallback: **Tavily** (primary) → **SerpAPI** (secondary) → **SearXNG** (tertiary, self-hosted).
+- `docker-compose.yml` добавлен сервис `searxng`; `.env.example` обновлён.
 
-### 9.2 ✅ Web search — balance guard добавлен (май 2026)
-~~Web search запускался до EPK. SerpAPI вызывался даже для zero-balance пользователей.~~
+### Healthcheck (§15)
+- `asyncio.wait_for()` с timeout 3s для Redis и Supabase; проверки параллельные через `asyncio.gather`.
+- `/providers` исправлен: `user_balances` вместо несуществующей `healthcheck`, `asyncio.to_thread` для sync Supabase call.
 
-**Закрыто:** balance guard в `update_handler.py` перед web search:
-```python
-if user_balance <= 0:
-    logger.info("Web search skipped — zero balance (pre-EPK guard)")
-else:
-    web_result = await run_tool(...)
-```
-EPK по-прежнему не знает о pre-search (полное устранение требует выноса в pre-processor),
-но zero-balance пользователи больше не расходуют SerpAPI quota.
+### Conversation history (§13.2)
+- `_MAX_HISTORY_TOKENS = 1200` заменён tier-зависимыми бюджетами: FAST=1800, GENERAL=3500 tokens.
+- SQL fetch limit поднят с 20 до 40 turns.
 
-### 9.3 ✅ Vision fast-path — balance guard добавлен (май 2026)
-~~Vision fast-path: hardcoded cost `0.001`, EPK не вызывался, zero-balance пользователи получали ответ.~~
+### CoT infinite loop (§17.1)
+- `reasoning_engine.py`: QUESTION на GENERAL/HEAVY → `mode=DIRECT`, убран CoT instruction.
+- `intent_engine.py` QUESTION system prompt: explicit graceful exit rule, запрет simulate search.
+- `response_synthesizer._strip_cot_artifacts()`: Mode A (pure CoT loop → честное признание), Mode B (partial stripping). Русские паттерны добавлены.
 
-**Закрыто:** balance guard перед vision fast-path response:
-```python
-_vision_cost_usd = 0.001
-if user_balance <= 0 or _vision_cost_usd > user_balance:
-    return OrchestratorResult(..., denied=True, deny_reason="insufficient_balance")
-```
-EPK authority сохранён: проверка структурно идентична EPK rule #1.
-
----
-
-## 10. OBSERVABILITY COLLAPSE
-
-### 10.1 ✅ `metrics.py` — `/metrics` endpoint добавлен (май 2026)
-~~Нет внешнего экспорта. `snapshot()` API готов. Нужен sink + scrape endpoint.~~
-
-**Закрыто:** см. §7.3. `GET /metrics` в `app/main.py` — JSON snapshot.
-Prometheus/StatsD: отдельная будущая задача, не требует изменений `metrics.py`.
-
-### 10.2 ✅ `tracing.py` — structured JSON spans + trace_id propagation (май 2026)
-~~`elapsed_ms` в stdout. Нет structured span export.~~
-
-**Закрыто:** `observability/tracing.py` переписан — log-based distributed tracing:
-- `trace_id` генерируется на корневом span, наследуется вложенными через `contextvars`
-- `span_id` уникален на каждый span, `parent_id` фиксирует вложенность
-- Span эмитируется как structured JSON в `extra["span_json"]` — читается `fly logs`
-  и любым JSON-aware log aggregator (Grafana Loki, Datadog)
-- `status: ok | error` — span помечается при исключении автоматически
-- `current_trace_id()` — публичный API для корреляции из других модулей
-- Интерфейс `with trace(name, **tags)` не изменился — `webhook.py` и `orchestrator.py`
-  не тронуты
-
-`opentelemetry-api` и `opentelemetry-sdk` удалены из `pyproject.toml` —
-были мёртвыми зависимостями (задекларированы, нигде не импортировались).
-
-**OTLP migration path:** заменить backend реализации `tracing.py` —
-все call sites остаются без изменений. Collector не нужен до появления
-Jaeger / Grafana Tempo / Honeycomb в инфраструктуре.
-
-### 10.3 ✅ Safety Gate signals — разделены по типу (май 2026)
-~~UNSAFE сигнал мог быть потерян молча при API ошибке.~~
-
-**Закрыто:** в `_classify_with_model()` два типа событий разделены:
-- API error → `"Safety Gate signal lost"` + `event: "safety_signal_lost"` (ERROR)
-- UNSAFE verdict → `"Safety Gate Pass 2: UNSAFE signal detected"` (WARNING)
-Разные severity и event keys позволяют мониторингу различать их.
-
-### 10.4 ✅ `request_id` — сквозная корреляция реализована (май 2026)
-~~Нет `request_id` через pipeline. Логи невозможно связать без ручной корреляции по времени.~~
-
-**Закрыто:** `webhook.py` генерирует `request_id = "{update_id}:{user_id}"`.
-Передаётся через `handle_message()` → `OrchestratorRequest.request_id` →
-логируется в orchestrator, coordinator. Все pipeline стадии теперь корреляционно связаны.
+### Balance guards (§9.2, §9.3)
+- Web search и vision fast-path не выполняются при `user_balance <= 0`.
 
 ---
 
-## 11. CI / TEST SUITE
-
-### 11.1 ✅ `.github/workflows/ci.yml` — существует
-`project-root/.github/workflows/ci.yml`: Python 3.12, pip cache, import checks, ruff, pytest.
-Корректно настроен для push на main и pull_request.
-
-### 11.2 ✅ Test suite — создан (май 2026)
-~~`pytest` запускался без тестовых файлов → CI падал.~~
-
-**Закрыто:** `project-root/tests/` создан, покрывает все обязательные области:
-- `test_epk.py` — `policy_registry`, `execution_policy_kernel`, `decision_matrix`, `cost_model` (Sealed layer)
-- `test_safety_gate.py` — оба прохода non-blocking, API errors не блокируют, UNSAFE → WARNING не DENY
-- `test_analysis.py` — публичный API, lightweight/full режимы, never raises
-- `test_usage_meter.py` — normal record, extended fields, PGRST204 fallback, double-failure path
-- `test_intent_engine_hints.py` — analysis_hints integration: HAS_MATH fast-path, effective_min adjustments
-- `test_orchestrator_web_search.py` — §3.3 верификация: `_NO_SEARCH_INTENTS` в orchestrator, не в transport
-- `conftest.py` — shared fixtures, asyncio marker
-Все тесты pure unit — no Supabase, Redis, Groq, HuggingFace. Внешний I/O замокан на границе.
-
-### 11.3 ✅ `fly.toml` — обновлён до production machine spec (май 2026)
-~~`fly.toml` содержал `memory = '2gb'`, `cpu_kind = 'shared'` — не соответствовало
-фактической машине. При следующем `fly deploy` машина откатилась бы на 2GB.~~
-
-**Закрыто:** `fly.toml` обновлён:
-```toml
-[[vm]]
-  memory = '8gb'
-  cpu_kind = 'performance'
-  cpus = 1
-```
-Причина апгрейда: `healthcheck.py` (`full_health()`) выполняет Redis ping +
-Supabase query при каждом `/health` запросе (interval=30s). На 2GB shared CPU
-под нагрузкой healthcheck мог не укладываться в timeout=5s → машина перезапускалась.
-8GB performance-cpu-1x устраняет эту проблему.
-
----
-
-## 12. UNIFIED AGENTIC PATH
-
-### 12.1 ✅ Tool-only bypass path удалён (май 2026)
-
-**Решение:** все пять data-driven интентов (SEARCH, WEATHER, MAPS, MAPS_POI, MAPS_ROUTE)
-теперь идут через compound_agent без исключений.
-
-**Изменения:**
-- `orchestrator.py`: `_TOOL_INTENTS` удалён, `_AGENTIC_INTENTS` задекларирован (все 5).
-  Tool-only bypass (WEATHER/MAPS/MAPS_ROUTE → форматтер → выход) удалён.
-- `compound_agent.py`: добавлен `get_route` tool schema + `_execute_tool()` handler.
-  Теперь compound вызывает `MapsService.get_route()` напрямую.
-- `multi_agent_coordinator.py`: комментарий обновлён — unified agentic path задокументирован.
-- Supported tools: `web_search`, `get_weather`, `geocode`, **`get_route`**.
-
-**Обоснование:**
-Детерминированные форматтеры (format_current, format_geocode, format_route) производят
-структурированный текст — и это правильно. Но доставка этого текста напрямую пользователю,
-минуя LLM reasoning, означает что бот не может:
-- интерпретировать данные в контексте вопроса ("стоит ли ехать в горы?")
-- верифицировать полноту и корректность retrieved data
-- корректно обработать частичные результаты или failure
-- добавить nuance ("ветер 15 м/с — это сильный ветер для пляжа")
-
-Compound получает форматированный результат как tool output, и делает reasoning над ним
-перед ответом пользователю. Форматтеры остаются в `compound_agent._execute_tool()` —
-они не исчезли, они стали input для reasoning, а не финальным output.
-
-### 12.2 ✅ STRICT truth gate — agentic интенты исключены (май 2026)
-
-**Проблема:** `_STRICT_INTENTS` в orchestrator содержал все пять agentic интентов.
-STRICT gate проверяет `has_grounding = bool(tool_output) or bool(retrieved_context)`
-ДО того, как compound_agent успевает выполниться. При `tool_output=None` (legacy `_run_tool`
-больше не вызывается для agentic интентов) → gate блокировал бы все запросы на погоду,
-маршруты и поиск с `no_grounded_data`.
-
-**Решение:**
-- `_STRICT_INTENTS` в orchestrator → пустое множество (`set()`). Задокументировано
-  как placeholder для будущих non-agentic STRICT интентов (AVAILABILITY, SCHEDULE).
-- `_run_tool()` вызывается только для `intent not in _AGENTIC_INTENTS` — agentic
-  интенты полностью исключены из legacy tool path.
-- `TruthMode.STRICT` остаётся в `context/assembler.py` для всех пяти интентов —
-  это LLM-инструкция "не выдумывай", она доходит до compound через `_build_messages()`.
-  Это правильно и не меняется.
-- `assembler.py` получил явный комментарий: STRICT здесь = LLM policy, не pre-execution gate.
-
-**Инвариант:** grounding для agentic интентов обеспечивает compound_agent изнутри.
-Orchestrator gate не может и не должен это проверять — compound ещё не запустился.
-
-| # | Категория | Статус |
-|---|---|---|
-| 1.1 | EPK детерминизм | ✅ |
-| 1.2 | `_classify_complexity` шум | ✅ Закрыто май 2026 |
-| 1.3 | `_build_messages` tier mismatch | ✅ Закрыто май 2026 |
-| 1.4 | MATH correction bounded | ✅ |
-| 2.1 | Safety Gate docs/runtime gap | ✅ Закрыто май 2026 |
-| 2.2 | `analysis.py` не вызывался | ✅ Закрыто май 2026 |
-| 2.3 | `decision_matrix` hardcoded пороги | ✅ Закрыто май 2026 |
-| 3.1 | EPK единственный policy authority | ✅ |
-| 3.2 | Coordinator — один call site | ✅ |
-| **NEW** | **Unified agentic path для всех tool intents** | **✅ Закрыто май 2026** |
-| **NEW** | **STRICT gate — agentic интенты исключены** | **✅ Закрыто май 2026** |
-| 3.3 | web search authority → orchestrator, coupling устранён | ✅ Закрыто май 2026 |
-| 3.4 | fallback billing по actual_tier | ✅ Закрыто май 2026 |
-| 4.1 | MATH correction bounded | ✅ |
-| 4.2 | Consensus mutex с HEAVY | ✅ |
-| 4.3 | bias-free safety selection + fallback observability | ✅ Закрыто май 2026 |
-| 5.1 | pgvector bug fix | ✅ |
-| 5.2 | rerank_tokens реальная оценка | ✅ Закрыто май 2026 |
-| 5.3 | source_credibility активирован + source_url в MemoryRecord | ✅ Закрыто май 2026 |
-| 5.4 | Retrieval при недоступном Redis | ✅ Закрыто май 2026 |
-| 6.1 | EPK estimate всегда GENERAL | ✅ Закрыто май 2026 |
-| 6.2 | decision_matrix ascending order | ✅ |
-| 6.3 | `_build_messages` GENERAL для FAST | ✅ Закрыто май 2026 |
-| 7.1 | UsageEntry поля не заполнялись | ✅ Закрыто май 2026 |
-| 7.2 | OrchestratorResult без speech fields | ✅ Закрыто май 2026 |
-| 7.3 | metrics.py — `/metrics` endpoint | ✅ Закрыто май 2026 |
-| 8.1 | Safety Gate docs/runtime | ✅ Закрыто май 2026 |
-| 8.2 | architecture.md §4 lifecycle | ✅ Закрыто май 2026 |
-| 8.3 | analysis.py "automatic" | ✅ Закрыто май 2026 |
-| 9.1 | fallback billing overbilling | ✅ Закрыто май 2026 |
-| 9.2 | web search до EPK | ✅ Balance guard май 2026 |
-| 9.3 | vision fast-path bypass EPK | ✅ Balance guard май 2026 |
-| 10.1 | metrics.py — `/metrics` endpoint | ✅ Закрыто май 2026 |
-| 10.2 | structured JSON spans + trace_id propagation | ✅ Закрыто май 2026 |
-| 10.3 | Safety Gate signals потеря | ✅ Закрыто май 2026 |
-| 10.4 | Нет request_id корреляции | ✅ Закрыто май 2026 |
-| 11.1 | ci.yml существует | ✅ |
-| 11.2 | Test suite создан | ✅ Закрыто май 2026 |
-| 11.3 | fly.toml machine spec | ✅ Закрыто май 2026 |
-| 12.1 | tool_calls billing gap | ✅ Закрыто май 2026 |
-| 12.2 | Execution ownership conflict SEARCH/MAPS_POI | ✅ Закрыто май 2026 |
-
-### Открытые пункты по приоритету
-
-Все зафиксированные пункты закрыты. Новых открытых пунктов нет.
-
----
-
-## 12. COMPOUND AGENT — BILLING & OWNERSHIP (май 2026)
-
-### 12.1 ✅ tool_calls billing gap — закрыт (май 2026)
-~~tool_calls: int объявлен в UsageEntry и Supabase, но в webhook.py не передавался.
-compound web_search вызовы не биллились. Revenue leak.~~
-
-**Закрыто:** chain замкнут без разрывов:
-```
-compound_agent._run_compound() — total_tool_calls += len(result.tool_calls) за каждый round
-→ AgentResult.tool_calls: int
-→ CoordinationResult.tool_calls: int (coordinator агрегирует из primary/fallback/consensus)
-→ OrchestratorResult.tool_calls: int (_run_allow, _run_degraded, _run_heavy — все три пути)
-→ webhook.py: meter.record(UsageEntry(..., tool_calls=result.tool_calls))
-→ Supabase usage_log.tool_calls
-```
-UsageEntry.tool_calls и Supabase колонка уже были объявлены — миграции не требуется.
-
-### 12.2 ✅ Execution ownership conflict — закрыт (май 2026)
-~~SEARCH и MAPS_POI: два параллельных пути к одному результату.
-Оркестратор перехватывал их в tool-only / _structured_search path раньше compound.
-compound_agent был недостижим для этих интентов. plan_agents() → coordinator
-→ compound_agent никогда не вызывался для SEARCH/MAPS_POI.~~
-
-**Закрыто:** Execution ownership разделён чётко:
-
-**_TOOL_INTENTS (WEATHER, MAPS, MAPS_ROUTE) → оркестратор → детерминированные форматтеры.**
-format_current / format_geocode / format_route уже возвращают финальный текст.
-LLM там не нужен. tool-only path корректен и намерен для этих интентов.
-
-**SEARCH, MAPS_POI → compound_agent через agentic path (plan_agents → coordinator).**
-SEARCH: compound сам решает что искать и как синтезировать результаты.
-MAPS_POI: compound reasoning нужен для релевантности и представления.
-_structured_search path удалён из оркестратора — больше не нужен.
-_NO_SEARCH_INTENTS включает "search" и "maps_poi" — pre-EPK web search не запускается
-для этих интентов (compound сам владеет tool execution).
-
-**STRICT truth gate сохранён в оркестраторе как policy (§2.1).**
-Compound не видит STRICT gate — это EPK-level policy, не agent-level logic.
-Если compound не нашёл grounding data — возвращает AgentResult(success=False) →
-coordinator пробует fallback → оркестратор может вернуть no_grounded_data через
-STRICT truth gate если has_grounding=False после всего pipeline.
----
-
-## 13. OBSERVED BUGS — тестирование май 2026
-
-Зафиксированы по скриншотам живых сессий. Статус: **OPEN**, подлежат исправлению.
-
----
-
-### 13.1 🔴 OPEN — Все tool intents → «сервис временно недоступен»
-
-**Наблюдение:**
-Поиск отелей, маршруты из аэропорта, погода в Сан-Франциско, погода в Молдове —
-все запросы с tool execution возвращают одно и то же:
-> 🔍 Не удалось получить актуальную информацию прямо сейчас — сервис поиска временно недоступен.
-
-**Причина (предположительная):**
-compound_agent пытается вызвать `web_search` / `get_weather` / `get_route`, но tool execution
-падает — API ключ, недоступность Groq compound endpoint (beta/waitlist), таймаут.
-Fallback в coordinator → AgentType.DEEP без tool context → synthesizer отдаёт i18n строку
-`search_unavailable`.
-
-Дополнительный риск: после наших изменений (unified agentic path, май 2026) WEATHER/MAPS/MAPS_ROUTE
-тоже переведены на compound. Если compound endpoint недоступен — **весь** tool-traffic падает.
-Раньше WEATHER/MAPS работали через детерминированные форматтеры независимо от compound.
-
-**Что проверить:**
-- Доступность `groq/compound` и `groq/compound-mini` через Groq API
-- Ключи SerpAPI / OpenWeatherMap / Mapbox в `app/settings.py`
-- Логи `compound_agent._run_compound()` — на каком tool call round падает
-- `fallback_handler.py` — что происходит при AgentResult(success=False)
-
-
-
-**Причина (уточнена май 2026):**
-Первоначальная гипотеза (модели недоступны) — опровергнута: groq/compound и
-groq/compound-mini подтверждены доступными на аккаунте.
-
-Реальная причина требует диагностики по логам fly.io.
-Кандидаты:
-1. compound-mini не поддерживает tool_choice="auto" — возможно требует другой параметр
-2. SERPAPI_KEY / OPENWEATHER_API_KEY не заполнены в fly.io secrets →
-   search/weather возвращают [] → compound получает пустой tool result → success=False
-3. Таймаут compound endpoint (>20s) — httpx.ReadTimeout в _execute_tool
-4. compound-mini возвращает finish_reason отличный от "tool_calls" и "stop" —
-   неожиданный тип → defensive return success=False в _run_compound
-
-**Что проверить в логах fly.io:**
-fly logs | grep "compound_agent"
-Ищем: "API call failed", "tool execution failed", "unexpected result type"
-
-**Влияние:** критическое. Все data-driven интенты отдают error вместо ответа.
-
----
-
-### 13.2 ✅ CLOSED — Потеря контекста разговора (история) (май 2026)
-
-**Наблюдение:**
-- «Вот, нашла» → бот переводит фразу как idiomatic expression вместо понимания контекста
-- «Походу да» → бот переводит вместо интерпретации как согласия
-- Поиск аниме: после 3+ уточнений бот снова просит описать сюжет
-
-**Причина (code-level):**
-`_MAX_HISTORY_TOKENS = 1200` в `conversation_history.py` — агрессивный обрезатель.
-System prompt для tool/STRICT интентов весит ~1300-1800 токенов (задокументировано там же).
-После trim history сокращается до 0-2 реплик. Compound получает почти пустую историю.
-
-Отдельно: `_llm_pre_classify(text)` в `intent_engine.py` получает только текущее сообщение
-без истории. Короткий follow-up «Вот, нашла» → pre-classifier не понимает контекст →
-не может вернуть правильный intent. (Часть 2 — остаётся в 13.4 OPEN.)
-
-**Исправление (часть 1 — history budget):**
-
-`memory/conversation_history.py` — убран захардкоженный `_MAX_HISTORY_TOKENS = 1200`.
-Введены tier-зависимые константы:
-```python
-FAST_HISTORY_BUDGET    = 1800   # ~6-7 пар (~280 tokens/turn)
-GENERAL_HISTORY_BUDGET = 3500   # ~12-15 пар
-```
-`get_history()` принимает `token_budget` как параметр (default = GENERAL_HISTORY_BUDGET).
-SQL fetch limit поднят с 20 до 40 turns (`_MAX_HISTORY_FETCH`).
-
-`transport/telegram/update_handler.py` — выбор бюджета перед вызовом `get_history()`:
-```python
-_history_budget = (
-    FAST_HISTORY_BUDGET
-    if complexity == Complexity.LOW and _message_tokens_pre < 300
-    else GENERAL_HISTORY_BUDGET
-)
-conversation_history = await history_store.get_history(
-    user_id, token_budget=_history_budget
-)
-```
-Эвристика идентична `orchestrator._estimate_tier` (audit §6.1) — единый подход.
-Tier в этой точке ещё неизвестен (EPK не запустился), поэтому используем complexity.
-Логируются: `token_budget`, `turns` — для диагностики.
-
-**Результат:** бот получает 6-7 пар на FAST и 12-15 пар на GENERAL/HEAVY
-вместо 0-2 пар при старом бюджете 1200 токенов.
-
----
-
-### 13.3 🟡 OPEN — Reasoning chain-of-thought утекает в финальный ответ
-
-**Наблюдение:**
-Ответы содержат внутренний reasoning format:
-```
-Constraints: 1. ... 2. ...
-Candidates: - ...
-Verification: - ...
-Verification table: Поле | Значение
-```
-
-**Причина:**
-`reasoning_engine.py` `instruction_prefix` для MATH/ANALYSIS требует «list ALL constraints»,
-«show verification table». `response_synthesizer.py` не фильтрует CoT структуру.
-
-Для vision запросов: `vision_handler` передаёт extracted text в pipeline →
-classifier видит структурированный текст → классифицирует как MATH/ANALYSIS →
-reasoning format применяется и весь CoT попадает в ответ пользователю.
-
-**Влияние:** ответы выглядят как отладочный вывод, не как ответ ассистента.
-
----
-
-### 13.4 🟡 OPEN — Classifier теряет контекст на follow-up сообщениях
-
-**Наблюдение:**
-«Вот, нашла» / «Туговатый у тебя поиск)» / «Реально поисковик сдох)» после диалога →
-classifier видит изолированную фразу → CONVERSATION → бот отвечает не по контексту.
-
-**Причина:**
-`_llm_pre_classify(text)` получает только `text[:500]` без истории.
-`classify()` принимает `conversation_history` параметр, но в pre-classifier он не передаётся.
-Embedding classifier тоже работает на изолированном тексте.
-
-**Решение-кандидат:**
-Передавать последние 2-3 реплики из `conversation_history` в `_llm_pre_classify` как контекст.
-«[Предыдущий контекст: ...]\n\nТекущее сообщение: {text}»
-
-**Влияние:** серьёзное для conversational UX. Любой follow-up теряет контекст.
-
----
-
-### 13.5 🟡 OPEN — SEARCH не оптимизирует запрос для поиска
-
-**Наблюдение:**
-Описательный поиск аниме («глава якудзы подставляет к своей дочери охранника, умерли родители») →
-3 попытки, не находит «Ojou to Banken-kun». Когда пользователь сам называет — бот сразу находит.
-
-**Причина:**
-compound_agent передаёт user message как query в `web_search` без переформулирования.
-Русскоязычный описательный запрос → SerpAPI → нерелевантные результаты.
-`_MAX_TOOL_ROUNDS = 3` — три попытки, но запрос почти не меняется.
-
-**Решение-кандидат:**
-В SEARCH system prompt явно инструктировать compound:
-«Переформулируй описание в оптимальный поисковый запрос на английском языке, используй ключевые слова».
-
-**Влияние:** умеренное. Поиск по описанию — частый и ожидаемый сценарий.
-
----
-
-### 13.6 🟢 ПРОВЕРЕНО — 25 000 × 40 000 = 1 000 000 000 (не баг)
-
-Бот ответил 1 000 000 000. Это математически верно: 25 × 10³ × 40 × 10³ = 1000 × 10⁶ = 10⁹.
-CoT format в ответе — проблема 13.3, не математическая ошибка.
-
----
-
-### 13.7 🟢 НИЗКИЙ — Грузинский: fallback-строка некорректна по смыслу
-
-**Наблюдение:**
-«რა ამინდია ამ წუთას მოლდოვაში?» → «სანდო ინფორმაცია ვერ მოიძება. გთხოვთ დააზუსტოთ კითხვა.»
-(«Уточните вопрос» — хотя вопрос чёткий).
-
-**Причина:**
-Та же, что 13.1 (compound failure). Плюс: i18n строка `search_unavailable` для `ka`
-формулирует отказ как «запрос неясен», а не «технический сбой».
-
-**Влияние:** низкое, но создаёт неверное впечатление.
-
----
-
-### СВОДНАЯ ТАБЛИЦА ОТКРЫТЫХ БАГОВ
+## СВОДНАЯ ТАБЛИЦА ОТКРЫТЫХ ПУНКТОВ
 
 | # | Приоритет | Описание | Файлы |
 |---|---|---|---|
 | 13.1 | 🔴 КРИТИЧЕСКИЙ | Все tool intents → «сервис недоступен» | compound_agent, groq_client, settings |
-| 13.2 | ✅ | Потеря контекста — history budget исправлен (FAST=1800, GENERAL=3500) | conversation_history, update_handler |
-| 13.3 | 🟡 СРЕДНИЙ | CoT reasoning format в финальном ответе | response_synthesizer, reasoning_engine, vision_handler |
+| 13.3 | 🟡 СРЕДНИЙ | CoT format в финальном ответе (остаточные случаи) | response_synthesizer, vision_handler |
 | 13.4 | 🟡 СРЕДНИЙ | Classifier теряет контекст на follow-up фразах | intent_engine._llm_pre_classify |
 | 13.5 | 🟡 СРЕДНИЙ | SEARCH не переформулирует описательный запрос | compound_agent, SEARCH system prompt |
+| 17.2 | 🟡 СРЕДНИЙ | Epistemic gap: TruthMode как flag вместо verification layer | consensus_engine, source_credibility |
 | 13.7 | 🟢 НИЗКИЙ | Грузинский: i18n fallback-строка некорректна по смыслу | i18n/strings.py |
 
----
-
-## 14. SEARCH PROVIDER — THREE-TIER FALLBACK (май 2026)
-
-### 14.1 ✅ Three-tier search fallback — реализован (май 2026)
-
-**Изменение:** `external/search.py` переписан с трёхуровневым fallback chain:
-
-```
-1. Tavily   (primary)   — LLM-optimised, structured content, 1000 req/mo free
-2. SerpAPI  (secondary) — reliable reserve, 250 req/mo free, hotel pack support
-3. SearXNG  (tertiary)  — meta-search, no limit, self-hosted, last resort
-```
-
-Каждый провайдер пропускается молча если ключ/URL не сконфигурирован.
-First success wins. Caller (compound_agent) не видит выбор провайдера.
-
-**`app/settings.py`:** добавлены поля:
-- `tavily_api_key: str = Field("", ...)` — primary search provider
-- `searxng_url: str = Field("", ...)` — tertiary provider URL
-
-`serpapi_key` уже был объявлен.
-
-**`docker-compose.yml`:** добавлен сервис `searxng` с:
-- `SEARXNG_SECRET_KEY` (без него JSON API нестабилен)
-- healthcheck: `wget /healthz`
-- сеть `ai-network` (изолирована от внешнего)
-
-**`.env` / `.env.example`:** секция `# Search providers` добавлена:
-```
-TAVILY_API_KEY=
-SERPAPI_KEY=
-SEARXNG_URL=http://searxng:8080
-SEARXNG_SECRET_KEY=  # openssl rand -hex 32
-```
-
-**`app/main.py` `/providers` endpoint:**
-- Добавлена проверка `settings.searxng_url` → `status["searxng"]`
-- Добавлен raw env check `SEARXNG_URL`
-
----
-
-## 15. HEALTHCHECK — TIMEOUT FIX (май 2026)
-
-### 15.1 ✅ healthcheck.py — asyncio.wait_for добавлен (май 2026)
-
-**Проблема:**
-`full_health()` в `infra/healthcheck.py` вызывал `asyncio.to_thread(supabase_query)`
-без timeout. Supabase sync client при холодном старте или сетевой задержке мог
-зависать > 5s → fly.io healthcheck (timeout=5s) получал 504 → машина перезапускалась.
-Healthcheck был переписан ранее (to_thread вместо sync call), но ошибка не ушла
-именно из-за отсутствия deadline.
-
-**Исправление:**
-```python
-_REDIS_TIMEOUT    = 3.0  # seconds
-_SUPABASE_TIMEOUT = 3.0  # seconds
-
-# check_redis:
-await asyncio.wait_for(redis.ping(), timeout=_REDIS_TIMEOUT)
-
-# check_supabase:
-await asyncio.wait_for(
-    asyncio.to_thread(lambda: supabase.table("user_balances")...execute()),
-    timeout=_SUPABASE_TIMEOUT,
-)
-
-# full_health — concurrent (было sequential):
-redis_ok, sb_ok = await asyncio.gather(check_redis(redis), check_supabase(supabase))
-```
-
-Проверки теперь идут **параллельно** через `asyncio.gather` — total latency = max, не сумма.
-При timeout каждый check возвращает False с ERROR логом. Fly.io получает ответ в < 5s.
-
-### 15.2 ✅ main.py /providers — Supabase call исправлен (май 2026)
-
-**Проблема:**
-`/providers` endpoint вызывал `supabase.table("healthcheck").select(...)` — двойная ошибка:
-1. Таблица `healthcheck` не существует в схеме (должна быть `user_balances`)
-2. Вызов синхронный без `to_thread` — блокировал event loop FastAPI
-
-**Исправление:**
-```python
-await asyncio.to_thread(
-    lambda: request.app.state.supabase.table("user_balances").select("user_id").limit(1).execute()
-)
-```
-
----
-
-### СВОДНАЯ ТАБЛИЦА — дополнение
-
-| # | Приоритет | Описание | Статус |
-|---|---|---|---|
-| 14.1 | ✅ | Three-tier search: Tavily → SerpAPI → SearXNG | Закрыто май 2026 |
-| 15.1 | ✅ | healthcheck timeout → fly restarts | Закрыто май 2026 |
-| 15.2 | ✅ | /providers: wrong table + sync blocking call | Закрыто май 2026 |
-
----
-
-## 16. TEST COVERAGE (май 2026)
-
-### 16.1 ✅ Coverage ≥ 60% достигнут (май 2026)
-
-**Было:** 41.10% — CI падал на `FAIL Required test coverage of 60%`.
-
-**Добавлены два файла:**
-
-**`tests/test_transport_and_retrieval.py`** — покрывает:
-- `transport/telegram/message_router.py` — classify_update, extract_text, extract_photo, extract_voice, extract_callback_data
-- `transport/telegram/update_handler.py` — _estimate_tokens, _estimate_history_tokens, _classify_complexity, handle_message (все пути: normal, timeout, vision, zero-balance)
-- `transport/telegram/vision_handler.py` — _get_file_url, _download_image, handle_vision (failure paths + CONVERSATION/non-CONVERSATION intent)
-- `transport/telegram/webhook.py` — _get_chat_id, _detect_lang
-- `retrieval/retrieval_engine.py` — embedding failure, no-supabase path, reranker call, RetrievalEngine wrapper
-- `retrieval/query_preprocessor.py` — 100% покрытие
-- `payments/access_controller.py` — get_balance, deduct, credit, db error paths
-- `security/rate_limiter.py` — allowed/denied/error paths, init/get
-
-**`tests/test_coverage_gap2.py`** — покрывает:
-- `payments/pricing_engine.py` — nano_to_ton, ton_to_nano, apply_margin, get_ton_price_usd, nano_to_usd, usd_to_nano
-- `retrieval/cache/ttl_policy.py` — 100% покрытие
-- `retrieval/cache/embedding_cache.py` — get/set, hit/miss/exception paths
-- `retrieval/cache/query_cache.py` — get/set, hit/miss/exception paths
-- `retrieval/cache/rerank_cache.py` — get/set, hit/miss/exception paths
-- `retrieval/fusion/hybrid_scorer.py` — 100% покрытие, все fusion сценарии
-- `retrieval/sparse/bm25_engine.py` — index/search, top_k, no-match, reindex, custom params
-- `retrieval/reranker/cross_encoder.py` — sorted output, fallback on error, single candidate
-- `transport/telegram/webhook.py` — _send_message, _send_message_with_topup, _send_voice, _answer_callback
-
-**Итог по coverage:**
-
-| Модуль | Было | Стало |
-|---|---|---|
-| message_router.py | 0% | ~100% |
-| update_handler.py | 6% | ~60% |
-| vision_handler.py | 0% | ~65% |
-| webhook.py | 0% | ~35% |
-| retrieval_engine.py | 0% | ~93% |
-| query_preprocessor.py | 0% | 100% |
-| access_controller.py | 0% | ~80% |
-| rate_limiter.py | 0% | ~85% |
-| pricing_engine.py | 40% | ~90% |
-| hybrid_scorer.py | 0% | 100% |
-| bm25_engine.py | 0% | ~90% |
-| cross_encoder.py | 38% | ~85% |
-| embedding_cache.py | 0% | ~85% |
-| query_cache.py | 0% | ~85% |
-| rerank_cache.py | 0% | ~85% |
-| **TOTAL** | **41.10%** | **~60%+** |
-
-**Правила написания тестов (зафиксированы для будущих контрибьюторов):**
-1. `patch("module.where.NAME.IS.USED")` — патчить там, где имя используется, не где определено. Если импорт внутри функции — патчить исходный модуль
-2. Enum сравнения: передавать реальный enum-член (`Intent.CONVERSATION`), не строку
-3. Один импорт на модуль в классе — повторный `from X import Y` внутри методов = F811
-
-**Следующий milestone:** coverage floor 75% (из CI_README.md open items) — после добавления speech/billing тестов.
----
-
-## 17. КАЧЕСТВО ОТВЕТОВ — ШАБЛОННОСТЬ И COT УТЕЧКА (май 2026)
-
-### ЦЕЛЬ
-Максимально приблизить качество ответов к уровню ChatGPT/Claude:
-живые, прямые, честные ответы вместо шаблонного robotic output.
-Задокументировано как стратегическое направление, не просто набор багфиксов.
-
----
-
-### 17.1 ✅ ЗАКРЫТО — CoT infinite loop в ответах (май 2026)
-
-**Проблема (из скринов живых сессий):**
-При вопросе «Ты узнаёшь этого персонажа из аниме?» бот выдавал стену текста:
-```
-Чтобы исправить нарушенные ограничения, мне нужно найти персонажа...
-Ограничения:
-1. Персонаж из аниме
-2. Мужской пол
-...
-Кандидаты:
-1. Канеки Кен — частично соответствует
-После долгого поиска я нашёл...
-Однако я нашёл ещё одного...
-[повторяется 5–7 раз, ответ сокращён]
-```
-Ответ обрезался Telegram-лимитом. Пользователь не получал никакого результата.
-
-**Корневые причины (три слоя):**
-1. `reasoning_engine.py`: `Intent.QUESTION` на `Tier.GENERAL` использовал
-   `instruction_prefix="Think carefully, then answer:"` + `mode=CHAIN_OF_THOUGHT` —
-   это провоцировало constraint-matching CoT в LLM output.
-2. `intent_engine.py`: system prompt для QUESTION не содержал graceful exit rule —
-   модель не знала что делать когда ответа нет, и симулировала бесконечный поиск.
-3. `response_synthesizer.py`: `_strip_cot_artifacts()` содержал только English паттерны
-   (`Constraints:`, `Candidates:`). Русские паттерны (`Ограничения:`, `Кандидаты:`)
-   и итеративные loop-фразы (`После поиска я нашёл`, `Однако я нашёл ещё одного`)
-   не обрабатывались — весь CoT попадал в финальный ответ.
-
-**Исправление — три файла:**
-
-**`cognition/reasoning_engine.py`** — QUESTION instruction_prefix:
-- FAST: `""` → `"Answer directly. If you don't know — say so in one sentence."`
-- GENERAL: `"Think carefully, then answer:"` + `CHAIN_OF_THOUGHT` →
-  `"Answer directly. If you don't know — say so. Do not simulate a search."` + `DIRECT`
-- HEAVY: аналогично GENERAL, mode=DIRECT
-
-**`cognition/intent_engine.py`** — QUESTION system prompt:
-Добавлен блок `CRITICAL — HONESTY AND GRACEFUL EXIT RULES`:
-- Явное правило: если не знаешь → скажи прямо одним предложением
-- Явный запрет: NEVER simulate internal search, NEVER list Constraints/Candidates
-- Специальное правило для visual recognition tasks (аниме, манга):
-  сделай лучшее предположение по визуальным деталям ИЛИ честно скажи что не знаешь
-
-**`cognition/response_synthesizer.py`** — `_strip_cot_artifacts()`:
-Переписан с двухрежимной стратегией:
-
-*Mode A — Pure CoT loop detection:*
-Если в тексте 2+ сигналов CoT-цикла → весь ответ является debug output,
-реального ответа нет. Заменяется честным признанием:
-- RU: `"Не могу точно определить — попробуй дать подсказку или уточнить вопрос."`
-- EN: `"I'm not sure — could you give me a hint or more context?"`
-
-Сигналы (9 паттернов): `Ограничения:\n\d+`, `Кандидаты:\n\d+`,
-`После [долгого] поиска я нашёл`, `Однако я нашёл ещё одного`,
-`Чтобы исправить нарушенные ограничения`, `Constraints:\n\d+`,
-`Candidates:\n\d+`, `After [long] search I found`, `However I found another`
-
-*Mode B — Partial header stripping:*
-Если CoT частичный (есть реальный ответ + немного scaffolding) →
-стрипаем только заголовки секций (English + Russian), 3 прохода до стабилизации.
-
-**Тесты (все проходят):**
-- Pure RU loop → честное признание ✅
-- Pure EN loop → honest admission ✅
-- MATH intent → passthrough без изменений ✅
-- Нормальный ответ → без изменений ✅
-
----
-
-### 17.2 🟡 OPEN — Epistemic gap: TruthMode как execution flag
-
-**Диагноз (по итогам сравнения с ChatGPT):**
-`TruthMode.STRICT/HYBRID` — это инструкции для LLM («не выдумывай»),
-но не epistemic verification layer. Отсутствует:
-- `confidence_score` — насколько модель уверена в ответе
-- `contradiction_detection` — противоречия между агентными ответами
-- `hallucination_risk` — риск что синтез не подкреплён grounding data
-- graceful exit на уровне pipeline (не только на уровне prompt)
-
-**Следствие:** система может уверенно выдавать hallucinated synthesis,
-не зная что галлюцинирует. Особенно критично при multi-agent coordination
-и distributed reasoning (у Ceyona именно такая архитектура).
-
-**Что ChatGPT предложил (верно архитектурно):**
-`TruthAssessmentPipeline` с полями:
-`source_count, source_agreement, retrieval_grounded, agent_consensus,
-contradiction_score, hallucination_risk, confidence_score`
-
-TruthMode тогда становится governance policy (min_confidence thresholds),
-а не просто execution flag.
-
-**Статус:** требует отдельного обсуждения и проектирования.
-Компоненты для этого уже есть: `consensus_engine.py`, `source_credibility.py`,
-`reflection.py`, `analysis.py` — нужно собрать в единый epistemic pipeline.
-НЕ быстрый фикс — архитектурное решение.
-
----
-
-### СВОДНАЯ ТАБЛИЦА — дополнение
-
-| # | Приоритет | Описание | Статус |
-|---|---|---|---|
-| 17.1 | ✅ | CoT infinite loop в ответах — двухрежимный фикс synthesizer + reasoning + intent | Закрыто май 2026 |
-| 17.2 | 🟡 СРЕДНИЙ | Epistemic gap: TruthMode как flag вместо verification layer | Open — требует проектирования |
+📋 **Из CI_README (planned):** coverage floor 75% (speech/billing тесты), asyncio stress tests (13.4), integration tests compound tool execution (13.1 regression), retrieval quality regression, mypy.
