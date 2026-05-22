@@ -59,13 +59,14 @@ jobs:
           key: arch-${{ runner.os }}-${{ hashFiles('project-root/pyproject.toml') }}
 
       - name: Install architecture tools
-        run: pip install import-linter grimp
-
-      - name: Install project
-        run: pip install -e .
+        run: |
+          pip install -e .
+          pip install import-linter grimp
 
       - name: Enforce layer contracts (import-linter)
         run: lint-imports
+        env:
+          PYTHONPATH: .
 
       - name: Detect circular dependencies
         run: |
