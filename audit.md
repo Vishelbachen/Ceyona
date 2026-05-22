@@ -816,3 +816,62 @@ await asyncio.to_thread(
 | 14.1 | ✅ | Three-tier search: Tavily → SerpAPI → SearXNG | Закрыто май 2026 |
 | 15.1 | ✅ | healthcheck timeout → fly restarts | Закрыто май 2026 |
 | 15.2 | ✅ | /providers: wrong table + sync blocking call | Закрыто май 2026 |
+
+---
+
+## 16. TEST COVERAGE (май 2026)
+
+### 16.1 ✅ Coverage ≥ 60% достигнут (май 2026)
+
+**Было:** 41.10% — CI падал на `FAIL Required test coverage of 60%`.
+
+**Добавлены два файла:**
+
+**`tests/test_transport_and_retrieval.py`** — покрывает:
+- `transport/telegram/message_router.py` — classify_update, extract_text, extract_photo, extract_voice, extract_callback_data
+- `transport/telegram/update_handler.py` — _estimate_tokens, _estimate_history_tokens, _classify_complexity, handle_message (все пути: normal, timeout, vision, zero-balance)
+- `transport/telegram/vision_handler.py` — _get_file_url, _download_image, handle_vision (failure paths + CONVERSATION/non-CONVERSATION intent)
+- `transport/telegram/webhook.py` — _get_chat_id, _detect_lang
+- `retrieval/retrieval_engine.py` — embedding failure, no-supabase path, reranker call, RetrievalEngine wrapper
+- `retrieval/query_preprocessor.py` — 100% покрытие
+- `payments/access_controller.py` — get_balance, deduct, credit, db error paths
+- `security/rate_limiter.py` — allowed/denied/error paths, init/get
+
+**`tests/test_coverage_gap2.py`** — покрывает:
+- `payments/pricing_engine.py` — nano_to_ton, ton_to_nano, apply_margin, get_ton_price_usd, nano_to_usd, usd_to_nano
+- `retrieval/cache/ttl_policy.py` — 100% покрытие
+- `retrieval/cache/embedding_cache.py` — get/set, hit/miss/exception paths
+- `retrieval/cache/query_cache.py` — get/set, hit/miss/exception paths
+- `retrieval/cache/rerank_cache.py` — get/set, hit/miss/exception paths
+- `retrieval/fusion/hybrid_scorer.py` — 100% покрытие, все fusion сценарии
+- `retrieval/sparse/bm25_engine.py` — index/search, top_k, no-match, reindex, custom params
+- `retrieval/reranker/cross_encoder.py` — sorted output, fallback on error, single candidate
+- `transport/telegram/webhook.py` — _send_message, _send_message_with_topup, _send_voice, _answer_callback
+
+**Итог по coverage:**
+
+| Модуль | Было | Стало |
+|---|---|---|
+| message_router.py | 0% | ~100% |
+| update_handler.py | 6% | ~60% |
+| vision_handler.py | 0% | ~65% |
+| webhook.py | 0% | ~35% |
+| retrieval_engine.py | 0% | ~93% |
+| query_preprocessor.py | 0% | 100% |
+| access_controller.py | 0% | ~80% |
+| rate_limiter.py | 0% | ~85% |
+| pricing_engine.py | 40% | ~90% |
+| hybrid_scorer.py | 0% | 100% |
+| bm25_engine.py | 0% | ~90% |
+| cross_encoder.py | 38% | ~85% |
+| embedding_cache.py | 0% | ~85% |
+| query_cache.py | 0% | ~85% |
+| rerank_cache.py | 0% | ~85% |
+| **TOTAL** | **41.10%** | **~60%+** |
+
+**Правила написания тестов (зафиксированы для будущих контрибьюторов):**
+1. `patch("module.where.NAME.IS.USED")` — патчить там, где имя используется, не где определено. Если импорт внутри функции — патчить исходный модуль
+2. Enum сравнения: передавать реальный enum-член (`Intent.CONVERSATION`), не строку
+3. Один импорт на модуль в классе — повторный `from X import Y` внутри методов = F811
+
+**Следующий milestone:** coverage floor 75% (из CI_README.md open items) — после добавления speech/billing тестов.
