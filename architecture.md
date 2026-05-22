@@ -1,5 +1,5 @@
 # CEYONA — CANONICAL ARCHITECTURE
-Version: 8.2 — Unified Agentic Path Edition
+Version: 8.3 — Anti-Drift Edition
 Status: Active Source of Truth
 Supersedes: architecture.md (all previous versions)
 
@@ -737,30 +737,39 @@ This document specifies rules — `audit.md` tracks what has been done and what 
 - §12.2: STRICT truth gate — agentic интенты исключены из pre-execution gate (май 2026)
 - §14.1: Three-tier search fallback — Tavily → SerpAPI → SearXNG (май 2026)
 - §15.1: healthcheck timeout fix — asyncio.wait_for + concurrent gather (май 2026)
+- §13.2: conversation history context loss — закрыт tier-зависимыми бюджетами (май 2026)
 - §11.x–12.x: предыдущие audit items (billing, epk, coordinator, safety gate)
 
 **Open bugs (май 2026):** см. audit.md §13.
-Критические: 13.1 (tool intents → сервис недоступен), 13.2 (потеря контекста).
+Критические: 13.1 (tool intents → сервис недоступен).
 
-Что НЕ верифицировано в этом аудите
-Все слои верифицированы. Открытых пунктов нет.
-ANTI-DRIFT PRINCIPLES
+---
+
+## 30. ANTI-DRIFT PRINCIPLES
+
 Architecture MUST scale through:
-explicit contracts, bounded execution, centralized governance
-deterministic orchestration, synchronized policy layers
+- explicit contracts, bounded execution, centralized governance
+- deterministic orchestration, synchronized policy layers
+
 Architecture MUST NOT scale through:
-emergent behavior, hidden coupling, implicit orchestration
-undocumented authority, runtime improvisation
-FINAL SYSTEM PRINCIPLE
+- emergent behavior, hidden coupling, implicit orchestration
+- undocumented authority, runtime improvisation
+
+---
+
+## 31. FINAL SYSTEM PRINCIPLE
+
 Ceyona is a governed orchestration system.
 It is NOT a collection of autonomous AI behaviors.
+
 The system succeeds only if:
-authority remains explicit
-execution remains deterministic
-policy remains synchronized
-runtime remains subordinate to architecture
-retrieval remains grounded
-orchestration remains bounded
+- authority remains explicit
+- execution remains deterministic
+- policy remains synchronized
+- runtime remains subordinate to architecture
+- retrieval remains grounded
+- orchestration remains bounded
+
 Architecture governs the system. Runtime executes the system.
 
 ---
