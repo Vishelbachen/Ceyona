@@ -875,3 +875,119 @@ await asyncio.to_thread(
 3. Один импорт на модуль в классе — повторный `from X import Y` внутри методов = F811
 
 **Следующий milestone:** coverage floor 75% (из CI_README.md open items) — после добавления speech/billing тестов.
+---
+
+## 17. КАЧЕСТВО ОТВЕТОВ — ШАБЛОННОСТЬ И COT УТЕЧКА (май 2026)
+
+### ЦЕЛЬ
+Максимально приблизить качество ответов к уровню ChatGPT/Claude:
+живые, прямые, честные ответы вместо шаблонного robotic output.
+Задокументировано как стратегическое направление, не просто набор багфиксов.
+
+---
+
+### 17.1 ✅ ЗАКРЫТО — CoT infinite loop в ответах (май 2026)
+
+**Проблема (из скринов живых сессий):**
+При вопросе «Ты узнаёшь этого персонажа из аниме?» бот выдавал стену текста:
+```
+Чтобы исправить нарушенные ограничения, мне нужно найти персонажа...
+Ограничения:
+1. Персонаж из аниме
+2. Мужской пол
+...
+Кандидаты:
+1. Канеки Кен — частично соответствует
+После долгого поиска я нашёл...
+Однако я нашёл ещё одного...
+[повторяется 5–7 раз, ответ сокращён]
+```
+Ответ обрезался Telegram-лимитом. Пользователь не получал никакого результата.
+
+**Корневые причины (три слоя):**
+1. `reasoning_engine.py`: `Intent.QUESTION` на `Tier.GENERAL` использовал
+   `instruction_prefix="Think carefully, then answer:"` + `mode=CHAIN_OF_THOUGHT` —
+   это провоцировало constraint-matching CoT в LLM output.
+2. `intent_engine.py`: system prompt для QUESTION не содержал graceful exit rule —
+   модель не знала что делать когда ответа нет, и симулировала бесконечный поиск.
+3. `response_synthesizer.py`: `_strip_cot_artifacts()` содержал только English паттерны
+   (`Constraints:`, `Candidates:`). Русские паттерны (`Ограничения:`, `Кандидаты:`)
+   и итеративные loop-фразы (`После поиска я нашёл`, `Однако я нашёл ещё одного`)
+   не обрабатывались — весь CoT попадал в финальный ответ.
+
+**Исправление — три файла:**
+
+**`cognition/reasoning_engine.py`** — QUESTION instruction_prefix:
+- FAST: `""` → `"Answer directly. If you don't know — say so in one sentence."`
+- GENERAL: `"Think carefully, then answer:"` + `CHAIN_OF_THOUGHT` →
+  `"Answer directly. If you don't know — say so. Do not simulate a search."` + `DIRECT`
+- HEAVY: аналогично GENERAL, mode=DIRECT
+
+**`cognition/intent_engine.py`** — QUESTION system prompt:
+Добавлен блок `CRITICAL — HONESTY AND GRACEFUL EXIT RULES`:
+- Явное правило: если не знаешь → скажи прямо одним предложением
+- Явный запрет: NEVER simulate internal search, NEVER list Constraints/Candidates
+- Специальное правило для visual recognition tasks (аниме, манга):
+  сделай лучшее предположение по визуальным деталям ИЛИ честно скажи что не знаешь
+
+**`cognition/response_synthesizer.py`** — `_strip_cot_artifacts()`:
+Переписан с двухрежимной стратегией:
+
+*Mode A — Pure CoT loop detection:*
+Если в тексте 2+ сигналов CoT-цикла → весь ответ является debug output,
+реального ответа нет. Заменяется честным признанием:
+- RU: `"Не могу точно определить — попробуй дать подсказку или уточнить вопрос."`
+- EN: `"I'm not sure — could you give me a hint or more context?"`
+
+Сигналы (9 паттернов): `Ограничения:\n\d+`, `Кандидаты:\n\d+`,
+`После [долгого] поиска я нашёл`, `Однако я нашёл ещё одного`,
+`Чтобы исправить нарушенные ограничения`, `Constraints:\n\d+`,
+`Candidates:\n\d+`, `After [long] search I found`, `However I found another`
+
+*Mode B — Partial header stripping:*
+Если CoT частичный (есть реальный ответ + немного scaffolding) →
+стрипаем только заголовки секций (English + Russian), 3 прохода до стабилизации.
+
+**Тесты (все проходят):**
+- Pure RU loop → честное признание ✅
+- Pure EN loop → honest admission ✅
+- MATH intent → passthrough без изменений ✅
+- Нормальный ответ → без изменений ✅
+
+---
+
+### 17.2 🟡 OPEN — Epistemic gap: TruthMode как execution flag
+
+**Диагноз (по итогам сравнения с ChatGPT):**
+`TruthMode.STRICT/HYBRID` — это инструкции для LLM («не выдумывай»),
+но не epistemic verification layer. Отсутствует:
+- `confidence_score` — насколько модель уверена в ответе
+- `contradiction_detection` — противоречия между агентными ответами
+- `hallucination_risk` — риск что синтез не подкреплён grounding data
+- graceful exit на уровне pipeline (не только на уровне prompt)
+
+**Следствие:** система может уверенно выдавать hallucinated synthesis,
+не зная что галлюцинирует. Особенно критично при multi-agent coordination
+и distributed reasoning (у Ceyona именно такая архитектура).
+
+**Что ChatGPT предложил (верно архитектурно):**
+`TruthAssessmentPipeline` с полями:
+`source_count, source_agreement, retrieval_grounded, agent_consensus,
+contradiction_score, hallucination_risk, confidence_score`
+
+TruthMode тогда становится governance policy (min_confidence thresholds),
+а не просто execution flag.
+
+**Статус:** требует отдельного обсуждения и проектирования.
+Компоненты для этого уже есть: `consensus_engine.py`, `source_credibility.py`,
+`reflection.py`, `analysis.py` — нужно собрать в единый epistemic pipeline.
+НЕ быстрый фикс — архитектурное решение.
+
+---
+
+### СВОДНАЯ ТАБЛИЦА — дополнение
+
+| # | Приоритет | Описание | Статус |
+|---|---|---|---|
+| 17.1 | ✅ | CoT infinite loop в ответах — двухрежимный фикс synthesizer + reasoning + intent | Закрыто май 2026 |
+| 17.2 | 🟡 СРЕДНИЙ | Epistemic gap: TruthMode как flag вместо verification layer | Open — требует проектирования |
