@@ -544,7 +544,7 @@ async def handle_message(
         from meta.reflection import ReflectionInput, reflect
 
         ref_input = ReflectionInput(
-            intent=str(result.epk_decision),
+            intent=result.intent or str(result.epk_decision),  # real intent, not EPK decision
             lang=lang,
             tier=str(result.tier),
             model=result.model or "",
