@@ -331,11 +331,14 @@ _PRE_CLASSIFIER_PROMPT = (
     "directions, transit options, bus/metro/train/taxi routes, travel time, "
     "distance between two specific points, how to get from airport/station\n"
     "- \"accommodation\" — asks about hotels, hostels, motels, guesthouses, "
-    "apartments, where to stay, cheap/budget/luxury lodging\n"
+    "apartments, where to stay, cheap/budget/luxury lodging in a specific city\n"
+    "- \"search\"        — asks to find, look up, search for specific current "
+    "information: news, events, people, places, products, anime/film/book titles, "
+    "recommendations, anything needing a web search for up-to-date facts\n"
     "- \"emotional\"     — expresses a strong emotion with no information request: "
     "surprise, frustration, excitement, disappointment, profanity, exclamations\n"
-    "- \"none\"          — everything else (factual questions, code, math, "
-    "maps/location lookup, general chat, instructions, analysis)\n\n"
+    "- \"none\"          — everything else: code, math, general chat, "
+    "instructions, analysis, abstract questions answerable from knowledge\n\n"
     "CRITICAL: reply with JSON only. No text before or after.\n\n"
     "Message: {text}"
 )
@@ -343,33 +346,55 @@ _PRE_CLASSIFIER_PROMPT = (
 async def _llm_pre_classify(text: str) -> str:
     """
     Run LLM pre-classification on the user message.
-    Returns one of: "weather", "route", "accommodation", "emotional", "none".
+    Returns one of: "weather", "route", "accommodation", "emotional", "search", "none".
     Always returns "none" on any failure — never raises.
     """
     import json
+    from llm.groq_client import groq_client  # module-level singleton, safe to import here
     try:
-        from llm.groq_client import groq_client
         prompt = _PRE_CLASSIFIER_PROMPT.format(text=text[:500])
         response = await groq_client.complete(
             model="llama-3.1-8b-instant",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=20,
+            max_tokens=30,
             temperature=0.0,
         )
-        raw = response.text.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+        raw = response.text.strip()
+        # Strip markdown code fences if model wrapped the JSON
+        if raw.startswith("```"):
+            raw = raw.lstrip("```json").lstrip("```").rstrip("```").strip()
         data = json.loads(raw)
         label = data.get("pre_intent", "none").strip().lower()
-        if label in {"weather", "route", "accommodation", "emotional", "none"}:
+        if label in {"weather", "route", "accommodation", "emotional", "search", "none"}:
+            logger.info(
+                "_llm_pre_classify: ok",
+                extra={"label": label, "text_preview": text[:60]},
+            )
             return label
         logger.warning(
             "_llm_pre_classify: unexpected label — defaulting to none",
             extra={"label": label, "text_preview": text[:60]},
         )
         return "none"
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "_llm_pre_classify: JSON parse failed — passing through to embedding classifier",
+            extra={
+                "error": str(exc),
+                "raw_response": response.text[:120] if "response" in dir() else "no_response",
+                "text_preview": text[:60],
+            },
+        )
+        return "none"
     except Exception as exc:
         logger.warning(
             "_llm_pre_classify: failed — passing through to embedding classifier",
-            extra={"error": str(exc), "text_preview": text[:60]},
+            extra={
+                "error": str(exc),
+                "error_type": type(exc).__name__,
+                "text_preview": text[:60],
+            },
+            exc_info=True,
         )
         return "none"
 
@@ -432,6 +457,9 @@ async def classify(
     if pre_label == "emotional":
         logger.info("classify: LLM pre-check → EMOTIONAL", extra={"lang": lang})
         return _build_result(Intent.EMOTIONAL, 0.82, lang, text)
+    if pre_label == "search":
+        logger.info("classify: LLM pre-check → SEARCH (general)", extra={"lang": lang})
+        return _build_result(Intent.SEARCH, 0.83, lang, text)
     # pre_label == "none" → fall through to embedding classifier
 
     if supabase is None or hf_client is None:
@@ -493,6 +521,31 @@ async def classify(
                 "threshold": effective_min,
                 "word_count": word_count,
             })
+            # ── keyword fallback (last resort before QUESTION) ────────────────
+            # Triggered only when LLM pre-classifier failed AND embedding score
+            # is below threshold. Language-agnostic — covers top-priority intents
+            # that must never silently fall to QUESTION.
+            kw_lower = text.lower()
+            _WEATHER_KW = {
+                "погода", "weather", "температур", "forecast", "дождь", "rain",
+                "снег", "snow", "ветер", "wind", "облачн", "cloudy", "sunny",
+                "солнечн", "жарко", "холодно", "humid", "влажн",
+                "ამინდი",  # Georgian
+            }
+            _SEARCH_KW = {
+                "найди", "поищи", "поиск", "найти", "search", "find", "look up",
+                "отель", "гостиниц", "хостел", "hotel", "hostel", "accommodation",
+                "новост", "news", "аниме", "anime", "manga", "фильм", "сериал",
+                "recommend", "посоветуй", "посовет",
+            }
+            for kw in _WEATHER_KW:
+                if kw in kw_lower:
+                    logger.info("classify: keyword fallback → WEATHER", extra={"kw": kw})
+                    return _build_result(Intent.WEATHER, 0.75, lang, text)
+            for kw in _SEARCH_KW:
+                if kw in kw_lower:
+                    logger.info("classify: keyword fallback → SEARCH", extra={"kw": kw})
+                    return _build_result(Intent.SEARCH, 0.75, lang, text)
             return fallback
 
         try:
