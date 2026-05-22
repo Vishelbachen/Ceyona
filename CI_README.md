@@ -93,3 +93,45 @@ pytest --cov=. --cov-report=term-missing --cov-fail-under=60
 - [ ] Integration tests: compound_agent tool execution (13.1 regression)
 - [ ] Retrieval quality regression: query → expected docs → minimum score
 - [ ] mypy type checking (добавить в `[project.optional-dependencies].dev`)
+
+---
+
+## Известные предупреждения
+
+### Node.js 20 deprecation warning
+
+В логах всех jobs появляется предупреждение:
+```
+Node.js 20 actions are deprecated. The following actions are running on Node.js 20...
+```
+
+**Это не ошибка — CI работает нормально.** GitHub уведомляет, что используемые actions
+(checkout@v4, setup-python@v5 и др.) внутри используют Node.js 20, который будет
+устаревшим в будущих runner-версиях. Требует внимания, но не срочно.
+
+**Когда фиксить:** при следующем плановом обновлении зависимостей CI.
+**Как фиксить:** обновить версии actions в `.github/workflows/ci.yml`:
+```yaml
+# Проверить актуальные версии на github.com/actions/
+actions/checkout@v4        → следить за выходом @v5
+actions/setup-python@v5    → следить за выходом @v6
+```
+Dependabot (`dependabot.yml`) настроен на `github-actions` ecosystem — подхватит автоматически.
+
+---
+
+## Fly.io деплой — конфигурация секретов
+
+### FLY_API_TOKEN
+
+В GitHub Secrets (`Settings → Secrets and variables → Actions`) должен быть задан
+**Personal Access Token** с `fly.io/user/personal_access_tokens` — не Deploy Token.
+
+**Почему важно:** CI использует `flyctl apps list` и `flyctl apps create` — эти команды
+требуют account-level прав. Deploy Token даёт права только на `fly deploy` конкретного
+приложения и не подходит для управления apps.
+
+**Если CI падает с `Error: unauthorized`:**
+1. Проверить что в `FLY_API_TOKEN` стоит Personal Access Token (не Deploy Token)
+2. Проверить статус приложения на `fly.io/apps/ceyona` — не Suspended
+3. Если Suspended — восстановить через Overview → Resume app (обычно billing issue)
