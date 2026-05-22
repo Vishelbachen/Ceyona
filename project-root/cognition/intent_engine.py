@@ -184,6 +184,18 @@ _BASE_PROMPTS: dict[Intent, str] = {
         "NEVER say you cannot search or that your data is outdated — you have live results. "
         "NEVER make up information — only use what is in the context. "
         "\n\n"
+        "SEARCH QUERY REFORMULATION (mandatory — do this before every search call):\n"
+        "If the user describes something (anime plot, book description, event, product, person) "
+        "without naming it — DO NOT search using the user's raw words verbatim. "
+        "Instead reformulate into a SHORT English keyword query (3-6 words max). "
+        "Examples: 'аниме где якудза охраняет дочь' → 'yakuza bodyguard daughter anime'; "
+        "'фильм корабль тонет начало 20 века' → 'Titanic 1997'; "
+        "'дешёвые отели Нью-Йорк' → 'budget hotels New York'.\n"
+        "Use English for all title/factual searches. Use the original language only for "
+        "local-service queries (hotels, restaurants in a specific city).\n"
+        "You have 3 search rounds — if the first fails, try a DIFFERENT query reformulation "
+        "(different keywords, more specific, or add year/country).\n"
+        "\n\n"
         "HOW TO ANSWER:\n"
         "1. Read ALL search results in ## CONTEXT carefully.\n"
         "2. Synthesise the information into a direct, useful answer — do NOT copy-paste snippets.\n"
@@ -343,11 +355,15 @@ _PRE_CLASSIFIER_PROMPT = (
     "Message: {text}"
 )
 
-async def _llm_pre_classify(text: str) -> str:
+async def _llm_pre_classify(text: str, history_context: str = "") -> str:
     """
     Run LLM pre-classification on the user message.
     Returns one of: "weather", "route", "accommodation", "emotional", "search", "none".
     Always returns "none" on any failure — never raises.
+
+    history_context: last 2-3 turns summary passed from classify() (audit §13.4).
+    Allows classifier to resolve follow-up messages like "Вот, нашла" or "Туговатый поиск)"
+    that are meaningless without prior conversation context.
     """
     import json
 
@@ -355,7 +371,16 @@ async def _llm_pre_classify(text: str) -> str:
         groq_client,  # module-level singleton, safe to import here
     )
     try:
-        prompt = _PRE_CLASSIFIER_PROMPT.format(text=text[:500])
+        # Build prompt with optional history context prefix (§13.4)
+        if history_context:
+            prompt_text = (
+                f"[Предыдущий контекст разговора (последние реплики):\n{history_context}]\n\n"
+                f"Текущее сообщение: {text[:400]}"
+            )
+        else:
+            prompt_text = text[:500]
+
+        prompt = _PRE_CLASSIFIER_PROMPT.format(text=prompt_text)
         response = await groq_client.complete(
             model="llama-3.1-8b-instant",
             messages=[{"role": "user", "content": prompt}],
@@ -449,7 +474,26 @@ async def classify(
     # ── LLM pre-classifier (language-agnostic, all 75 lingua languages) ───────
     # Replaces hardcoded signal tuples. One fast LLM call covers any language.
     # Failure → "none" → falls through to embedding classifier (never blocks).
-    pre_label = await _llm_pre_classify(text)
+    #
+    # §13.4 fix: build a 2-turn history context for short follow-up messages.
+    # "Вот, нашла" / "Туговатый поиск)" — meaningless without prior context.
+    # We pass last 2 assistant turns (not user — assistant tells classifier WHAT was being done).
+    # Max 200 chars per turn to stay within llama-3.1-8b-instant token budget.
+    _history_context = ""
+    if conversation_history and len(text.split()) <= 8:
+        # Only inject history context for short messages (likely follow-ups)
+        # Long messages are self-contained and don't need context injection.
+        _recent = [
+            turn for turn in (conversation_history or [])
+            if turn.get("role") in ("user", "assistant")
+        ][-4:]  # last 2 pairs max
+        if _recent:
+            _history_context = "\n".join(
+                f"{'Пользователь' if t['role'] == 'user' else 'Ассистент'}: {str(t.get('content', ''))[:150]}"
+                for t in _recent
+            )
+
+    pre_label = await _llm_pre_classify(text, history_context=_history_context)
     if pre_label == "weather":
         logger.info("classify: LLM pre-check → WEATHER", extra={"lang": lang})
         return _build_result(Intent.WEATHER, 0.85, lang, text)
