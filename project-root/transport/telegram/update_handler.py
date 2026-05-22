@@ -519,6 +519,10 @@ async def handle_message(
         embedding_tokens=embedding_tokens,
         rerank_tokens=rerank_tokens,
         vision_intent=locals().get("_vision_intent_result"),
+        # Vision path: image description is NOT a valid search query.
+        # skip_web_search prevents Tavily/SerpAPI from receiving extracted image text,
+        # which would result in 400 Bad Request (audit §Tavily-400-fix).
+        skip_web_search=locals().get("_vision_intent_result") is not None,
         request_id=request_id,
         analysis_report=_analysis_report,
     )
