@@ -253,32 +253,49 @@ def _strip_cot_artifacts(text: str, intent: "Intent | None") -> str:
     """
     Step 2.5 (audit §13.3): Strip chain-of-thought reasoning artifacts from final response.
 
-    Problem: reasoning_engine instruction_prefix for MATH/ANALYSIS/QUESTION triggers
-    CoT format ('Constraints: / Candidates: / Verification table:') in the LLM output.
-    For MATH intent this structured format is DESIRED and must pass through.
-    For all other intents it leaks into user-facing text and looks like debug output.
+    Two-mode strategy:
+    A) Pure CoT loop detection — if 2+ loop signals found, the whole response IS the
+       debug output (no real answer exists). Replace with honest admission.
+       Handles the 'infinite candidate search' pattern seen in screenshots.
+    B) Partial header stripping — remove CoT section headers while keeping real content.
 
-    Rule: MATH intent → pass through (CoT IS the answer).
-          All other intents → strip known CoT header patterns from response start.
-
-    What is stripped: lines that look like internal reasoning headers appearing
-    BEFORE the actual answer. We do NOT strip CoT that's mid-answer or conclusion-level.
-
-    Position: between normalize_telegram (step 2) and structure (step 3),
-    so that further normalization still applies to the cleaned text.
+    Rule: MATH/EXAM intent → pass through (CoT IS the answer for these).
     """
     import re
 
     from cognition.intent_engine import Intent as _Intent
 
-    # MATH CoT is intentional and valuable — never strip it
+    # MATH and EXAM CoT is intentional — never strip it
     if intent in (_Intent.MATH, _Intent.EXAM):
         return text
 
-    # Patterns that are pure reasoning scaffolding, not answer content.
-    # Match only at line START, case-insensitive, followed by colon or colon+space.
+    # ── Mode A: Pure CoT loop detection ──────────────────────────────────────
+    # If 2+ loop signals present → entire response is a constraint-matching loop
+    # with no real answer. Replace with honest admission instead of showing debug.
+    _LOOP_SIGNALS = [
+        re.compile(r"Ограничения:\s*\n\s*\d+\.", re.IGNORECASE),
+        re.compile(r"Кандидаты:\s*\n\s*\d+\.", re.IGNORECASE),
+        re.compile(r"После(?:\s+долгого)?\s+поиска\s+я\s+нашёл", re.IGNORECASE),
+        re.compile(r"Однако\s+я\s+нашёл\s+ещё\s+одного", re.IGNORECASE),
+        re.compile(r"Чтобы\s+исправить\s+нарушенные\s+ограничения", re.IGNORECASE),
+        re.compile(r"Constraints?:\s*\n\s*\d+\.", re.IGNORECASE),
+        re.compile(r"Candidates?:\s*\n\s*\d+\.", re.IGNORECASE),
+        re.compile(r"After\s+(?:a\s+)?(?:long\s+)?search\s+I\s+found", re.IGNORECASE),
+        re.compile(r"However,?\s+I\s+found\s+another", re.IGNORECASE),
+    ]
+    loop_signal_count = sum(1 for p in _LOOP_SIGNALS if p.search(text))
+
+    if loop_signal_count >= 2:
+        # Detect language by Cyrillic presence
+        _has_cyrillic = re.search(r"[а-яёА-ЯЁ]", text)
+        if _has_cyrillic:
+            return "Не могу точно определить — попробуй дать подсказку или уточнить вопрос."
+        return "I'm not sure — could you give me a hint or more context?"
+
+    # ── Mode B: Partial CoT header stripping ─────────────────────────────────
+    # Remove known scaffolding headers while preserving real answer content.
     _COT_HEADER_PATTERNS = [
-        # English scaffolding
+        # English scaffolding headers
         re.compile(r"^Constraints?:\s*\n", re.MULTILINE | re.IGNORECASE),
         re.compile(r"^Candidates?:\s*\n", re.MULTILINE | re.IGNORECASE),
         re.compile(r"^Verification(?: table)?:\s*\n", re.MULTILINE | re.IGNORECASE),
@@ -287,23 +304,38 @@ def _strip_cot_artifacts(text: str, intent: "Intent | None") -> str:
         re.compile(r"^Reasoning:\s*\n", re.MULTILINE | re.IGNORECASE),
         re.compile(r"^Analysis:\s*\n", re.MULTILINE | re.IGNORECASE),
         re.compile(r"^Think(ing| step):\s*\n", re.MULTILINE | re.IGNORECASE),
-        # Multi-line scaffold blocks (header + indented body before final answer)
+        # English multi-line scaffold blocks (header + numbered/dash body)
         re.compile(
             r"^(?:Constraints?|Candidates?|Verification|Analysis|Reasoning):\s*\n"
+            r"(?:[ \t]*[-\d\.].+\n)+",
+            re.MULTILINE | re.IGNORECASE,
+        ),
+        # Russian scaffolding headers
+        re.compile(r"^Ограничения:\s*\n", re.MULTILINE | re.IGNORECASE),
+        re.compile(r"^Кандидаты:\s*\n", re.MULTILINE | re.IGNORECASE),
+        re.compile(r"^Верификация(?: таблица)?:\s*\n", re.MULTILINE | re.IGNORECASE),
+        re.compile(r"^Проверка:\s*\n", re.MULTILINE | re.IGNORECASE),
+        re.compile(r"^Рассуждение:\s*\n", re.MULTILINE | re.IGNORECASE),
+        re.compile(r"^Анализ:\s*\n", re.MULTILINE | re.IGNORECASE),
+        re.compile(r"^Шаг за шагом:\s*\n", re.MULTILINE | re.IGNORECASE),
+        # Russian multi-line scaffold blocks
+        re.compile(
+            r"^(?:Ограничения|Кандидаты|Верификация|Проверка|Рассуждение|Анализ):\s*\n"
             r"(?:[ \t]*[-\d\.].+\n)+",
             re.MULTILINE | re.IGNORECASE,
         ),
     ]
 
     result = text
-    for pattern in _COT_HEADER_PATTERNS:
-        result = pattern.sub("", result)
+    for _ in range(3):
+        prev = result
+        for pattern in _COT_HEADER_PATTERNS:
+            result = pattern.sub("", result)
+        if result == prev:
+            break
 
-    # Collapse blank lines left behind by removals
     result = re.sub(r"\n{3,}", "\n\n", result).strip()
-
     return result if result.strip() else text
-
 
 def _truncate(text: str, lang: str) -> tuple[str, bool]:
     if len(text) <= _TELEGRAM_MAX_CHARS:
