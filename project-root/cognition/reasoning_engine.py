@@ -28,23 +28,41 @@ class ReasoningStrategy:
 _STRATEGY_MATRIX: dict[tuple[str, str], ReasoningStrategy] = {
 
     # ── QUESTION ─────────────────────────────────────────
+    # instruction_prefix must NOT trigger constraint-listing or candidate-matching
+    # CoT patterns — those leak into user-facing output (audit §13.3).
+    # Graceful exit rule is mandatory: if you don't know, say so directly.
+    # Never simulate a search loop or list internal reasoning steps.
     (Intent.QUESTION, Tier.FAST): ReasoningStrategy(
         mode=ReasoningMode.DIRECT,
         temperature=0.3,
-        instruction_prefix="",
+        instruction_prefix=(
+            "Answer directly and concisely. "
+            "If you don't know or aren't sure — say so in one sentence. "
+            "Never list internal reasoning steps."
+        ),
         max_reasoning_steps=1,
     ),
     (Intent.QUESTION, Tier.GENERAL): ReasoningStrategy(
-        mode=ReasoningMode.CHAIN_OF_THOUGHT,
+        mode=ReasoningMode.DIRECT,
         temperature=0.4,
-        instruction_prefix="Think carefully, then answer:",
-        max_reasoning_steps=3,
+        instruction_prefix=(
+            "Answer directly. "
+            "If you don't know — say so clearly and briefly. "
+            "Do not simulate a search process or list candidates internally. "
+            "Do not show reasoning steps — only the final answer."
+        ),
+        max_reasoning_steps=2,
     ),
     (Intent.QUESTION, Tier.HEAVY): ReasoningStrategy(
-        mode=ReasoningMode.CHAIN_OF_THOUGHT,
+        mode=ReasoningMode.DIRECT,
         temperature=0.3,
-        instruction_prefix="Think carefully, then answer:",
-        max_reasoning_steps=5,
+        instruction_prefix=(
+            "Answer directly and accurately. "
+            "If you are not confident — state your uncertainty explicitly. "
+            "Do not list constraints, candidates, or verification steps. "
+            "Show only the final answer, not the reasoning process."
+        ),
+        max_reasoning_steps=3,
     ),
 
     # ── CODE ─────────────────────────────────────────────
