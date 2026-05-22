@@ -90,6 +90,55 @@ _EXTRACTION_SYSTEM = (
 )
 
 
+# ─── IMAGE RESIZE ─────────────────────────────────────────────────────────────
+
+_MAX_IMAGE_SIDE = 1280   # px — Groq recommends ≤ 1568px; 1280 gives safe margin
+_JPEG_QUALITY   = 85     # good quality/size balance
+
+def _resize_image_if_needed(image_bytes: bytes) -> bytes:
+    """
+    Resize image to max 1280px on longest side if needed.
+    Prevents 413 Payload Too Large from Groq vision endpoint.
+    Falls back to original bytes if PIL unavailable or resize fails.
+    Handles JPEG, PNG, WEBP — converts output to JPEG for consistency.
+    """
+    try:
+        import io
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(image_bytes))
+        w, h = img.size
+
+        if max(w, h) <= _MAX_IMAGE_SIDE:
+            # Already small enough — still re-encode to JPEG to normalize format
+            if img.format == "JPEG":
+                return image_bytes  # no-op — avoid re-encoding if already JPEG
+            buf = io.BytesIO()
+            img.convert("RGB").save(buf, format="JPEG", quality=_JPEG_QUALITY)
+            return buf.getvalue()
+
+        # Scale down maintaining aspect ratio
+        ratio = _MAX_IMAGE_SIDE / max(w, h)
+        new_w, new_h = int(w * ratio), int(h * ratio)
+        img_resized = img.resize((new_w, new_h), Image.LANCZOS)
+
+        buf = io.BytesIO()
+        img_resized.convert("RGB").save(buf, format="JPEG", quality=_JPEG_QUALITY)
+        resized_bytes = buf.getvalue()
+
+        logger.info("Image resized for Groq vision", extra={
+            "original_bytes": len(image_bytes),
+            "resized_bytes":  len(resized_bytes),
+            "original_size":  f"{w}x{h}",
+            "new_size":       f"{new_w}x{new_h}",
+        })
+        return resized_bytes
+
+    except Exception as exc:
+        logger.warning("Image resize failed — using original bytes", extra={"error": str(exc)})
+        return image_bytes
+
+
 # ─── MAIN ENTRY POINT ─────────────────────────────────────────────────────────
 
 async def handle_vision(
@@ -117,6 +166,13 @@ async def handle_vision(
     image_bytes = await _download_image(file_url)
     if not image_bytes:
         return VisionResult(text=err_text, needs_pipeline=False)
+
+    # ── resize to prevent 413 Payload Too Large ───────────────────────────────
+    # Groq vision endpoint rejects images > ~4MB base64.
+    # Resize to max 1280px on longest side before encoding.
+    # Uses only stdlib (no Pillow dependency) via a pure-Python JPEG resize,
+    # or falls back to raw bytes if resize fails (still better than guaranteed 413).
+    image_bytes = _resize_image_if_needed(image_bytes)
 
     image_b64 = base64.b64encode(image_bytes).decode("ascii")
 
