@@ -350,7 +350,10 @@ async def _llm_pre_classify(text: str) -> str:
     Always returns "none" on any failure — never raises.
     """
     import json
-    from llm.groq_client import groq_client  # module-level singleton, safe to import here
+
+    from llm.groq_client import (
+        groq_client,  # module-level singleton, safe to import here
+    )
     try:
         prompt = _PRE_CLASSIFIER_PROMPT.format(text=text[:500])
         response = await groq_client.complete(
