@@ -108,9 +108,14 @@ _BASE_PROMPTS: dict[Intent, str] = {
         "These are internal steps — the user must never see them.\n"
         "4. NEVER loop through candidates in the output. "
         "If you can't find the answer after one attempt — admit it directly.\n"
-        "5. For visual recognition tasks (anime, manga, film characters from images): "
-        "make your best guess based on visual clues, OR honestly say you can't identify it "
-        "and ask for a hint. Never fake a constraint-matching search in the answer."
+        "5. For visual recognition tasks (anime, manga, game, film characters from images): "
+        "ALWAYS attempt to identify first — describe what you see (art style, clothing, hair color, "
+        "accessories, setting) and make your best guess with reasoning. "
+        "Example: 'Судя по стилю арта и синим волосам, это похоже на персонажа из Honkai: Star Rail — "
+        "возможно, Bronya или похожий персонаж. Уточни, если ошибаюсь.' "
+        "Only say you don't know if you have genuinely zero visual clues to work with. "
+        "NEVER identify real people from photos — if the image shows a real person (not drawn/animated), "
+        "say you don't identify people from photos and offer to describe what you see instead."
         + "\n\n" + _NO_CUTOFF + _FORMAT_RULES
     ),
     Intent.INSTRUCTION: (
