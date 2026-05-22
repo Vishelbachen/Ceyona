@@ -350,10 +350,7 @@ async def _llm_pre_classify(text: str) -> str:
     Always returns "none" on any failure — never raises.
     """
     import json
-
-    from llm.groq_client import (
-        groq_client,  # module-level singleton, safe to import here
-    )
+    from llm.groq_client import groq_client  # module-level singleton, safe to import here
     try:
         prompt = _PRE_CLASSIFIER_PROMPT.format(text=text[:500])
         response = await groq_client.complete(
@@ -367,6 +364,8 @@ async def _llm_pre_classify(text: str) -> str:
         if raw.startswith("```"):
             raw = raw.lstrip("```json").lstrip("```").rstrip("```").strip()
         data = json.loads(raw)
+        # Model sometimes returns escaped key like '\"pre_intent\"' — normalize all keys
+        data = {k.strip().strip('"').strip("'"): v for k, v in data.items()}
         label = data.get("pre_intent", "none").strip().lower()
         if label in {"weather", "route", "accommodation", "emotional", "search", "none"}:
             logger.info(
