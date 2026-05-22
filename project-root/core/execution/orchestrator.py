@@ -587,10 +587,13 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
         # ── STRICT truth gate ─────────────────────────────────────────────────
         # Guards non-agentic STRICT intents (e.g. future AVAILABILITY, SCHEDULE)
         # that require pre-fetched context before LLM synthesis.
-        # Agentic intents are excluded from _STRICT_INTENTS (see definition above) —
-        # they self-ground via compound_agent and must not be blocked here.
+        # Agentic intents (WEATHER, MAPS, MAPS_POI, MAPS_ROUTE, SEARCH) are
+        # ALWAYS excluded — compound_agent self-grounds by calling tools internally.
+        # The gate must never fire for agentic intents regardless of truth_mode,
+        # because compound has not yet executed at this point.
         has_grounding = bool(_retrieved_context) or bool(tool_output)
-        if truth_mode == TruthMode.STRICT and not has_grounding:
+        _is_agentic = intent_result.intent in _AGENTIC_INTENTS
+        if truth_mode == TruthMode.STRICT and not has_grounding and not _is_agentic:
             logger.info("Truth gate: STRICT intent with no grounding data", extra={
                 "intent": intent_result.intent,
             })
