@@ -12,15 +12,15 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: ~/.cache/pip
           key: lint-${{ runner.os }}-${{ hashFiles('project-root/pyproject.toml') }}
@@ -47,13 +47,13 @@ jobs:
       run:
         working-directory: project-root
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: ~/.cache/pip
           key: arch-${{ runner.os }}-${{ hashFiles('project-root/pyproject.toml') }}
@@ -158,13 +158,13 @@ jobs:
       run:
         working-directory: project-root
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: ~/.cache/pip
           key: test-${{ runner.os }}-${{ hashFiles('project-root/pyproject.toml') }}
@@ -197,7 +197,7 @@ jobs:
             --ignore=tests/test_architecture_contracts.py
 
       - name: Upload coverage report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-xml
           path: project-root/coverage.xml
@@ -209,13 +209,13 @@ jobs:
       run:
         working-directory: project-root
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: ~/.cache/pip
           key: sec-${{ runner.os }}-${{ hashFiles('project-root/pyproject.toml') }}
@@ -239,7 +239,7 @@ jobs:
     needs: [test, architecture, security]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install flyctl
         uses: superfly/flyctl-actions/setup-flyctl@master
@@ -271,7 +271,7 @@ jobs:
     needs: [test, architecture, security]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install flyctl
         uses: superfly/flyctl-actions/setup-flyctl@master
