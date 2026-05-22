@@ -17,6 +17,7 @@ root_packages =
     llm
     external
 include_external_packages = True
+source_paths = .
 
 
 [contract:transport_no_cognition_internals]
