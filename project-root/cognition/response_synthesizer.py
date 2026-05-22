@@ -268,6 +268,7 @@ def _strip_cot_artifacts(text: str, intent: "Intent | None") -> str:
     so that further normalization still applies to the cleaned text.
     """
     import re
+
     from cognition.intent_engine import Intent as _Intent
 
     # MATH CoT is intentional and valuable — never strip it
