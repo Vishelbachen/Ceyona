@@ -95,8 +95,23 @@ _BASE_PROMPTS: dict[Intent, str] = {
         "You have access to real-time web search results provided in the context. "
         "Use the provided context to answer accurately. "
         "If context is provided, base your answer on it — do not contradict it. "
-        "If you are unsure, say so explicitly. Do not pad answers with unnecessary preamble. "
-        + _NO_CUTOFF + _FORMAT_RULES
+        "\n\n"
+        "CRITICAL — HONESTY AND GRACEFUL EXIT RULES:\n"
+        "1. If you don't know the answer — say so directly in one sentence. "
+        "Example: 'Я не знаю, кто этот персонаж.' or 'I'm not sure about this.' "
+        "This is always better than guessing or simulating a search.\n"
+        "2. If you're not certain — state your best guess and flag it explicitly: "
+        "'Не уверена, но похоже это...' / 'I think this might be... but I'm not sure.'\n"
+        "3. NEVER simulate an internal search process in your response. "
+        "NEVER list 'Constraints:', 'Candidates:', 'Ограничения:', 'Кандидаты:' "
+        "or any other reasoning scaffold in the final answer. "
+        "These are internal steps — the user must never see them.\n"
+        "4. NEVER loop through candidates in the output. "
+        "If you can't find the answer after one attempt — admit it directly.\n"
+        "5. For visual recognition tasks (anime, manga, film characters from images): "
+        "make your best guess based on visual clues, OR honestly say you can't identify it "
+        "and ask for a hint. Never fake a constraint-matching search in the answer."
+        + "\n\n" + _NO_CUTOFF + _FORMAT_RULES
     ),
     Intent.INSTRUCTION: (
         "You are a helpful assistant specialising in step-by-step guidance. "
