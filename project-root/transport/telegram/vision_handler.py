@@ -104,6 +104,7 @@ def _resize_image_if_needed(image_bytes: bytes) -> bytes:
     """
     try:
         import io
+
         from PIL import Image
 
         img = Image.open(io.BytesIO(image_bytes))
