@@ -108,6 +108,12 @@ class OrchestratorRequest:
     # Non-binding — passed to intent_engine.classify() for confidence adjustment only.
     # None when analysis is unavailable (DENY path, error). Never authoritative.
     analysis_report: object = None  # meta.analysis.AnalysisReport | None
+    # skip_web_search: True on the vision pipeline path.
+    # Reason: vision_handler sends extracted image description as user_message.
+    # That description is NOT a valid search query — it must never trigger web_search.
+    # Sending image descriptions to Tavily/SerpAPI returns 400 Bad Request.
+    # Set to True by update_handler when forwarding a vision result to orchestrator.
+    skip_web_search: bool = False
 
 
 @dataclass
@@ -549,12 +555,15 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
         # Web search decision belongs to orchestrator — intent is known here,
         # EPK is about to run, authority is unambiguous.
         # Conditions: no retrieval context yet + intent benefits from search
-        # + user has non-zero balance (cheap pre-EPK guard, full check follows).
+        # + user has non-zero balance (cheap pre-EPK guard, full check follows)
+        # + NOT a vision pipeline request (image descriptions are NOT valid
+        #   search queries — sending them to Tavily returns 400 Bad Request).
         _retrieved_context = request.retrieved_context
         if (
             not _retrieved_context
             and intent_result.intent.value not in _NO_SEARCH_INTENTS
             and request.user_balance > 0
+            and not request.skip_web_search
         ):
             try:
                 from external.web_tools import run_tool as _web_run_tool
