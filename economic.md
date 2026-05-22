@@ -1,5 +1,5 @@
 # CEYONA — ECONOMIC MODEL
-Version: 5.1 — Synchronized Edition
+Version: 5.2 — Anti-Drift Edition
 Status: Active Source of Truth
 Supersedes: economic.md (all previous versions)
 
@@ -12,7 +12,7 @@ This document defines ONLY:
 - initial balance and free trial policy
 
 This document MUST NOT define: orchestration, routing policy, model roles, DAG.
-Model roles and tier assignments → models1.md
+Model roles and tier assignments → models.md
 Architecture and DAG → architecture.md
 
 ---
@@ -212,12 +212,14 @@ These MUST NOT be identical. Different purposes, different authorities.
 
 ## 4. COST FUNCTIONS
 
+Two variants — same signature except for one parameter: `estimated_output_tokens` (pre-execution, capped) vs `output_tokens` (post-execution, actual from API response).
+
 ### 4.1 Pre-execution estimate (EPK input)
 
 ```python
 def estimate_cost(
     input_tokens,
-    estimated_output_tokens,
+    estimated_output_tokens,  # capped by MAX_OUTPUT_CAP — conservative bound
     embedding_tokens,
     rerank_tokens,
     tier,
@@ -239,7 +241,7 @@ Uses primary model rates (worst-case). Conservative by design — EPK must not u
 ```python
 def actual_cost(
     input_tokens,
-    output_tokens,
+    output_tokens,            # real token counts from Groq usage response
     embedding_tokens,
     rerank_tokens,
     tier,
@@ -254,13 +256,9 @@ def actual_cost(
     ) / 1_000_000
 ```
 
-Uses real token counts from Groq usage response.
 Currently uses primary model rates per tier.
 When per-route billing is implemented (logging actual model name per request),
 update MODEL_RATES lookup to per-model rates — `actual_cost()` signature unchanged.
-
-**The difference between 4.1 and 4.2:**
-`estimated_output_tokens` (pre, capped) vs `output_tokens` (actual from API response).
 
 ---
 
@@ -444,7 +442,7 @@ When balance reaches $0.00 → EPK returns DENY → user sees balance_exhausted 
 
 This document is synchronized with:
 
-**models1.md** — model names, tier assignments, fallback order:
+**models.md** — model names, tier assignments, fallback order:
 - FAST primary: llama-3.1-8b-instant ✓
 - FAST fallback: gemma2-9b-it REMOVED (deprecated Aug 2025) ✓
 - GENERAL primary: llama-3.3-70b-versatile ✓
@@ -481,5 +479,3 @@ This document is synchronized with:
 - [ ] HF Inference Endpoints pricing if serverless quota exceeded
 - [ ] Batch API discount (50%) — applicable when usage grows, not yet implemented
 - [ ] Prompt caching discount (50% input) — applicable for high cache-hit workloads
-- [ ] Speech billing not yet integrated into usage_meter (audio_seconds, tts_characters)
-- [ ] Safety Gate token billing not yet integrated into usage_meter
