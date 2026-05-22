@@ -249,6 +249,61 @@ def _apply_normalizer(text: str, lang: str) -> str:
         return text
 
 
+def _strip_cot_artifacts(text: str, intent: "Intent | None") -> str:
+    """
+    Step 2.5 (audit §13.3): Strip chain-of-thought reasoning artifacts from final response.
+
+    Problem: reasoning_engine instruction_prefix for MATH/ANALYSIS/QUESTION triggers
+    CoT format ('Constraints: / Candidates: / Verification table:') in the LLM output.
+    For MATH intent this structured format is DESIRED and must pass through.
+    For all other intents it leaks into user-facing text and looks like debug output.
+
+    Rule: MATH intent → pass through (CoT IS the answer).
+          All other intents → strip known CoT header patterns from response start.
+
+    What is stripped: lines that look like internal reasoning headers appearing
+    BEFORE the actual answer. We do NOT strip CoT that's mid-answer or conclusion-level.
+
+    Position: between normalize_telegram (step 2) and structure (step 3),
+    so that further normalization still applies to the cleaned text.
+    """
+    import re
+    from cognition.intent_engine import Intent as _Intent
+
+    # MATH CoT is intentional and valuable — never strip it
+    if intent in (_Intent.MATH, _Intent.EXAM):
+        return text
+
+    # Patterns that are pure reasoning scaffolding, not answer content.
+    # Match only at line START, case-insensitive, followed by colon or colon+space.
+    _COT_HEADER_PATTERNS = [
+        # English scaffolding
+        re.compile(r"^Constraints?:\s*\n", re.MULTILINE | re.IGNORECASE),
+        re.compile(r"^Candidates?:\s*\n", re.MULTILINE | re.IGNORECASE),
+        re.compile(r"^Verification(?: table)?:\s*\n", re.MULTILINE | re.IGNORECASE),
+        re.compile(r"^Step-by-step(?: reasoning)?:\s*\n", re.MULTILINE | re.IGNORECASE),
+        re.compile(r"^Chain of thought:\s*\n", re.MULTILINE | re.IGNORECASE),
+        re.compile(r"^Reasoning:\s*\n", re.MULTILINE | re.IGNORECASE),
+        re.compile(r"^Analysis:\s*\n", re.MULTILINE | re.IGNORECASE),
+        re.compile(r"^Think(ing| step):\s*\n", re.MULTILINE | re.IGNORECASE),
+        # Multi-line scaffold blocks (header + indented body before final answer)
+        re.compile(
+            r"^(?:Constraints?|Candidates?|Verification|Analysis|Reasoning):\s*\n"
+            r"(?:[ \t]*[-\d\.].+\n)+",
+            re.MULTILINE | re.IGNORECASE,
+        ),
+    ]
+
+    result = text
+    for pattern in _COT_HEADER_PATTERNS:
+        result = pattern.sub("", result)
+
+    # Collapse blank lines left behind by removals
+    result = re.sub(r"\n{3,}", "\n\n", result).strip()
+
+    return result if result.strip() else text
+
+
 def _truncate(text: str, lang: str) -> tuple[str, bool]:
     if len(text) <= _TELEGRAM_MAX_CHARS:
         return text, False
@@ -299,6 +354,7 @@ def synthesize(inp: SynthesisInput) -> SynthesisResult:
     # ── normal pipeline ───────────────────────────────────────────────────────
     text = _assemble(inp.raw_text)
     text = _normalize_for_telegram(text)
+    text = _strip_cot_artifacts(text, inp.intent)   # §13.3: remove CoT scaffolding for non-MATH
     text = _structure(text, inp.intent)
     text = _format(text)
     text = _apply_correction(text)
