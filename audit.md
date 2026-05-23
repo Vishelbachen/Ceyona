@@ -132,11 +132,24 @@
 
 **Причина:** `web_tools._search()` передавал user message в search provider as-is без реврайта.
 
-**Решение:**
-- `external/web_tools.py` — добавлена функция `_rewrite_search_query()`: семантический классификатор **KNOWN_ENTITY vs DESCRIPTIVE_SEARCH**. Один prompt к llama-3.1-8b-instant (FAST tier, max_tokens=30, temperature=0.0) — LLM определяет, знает ли пользователь точное название. KNOWN_ENTITY → запрос передаётся as-is (или переводится на английский). DESCRIPTIVE_SEARCH → конвертируется в краткий английский keyword query (3-8 слов) по уникальным признакам: роль, отношения, жанр, год, сеттинг. Никаких hardcoded списков слов — классификация полностью семантическая, работает на всех 75 языках. Fallback на оригинальный запрос при любой ошибке (non-blocking).
-- `cognition/intent_engine.py` — SEARCH prompt: удалена ложная инструкция «3 search rounds» (compound — синтезатор, не агент, повторный вызов search невозможен). Заменена на «SEARCH RESULTS SELECTION»: выбирать из кандидатов в ## CONTEXT, не генерировать, при неоднозначности предлагать top 2-3, запрещено галлюцинировать тайтлы.
+**Решение (финальная архитектура):**
 
-**Архитектурное соответствие:** rewrite живёт в retrieval path (web_tools → search_service), не нарушает §26. Новый module не создан. llama-3.1-8b-instant используется по аналогии с `_extract_poi_parts_via_llm` и `_extract_route_endpoints_via_llm` — паттерн уже существует в кодовой базе.
+**`cognition/intent_engine.py`:**
+- Добавлена функция `_understand_query(text) -> str`: семантический классификатор **KNOWN_ENTITY vs DESCRIPTIVE_SEARCH**. Один prompt к llama-3.1-8b-instant (FAST tier, max_tokens=30, temperature=0.0) — LLM определяет, знает ли пользователь точное название. KNOWN_ENTITY → запрос as-is. DESCRIPTIVE_SEARCH → краткий английский keyword query (3-8 слов) по уникальным признакам: роль, отношения, жанр, год, сеттинг. Никаких hardcoded списков слов — работает на всех 75 языках.
+- `_understand_query()` вызывается в `classify()` **до** `_build_result()` — только для SEARCH intent (все три пути: pre_label route/accommodation/search, embedding path).
+- `_build_result()` остаётся чистым структурным билдером: принимает готовый `query`, упаковывает в `IntentResult`. Никакой логики, никакого `if SEARCH` внутри.
+- Удалён keyword fallback (`_WEATHER_KW`, `_SEARCH_KW`) — дублировал LLM pre-classifier и ломался на языках вне списка.
+- SEARCH prompt очищен: убран перегруженный блок «HOW TO ANSWER» (8 пунктов — микро-оркестратор внутри промпта). Оставлены 4 правила: использовать только ## CONTEXT, не галлюцинировать, при неоднозначности предлагать top 2-3, если ничего не нашлось — сказать честно.
+- Удалена ложная инструкция «3 search rounds» (compound — синтезатор, повторный вызов search невозможен).
+
+**`external/web_tools.py`:**
+- `_rewrite_search_query()` удалена — rewrite перенесён на правильный уровень (intent classification, не retrieval execution).
+- `_search()` получает уже готовый query из `tool_params["query"]` — никакой трансформации в web_tools.
+
+**Архитектурное соответствие:**
+- Query understanding живёт в classify() — единственное правильное место (§2.1, §2.5).
+- `_build_result` — pure structural builder, без логики и LLM-зависимостей.
+- Новых модулей не создано. llama-3.1-8b-instant — паттерн существующий в кодовой базе (`_extract_poi_parts_via_llm`, `_extract_route_endpoints_via_llm`).
 
 ---
 
@@ -222,7 +235,7 @@
 |---|---|---|---|
 | 13.3 | 🟡 | CoT артефакты (остаточные случаи) | response_synthesizer, vision_handler |
 | 13.4 | 🟡 | Classifier теряет контекст на follow-up | intent_engine._llm_pre_classify |
-| 13.5 | ✅ | SEARCH query rewriter — ЗАКРЫТ (май 2026) | external/web_tools.py, cognition/intent_engine.py |
+| 13.5 | ✅ | SEARCH query understanding (_understand_query) — ЗАКРЫТ (май 2026) | cognition/intent_engine.py, external/web_tools.py |
 | 17.2 | 🟡 | TruthMode как flag, не verification layer | execution_policy_kernel |
 | 13.7 | 🟢 | Грузинский i18n fallback некорректен | i18n/strings.py |
 
