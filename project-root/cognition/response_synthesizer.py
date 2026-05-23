@@ -39,6 +39,7 @@ class SynthesisInput:
     denied: bool = False
     deny_reason: str = ""
     lang: str = "en"
+    from_vision: bool = False   # True when input originated from vision_handler — forces CoT stripping
 
 
 @dataclass(frozen=True)
@@ -249,7 +250,7 @@ def _apply_normalizer(text: str, lang: str) -> str:
         return text
 
 
-def _strip_cot_artifacts(text: str, intent: "Intent | None") -> str:
+def _strip_cot_artifacts(text: str, intent: "Intent | None", from_vision: bool = False) -> str:
     """
     Step 2.5 (audit §13.3): Strip chain-of-thought reasoning artifacts from final response.
 
@@ -260,13 +261,19 @@ def _strip_cot_artifacts(text: str, intent: "Intent | None") -> str:
     B) Partial header stripping — remove CoT section headers while keeping real content.
 
     Rule: MATH/EXAM intent → pass through (CoT IS the answer for these).
+    Exception: from_vision=True → always strip CoT even for MATH/EXAM,
+    because vision tasks (image description, OCR, recognition) classified as MATH
+    due to content features must never leak constraint-solving scaffolding.
     """
     import re
 
     from cognition.intent_engine import Intent as _Intent
 
-    # MATH and EXAM CoT is intentional — never strip it
-    if intent in (_Intent.MATH, _Intent.EXAM):
+    # MATH and EXAM CoT is intentional — never strip it.
+    # Exception: if the request came from vision pipeline, it may have been
+    # misclassified as MATH due to image content (formulas, tables, etc.).
+    # Vision tasks are description/extraction tasks — CoT must always be stripped.
+    if intent in (_Intent.MATH, _Intent.EXAM) and not from_vision:
         return text
 
     # ── Mode A: Pure CoT loop detection ──────────────────────────────────────
@@ -387,7 +394,7 @@ def synthesize(inp: SynthesisInput) -> SynthesisResult:
     # ── normal pipeline ───────────────────────────────────────────────────────
     text = _assemble(inp.raw_text)
     text = _normalize_for_telegram(text)
-    text = _strip_cot_artifacts(text, inp.intent)   # §13.3: remove CoT scaffolding for non-MATH
+    text = _strip_cot_artifacts(text, inp.intent, from_vision=inp.from_vision)   # §13.3: remove CoT scaffolding for non-MATH
     text = _structure(text, inp.intent)
     text = _format(text)
     text = _apply_correction(text)
