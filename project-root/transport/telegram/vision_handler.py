@@ -112,6 +112,7 @@ def _resize_image_if_needed(image_bytes: bytes) -> bytes:
     """
     try:
         import io
+
         from PIL import Image
 
         def _encode(img: Image.Image, max_side: int, quality: int) -> bytes:
