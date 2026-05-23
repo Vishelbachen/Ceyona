@@ -21,59 +21,11 @@ async def _weather(query: str, lang: str = "en") -> str:
     return weather_service.format_current(data, lang=lang)
 
 
-async def _rewrite_search_query(query: str) -> str:
-    """
-    Semantic query planner for web search.
-
-    Classifies user intent as one of two modes:
-      KNOWN_ENTITY      — user knows the exact name → pass query as-is
-      DESCRIPTIVE_SEARCH — user describes something without knowing its name
-                           → rewrite into a concise English keyword query
-
-    No hardcoded word lists. Classification is fully semantic — the LLM
-    determines whether the user knows the name, regardless of language or phrasing.
-
-    Uses llama-3.1-8b-instant (FAST tier) — single bounded call, cheap.
-    Falls back to original query on any failure (non-blocking).
-    """
-    try:
-        from llm.groq_client import groq_client
-        prompt = (
-            "You are an intent-aware query planner for a web search engine.\n\n"
-            "Your task: determine whether the user knows the exact name of what they are looking for.\n\n"
-            "Case 1 — KNOWN_ENTITY: the user knows the exact name (title, person, place, product).\n"
-            "→ Output the search query as-is (translate to English if needed, keep the name intact).\n\n"
-            "Case 2 — DESCRIPTIVE_SEARCH: the user describes something WITHOUT knowing its name.\n"
-            "→ Convert the description into a concise English keyword query (3-8 words).\n"
-            "→ Focus on unique identifying traits: role, relationships, genre, year, setting.\n"
-            "→ Remove all conversational filler. Output ONLY the final search query.\n\n"
-            "Do not explain your reasoning. Output ONLY the final search query, nothing else.\n\n"
-            f"User query: {query}"
-        )
-        response = await groq_client.complete(
-            model="llama-3.1-8b-instant",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=30,
-            temperature=0.0,
-        )
-        rewritten = response.text.strip().strip('"').strip("'")
-        if rewritten and len(rewritten) < 120:
-            if rewritten.lower() != query.lower():
-                logger.info(
-                    "search query rewritten",
-                    extra={"original": query[:80], "rewritten": rewritten},
-                )
-            return rewritten
-    except Exception as exc:
-        logger.warning("_rewrite_search_query failed", extra={"error": str(exc)})
-
-    return query
-
-
 async def _search(query: str, lang: str = "en") -> str:
+    # query is already rewritten by _understand_query() in intent_engine.classify().
+    # web_tools receives the final search query — no transformation needed here.
     from external.search import search_service
-    rewritten = await _rewrite_search_query(query)
-    results = await search_service.search(rewritten, lang=lang)
+    results = await search_service.search(query, lang=lang)
     return search_service.format_results(results, lang=lang)
 
 
