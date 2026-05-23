@@ -194,6 +194,9 @@ async def handle_message(
         update = dict(update)
         _vision_text_override  = vision_result.text
         _vision_intent_result  = vision_result.intent_result
+        # For history: save what the user actually sent (caption), not the vision dump.
+        # Vision dump can be thousands of tokens — saving it causes 413 on next requests.
+        _vision_caption_for_history = caption if caption.strip() else "[фото]"
 
     # ── voice/audio handling (ASR → transcript → pipeline) ───────────────────
     _is_voice_input    = False
@@ -532,7 +535,13 @@ async def handle_message(
     # ── save history ──────────────────────────────────────────────────────────
     if history_store is not None and not result.denied:
         try:
-            await history_store.append(user_id, "user", text)
+            # Vision path: save caption (what user actually typed), not the vision extraction dump.
+            # Saving the full vision text (potentially 1000+ tokens) into history causes
+            # 413 Payload Too Large on subsequent requests — audit §13.2 / vision history fix.
+            _user_message_for_history = (
+                locals().get("_vision_caption_for_history") or text
+            )
+            await history_store.append(user_id, "user", _user_message_for_history)
             if result.text:
                 await history_store.append(user_id, "assistant", result.text)
         except Exception as exc:
