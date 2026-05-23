@@ -21,9 +21,77 @@ async def _weather(query: str, lang: str = "en") -> str:
     return weather_service.format_current(data, lang=lang)
 
 
+async def _rewrite_search_query(query: str) -> str:
+    """
+    Detect descriptive queries (no exact name known) and rewrite into
+    a short English keyword query before hitting the search provider.
+
+    Activation condition: query contains description markers — phrases like
+    "я забыла", "не помню", "там где", "про то как", "примерно", etc.
+    No activation for direct lookup queries ("погода в Москве", "курс доллара").
+
+    Uses llama-3.1-8b-instant (FAST tier) — single bounded call, cheap.
+    Falls back to original query on any failure (non-blocking).
+    """
+    _DESCRIPTION_MARKERS = (
+        # Russian
+        "забы", "не помню", "не знаю название", "там где", "про то как",
+        "про то что", "примерно", "вроде как", "что-то про", "аниме про",
+        "фильм про", "сериал про", "книга про", "игра про", "музыка где",
+        "песня где", "там есть", "главный герой", "главная героиня",
+        "там где", "ищу аниме", "ищу фильм", "ищу сериал", "ищу книгу",
+        # English
+        "i forgot", "i don't remember", "can't remember", "something about",
+        "anime where", "movie where", "show where", "book where",
+        "anime about", "movie about", "show about",
+        "main character", "main hero", "the one where",
+    )
+
+    q_lower = query.lower()
+    needs_rewrite = any(marker in q_lower for marker in _DESCRIPTION_MARKERS)
+    if not needs_rewrite:
+        return query
+
+    try:
+        from llm.groq_client import groq_client
+        prompt = (
+            "Rewrite the following user query into a SHORT English keyword search query "
+            "(3-8 words max, no filler words, no articles). "
+            "Rules:\n"
+            "1. Translate to English.\n"
+            "2. Keep only entities + key descriptors (genre, year, character type, etc.).\n"
+            "3. Add a type hint if clear: anime, movie, book, song, game, etc.\n"
+            "4. If a year or country is mentioned — include it.\n"
+            "5. Output ONLY the rewritten query, nothing else. No quotes, no explanation.\n\n"
+            "Examples:\n"
+            "  'я забыла аниме, там внучка якудзы и охранник' → 'yakuza granddaughter bodyguard anime'\n"
+            "  'фильм где корабль тонет в начале 20 века' → 'ship sinking 1900s movie'\n"
+            "  'песня где мужчина поёт про дождь и одиночество 2020' → 'rain loneliness male singer 2020'\n\n"
+            f"Query: {query}"
+        )
+        response = await groq_client.complete(
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=30,
+            temperature=0.0,
+        )
+        rewritten = response.text.strip().strip('"').strip("'")
+        if rewritten and len(rewritten) < 120:
+            logger.info(
+                "search query rewritten",
+                extra={"original": query[:80], "rewritten": rewritten},
+            )
+            return rewritten
+    except Exception as exc:
+        logger.warning("_rewrite_search_query failed", extra={"error": str(exc)})
+
+    return query
+
+
 async def _search(query: str, lang: str = "en") -> str:
     from external.search import search_service
-    results = await search_service.search(query, lang=lang)
+    rewritten = await _rewrite_search_query(query)
+    results = await search_service.search(rewritten, lang=lang)
     return search_service.format_results(results, lang=lang)
 
 
