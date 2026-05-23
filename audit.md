@@ -1,7 +1,7 @@
 # CEYONA — ARCHITECTURE AUDIT
 **Дата:** май 2026 (обновлён май 2026)
 **Проверено:** architecture.md v8.4, models.md v7.3, economic.md v5.2 + весь runtime код
-**Статус:** 13.1 закрыт. Открыто: 4 UX/качество + 1 архитектурный gap.
+**Статус:** 13.1, 13.5 закрыты. Открыто: 3 UX/качество + 1 архитектурный gap.
 
 Обозначения: ✅ Закрыто | ⚠️ Открыто | 🔴 Критично | 🟡 Средний | 🟢 Низкий
 
@@ -126,13 +126,17 @@
 
 ---
 
-### 🟡 13.5 — SEARCH не переформулирует описательный запрос
+### ✅ 13.5 — ЗАКРЫТ (май 2026)
 
-**Симптом:** «глава якудзы подставляет к дочери охранника» — не находит тайтл.
+**Симптом:** описательный запрос («аниме про внучку якудзы с охранником») → поиск по сырому тексту → нерелевантные результаты.
 
-**Причина:** `web_tools._search()` передаёт user message as-is без keyword rewrite.
+**Причина:** `web_tools._search()` передавал user message в search provider as-is без реврайта.
 
-**Решение:** инструкция в SEARCH system prompt в `intent_engine.py` — переформулировать в keyword query на английском (уже частично есть в prompt, нужно проверить работает ли через новый pipeline).
+**Решение:**
+- `external/web_tools.py` — добавлена функция `_rewrite_search_query()`: семантический классификатор **KNOWN_ENTITY vs DESCRIPTIVE_SEARCH**. Один prompt к llama-3.1-8b-instant (FAST tier, max_tokens=30, temperature=0.0) — LLM определяет, знает ли пользователь точное название. KNOWN_ENTITY → запрос передаётся as-is (или переводится на английский). DESCRIPTIVE_SEARCH → конвертируется в краткий английский keyword query (3-8 слов) по уникальным признакам: роль, отношения, жанр, год, сеттинг. Никаких hardcoded списков слов — классификация полностью семантическая, работает на всех 75 языках. Fallback на оригинальный запрос при любой ошибке (non-blocking).
+- `cognition/intent_engine.py` — SEARCH prompt: удалена ложная инструкция «3 search rounds» (compound — синтезатор, не агент, повторный вызов search невозможен). Заменена на «SEARCH RESULTS SELECTION»: выбирать из кандидатов в ## CONTEXT, не генерировать, при неоднозначности предлагать top 2-3, запрещено галлюцинировать тайтлы.
+
+**Архитектурное соответствие:** rewrite живёт в retrieval path (web_tools → search_service), не нарушает §26. Новый module не создан. llama-3.1-8b-instant используется по аналогии с `_extract_poi_parts_via_llm` и `_extract_route_endpoints_via_llm` — паттерн уже существует в кодовой базе.
 
 ---
 
@@ -218,7 +222,7 @@
 |---|---|---|---|
 | 13.3 | 🟡 | CoT артефакты (остаточные случаи) | response_synthesizer, vision_handler |
 | 13.4 | 🟡 | Classifier теряет контекст на follow-up | intent_engine._llm_pre_classify |
-| 13.5 | 🟡 | SEARCH не переформулирует описательный запрос | web_tools._search, intent_engine SEARCH prompt |
+| 13.5 | ✅ | SEARCH query rewriter — ЗАКРЫТ (май 2026) | external/web_tools.py, cognition/intent_engine.py |
 | 17.2 | 🟡 | TruthMode как flag, не verification layer | execution_policy_kernel |
 | 13.7 | 🟢 | Грузинский i18n fallback некорректен | i18n/strings.py |
 
