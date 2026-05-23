@@ -37,9 +37,11 @@ class TestNoSearchIntents:
             assert intent in _NO_SEARCH_INTENTS, f"{intent} must be in _NO_SEARCH_INTENTS"
 
     def test_tool_intents_excluded(self):
-        """Orchestrator-owned tool intents must not trigger background web search."""
+        """Agentic tool intents route via _AGENTIC_TOOL_MAP (orchestrator-owned), not background search."""
+        from core.execution.orchestrator import _AGENTIC_TOOL_MAP
         for intent in ("weather", "maps", "maps_route", "maps_poi", "search"):
-            assert intent in _NO_SEARCH_INTENTS, f"{intent} must be in _NO_SEARCH_INTENTS"
+            assert intent in _AGENTIC_TOOL_MAP, f"{intent} must be in _AGENTIC_TOOL_MAP"
+            assert intent not in _NO_SEARCH_INTENTS, f"{intent} must not be in _NO_SEARCH_INTENTS"
 
 
 # ─── OrchestratorRequest: vision_intent field ─────────────────────────────────
@@ -163,17 +165,17 @@ class TestUnifiedAgenticPath:
         )
 
     def test_get_route_in_compound_tools(self):
-        """compound_agent must declare get_route as a supported tool."""
-        from agents.compound_agent import _TOOL_SCHEMAS
-        tool_names = [t["function"]["name"] for t in _TOOL_SCHEMAS]
-        assert "get_route" in tool_names, "get_route must be in compound_agent _TOOL_SCHEMAS"
+        """get_route must be declared in orchestrator _AGENTIC_TOOL_MAP (§13.1: compound is synthesizer)."""
+        from core.execution.orchestrator import _AGENTIC_TOOL_MAP
+        assert "maps_route" in _AGENTIC_TOOL_MAP, "maps_route must be in _AGENTIC_TOOL_MAP"
 
     def test_compound_tools_complete(self):
-        """compound_agent must support all four tools."""
-        from agents.compound_agent import _TOOL_SCHEMAS
-        tool_names = {t["function"]["name"] for t in _TOOL_SCHEMAS}
-        expected = {"web_search", "get_weather", "geocode", "get_route"}
-        assert expected == tool_names, f"Expected {expected}, got {tool_names}"
+        """All agentic tool intents must be covered by orchestrator _AGENTIC_TOOL_MAP (§13.1)."""
+        from core.execution.orchestrator import _AGENTIC_TOOL_MAP
+        expected = {"search", "weather", "maps", "maps_poi", "maps_route"}
+        assert expected == set(_AGENTIC_TOOL_MAP.keys()), (
+            f"Expected {expected}, got {set(_AGENTIC_TOOL_MAP.keys())}"
+        )
 
     def test_strict_intents_empty_in_orchestrator(self):
         """
