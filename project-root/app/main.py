@@ -293,3 +293,173 @@ async def providers(request: Request):
     status["ALLOWED_ORIGINS"] = "ok" if settings.allowed_origins else "missing"
 
     return status
+
+
+@app.get("/debug")
+async def debug() -> dict:
+    """
+    Live functional checks for every external integration.
+
+    Unlike /providers (key presence only), /debug actually calls each service
+    and reports the real error when something fails.
+
+    Checks:
+      - compound-mini  : complete_with_tools() with a trivial prompt
+      - compound       : complete_with_tools() with a trivial prompt
+      - search         : Tavily → SerpAPI → SearXNG with a known query
+      - weather        : OpenWeatherMap for "London"
+      - maps/geocode   : Mapbox geocode for "Red Square, Moscow"
+      - maps/route     : Mapbox route from Moscow to Saint Petersburg
+      - embedding      : HuggingFace BGE-large embed of a short string
+      - groq/llm       : plain complete() with llama-3.1-8b-instant
+    """
+    import time
+    import traceback
+
+    from external.maps import maps_service
+    from external.search import search_service
+    from external.weather import weather_service
+    from llm.groq_client import groq_client
+    from llm.model_router import DEEP_AGENT_MODEL, FAST_AGENT_MODEL
+
+    results: dict[str, dict] = {}
+
+    # ── helper ────────────────────────────────────────────────────────────────
+    def _ok(detail: str = "") -> dict:
+        return {"status": "ok", "detail": detail}
+
+    def _err(exc: Exception) -> dict:
+        return {
+            "status": "error",
+            "error": str(exc),
+            "type": type(exc).__name__,
+            "trace": traceback.format_exc(limit=5),
+        }
+
+    # ── groq plain LLM ────────────────────────────────────────────────────────
+    try:
+        t0 = time.monotonic()
+        resp = await groq_client.complete(
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "user", "content": "Reply with the single word: OK"}],
+            max_tokens=10,
+            temperature=0.0,
+        )
+        results["groq_llm"] = _ok(f"{resp.text.strip()!r} in {time.monotonic()-t0:.2f}s")
+    except Exception as exc:
+        results["groq_llm"] = _err(exc)
+
+    # ── compound-mini ─────────────────────────────────────────────────────────
+    _PING_TOOLS = [{
+        "type": "function",
+        "function": {
+            "name": "ping",
+            "description": "Test tool — always call this immediately.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    }]
+    try:
+        t0 = time.monotonic()
+        resp = await groq_client.complete_with_tools(
+            model=FAST_AGENT_MODEL,
+            messages=[{"role": "user", "content": "Call the ping tool now."}],
+            tools=_PING_TOOLS,
+            max_tokens=64,
+            temperature=0.0,
+        )
+        detail = f"finish_type={type(resp).__name__} in {time.monotonic()-t0:.2f}s"
+        results["compound_mini"] = _ok(detail)
+    except Exception as exc:
+        results["compound_mini"] = _err(exc)
+
+    # ── compound (deep) ───────────────────────────────────────────────────────
+    try:
+        t0 = time.monotonic()
+        resp = await groq_client.complete_with_tools(
+            model=DEEP_AGENT_MODEL,
+            messages=[{"role": "user", "content": "Call the ping tool now."}],
+            tools=_PING_TOOLS,
+            max_tokens=64,
+            temperature=0.0,
+        )
+        detail = f"finish_type={type(resp).__name__} in {time.monotonic()-t0:.2f}s"
+        results["compound_deep"] = _ok(detail)
+    except Exception as exc:
+        results["compound_deep"] = _err(exc)
+
+    # ── web search ────────────────────────────────────────────────────────────
+    try:
+        t0 = time.monotonic()
+        hits = await search_service.search(query="current date", lang="en", num=3)
+        detail = f"{len(hits)} results in {time.monotonic()-t0:.2f}s"
+        if hits:
+            detail += f" | first: {hits[0].get('title', '')[:60]}"
+        results["search"] = _ok(detail) if hits else {
+            "status": "warning",
+            "detail": "all providers returned 0 results",
+        }
+    except Exception as exc:
+        results["search"] = _err(exc)
+
+    # ── weather ───────────────────────────────────────────────────────────────
+    try:
+        t0 = time.monotonic()
+        data = await weather_service.get_current(city="London", lang="en")
+        if data:
+            temp = data.get("main", {}).get("temp", "?")
+            desc = data.get("weather", [{}])[0].get("description", "?")
+            results["weather"] = _ok(f"London: {temp}°C, {desc} in {time.monotonic()-t0:.2f}s")
+        else:
+            results["weather"] = {"status": "error", "error": "get_current returned None"}
+    except Exception as exc:
+        results["weather"] = _err(exc)
+
+    # ── maps geocode ──────────────────────────────────────────────────────────
+    try:
+        t0 = time.monotonic()
+        feature = await maps_service.geocode(query="Red Square, Moscow", lang="en")
+        if feature:
+            coords = feature.get("geometry", {}).get("coordinates", "?")
+            results["maps_geocode"] = _ok(f"coords={coords} in {time.monotonic()-t0:.2f}s")
+        else:
+            results["maps_geocode"] = {"status": "error", "error": "geocode returned None"}
+    except Exception as exc:
+        results["maps_geocode"] = _err(exc)
+
+    # ── maps route ────────────────────────────────────────────────────────────
+    try:
+        t0 = time.monotonic()
+        route = await maps_service.get_route(
+            origin="Moscow, Russia",
+            destination="Saint Petersburg, Russia",
+            lang="en",
+        )
+        if route:
+            results["maps_route"] = _ok(f"route ok in {time.monotonic()-t0:.2f}s")
+        else:
+            results["maps_route"] = {"status": "error", "error": "get_route returned None"}
+    except Exception as exc:
+        results["maps_route"] = _err(exc)
+
+    # ── HuggingFace embedding ─────────────────────────────────────────────────
+    try:
+        from llm.hf_client import BGE_LARGE, hf_client
+        t0 = time.monotonic()
+        vecs = await hf_client.embed(["test embedding ping"], model=BGE_LARGE)
+        if vecs and vecs[0]:
+            results["embedding"] = _ok(f"dim={len(vecs[0])} in {time.monotonic()-t0:.2f}s")
+        else:
+            results["embedding"] = {"status": "error", "error": "embed returned empty vector"}
+    except Exception as exc:
+        results["embedding"] = _err(exc)
+
+    # ── summary ───────────────────────────────────────────────────────────────
+    ok_count  = sum(1 for v in results.values() if v.get("status") == "ok")
+    err_count = sum(1 for v in results.values() if v.get("status") == "error")
+    results["_summary"] = {
+        "ok": ok_count,
+        "error": err_count,
+        "warning": len(results) - 1 - ok_count - err_count,
+    }
+
+    return results
