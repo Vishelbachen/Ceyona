@@ -213,12 +213,9 @@ _BASE_PROMPTS: dict[Intent, str] = {
         "\n\n"
         "RULES:\n"
         "1. Use ONLY what is in ## CONTEXT — never invent facts, titles, names, or routes.\n"
-        "2. If the user was looking for a specific title (anime, movie, book, song, game): "
-        "pick the best match from the results. If multiple are plausible — list 2-3 briefly "
-        "and let the user confirm. If nothing matches — say so honestly.\n"
+        "2. If nothing in the context matches the query — say so honestly.\n"
         "3. If sources conflict or are insufficient — say so. "
-        "'I could not find this in the results' is always better than a guess.\n"
-        "4. End with 1-2 useful links if they add value. Never list all sources mechanically."
+        "'I could not find this in the results' is always better than a guess."
         + _NO_CUTOFF + _FORMAT_RULES
     ),
     Intent.MAPS_POI: (
@@ -374,9 +371,60 @@ async def _understand_query(text: str) -> str:
 
 
 # ── LLM pre-classifier (language-agnostic, all 75 lingua languages) ───────
-    # Replaces hardcoded signal tuples. One fast LLM call covers any language.
-    # Failure → "none" → falls through to embedding classifier (never blocks).
-    #
+# Replaces hardcoded signal tuples. One fast LLM call covers any language.
+# Failure → "none" → falls through to embedding classifier (never blocks).
+_LLM_PRE_CLASSIFY_PROMPT = (
+    "Classify the user message into one of these categories:\n"
+    "- \"weather\"       — asking about weather conditions\n"
+    "- \"search\"        — looking for a place, route, accommodation, or web search\n"
+    "- \"emotional\"     — expressing emotions, frustration, or seeking support\n"
+    "- \"none\"          — anything else\n\n"
+    "Output ONLY the category label. No explanation.\n\n"
+    "Message: {text}\n"
+    "{history_block}"
+)
+
+
+async def _llm_pre_classify(text: str, history_context: str = "") -> str:
+    """
+    Fast LLM-based pre-classifier. Returns one of:
+    'weather' | 'search' | 'emotional' | 'none'
+    Always returns a string. Falls back to 'none' on any failure.
+    """
+    try:
+        from llm.groq_client import groq_client
+        history_block = f"\nRecent context:\n{history_context}" if history_context else ""
+        prompt = _LLM_PRE_CLASSIFY_PROMPT.format(text=text[:500], history_block=history_block)
+        response = await groq_client.complete(
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=5,
+            temperature=0.0,
+        )
+        label = response.text.strip().lower().strip('"').strip("'")
+        if label in ("weather", "search", "emotional", "none"):
+            return label
+    except Exception as exc:
+        logger.warning("_llm_pre_classify failed", extra={"error": str(exc)})
+    return "none"
+
+
+async def classify(
+    text: str,
+    lang: str,
+    supabase=None,
+    hf_client=None,
+    conversation_history: list | None = None,
+    analysis_hints=None,
+) -> IntentResult:
+    """
+    Public classification entry point. Called by orchestrator only.
+    Returns IntentResult with intent, confidence, system_prompt, tool contract.
+    """
+    from meta.analysis import HintType  # local import — avoids circular at module level
+
+    fallback = _build_result(Intent.QUESTION, 0.0, lang, text)
+
     # §13.4 fix: build a 2-turn history context for short follow-up messages.
     # "Вот, нашла" / "Туговатый поиск)" — meaningless without prior context.
     # We pass last 2 assistant turns (not user — assistant tells classifier WHAT was being done).
