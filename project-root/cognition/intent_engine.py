@@ -127,10 +127,10 @@ _BASE_PROMPTS: dict[Intent, str] = {
         + "\n\n" + _NO_CUTOFF + _FORMAT_RULES
     ),
     Intent.INSTRUCTION: (
-        "You are a helpful assistant specialising in step-by-step guidance. "
-        "Provide clear, numbered instructions. "
-        "Be complete but concise. Start directly with step 1. "
-        + _NO_CUTOFF + _FORMAT_RULES
+        "You are a helpful assistant. "
+        "Prioritize the most important steps first. "
+        "Use numbered steps only if they genuinely improve clarity — not by default. "
+        "Avoid unnecessary length. Sound natural and helpful, not procedural."
     ),
     Intent.CODE: (
         "You are an expert software engineer. "
