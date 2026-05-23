@@ -208,43 +208,17 @@ _BASE_PROMPTS: dict[Intent, str] = {
     ),
     Intent.SEARCH: (
         "You are a research assistant with access to live web search results. "
-        "The search results in your context were fetched from the web RIGHT NOW. "
-        "NEVER say you cannot search or that your data is outdated — you have live results. "
-        "NEVER make up information — only use what is in the context. "
+        "The search results in ## CONTEXT were fetched RIGHT NOW using a search query "
+        "derived from the user's message. "
         "\n\n"
-        "SEARCH QUERY REFORMULATION (mandatory — do this before every search call):\n"
-        "If the user describes something (anime plot, book description, event, product, person) "
-        "without naming it — DO NOT search using the user's raw words verbatim. "
-        "Instead reformulate into a SHORT English keyword query (3-6 words max). "
-        "Examples: 'аниме где якудза охраняет дочь' → 'yakuza bodyguard daughter anime'; "
-        "'фильм корабль тонет начало 20 века' → 'Titanic 1997'; "
-        "'дешёвые отели Нью-Йорк' → 'budget hotels New York'.\n"
-        "Use English for all title/factual searches. Use the original language only for "
-        "local-service queries (hotels, restaurants in a specific city).\n"
-        "You have 3 search rounds — if the first fails, try a DIFFERENT query reformulation "
-        "(different keywords, more specific, or add year/country).\n"
-        "\n\n"
-        "HOW TO ANSWER:\n"
-        "1. Read ALL search results in ## CONTEXT carefully.\n"
-        "2. Synthesise the information into a direct, useful answer — do NOT copy-paste snippets.\n"
-        "3. For navigation/route queries: "
-        "CRITICAL — if the sources do not explicitly name a specific bus number, tram, "
-        "metro line, or stop — do NOT invent one. Not even a plausible-sounding one. "
-        "Instead say: 'For exact bus numbers and schedules, check Yandex.Transport or 2GIS.' "
-        "Only mention a route number if a source in ## CONTEXT explicitly states it. "
-        "Example of what NOT to do: 'Bus 27A departs from ul. Perkhorovicha' — "
-        "if that is not in the context, it is hallucination. Do not do this.\n"
-        "4. For hotel/accommodation queries: only name hotels that appear in the sources. "
-        "Do not add hotels from general knowledge. "
-        "Mention the source number (e.g. 'source 2') so the user can verify.\n"
-        "5. For factual queries: give a concise answer, cite the most reliable source.\n"
-        "6. Filter out SEO junk — if a source is clearly low-quality or irrelevant, ignore it.\n"
-        "7. End with 1-2 most useful links if they add value. "
-        "Never list all sources mechanically. Never include links that contain "
-        "garbled characters or non-ASCII symbols in the URL path.\n"
-        "8. If sources conflict or are insufficient, say so honestly and briefly. "
-        "It is always better to say 'I could not find this detail in the sources' "
-        "than to invent a specific fact."
+        "RULES:\n"
+        "1. Use ONLY what is in ## CONTEXT — never invent facts, titles, names, or routes.\n"
+        "2. If the user was looking for a specific title (anime, movie, book, song, game): "
+        "pick the best match from the results. If multiple are plausible — list 2-3 briefly "
+        "and let the user confirm. If nothing matches — say so honestly.\n"
+        "3. If sources conflict or are insufficient — say so. "
+        "'I could not find this in the results' is always better than a guess.\n"
+        "4. End with 1-2 useful links if they add value. Never list all sources mechanically."
         + _NO_CUTOFF + _FORMAT_RULES
     ),
     Intent.MAPS_POI: (
@@ -308,8 +282,14 @@ def _build_result(
     intent: Intent,
     confidence: float,
     lang: str,
-    text: str,
+    query: str,
 ) -> IntentResult:
+    """
+    Pure structural builder. No logic, no LLM, no async.
+    query is the final search term — already resolved by the caller.
+    For SEARCH: caller passes _understand_query() result.
+    For all other intents: caller passes raw text.
+    """
     tool_name = _TOOL_MAP.get(intent, "")
     return IntentResult(
         intent=intent,
@@ -318,7 +298,7 @@ def _build_result(
         requires_retrieval=intent in _NEEDS_RETRIEVAL,
         requires_tools=bool(tool_name),
         tool_name=tool_name,
-        tool_params={"query": text, "lang": lang} if tool_name else {},
+        tool_params={"query": query, "lang": lang} if tool_name else {},
     )
 
 
@@ -339,167 +319,61 @@ _MATH_PATTERN = _re.compile(
 )
 
 
-# ─── LLM PRE-CLASSIFIER ──────────────────────────────────────────────────────
-# Replaces all hardcoded signal tuples (_WEATHER_SIGNALS, _ROUTE_SIGNALS,
-# _ACCOMMODATION_SIGNALS, _EMOTIONAL_SIGNALS).
+# ─── QUERY UNDERSTANDING (SEARCH only) ───────────────────────────────────────
+# Determines whether the user knows the exact name of what they want (KNOWN_ENTITY)
+# or describes something without knowing its name (DESCRIPTIVE_SEARCH).
 #
-# WHY: signal tuples are hardcoded per language. With 75 languages (lingua),
-# full coverage is impossible — any uncovered language causes misclassification.
-# LLM understands semantics in all languages without any language-specific strings.
+# KNOWN_ENTITY:      pass the query as-is (or translate to English).
+# DESCRIPTIVE_SEARCH: rewrite into a concise English keyword query (3-8 words),
+#                     focusing on unique identifying traits: role, relationships,
+#                     genre, year, setting.
 #
-# MODEL: llama-3.1-8b-instant (FAST tier) — low latency, called once per request.
-# POSITION: before embedding classifier, after math regex pre-check.
-#
-# Returns one of:
-#   "weather"       → Intent.WEATHER
-#   "route"         → Intent.SEARCH  (transit info, not Mapbox driving)
-#   "accommodation" → Intent.SEARCH  (anti-hallucination: only SerpAPI sources)
-#   "emotional"     → Intent.EMOTIONAL
-#   "none"          → proceed to embedding classifier
-#
-# Failure policy: any exception or unexpected response → "none" (pass through).
-# Never blocks the pipeline. Pre-check is best-effort, not authoritative.
+# No hardcoded word lists. Fully semantic — works across all 75 lingua languages.
+# Uses llama-3.1-8b-instant (FAST tier). Falls back to original text on failure.
 
-_PRE_CLASSIFIER_PROMPT = (
-    "Classify the intent of the following user message. "
-    "Reply with a JSON object ONLY — no markdown, no explanation:\n"
-    '{{"pre_intent": "<label>"}}\n\n'
-    "Labels (choose exactly one):\n"
-    "- \"weather\"       — asks about current weather, temperature, forecast, "
-    "wind, humidity, precipitation for any location\n"
-    "- \"route\"         — asks how to travel FROM one place TO another: "
-    "directions, transit options, bus/metro/train/taxi routes, travel time, "
-    "distance between two specific points, how to get from airport/station\n"
-    "- \"accommodation\" — asks about hotels, hostels, motels, guesthouses, "
-    "apartments, where to stay, cheap/budget/luxury lodging in a specific city\n"
-    "- \"search\"        — asks to find, look up, search for specific current "
-    "information: news, events, people, places, products, anime/film/book titles, "
-    "recommendations, anything needing a web search for up-to-date facts\n"
-    "- \"emotional\"     — expresses a strong emotion with no information request: "
-    "surprise, frustration, excitement, disappointment, profanity, exclamations\n"
-    "- \"none\"          — everything else: code, math, general chat, "
-    "instructions, analysis, abstract questions answerable from knowledge\n\n"
-    "CRITICAL: reply with JSON only. No text before or after.\n\n"
-    "Message: {text}"
+_QUERY_UNDERSTANDING_PROMPT = (
+    "You are an intent-aware query planner for a web search engine.\n\n"
+    "Your task: determine whether the user knows the exact name of what they are looking for.\n\n"
+    "Case 1 — KNOWN_ENTITY: the user knows the exact name (title, person, place, product).\n"
+    "→ Output the search query as-is (translate to English if needed, keep the name intact).\n\n"
+    "Case 2 — DESCRIPTIVE_SEARCH: the user describes something WITHOUT knowing its name.\n"
+    "→ Convert the description into a concise English keyword query (3-8 words).\n"
+    "→ Focus on unique identifying traits: role, relationships, genre, year, setting.\n"
+    "→ Remove all conversational filler.\n\n"
+    "Output ONLY the final search query. No explanation. No quotes.\n\n"
+    "User query: {text}"
 )
 
-async def _llm_pre_classify(text: str, history_context: str = "") -> str:
-    """
-    Run LLM pre-classification on the user message.
-    Returns one of: "weather", "route", "accommodation", "emotional", "search", "none".
-    Always returns "none" on any failure — never raises.
 
-    history_context: last 2-3 turns summary passed from classify() (audit §13.4).
-    Allows classifier to resolve follow-up messages like "Вот, нашла" or "Туговатый поиск)"
-    that are meaningless without prior conversation context.
+async def _understand_query(text: str) -> str:
     """
-    import json
-
-    from llm.groq_client import (
-        groq_client,  # module-level singleton, safe to import here
-    )
+    Query understanding layer for SEARCH intent.
+    Returns the search query to pass to the provider — either as-is or rewritten.
+    Always returns a non-empty string. Falls back to original text on any failure.
+    """
     try:
-        # Build prompt with optional history context prefix (§13.4)
-        if history_context:
-            prompt_text = (
-                f"[Предыдущий контекст разговора (последние реплики):\n{history_context}]\n\n"
-                f"Текущее сообщение: {text[:400]}"
-            )
-        else:
-            prompt_text = text[:500]
-
-        prompt = _PRE_CLASSIFIER_PROMPT.format(text=prompt_text)
+        from llm.groq_client import groq_client
+        prompt = _QUERY_UNDERSTANDING_PROMPT.format(text=text)
         response = await groq_client.complete(
             model="llama-3.1-8b-instant",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=30,
             temperature=0.0,
         )
-        raw = response.text.strip()
-        # Strip markdown code fences if model wrapped the JSON
-        if raw.startswith("```"):
-            raw = raw.lstrip("```json").lstrip("```").rstrip("```").strip()
-        data = json.loads(raw)
-        # Model sometimes returns escaped key like '\"pre_intent\"' — normalize all keys
-        data = {k.strip().strip('"').strip("'"): v for k, v in data.items()}
-        label = data.get("pre_intent", "none").strip().lower()
-        if label in {"weather", "route", "accommodation", "emotional", "search", "none"}:
-            logger.info(
-                "_llm_pre_classify: ok",
-                extra={"label": label, "text_preview": text[:60]},
-            )
-            return label
-        logger.warning(
-            "_llm_pre_classify: unexpected label — defaulting to none",
-            extra={"label": label, "text_preview": text[:60]},
-        )
-        return "none"
-    except json.JSONDecodeError as exc:
-        logger.warning(
-            "_llm_pre_classify: JSON parse failed — passing through to embedding classifier",
-            extra={
-                "error": str(exc),
-                "raw_response": response.text[:120] if "response" in dir() else "no_response",
-                "text_preview": text[:60],
-            },
-        )
-        return "none"
+        rewritten = response.text.strip().strip('"').strip("'")
+        if rewritten and len(rewritten) < 120:
+            if rewritten.lower() != text.lower():
+                logger.info(
+                    "query_understanding: rewritten",
+                    extra={"original": text[:80], "rewritten": rewritten},
+                )
+            return rewritten
     except Exception as exc:
-        logger.warning(
-            "_llm_pre_classify: failed — passing through to embedding classifier",
-            extra={
-                "error": str(exc),
-                "error_type": type(exc).__name__,
-                "text_preview": text[:60],
-            },
-            exc_info=True,
-        )
-        return "none"
+        logger.warning("_understand_query failed", extra={"error": str(exc)})
+    return text
 
 
-async def classify(
-    text: str,
-    lang: str = "en",
-    supabase=None,
-    hf_client=None,
-    conversation_history: list[dict] | None = None,
-    analysis_hints: "AnalysisReport | None" = None,
-) -> IntentResult:
-    """
-    Classify user intent via BGE embedding + Supabase pgvector similarity.
-
-    Falls back to Intent.QUESTION if:
-      - supabase or hf_client not provided
-      - embedding fails
-      - no match above MIN_CONFIDENCE
-
-    analysis_hints: optional AnalysisReport from meta/analysis.py (pre-reasoning hints).
-    Non-binding — used to boost confidence for structurally clear intents and to
-    adjust effective_min threshold for short/multilingual input.
-    analysis_hints is never authoritative — it only adjusts probabilities.
-    """
-    from meta.analysis import HintType
-    fallback = _build_result(Intent.QUESTION, 0.70, lang, text)
-
-    # ── analysis_hints: math boost (structural signal, no I/O cost) ──────────
-    # If analysis detected HAS_MATH with high confidence → skip LLM pre-classifier
-    # and go straight to MATH intent. Faster and more reliable than regex alone.
-    if analysis_hints is not None and analysis_hints.has(HintType.HAS_MATH):
-        hint = analysis_hints.get(HintType.HAS_MATH)
-        if hint and hint.confidence >= 0.80:
-            logger.info(
-                "classify: analysis_hints HAS_MATH → MATH (skipping LLM pre-check)",
-                extra={"lang": lang, "confidence": hint.confidence},
-            )
-            return _build_result(Intent.MATH, 0.87, lang, text)
-
-    # ── math pre-check (language-agnostic regex) ──────────────────────────────
-    # Runs before LLM pre-classifier: regex is instant, no I/O cost.
-    if _MATH_PATTERN.search(text):
-        logger.info("classify: math regex pre-check → MATH", extra={"lang": lang})
-        return _build_result(Intent.MATH, 0.85, lang, text)
-
-    # ── LLM pre-classifier (language-agnostic, all 75 lingua languages) ───────
+# ── LLM pre-classifier (language-agnostic, all 75 lingua languages) ───────
     # Replaces hardcoded signal tuples. One fast LLM call covers any language.
     # Failure → "none" → falls through to embedding classifier (never blocks).
     #
@@ -525,18 +399,16 @@ async def classify(
     if pre_label == "weather":
         logger.info("classify: LLM pre-check → WEATHER", extra={"lang": lang})
         return _build_result(Intent.WEATHER, 0.85, lang, text)
-    if pre_label == "route":
-        logger.info("classify: LLM pre-check → SEARCH (route)", extra={"lang": lang})
-        return _build_result(Intent.SEARCH, 0.87, lang, text)
-    if pre_label == "accommodation":
-        logger.info("classify: LLM pre-check → SEARCH (accommodation)", extra={"lang": lang})
-        return _build_result(Intent.SEARCH, 0.85, lang, text)
+    if pre_label in ("route", "accommodation", "search"):
+        query = await _understand_query(text)
+        logger.info(
+            "classify: LLM pre-check → SEARCH",
+            extra={"lang": lang, "pre_label": pre_label, "query": query[:60]},
+        )
+        return _build_result(Intent.SEARCH, 0.87, lang, query)
     if pre_label == "emotional":
         logger.info("classify: LLM pre-check → EMOTIONAL", extra={"lang": lang})
         return _build_result(Intent.EMOTIONAL, 0.82, lang, text)
-    if pre_label == "search":
-        logger.info("classify: LLM pre-check → SEARCH (general)", extra={"lang": lang})
-        return _build_result(Intent.SEARCH, 0.83, lang, text)
     # pre_label == "none" → fall through to embedding classifier
 
     if supabase is None or hf_client is None:
@@ -598,31 +470,6 @@ async def classify(
                 "threshold": effective_min,
                 "word_count": word_count,
             })
-            # ── keyword fallback (last resort before QUESTION) ────────────────
-            # Triggered only when LLM pre-classifier failed AND embedding score
-            # is below threshold. Language-agnostic — covers top-priority intents
-            # that must never silently fall to QUESTION.
-            kw_lower = text.lower()
-            _WEATHER_KW = {
-                "погода", "weather", "температур", "forecast", "дождь", "rain",
-                "снег", "snow", "ветер", "wind", "облачн", "cloudy", "sunny",
-                "солнечн", "жарко", "холодно", "humid", "влажн",
-                "ამინდი",  # Georgian
-            }
-            _SEARCH_KW = {
-                "найди", "поищи", "поиск", "найти", "search", "find", "look up",
-                "отель", "гостиниц", "хостел", "hotel", "hostel", "accommodation",
-                "новост", "news", "аниме", "anime", "manga", "фильм", "сериал",
-                "recommend", "посоветуй", "посовет",
-            }
-            for kw in _WEATHER_KW:
-                if kw in kw_lower:
-                    logger.info("classify: keyword fallback → WEATHER", extra={"kw": kw})
-                    return _build_result(Intent.WEATHER, 0.75, lang, text)
-            for kw in _SEARCH_KW:
-                if kw in kw_lower:
-                    logger.info("classify: keyword fallback → SEARCH", extra={"kw": kw})
-                    return _build_result(Intent.SEARCH, 0.75, lang, text)
             return fallback
 
         try:
@@ -636,6 +483,10 @@ async def classify(
             "confidence": f"{best_score:.3f}",
             "lang": lang,
         })
+        # For SEARCH via embedding path — run query understanding before building result
+        if intent == Intent.SEARCH:
+            query = await _understand_query(text)
+            return _build_result(intent, round(best_score, 3), lang, query)
         return _build_result(intent, round(best_score, 3), lang, text)
 
     except Exception as exc:
