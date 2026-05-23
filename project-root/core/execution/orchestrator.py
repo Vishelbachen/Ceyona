@@ -312,6 +312,7 @@ async def _run_allow(
         intent=intent_result.intent,
         tier=tier,
         lang=lang,
+        from_vision=request.vision_intent is not None,  # §13.3: force CoT strip on vision path
     ))
 
     return OrchestratorResult(
@@ -387,6 +388,7 @@ async def _run_degraded(
         intent=intent_result.intent,
         tier=tier,
         lang=lang,
+        from_vision=request.vision_intent is not None,  # §13.3: force CoT strip on vision path
     ))
 
     return OrchestratorResult(
@@ -484,6 +486,7 @@ async def _run_heavy(
         intent=intent_result.intent,
         tier=tier,
         lang=lang,
+        from_vision=request.vision_intent is not None,  # §13.3: force CoT strip on vision path
     ))
 
     return OrchestratorResult(
