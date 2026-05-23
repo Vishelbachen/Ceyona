@@ -362,7 +362,7 @@ _MATH_PATTERN = _re.compile(
 _PRE_CLASSIFIER_PROMPT = (
     "Classify the intent of the following user message. "
     "Reply with a JSON object ONLY — no markdown, no explanation:\n"
-    '{"pre_intent": "<label>"}\n\n'
+    '{{"pre_intent": "<label>"}}\n\n'
     "Labels (choose exactly one):\n"
     "- \"weather\"       — asks about current weather, temperature, forecast, "
     "wind, humidity, precipitation for any location\n"
