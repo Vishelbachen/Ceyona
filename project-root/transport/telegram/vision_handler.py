@@ -187,9 +187,21 @@ async def handle_vision(
     if caption.strip():
         user_content.append({"type": "text", "text": caption.strip()})
 
+    # Choose max_tokens based on image size.
+    # FAST (1024): sufficient for simple photos, illustrations, small text.
+    # GENERAL (3072): required for UI screenshots, marketplace pages, dense text layouts
+    #   (e.g. Wildberries, Ozon, app interfaces) — these produce long extraction output
+    #   that exceeds FAST limit, causing truncated extraction → broken pipeline.
+    # Threshold: if image > 200KB after resize, treat as complex and use GENERAL limit.
+    _extraction_max_tokens = (
+        RUNTIME.tier_configs[Tier.GENERAL].max_output_tokens
+        if len(image_bytes) > 200_000
+        else RUNTIME.tier_configs[Tier.FAST].max_output_tokens
+    )
+
     payload = {
         "model": _VISION_MODEL,
-        "max_tokens": RUNTIME.tier_configs[Tier.FAST].max_output_tokens,  # §15: reads from policy_registry, not hardcoded
+        "max_tokens": _extraction_max_tokens,  # §15: reads from policy_registry; adaptive by image complexity
         "temperature": 0.1,      # low: extraction must be faithful, not creative
         "messages": [
             {"role": "system", "content": _EXTRACTION_SYSTEM},
