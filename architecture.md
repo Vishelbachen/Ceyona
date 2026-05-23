@@ -1,5 +1,5 @@
 # CEYONA — CANONICAL ARCHITECTURE
-Version: 8.3 — Anti-Drift Edition
+Version: 8.4 — Response-First Edition
 Status: Active Source of Truth
 Supersedes: architecture.md (all previous versions)
 
@@ -7,6 +7,12 @@ This document defines **architectural rules and principles only**.
 Implementation status, resolved issues, and open bugs are tracked in `audit.md`.
 
 If runtime behavior contradicts this document — the runtime must be corrected.
+
+> **Первое правило при открытии этого файла:**
+> Архитектура существует ради одного — чтобы бот отвечал на уровне
+> Claude / ChatGPT. Если ответы сломаны — это приоритет №1 над любым
+> архитектурным рефакторингом. Подробнее: `audit.md` → раздел
+> «АБСОЛЮТНЫЙ ПРИОРИТЕТ — КАЧЕСТВО ОТВЕТОВ».
 
 ---
 
