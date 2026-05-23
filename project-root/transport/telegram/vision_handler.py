@@ -74,19 +74,33 @@ async def _download_image(url: str) -> bytes | None:
 # ─── EXTRACTION SYSTEM PROMPT ─────────────────────────────────────────────────
 
 _EXTRACTION_SYSTEM = (
-    "You are a precise image content extractor. "
-    "Your ONLY task is to faithfully report what is in the image — nothing more. "
-    "\n\n"
-    "RULES:\n"
-    "1. If the image contains written text (exam questions, tasks, problems, "
-    "formulas, diagrams with labels, tables, code, handwriting): "
-    "transcribe ALL text EXACTLY as it appears. Preserve numbering, structure, "
-    "and formatting. Do NOT solve, do NOT answer, do NOT interpret.\n"
-    "2. If the image is a photograph, illustration, or scene with no significant "
-    "text: describe what you see clearly and concisely. "
-    "Include objects, people, setting, colours, actions — whatever is visible.\n"
-    "3. NEVER add conclusions, answers, suggestions, or commentary. "
-    "Report only what is literally present in the image."
+    "You are an image analysis assistant. Extract and report image content accurately.\n\n"
+    "RULES — apply the first matching rule:\n\n"
+    "RULE 1 — TEXT/TASK IMAGE (exam, problem, formula, table, code, handwriting, diagram with labels):\n"
+    "Transcribe ALL text EXACTLY as it appears. Preserve numbering, structure, formatting.\n"
+    "Do NOT solve, answer, or interpret. Output the raw text only.\n\n"
+    "RULE 2 — DRAWN / ANIMATED / ILLUSTRATED CHARACTER "
+    "(anime, manga, game art, cartoon, digital art, fictional character — NOT a real photograph):\n"
+    "Describe the character's visible appearance: hair colour and style, eye colour, "
+    "clothing, accessories, art style, setting, any visible name/logo/insignia.\n"
+    "Then attempt to identify the character and their franchise/game/anime/series. "
+    "State your confidence explicitly. If uncertain, say so and give your best guess with reasoning.\n"
+    "Example output: 'Персонаж с тёмными растрёпанными волосами, в длинном пальто, со швом на лбу. "
+    "По стилю — манга/аниме. Похоже на [Name] из [Series], но не уверен — уточни.'\n"
+    "Only say you cannot identify if you have genuinely zero visual clues.\n\n"
+    "RULE 3 — REAL PERSON (photograph of an actual human being):\n"
+    "Describe ONLY what is literally visible: clothing (colours, style, brand if visible), "
+    "hair (colour, length, style), pose, expression, objects held, setting/background, "
+    "lighting, mood. Be detailed and specific.\n"
+    "NEVER attempt to name, identify, or guess who this person is.\n"
+    "NEVER infer age, location, profession, or any personal information.\n"
+    "NEVER confirm or deny if someone asks 'is this [name]?'.\n\n"
+    "RULE 4 — OTHER (product, place, animal, object, scene, app screenshot, UI):\n"
+    "Describe what you see clearly and concisely. "
+    "Include relevant details: objects, colours, layout, text visible, context.\n\n"
+    "OUTPUT FORMAT: plain prose, no headers, no bullet points, no meta-commentary like "
+    "'The image shows' or 'This image depicts' or 'Изображение представляет собой'. "
+    "Start directly with the content."
 )
 
 
@@ -265,11 +279,30 @@ async def handle_vision(
         else extracted
     )
 
+    # Signals that the extractor couldn't identify/understand the image.
+    # These must always go through the pipeline — never returned raw to user.
+    _UNCERTAINTY_SIGNALS = (
+        "не знаю", "не могу определить", "не удалось", "не удалось идентифицировать",
+        "don't know", "cannot identify", "unable to identify", "i'm not sure",
+        "not sure", "невозможно определить", "не могу распознать",
+    )
+
     intent_result  = None
     try:
         from cognition.intent_engine import Intent, classify
         intent_result  = await classify(classify_input, lang=lang)
-        needs_pipeline = intent_result.intent != Intent.CONVERSATION
+
+        _extracted_lower = extracted.lower()
+        _has_uncertainty = any(s in _extracted_lower for s in _UNCERTAINTY_SIGNALS)
+
+        # Force pipeline when:
+        # 1. Intent is not a simple conversational reply
+        # 2. Extractor expressed uncertainty — raw "I don't know" must never reach user directly;
+        #    pipeline LLM will give a warmer, more helpful response
+        needs_pipeline = (
+            intent_result.intent != Intent.CONVERSATION
+            or _has_uncertainty
+        )
     except Exception as exc:
         # If classifier fails, default to pipeline for safety.
         logger.warning("Intent classify failed in vision, defaulting to pipeline",
