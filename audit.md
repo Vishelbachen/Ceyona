@@ -141,13 +141,75 @@
 
 ### 🟡 17.2 — Epistemic gap: TruthMode как execution flag
 
-**Проблема:** нет `confidence_score`, `contradiction_detection`, `hallucination_risk` на уровне pipeline.
-Система может уверенно галлюцинировать — особенно критично при multi-agent coordination.
+**Приоритет:** после стабилизации качества ответов (§ АБСОЛЮТНЫЙ ПРИОРИТЕТ).
+TruthMode не влияет на обычные ответы — включается только на фактических запросах.
+Не трогать пока vision/prompt фиксы не задеплоены и не проверены в продакшне.
 
-**Решение-кандидат:** `TruthAssessmentPipeline` собрать из существующих компонентов
-(`consensus_engine.py`, `source_credibility.py`, `reflection.py`, `analysis.py`).
+**Проблема:** `TruthMode` сейчас — это флаг поведения, не verification pipeline.
+```python
+# Текущее (неправильное):
+if mode == "truth":
+    prompt = STRICT_PROMPT  # LLM просто "старается точнее" — галлюцинации не убирает
+```
+Система может уверенно галлюцинировать — флаг меняет стиль, но не проверяет факты.
 
-**Статус:** требует отдельного проектирования, не быстрый фикс.
+**Разбор компонентов (аудит май 2026):**
+
+| Компонент | Статус | Вывод |
+|-----------|--------|-------|
+| `TruthMode` как флаг | ❌ Иллюзия точности | Убрать как механизм истины |
+| `TruthMode` как prompt | ❌ Не работает | LLM не знает где ошибается |
+| `consensus_engine.py` | ❌ Не даёт truth | 3 LLM могут одинаково ошибиться, это голосование мнений а не проверка фактов |
+| `source_credibility.py` | ⚠️ Полезно частично | Часть verification, не замена. Использовать как `final_score = similarity * credibility` |
+| `retrieval` как истина | ❌ Опасная подмена | Retrieval возвращает кандидатов, не истину. Embeddings ищут похожее, не верное |
+| Retrieval + verify | ✅ Правильно | Retrieval = источник кандидатов, verify = проверка утверждений против них |
+
+**Ключевой принцип:**
+> Truth не генерируется. Truth валидируется.
+>
+> retrieval = источник кандидатов
+> LLM = генератор
+> truth layer = судья (один, централизованный)
+
+**Что сейчас в коде по факту:**
+TruthMode распределён между `consensus_engine.py`, `source_credibility.py`,
+частично `retrieval/`, частично `meta/reflection.py` — без координации,
+без приоритета, без финального арбитра. Это implicit truth layer, не explicit.
+
+**Правильное решение — одна функция, не новые папки:**
+
+Встраивается в `core/kernel/execution_policy_kernel.py` — одна точка входа:
+
+```python
+def truth_check(answer: str, retrieval_context: list) -> float:
+    """
+    Минимальный verification layer без overengineering.
+    Возвращает confidence score 0.0–1.0.
+    < 0.5 → флагируем ответ как uncertain перед отправкой пользователю.
+    """
+    score = 0
+    if matches_retrieval(answer, retrieval_context): score += 1   # проверка против retrieval
+    if is_logically_consistent(answer): score += 1                # базовые инварианты
+    if not has_known_errors(answer): score += 1                   # sanity check
+    return score / 3
+```
+
+Pipeline после добавления:
+```
+input → intent → kernel → retrieval (обязательно!) → LLM → truth_check() → response
+```
+
+**Что НЕ делать:**
+- ❌ Не создавать `truth/verifier.py`, `truth/consensus.py`, `truth/confidence.py` — это замена одних файлов другими
+- ❌ Не делать retrieval = истина
+- ❌ Не использовать consensus (N LLM вызовов) как механизм истины
+- ❌ Не добавлять truth внутрь каждого агента отдельно → рассинхрон и конфликты
+
+**Файлы для анализа перед реализацией:**
+`core/kernel/execution_policy_kernel.py`, `cognition/retrieval_engine.py`,
+`meta/reflection.py`, `cognition/source_credibility.py`
+
+**Статус:** спроектировано, не реализовано. Ждёт стабилизации ответов.
 
 ---
 
@@ -233,7 +295,7 @@
 | 13.3 | 🟡 СРЕДНИЙ | CoT format в финальном ответе (остаточные случаи) | response_synthesizer, vision_handler |
 | 13.4 | 🟡 СРЕДНИЙ | Classifier теряет контекст на follow-up фразах | intent_engine._llm_pre_classify |
 | 13.5 | 🟡 СРЕДНИЙ | SEARCH не переформулирует описательный запрос | compound_agent, SEARCH system prompt |
-| 17.2 | 🟡 СРЕДНИЙ | Epistemic gap: TruthMode как flag вместо verification layer | consensus_engine, source_credibility |
+| 17.2 | 🟡 СРЕДНИЙ | TruthMode как flag вместо verification layer — спроектировано, ждёт стабилизации ответов | execution_policy_kernel, retrieval_engine, source_credibility |
 | 13.7 | 🟢 НИЗКИЙ | Грузинский: i18n fallback-строка некорректна по смыслу | i18n/strings.py |
 
 📋 **Из CI_README (planned):** coverage floor 75% (speech/billing тесты), asyncio stress tests (13.4), integration tests compound tool execution (13.1 regression), retrieval quality regression, mypy.
