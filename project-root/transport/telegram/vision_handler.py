@@ -92,48 +92,60 @@ _EXTRACTION_SYSTEM = (
 
 # ─── IMAGE RESIZE ─────────────────────────────────────────────────────────────
 
-_MAX_IMAGE_SIDE = 1280   # px — Groq recommends ≤ 1568px; 1280 gives safe margin
-_JPEG_QUALITY   = 85     # good quality/size balance
+_MAX_IMAGE_SIDE     = 1280   # px — default for photos/illustrations
+_MAX_IMAGE_SIDE_UI  = 800    # px — aggressive resize for UI screenshots (Wildberries, apps)
+_JPEG_QUALITY       = 85     # default quality
+_JPEG_QUALITY_UI    = 70     # lower quality for UI — text is still readable, size drops 40%
+_UI_SIZE_THRESHOLD  = 300_000  # bytes — images larger than this after initial resize get second pass
 
 def _resize_image_if_needed(image_bytes: bytes) -> bytes:
     """
-    Resize image to max 1280px on longest side if needed.
-    Prevents 413 Payload Too Large from Groq vision endpoint.
+    Resize image to prevent 413 Payload Too Large from Groq vision endpoint.
+
+    Two-pass strategy:
+    - Pass 1: resize to max 1280px on longest side (standard for photos).
+    - Pass 2: if result still > 300KB (typical for UI screenshots like Wildberries,
+      marketplace pages with many text elements), resize again to 800px at quality 70.
+      Text remains readable; base64-encoded payload drops to ~300KB safe zone.
+
     Falls back to original bytes if PIL unavailable or resize fails.
-    Handles JPEG, PNG, WEBP — converts output to JPEG for consistency.
     """
     try:
         import io
-
         from PIL import Image
+
+        def _encode(img: Image.Image, max_side: int, quality: int) -> bytes:
+            w, h = img.size
+            if max(w, h) > max_side:
+                ratio = max_side / max(w, h)
+                img = img.resize((int(w * ratio), int(h * ratio)), Image.LANCZOS)
+            buf = io.BytesIO()
+            img.convert("RGB").save(buf, format="JPEG", quality=quality)
+            return buf.getvalue()
 
         img = Image.open(io.BytesIO(image_bytes))
         w, h = img.size
 
-        if max(w, h) <= _MAX_IMAGE_SIDE:
-            # Already small enough — still re-encode to JPEG to normalize format
-            if img.format == "JPEG":
-                return image_bytes  # no-op — avoid re-encoding if already JPEG
-            buf = io.BytesIO()
-            img.convert("RGB").save(buf, format="JPEG", quality=_JPEG_QUALITY)
-            return buf.getvalue()
+        # Pass 1: standard resize
+        result = _encode(img, _MAX_IMAGE_SIDE, _JPEG_QUALITY)
 
-        # Scale down maintaining aspect ratio
-        ratio = _MAX_IMAGE_SIDE / max(w, h)
-        new_w, new_h = int(w * ratio), int(h * ratio)
-        img_resized = img.resize((new_w, new_h), Image.LANCZOS)
-
-        buf = io.BytesIO()
-        img_resized.convert("RGB").save(buf, format="JPEG", quality=_JPEG_QUALITY)
-        resized_bytes = buf.getvalue()
+        # Pass 2: if still large (UI screenshot), compress more aggressively
+        if len(result) > _UI_SIZE_THRESHOLD:
+            result_pass2 = _encode(Image.open(io.BytesIO(result)), _MAX_IMAGE_SIDE_UI, _JPEG_QUALITY_UI)
+            logger.info("Image double-compressed for Groq vision (UI screenshot path)", extra={
+                "original_bytes": len(image_bytes),
+                "pass1_bytes":    len(result),
+                "pass2_bytes":    len(result_pass2),
+                "original_size":  f"{w}x{h}",
+            })
+            return result_pass2
 
         logger.info("Image resized for Groq vision", extra={
             "original_bytes": len(image_bytes),
-            "resized_bytes":  len(resized_bytes),
+            "resized_bytes":  len(result),
             "original_size":  f"{w}x{h}",
-            "new_size":       f"{new_w}x{new_h}",
         })
-        return resized_bytes
+        return result
 
     except Exception as exc:
         logger.warning("Image resize failed — using original bytes", extra={"error": str(exc)})
