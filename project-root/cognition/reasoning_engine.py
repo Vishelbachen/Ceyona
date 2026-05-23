@@ -189,23 +189,21 @@ _STRATEGY_MATRIX: dict[tuple[str, str], ReasoningStrategy] = {
     ),
 
     # ── INSTRUCTION ──────────────────────────────────────
-    # DIRECT — let the model choose structure naturally.
-    # STRUCTURED was forcing numbered lists regardless of whether they helped.
     (Intent.INSTRUCTION, Tier.FAST): ReasoningStrategy(
-        mode=ReasoningMode.DIRECT,
-        temperature=0.4,
+        mode=ReasoningMode.STRUCTURED,
+        temperature=0.3,
         instruction_prefix="",
         max_reasoning_steps=2,
     ),
     (Intent.INSTRUCTION, Tier.GENERAL): ReasoningStrategy(
-        mode=ReasoningMode.DIRECT,
-        temperature=0.45,
+        mode=ReasoningMode.STRUCTURED,
+        temperature=0.35,
         instruction_prefix="",
         max_reasoning_steps=4,
     ),
     (Intent.INSTRUCTION, Tier.HEAVY): ReasoningStrategy(
-        mode=ReasoningMode.DIRECT,
-        temperature=0.4,
+        mode=ReasoningMode.STRUCTURED,
+        temperature=0.3,
         instruction_prefix="",
         max_reasoning_steps=6,
     ),
