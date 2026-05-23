@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from i18n.t import lang_instruction as _lang_directive
 
 if TYPE_CHECKING:
-    from meta.analysis import AnalysisReport
+    pass
 
 logger = logging.getLogger(__name__)
 
