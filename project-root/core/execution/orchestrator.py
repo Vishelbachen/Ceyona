@@ -25,41 +25,35 @@ logger = logging.getLogger(__name__)
 
 # ─── TRUTH ENFORCEMENT ────────────────────────────────────────────────────────
 
-# Intents for which pre-EPK web search MUST NOT be triggered.
-# Two categories:
-#   (a) self-contained intents: generate freely without external data
-#       (creative, conversation, emotional, code, math)
-#   (b) agentic tool intents: compound_agent owns their own tool execution
-#       (search, weather, maps, maps_poi, maps_route) — compound decides
-#       what to search and how; pre-EPK search would duplicate or conflict.
+# Intents for which pre-EPK generic web search MUST NOT be triggered.
+# Self-contained intents only — they generate freely without external data.
+# Agentic intents (search, weather, maps, maps_poi, maps_route) are NOT here:
+# they collect context via explicit intent-specific retrieval (see below).
 # Owned here — not in transport layer.
 _NO_SEARCH_INTENTS = {
     "creative", "conversation", "emotional", "code", "math",
-    "weather", "maps", "maps_poi", "maps_route", "search",
+}
+
+# Intents that require intent-specific retrieval via web_tools.run_tool().
+# Each maps to its tool_name in web_tools._TOOL_MAP.
+# compound_agent receives the collected context in messages and synthesizes.
+_AGENTIC_TOOL_MAP: dict[str, str] = {
+    "search":      "search",
+    "weather":     "weather",
+    "maps":        "maps",
+    "maps_poi":    "maps_poi",
+    "maps_route":  "maps_route",
 }
 
 # Intents that MUST have retrieved context — no context = don't call LLM.
-# IMPORTANT: agentic intents (WEATHER, MAPS, MAPS_POI, MAPS_ROUTE, SEARCH)
-# are NOT in this set. Rationale:
-#   - compound_agent guarantees its own grounding by calling tools internally.
-#   - The STRICT gate runs BEFORE compound executes — tool_output is always
-#     None at that point for agentic intents, so including them here would
-#     block every weather/maps/search request unconditionally.
-#   - Grounding responsibility for agentic intents belongs to compound_agent,
-#     not to the pre-EPK orchestrator gate.
-# This set is intentionally empty for now — kept for future non-agentic
-# STRICT intents (e.g. AVAILABILITY, SCHEDULE) if added later.
+# Agentic intents (WEATHER, MAPS, MAPS_POI, MAPS_ROUTE, SEARCH) ARE included:
+# orchestrator now collects their context explicitly before EPK (see below).
+# If retrieval fails → STRICT gate fires → no hallucination.
 _STRICT_INTENTS: set[Intent] = set()
 
-# All tool intents that go through compound_agent (agentic path).
-# compound_agent owns tool execution + reasoning over retrieved data for ALL of these.
-# Rationale: every data-driven intent requires LLM reasoning to:
-#   - interpret and validate retrieved data
-#   - handle edge cases, partial results, and failures gracefully
-#   - apply nuance (e.g. weather suitability, route alternatives, POI relevance)
-# Deterministic formatters (format_current, format_geocode, format_route) are still
-# used INSIDE compound_agent._execute_tool() — they produce structured text that the
-# compound model then reasons over before delivering the final response.
+# All tool intents that go through compound_agent as synthesizer.
+# compound_agent no longer executes tools — it receives pre-assembled context
+# in messages and synthesizes the final response.
 _AGENTIC_INTENTS = {
     Intent.SEARCH,
     Intent.WEATHER,
@@ -554,20 +548,57 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
                 "confidence": intent_result.confidence,
             })
 
-        # ── web search ───────────────────────────────────────────────────────
-        # Web search decision belongs to orchestrator — intent is known here,
-        # EPK is about to run, authority is unambiguous.
-        # Conditions: no retrieval context yet + intent benefits from search
-        # + user has non-zero balance (cheap pre-EPK guard, full check follows)
-        # + NOT a vision pipeline request (image descriptions are NOT valid
-        #   search queries — sending them to Tavily returns 400 Bad Request).
+        # ── retrieval ────────────────────────────────────────────────────────
+        # All external data collection happens here, before EPK.
+        # Two paths:
+        #   (a) Agentic intents (SEARCH, WEATHER, MAPS, MAPS_POI, MAPS_ROUTE):
+        #       explicit intent-specific retrieval via web_tools.run_tool().
+        #       compound_agent receives the result in messages and synthesizes.
+        #   (b) Other retrieval-benefiting intents (QUESTION, ANALYSIS, etc.):
+        #       generic web search via Tavily → SerpAPI → SearXNG fallback chain.
+        # Self-contained intents (_NO_SEARCH_INTENTS) skip both paths.
+        # Vision pipeline requests skip search (image context is not a valid query).
+        # Zero-balance users skip search (pre-EPK cost guard).
         _retrieved_context = request.retrieved_context
-        if (
+
+        _intent_value = intent_result.intent.value
+        _can_fetch = (
             not _retrieved_context
-            and intent_result.intent.value not in _NO_SEARCH_INTENTS
             and request.user_balance > 0
             and not request.skip_web_search
-        ):
+        )
+
+        if _can_fetch and _intent_value in _AGENTIC_TOOL_MAP:
+            # Path (a): intent-specific retrieval
+            _tool_name = _AGENTIC_TOOL_MAP[_intent_value]
+            try:
+                from external.web_tools import run_tool as _web_run_tool
+                _tool_result = await _web_run_tool(
+                    tool_name=_tool_name,
+                    params={"query": request.user_message, "lang": lang},
+                    lang=lang,
+                )
+                if _tool_result:
+                    _retrieved_context = _tool_result
+                    logger.info("Agentic retrieval: context acquired", extra={
+                        "intent": _intent_value,
+                        "tool":   _tool_name,
+                        "chars":  len(_tool_result),
+                    })
+                else:
+                    logger.warning("Agentic retrieval: empty result", extra={
+                        "intent": _intent_value,
+                        "tool":   _tool_name,
+                    })
+            except Exception as exc:
+                logger.warning("Agentic retrieval failed — continuing without", extra={
+                    "intent": _intent_value,
+                    "tool":   _tool_name,
+                    "error":  str(exc),
+                })
+
+        elif _can_fetch and _intent_value not in _NO_SEARCH_INTENTS:
+            # Path (b): generic web search for non-agentic intents
             try:
                 from external.web_tools import run_tool as _web_run_tool
                 web_result = await _web_run_tool(
@@ -578,8 +609,8 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
                 if web_result:
                     _retrieved_context = web_result
                     logger.info("Web search: context acquired", extra={
-                        "intent": intent_result.intent.value,
-                        "chars": len(web_result),
+                        "intent": _intent_value,
+                        "chars":  len(web_result),
                     })
             except Exception as exc:
                 logger.warning("Web search failed — continuing without", extra={"error": str(exc)})
@@ -587,25 +618,20 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
         # ── truth mode ───────────────────────────────────────────────────────
         truth_mode = resolve_truth_mode(intent_result.intent)
 
-        # ── tool execution ───────────────────────────────────────────────────
-        # Agentic intents (WEATHER, MAPS, MAPS_POI, MAPS_ROUTE, SEARCH) do NOT
-        # use _run_tool() here. compound_agent owns tool execution for all of them
-        # and calls tools internally during its reasoning loop.
-        # _run_tool() is kept for any future non-agentic tool intents only.
+        # ── non-agentic tool execution (reserved for future intents) ─────────
+        # Agentic intents (WEATHER, MAPS, MAPS_POI, MAPS_ROUTE, SEARCH) collect
+        # context above. _run_tool() is kept for future non-agentic tool intents.
         tool_output: str | None = None
         if intent_result.requires_tools and intent_result.intent not in _AGENTIC_INTENTS:
             tool_output = await _run_tool(intent_result, lang)
 
         # ── STRICT truth gate ─────────────────────────────────────────────────
-        # Guards non-agentic STRICT intents (e.g. future AVAILABILITY, SCHEDULE)
-        # that require pre-fetched context before LLM synthesis.
-        # Agentic intents (WEATHER, MAPS, MAPS_POI, MAPS_ROUTE, SEARCH) are
-        # ALWAYS excluded — compound_agent self-grounds by calling tools internally.
-        # The gate must never fire for agentic intents regardless of truth_mode,
-        # because compound has not yet executed at this point.
+        # If TruthMode is STRICT and there is no grounding data → deny.
+        # Agentic intents are NO LONGER excluded: compound_agent is now a
+        # synthesizer, not a self-grounding agent. Grounding is the orchestrator's
+        # responsibility. If retrieval failed → gate fires → no hallucination.
         has_grounding = bool(_retrieved_context) or bool(tool_output)
-        _is_agentic = intent_result.intent in _AGENTIC_INTENTS
-        if truth_mode == TruthMode.STRICT and not has_grounding and not _is_agentic:
+        if truth_mode == TruthMode.STRICT and not has_grounding:
             logger.info("Truth gate: STRICT intent with no grounding data", extra={
                 "intent": intent_result.intent,
             })
