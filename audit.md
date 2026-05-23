@@ -1,121 +1,118 @@
 # CEYONA — ARCHITECTURE AUDIT
-**Дата:** май 2026
-**Проверено:** architecture.md v8.3, models.md v7.3, economic.md v5.2 + весь runtime код
-**Статус:** все архитектурные пункты закрыты. Открыто: 5 UX/качество багов + 2 архитектурных gap.
+**Дата:** май 2026 (обновлён май 2026)
+**Проверено:** architecture.md v8.4, models.md v7.3, economic.md v5.2 + весь runtime код
+**Статус:** 13.1 закрыт. Открыто: 4 UX/качество + 1 архитектурный gap.
 
-Обозначения: ✅ Закрыто | ⚠️ Открыто | 🔴 Критично | 🟡 Средний | 🟢 Низкий | 📋 Запланировано
+Обозначения: ✅ Закрыто | ⚠️ Открыто | 🔴 Критично | 🟡 Средний | 🟢 Низкий
 
 ---
 
 ## ⚡ АБСОЛЮТНЫЙ ПРИОРИТЕТ — КАЧЕСТВО ОТВЕТОВ
 
-> **Прочитай это перед тем как открывать любой другой файл.**
+**Пользователь видит только ответ бота. Не pipeline, не архитектуру — только ответ.**
+Целевой уровень: **Claude / ChatGPT** — разговорный, тёплый, умный, без роботизации.
 
-**Ответы бота — это 99% продакшена.**
-Без качественных ответов любая архитектурная работа, рефакторинг, оптимизация
-и новые фичи не имеют смысла. Пользователь не видит pipeline. Пользователь
-видит только то, что написал бот.
+**Правило:** любое архитектурное изменение оценивается по одному критерию — стал ли ответ лучше или хуже. Если хуже — откат, даже если изменение «архитектурно правильное».
 
-### Текущий статус (май 2026)
-Целевой уровень ответов: **Claude / ChatGPT** — разговорный, тёплый, умный,
-без роботизированных фраз, без холодных отказов.
+**Не делай костылей, заглушек и временных решений.** Продакшн серьёзный. Каждое решение должно быть правильным и масштабируемым — с первого раза.
 
-Три критических фикса задеплоены (май 2026):
-- `vision_handler.py` — `_EXTRACTION_SYSTEM` переписан: экстрактор пробует
-  идентифицировать нарисованных персонажей, описывает реальных людей без
-  попытки назвать, стартует прямо с контента без «Изображение представляет собой».
-- `vision_handler.py` — маршрутизация: если экстрактор вернул «не знаю» /
-  «cannot identify» → принудительно через pipeline, не отдавать raw пользователю.
-- `intent_engine.py` — QUESTION prompt: убрана роботизированная фраза
-  «Я не идентифицирую людей по фото, но вот что вижу:», добавлен тёплый голос,
-  запрет на открытие с «Изображение представляет собой».
-- `update_handler.py` — история: сохраняется caption, не vision dump
-  (фикс 413 Payload Too Large на следующих сообщениях после фото).
+### Файлы, которые определяют КАК бот отвечает
 
-### Правила для любого, кто открывает эти файлы
+| Файл | Что решает |
+|------|-----------|
+| `cognition/intent_engine.py` | System prompts для каждого intent — голос и стиль |
+| `transport/telegram/vision_handler.py` | Обработка изображений |
+| `transport/telegram/update_handler.py` | Общий flow ответа, история |
+| `llm/prompt_engine.py` | Сборка промпта перед LLM |
+| `core/execution/orchestrator.py` | intent → путь → ответ |
+| `agents/compound_agent.py` | Синтез ответов для data-driven интентов |
+| `cognition/response_synthesizer.py` | Финальная обработка перед отправкой |
 
-1. **Сначала — анализ ответов.** Прежде чем менять архитектуру, retrieval,
-   агентов или pipeline — проверь: как бот отвечает прямо сейчас?
-   Открой тестовый диалог, отправь несколько сообщений разных типов
-   (вопрос, фото, голос, поиск). Если ответы роботизированные или пустые —
-   это приоритет №1.
+### Признаки проблемы с ответами
 
-2. **Файлы, которые определяют КАК бот отвечает** — анализировать обязательно
-   при каждой сессии (если файл недавно изменён и работает — можно пропустить):
+- Начинается с «Изображение представляет собой» / «The image shows» → vision fast-path сломан
+- Содержит `Constraints:`, `Candidates:`, `Ограничения:` → CoT артефакты (§13.3)
+- Пустой или обрывается → timeout или 413
+- Тон сухой на простых вопросах → CONVERSATION system prompt
 
-   | Файл | Что решает |
-   |------|-----------|
-   | `cognition/intent_engine.py` | System prompts для каждого intent — голос и стиль ответа |
-   | `transport/telegram/vision_handler.py` | Как обрабатываются изображения, что видит пользователь |
-   | `transport/telegram/update_handler.py` | Общий flow ответа, история, fast-path vs pipeline |
-   | `llm/fallback_handler.py` | Что происходит когда основной LLM не отвечает |
-   | `llm/prompt_engine.py` | Сборка финального промпта перед LLM |
-   | `core/execution/orchestrator.py` | Какой intent → какой путь → какой ответ |
-   | `agents/fast_agent.py` | Ответы в быстром режиме |
-   | `agents/deep_agent.py` | Ответы в глубоком режиме |
-   | `cognition/response_synthesizer.py` | Финальная обработка ответа перед отправкой |
+### Задеплоены (май 2026)
+- `vision_handler.py` — экстрактор переписан: идентифицирует нарисованных персонажей, описывает реальных людей без именования, не начинает с мета-фраз
+- `vision_handler.py` — маршрутизация: «не знаю» → pipeline, не raw output
+- `intent_engine.py` — QUESTION prompt: убрана роботизация, тёплый голос
+- `update_handler.py` — история: сохраняется caption, не vision dump (фикс 413)
+- `intent_engine.py` — LLM pre-classifier вместо hardcoded signal tuples (все 75 языков)
+- `intent_engine.py` — history context для follow-up сообщений (§13.4 частично)
+- `prompt_engine.py` — переписан: lang → system prompt → truth block → format. Контекст в user turn
+- `reasoning_engine.py` — QUESTION на GENERAL/HEAVY: mode=DIRECT, CoT убран
 
-3. **Признаки что с ответами проблема** (смотреть в логах и тестах):
-   - Начало ответа: «Изображение представляет собой», «На изображении»,
-     «The image shows» → сломан vision fast-path или экстрактор
-   - Ответ «Я не знаю» без попытки объяснить → сломана маршрутизация vision
-   - Ответ содержит «Constraints:», «Candidates:», «Ограничения:» →
-     CoT артефакты утекают (см. §13.3)
-   - Ответ обрывается или пустой → 413 или LLM timeout (см. §13.1)
-   - Тон сухой и дистанцированный на простых вопросах → проверь
-     CONVERSATION system prompt в intent_engine
+---
 
-4. **Архитектурные изменения** (retrieval, agents, kernel, embeddings) —
-   только после того как ответы стабильно на уровне. Не наоборот.
+## ⚡ КРИТИЧЕСКОЕ АРХИТЕКТУРНОЕ ОТКРЫТИЕ — compound (май 2026)
 
-### Контекст: аудит архитектуры (ChatGPT + ручной анализ, май 2026)
+### Диагноз
 
-Внешний аудит выявил реальные архитектурные проблемы — они валидны,
-но это roadmap, не срочность:
+`groq/compound` и `groq/compound-mini` — **не tool-calling модели**. Это автономные агентные системы Groq со встроенными инструментами (web search, code execution). Кастомные tool schemas не поддерживаются — API возвращает `400 invalid_request_error: 'tool calling' is not supported with this model`.
 
-- **«Распределённый мозг»**: решения принимаются в agents/ + cognition/ +
-  core/kernel/ одновременно. Нет единого центра. Это технический долг,
-  не блокер ответов.
-- **Multi-agent преждевременно**: fast/deep/creative agent — физическое
-  разделение ролей, но ChatGPT/Claude делают это через режимы одного LLM,
-  не отдельные агенты. Долгосрочно — правильное направление: kernel выбирает
-  режим, один LLM исполняет.
-- **Over-engineered retrieval**: dense + sparse + fusion + reranker —
-  уровень production FAANG без базы под это. Зафиксировать на dense (BGE)
-  пока нет измеренной потребности в остальном.
-- **Embeddings dataset вместо rule-наборов**: вместо exam_rules / image_rules /
-  voice_rules — единый dataset примеров с mode/constraints, поиск через
-  embeddings. Правильное направление, но это месяц работы, не срочно.
+Предыдущая архитектура (`compound_agent.py` передавал `_TOOL_SCHEMAS` + `tool_choice="auto"`) была архитектурно несовместима с природой этих моделей.
 
-**Эти пункты — для следующей итерации, когда ответы стабильны.**
+**Диагностика** подтверждена через `GET /debug` (добавлен в `main.py` май 2026):
+- `groq_llm` ✅ — plain complete() работает
+- `compound_mini` ❌ — 400 на tool_choice
+- `compound_deep` ❌ — 400 на tool_choice
+- `search`, `weather`, `maps`, `embedding` ✅ — все внешние сервисы работают
+
+**Важно:** `/providers` проверяет только **наличие ключей**, не реальную доступность сервисов. Для диагностики использовать `/debug`.
+
+### Принятое решение
+
+**compound = синтезатор, не агент.**
+
+Внешний retrieval (Tavily / SerpAPI / SearXNG / OpenWeatherMap / Mapbox) выполняется оркестратором до вызова compound. Compound получает готовый контекст в messages и синтезирует ответ через `groq_client.complete()` без tools.
+
+**Почему это единственное правильное решение:**
+- Сохраняет `source_credibility.py` фильтрацию (architecture §20)
+- Сохраняет TruthMode.STRICT grounding invariant (architecture §10)
+- Сохраняет ownership retrieval pipeline (architecture §3)
+- Устраняет 400 ошибки
+- compound как синтезатор поверх контролируемого контекста — это его правильная роль в governed системе
+
+**Что НЕ делать:**
+- ❌ Давать compound автономный поиск — теряем контроль источников, ломаем source_credibility и TruthMode.STRICT
+- ❌ Адаптировать tool_choice параметры — compound не tool-calling модель по природе
+- ❌ Делать fallback внутри одного агента
+
+### Изменения (май 2026) ✅
+
+**`agents/compound_agent.py`** — полная переработка:
+- Удалено: `_TOOL_SCHEMAS`, `complete_with_tools`, tool loop, `_execute_tool`, `_build_tool_result_messages`
+- Удалены импорты: `json`, `ToolCallResponse`, `external.maps`, `external.search`, `external.weather`
+- Один вызов `groq_client.complete()`. Сигнатуры `run_fast()` / `run_deep()` не изменились — coordinator не трогается
+
+**`core/execution/orchestrator.py`** — три изменения:
+- `_NO_SEARCH_INTENTS` — только self-contained интенты: `creative, conversation, emotional, code, math`
+- `_AGENTIC_TOOL_MAP` — каждый data-driven intent маппится на свой `web_tools` инструмент, контекст собирается до EPK
+- STRICT gate — убрано `_is_agentic` исключение: если retrieval упал → gate срабатывает → нет галлюцинаций
+
+**`app/main.py`** — добавлен `GET /debug`: реальные live-вызовы каждого сервиса с точным текстом ошибки.
+
+**Не тронуто:** `groq_client.py` (complete_with_tools остаётся для будущего), `multi_agent_coordinator.py` (вызывает run_fast/run_deep — они корректны).
 
 ---
 
 ## ОТКРЫТЫЕ ПРОБЛЕМЫ
 
-### 🔴 13.1 — Все tool intents → «сервис временно недоступен»
-
-**Симптом:** поиск, маршруты, погода — всегда возвращают `search_unavailable`.
-
-**Предполагаемые причины:**
-- SERPAPI_KEY / OPENWEATHER_API_KEY не заполнены в fly.io secrets
-- compound-mini не поддерживает `tool_choice="auto"` с текущими параметрами
-- httpx.ReadTimeout в `_execute_tool`
-- unexpected `finish_reason` → defensive `success=False` в `_run_compound`
-
-**Диагностика:** `fly logs | grep "compound_agent"` — искать `"API call failed"`, `"tool execution failed"`.
-
-**Влияние:** критическое — все data-driven интенты деградируют.
+### ✅ 13.1 — ЗАКРЫТ (май 2026)
+Все tool intents → «сервис недоступен». Причина: `tool_choice="auto"` не поддерживается compound моделями. Решение: архитектурная переработка compound как синтезатора (см. выше).
 
 ---
 
-### 🟡 13.3 — CoT reasoning format утекает в финальный ответ (частично)
+### 🟡 13.3 — CoT артефакты в финальном ответе (остаточные случаи)
 
 **Симптом:** ответы содержат `Constraints / Candidates / Verification table`.
 
-**Причина:** `_strip_cot_artifacts()` не покрывает все сценарии (vision → MATH/ANALYSIS classification).
+**Причина:** `_strip_cot_artifacts()` не покрывает vision → MATH/ANALYSIS classification.
 
-**Частично закрыто:** двухрежимный фикс в `response_synthesizer.py` (май 2026) закрыл infinite loop (13.1→17.1). Остаточные случаи — vision-input через reasoning_engine.
+**Статус:** основной infinite loop закрыт (17.1). Остаток — редкие случаи через vision-input.
 
 ---
 
@@ -123,167 +120,95 @@
 
 **Симптом:** «Вот, нашла» / «Туговатый поиск» → CONVERSATION вместо правильного intent.
 
-**Причина:** `_llm_pre_classify(text)` получает только `text[:500]` без истории.
+**Причина:** `_llm_pre_classify` получает только `text[:500]` без истории. Частично закрыт: history context добавлен для коротких сообщений (≤8 слов).
 
-**Решение-кандидат:** передавать последние 2–3 реплики как контекст в pre-classifier.
+**Осталось:** asyncio stress tests (см. CI_README).
 
 ---
 
 ### 🟡 13.5 — SEARCH не переформулирует описательный запрос
 
-**Симптом:** «глава якудзы подставляет к дочери охранника» — 3 попытки, не находит тайтл.
+**Симптом:** «глава якудзы подставляет к дочери охранника» — не находит тайтл.
 
-**Причина:** compound передаёт user message как-есть в `web_search` без rewrite.
+**Причина:** `web_tools._search()` передаёт user message as-is без keyword rewrite.
 
-**Решение-кандидат:** инструкция в SEARCH system prompt — переформулировать в keyword query на английском.
-
----
-
-### 🟡 17.2 — Epistemic gap: TruthMode как execution flag
-
-**Приоритет:** после стабилизации качества ответов (§ АБСОЛЮТНЫЙ ПРИОРИТЕТ).
-TruthMode не влияет на обычные ответы — включается только на фактических запросах.
-Не трогать пока vision/prompt фиксы не задеплоены и не проверены в продакшне.
-
-**Проблема:** `TruthMode` сейчас — это флаг поведения, не verification pipeline.
-```python
-# Текущее (неправильное):
-if mode == "truth":
-    prompt = STRICT_PROMPT  # LLM просто "старается точнее" — галлюцинации не убирает
-```
-Система может уверенно галлюцинировать — флаг меняет стиль, но не проверяет факты.
-
-**Разбор компонентов (аудит май 2026):**
-
-| Компонент | Статус | Вывод |
-|-----------|--------|-------|
-| `TruthMode` как флаг | ❌ Иллюзия точности | Убрать как механизм истины |
-| `TruthMode` как prompt | ❌ Не работает | LLM не знает где ошибается |
-| `consensus_engine.py` | ❌ Не даёт truth | 3 LLM могут одинаково ошибиться, это голосование мнений а не проверка фактов |
-| `source_credibility.py` | ⚠️ Полезно частично | Часть verification, не замена. Использовать как `final_score = similarity * credibility` |
-| `retrieval` как истина | ❌ Опасная подмена | Retrieval возвращает кандидатов, не истину. Embeddings ищут похожее, не верное |
-| Retrieval + verify | ✅ Правильно | Retrieval = источник кандидатов, verify = проверка утверждений против них |
-
-**Ключевой принцип:**
-> Truth не генерируется. Truth валидируется.
->
-> retrieval = источник кандидатов
-> LLM = генератор
-> truth layer = судья (один, централизованный)
-
-**Что сейчас в коде по факту:**
-TruthMode распределён между `consensus_engine.py`, `source_credibility.py`,
-частично `retrieval/`, частично `meta/reflection.py` — без координации,
-без приоритета, без финального арбитра. Это implicit truth layer, не explicit.
-
-**Правильное решение — одна функция, не новые папки:**
-
-Встраивается в `core/kernel/execution_policy_kernel.py` — одна точка входа:
-
-```python
-def truth_check(answer: str, retrieval_context: list) -> float:
-    """
-    Минимальный verification layer без overengineering.
-    Возвращает confidence score 0.0–1.0.
-    < 0.5 → флагируем ответ как uncertain перед отправкой пользователю.
-    """
-    score = 0
-    if matches_retrieval(answer, retrieval_context): score += 1   # проверка против retrieval
-    if is_logically_consistent(answer): score += 1                # базовые инварианты
-    if not has_known_errors(answer): score += 1                   # sanity check
-    return score / 3
-```
-
-Pipeline после добавления:
-```
-input → intent → kernel → retrieval (обязательно!) → LLM → truth_check() → response
-```
-
-**Что НЕ делать:**
-- ❌ Не создавать `truth/verifier.py`, `truth/consensus.py`, `truth/confidence.py` — это замена одних файлов другими
-- ❌ Не делать retrieval = истина
-- ❌ Не использовать consensus (N LLM вызовов) как механизм истины
-- ❌ Не добавлять truth внутрь каждого агента отдельно → рассинхрон и конфликты
-
-**Файлы для анализа перед реализацией:**
-`core/kernel/execution_policy_kernel.py`, `cognition/retrieval_engine.py`,
-`meta/reflection.py`, `cognition/source_credibility.py`
-
-**Статус:** спроектировано, не реализовано. Ждёт стабилизации ответов.
+**Решение:** инструкция в SEARCH system prompt в `intent_engine.py` — переформулировать в keyword query на английском (уже частично есть в prompt, нужно проверить работает ли через новый pipeline).
 
 ---
 
-### 🟢 13.7 — Грузинский: i18n fallback некорректен по смыслу
+### 🟡 17.2 — TruthMode как flag вместо verification layer
 
-**Симптом:** чёткий вопрос на грузинском → «уточните вопрос» вместо «технический сбой».
+**Проблема:** TruthMode меняет стиль промпта, но не проверяет факты. LLM может галлюцинировать уверенно.
 
-**Причина:** `search_unavailable` строка для `ka` формулирует отказ как неясность запроса.
+**Правильное решение:** одна функция `truth_check(answer, retrieval_context) -> float` в `execution_policy_kernel.py`. Retrieval = кандидаты, LLM = генератор, truth_check = судья.
+
+**Что НЕ делать:** не создавать `truth/verifier.py` и другие новые модули — это замена файлов, не решение.
+
+**Статус:** спроектировано. Реализация после стабилизации ответов.
+
+---
+
+### 🟢 13.7 — Грузинский: i18n fallback некорректен
+
+**Симптом:** вопрос на грузинском → «уточните вопрос» вместо «технический сбой».
+
+**Файл:** `i18n/strings.py`, ключ `search_unavailable`, lang `ka`.
 
 ---
 
 ## ИСТОРИЯ РЕШЕНИЙ
 
-Все архитектурные проблемы закрыты в мае 2026. Краткая сводка по категориям:
+### Нондетерминизм и классификация
+- `_classify_complexity()` переписан: code detection только по fenced blocks, JSON требует key:value, threshold 800 chars
+- `_build_messages()` принимает реальный tier — FAST/HEAVY получают разные instruction_prefix
 
-### Нондетерминизм и классификация (§1)
-- `_classify_complexity()` переписан: code detection только по fenced blocks, JSON требует key:value паттерн, threshold поднят до 800 chars.
-- `_build_messages()` принимает реальный `tier` — FAST/HEAVY получают разные instruction_prefix.
+### Governance
+- Safety Gate: observability-only (non-blocking) — false-positive rate на русском/арабском/коротком тексте неприемлем
+- `analysis.py` подключён: update_handler → analyse() → OrchestratorRequest.analysis_report → intent_engine.classify()
+- `decision_matrix.py` читает пороги из policy_registry.RUNTIME
 
-### Governance theater (§2)
-- Safety Gate задокументирован как **observability-only** (non-blocking) — false-positive rate на коротком/русском/арабском тексте неприемлем. Единственный blocking authority — `safety_agent`.
-- `analysis.py` подключён: `update_handler → analyse() → OrchestratorRequest.analysis_report → intent_engine.classify(analysis_hints=...)`.
-- `decision_matrix.py` читает пороги из `policy_registry.RUNTIME` вместо hardcoded значений.
+### Orchestration
+- Web search routing перенесена из transport в orchestrator.run()
+- forced_intent / _already_grounded coupling устранён → vision_intent: IntentResult | None
+- Billing cascade исправлен: используется actual_tier из CoordinationResult
 
-### Orchestration (§3, §9, §12)
-- Web search routing перенесена из transport в `orchestrator.run()`.
-- `forced_intent` / `_already_grounded` coupling устранён — заменён на `vision_intent: IntentResult | None`.
-- Billing cascade (HEAVY→GENERAL→FAST) исправлен: используется `actual_tier` из `CoordinationResult`.
-- Unified agentic path: все 5 tool intents (SEARCH, WEATHER, MAPS, MAPS_POI, MAPS_ROUTE) через `compound_agent`. `_STRICT_INTENTS` → пустое множество (STRICT = LLM policy, не pre-execution gate).
+### Retrieval
+- pgvector similarity_search() bug исправлен
+- rerank_tokens считает реальные символы (1 token ≈ 4 chars)
+- source_credibility.score_documents() активирован; source_url добавлен в MemoryRecord
+- Retrieval при redis is None: деградирует без кэша с WARNING, не пропускается
 
-### Retrieval (§5)
-- pgvector `similarity_search()` bug исправлен.
-- `rerank_tokens` считает реальные символы (1 token ≈ 4 chars).
-- `source_credibility.score_documents()` активирован для pgvector результатов; `source_url` добавлен в `MemoryRecord`.
-- Retrieval при `redis is None` не пропускается — деградирует без кэша с WARNING.
+### Billing
+- UsageEntry заполняется полностью: intent, audio_seconds, tts_characters, tool_calls
+- Speech billing columns через migrate_usage_log.sql; PGRST204 fallback до миграции
 
-### Tier inflation (§6)
-- `_estimate_tier` в `orchestrator.run()`: LOW complexity + <300 input tokens → оценка по FAST rates.
+### Observability
+- GET /metrics в main.py — in-memory JSON snapshot
+- tracing.py переписан: structured JSON spans, trace_id через contextvars
+- request_id = "{update_id}:{user_id}" — сквозная корреляция
 
-### Billing completeness (§7)
-- `UsageEntry` заполняется полностью: `intent`, `audio_seconds`, `tts_characters`, `tool_calls`.
-- `OrchestratorResult` объявляет speech fields; `update_handler` заполняет через `dataclasses.replace()`.
-- Speech billing columns добавлены через `migrate_usage_log.sql`; PGRST204 fallback до миграции.
+### CI / Tests
+- Test suite: EPK, safety gate, analysis, usage meter, intent hints, web search routing
+- Coverage: 41% → ≥60%
+- fly.toml: 8gb / performance-cpu-1x (healthcheck timeout fix)
 
-### Observability (§10)
-- `GET /metrics` добавлен в `main.py` — JSON snapshot. In-memory, per-process, без persistence (by design).
-- `tracing.py` переписан: structured JSON spans, `trace_id` через `contextvars`, `parent_id`, `status: ok|error`. OpenTelemetry deps удалены как мёртвые.
-- Safety Gate signals разделены: API error → `safety_signal_lost` (ERROR), UNSAFE → WARNING.
-- `request_id = "{update_id}:{user_id}"` сквозная корреляция через весь pipeline.
+### Search
+- Three-tier fallback: Tavily → SerpAPI → SearXNG (self-hosted)
 
-### CI / Tests (§11, §16)
-- Test suite создан: EPK, safety gate, analysis, usage meter, intent hints, web search routing. Все pure unit, без внешних зависимостей.
-- Coverage поднят с 41% до ≥60% добавлением тестов transport/retrieval/payments/cache.
-- `fly.toml` обновлён до `8gb / performance-cpu-1x` (healthcheck не укладывался в 5s timeout на 2GB shared).
+### Healthcheck
+- asyncio.wait_for() 3s для Redis и Supabase; параллельные проверки через asyncio.gather
+- asyncio.to_thread для sync Supabase call
 
-### Search provider (§14)
-- Three-tier fallback: **Tavily** (primary) → **SerpAPI** (secondary) → **SearXNG** (tertiary, self-hosted).
-- `docker-compose.yml` добавлен сервис `searxng`; `.env.example` обновлён.
+### Conversation history
+- Tier-зависимые бюджеты: FAST=1800, GENERAL=3500 tokens (было: 1200 для всех)
+- SQL fetch limit: 20 → 40 turns
 
-### Healthcheck (§15)
-- `asyncio.wait_for()` с timeout 3s для Redis и Supabase; проверки параллельные через `asyncio.gather`.
-- `/providers` исправлен: `user_balances` вместо несуществующей `healthcheck`, `asyncio.to_thread` для sync Supabase call.
+### CoT infinite loop (17.1)
+- reasoning_engine.py: QUESTION на GENERAL/HEAVY → mode=DIRECT
+- response_synthesizer._strip_cot_artifacts(): Mode A (pure CoT loop), Mode B (partial stripping)
 
-### Conversation history (§13.2)
-- `_MAX_HISTORY_TOKENS = 1200` заменён tier-зависимыми бюджетами: FAST=1800, GENERAL=3500 tokens.
-- SQL fetch limit поднят с 20 до 40 turns.
-
-### CoT infinite loop (§17.1)
-- `reasoning_engine.py`: QUESTION на GENERAL/HEAVY → `mode=DIRECT`, убран CoT instruction.
-- `intent_engine.py` QUESTION system prompt: explicit graceful exit rule, запрет simulate search.
-- `response_synthesizer._strip_cot_artifacts()`: Mode A (pure CoT loop → честное признание), Mode B (partial stripping). Русские паттерны добавлены.
-
-### Balance guards (§9.2, §9.3)
-- Web search и vision fast-path не выполняются при `user_balance <= 0`.
+### Balance guards
+- Web search и vision fast-path пропускаются при user_balance ≤ 0
 
 ---
 
@@ -291,11 +216,10 @@ input → intent → kernel → retrieval (обязательно!) → LLM → 
 
 | # | Приоритет | Описание | Файлы |
 |---|---|---|---|
-| 13.1 | 🔴 КРИТИЧЕСКИЙ | Все tool intents → «сервис недоступен» | compound_agent, groq_client, settings |
-| 13.3 | 🟡 СРЕДНИЙ | CoT format в финальном ответе (остаточные случаи) | response_synthesizer, vision_handler |
-| 13.4 | 🟡 СРЕДНИЙ | Classifier теряет контекст на follow-up фразах | intent_engine._llm_pre_classify |
-| 13.5 | 🟡 СРЕДНИЙ | SEARCH не переформулирует описательный запрос | compound_agent, SEARCH system prompt |
-| 17.2 | 🟡 СРЕДНИЙ | TruthMode как flag вместо verification layer — спроектировано, ждёт стабилизации ответов | execution_policy_kernel, retrieval_engine, source_credibility |
-| 13.7 | 🟢 НИЗКИЙ | Грузинский: i18n fallback-строка некорректна по смыслу | i18n/strings.py |
+| 13.3 | 🟡 | CoT артефакты (остаточные случаи) | response_synthesizer, vision_handler |
+| 13.4 | 🟡 | Classifier теряет контекст на follow-up | intent_engine._llm_pre_classify |
+| 13.5 | 🟡 | SEARCH не переформулирует описательный запрос | web_tools._search, intent_engine SEARCH prompt |
+| 17.2 | 🟡 | TruthMode как flag, не verification layer | execution_policy_kernel |
+| 13.7 | 🟢 | Грузинский i18n fallback некорректен | i18n/strings.py |
 
-📋 **Из CI_README (planned):** coverage floor 75% (speech/billing тесты), asyncio stress tests (13.4), integration tests compound tool execution (13.1 regression), retrieval quality regression, mypy.
+📋 **CI (planned):** coverage floor 75%, asyncio stress tests (13.4), integration tests compound pipeline, retrieval quality regression, mypy.
