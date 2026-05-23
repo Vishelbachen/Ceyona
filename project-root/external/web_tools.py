@@ -23,51 +23,32 @@ async def _weather(query: str, lang: str = "en") -> str:
 
 async def _rewrite_search_query(query: str) -> str:
     """
-    Detect descriptive queries (no exact name known) and rewrite into
-    a short English keyword query before hitting the search provider.
+    Semantic query planner for web search.
 
-    Activation condition: query contains description markers — phrases like
-    "я забыла", "не помню", "там где", "про то как", "примерно", etc.
-    No activation for direct lookup queries ("погода в Москве", "курс доллара").
+    Classifies user intent as one of two modes:
+      KNOWN_ENTITY      — user knows the exact name → pass query as-is
+      DESCRIPTIVE_SEARCH — user describes something without knowing its name
+                           → rewrite into a concise English keyword query
+
+    No hardcoded word lists. Classification is fully semantic — the LLM
+    determines whether the user knows the name, regardless of language or phrasing.
 
     Uses llama-3.1-8b-instant (FAST tier) — single bounded call, cheap.
     Falls back to original query on any failure (non-blocking).
     """
-    _DESCRIPTION_MARKERS = (
-        # Russian
-        "забы", "не помню", "не знаю название", "там где", "про то как",
-        "про то что", "примерно", "вроде как", "что-то про", "аниме про",
-        "фильм про", "сериал про", "книга про", "игра про", "музыка где",
-        "песня где", "там есть", "главный герой", "главная героиня",
-        "там где", "ищу аниме", "ищу фильм", "ищу сериал", "ищу книгу",
-        # English
-        "i forgot", "i don't remember", "can't remember", "something about",
-        "anime where", "movie where", "show where", "book where",
-        "anime about", "movie about", "show about",
-        "main character", "main hero", "the one where",
-    )
-
-    q_lower = query.lower()
-    needs_rewrite = any(marker in q_lower for marker in _DESCRIPTION_MARKERS)
-    if not needs_rewrite:
-        return query
-
     try:
         from llm.groq_client import groq_client
         prompt = (
-            "Rewrite the following user query into a SHORT English keyword search query "
-            "(3-8 words max, no filler words, no articles). "
-            "Rules:\n"
-            "1. Translate to English.\n"
-            "2. Keep only entities + key descriptors (genre, year, character type, etc.).\n"
-            "3. Add a type hint if clear: anime, movie, book, song, game, etc.\n"
-            "4. If a year or country is mentioned — include it.\n"
-            "5. Output ONLY the rewritten query, nothing else. No quotes, no explanation.\n\n"
-            "Examples:\n"
-            "  'я забыла аниме, там внучка якудзы и охранник' → 'yakuza granddaughter bodyguard anime'\n"
-            "  'фильм где корабль тонет в начале 20 века' → 'ship sinking 1900s movie'\n"
-            "  'песня где мужчина поёт про дождь и одиночество 2020' → 'rain loneliness male singer 2020'\n\n"
-            f"Query: {query}"
+            "You are an intent-aware query planner for a web search engine.\n\n"
+            "Your task: determine whether the user knows the exact name of what they are looking for.\n\n"
+            "Case 1 — KNOWN_ENTITY: the user knows the exact name (title, person, place, product).\n"
+            "→ Output the search query as-is (translate to English if needed, keep the name intact).\n\n"
+            "Case 2 — DESCRIPTIVE_SEARCH: the user describes something WITHOUT knowing its name.\n"
+            "→ Convert the description into a concise English keyword query (3-8 words).\n"
+            "→ Focus on unique identifying traits: role, relationships, genre, year, setting.\n"
+            "→ Remove all conversational filler. Output ONLY the final search query.\n\n"
+            "Do not explain your reasoning. Output ONLY the final search query, nothing else.\n\n"
+            f"User query: {query}"
         )
         response = await groq_client.complete(
             model="llama-3.1-8b-instant",
@@ -77,10 +58,11 @@ async def _rewrite_search_query(query: str) -> str:
         )
         rewritten = response.text.strip().strip('"').strip("'")
         if rewritten and len(rewritten) < 120:
-            logger.info(
-                "search query rewritten",
-                extra={"original": query[:80], "rewritten": rewritten},
-            )
+            if rewritten.lower() != query.lower():
+                logger.info(
+                    "search query rewritten",
+                    extra={"original": query[:80], "rewritten": rewritten},
+                )
             return rewritten
     except Exception as exc:
         logger.warning("_rewrite_search_query failed", extra={"error": str(exc)})
