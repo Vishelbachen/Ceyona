@@ -202,8 +202,14 @@ class GroqClient:
         choice = response.choices[0]
         usage  = response.usage
 
-        # Model requested tool execution
-        if choice.finish_reason == "tool_calls" and choice.message.tool_calls:
+        # Model requested tool execution.
+        # CRITICAL: check message.tool_calls FIRST — some compound model variants
+        # (notably groq/compound-mini) return finish_reason="stop" WITH tool_calls
+        # populated instead of finish_reason="tool_calls". Checking finish_reason alone
+        # causes the response to fall through to LLMResponse with empty/wrong content.
+        # Defensive: treat any response with tool_calls in the message as a tool call request,
+        # regardless of finish_reason.
+        if choice.message.tool_calls:
             raw_tool_calls = choice.message.tool_calls
             tool_calls = [
                 ToolCall(
