@@ -42,6 +42,47 @@ async def lifespan(app: FastAPI):
     from llm.hf_client import hf_client
     app.state.hf_client = hf_client
 
+    # ── media group aggregator ────────────────────────────
+    from transport.telegram.media_group_aggregator import MediaGroupAggregator
+    from transport.telegram.vision_handler import handle_vision_group
+
+    aggregator: MediaGroupAggregator = state["media_group_aggregator"]
+
+    async def _on_group_ready(group_id: str, items) -> None:
+        """
+        Called by the aggregator once all photos in an album have arrived.
+        Runs the full vision + pipeline path and sends the result to the user.
+        """
+        from transport.telegram.webhook import _send_message, _send_message_with_topup
+        # Derive user context from first item's message_id via Supabase is not
+        # feasible here without chat_id, so we store it alongside items.
+        # The chat_id is encoded as a prefix in group_id: "{chat_id}:{tg_group_id}"
+        try:
+            chat_id_str, _ = group_id.split(":", 1)
+            chat_id = int(chat_id_str)
+        except (ValueError, AttributeError):
+            logger.error("MediaGroup: cannot parse chat_id from group_id", extra={"group_id": group_id})
+            return
+
+        caption = next((i.caption for i in items if i.caption), "")
+        file_ids = [i.file_id for i in items]
+
+        try:
+            vision_result = await handle_vision_group(
+                file_ids=file_ids,
+                caption=caption,
+                lang="en",   # TODO: persist lang in aggregator item
+            )
+        except Exception as exc:
+            logger.error("MediaGroup vision group failed", extra={"error": str(exc)})
+            await _send_message(chat_id, "❌ Could not process the images.")
+            return
+
+        await _send_message(chat_id, vision_result.text or "❌ Could not process the images.")
+
+    aggregator._on_group_ready = _on_group_ready
+    app.state.media_group_aggregator = aggregator
+
     # ── rate limiter ──────────────────────────────────────
     from security.rate_limiter import init_rate_limiter
     init_rate_limiter(state["redis"])
