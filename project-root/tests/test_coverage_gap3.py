@@ -162,6 +162,7 @@ class TestAuthMiddleware:
     def test_verify_webhook_secret_timing_safe(self):
         """Must use constant-time comparison (hmac.compare_digest)."""
         from transport.telegram.auth_middleware import verify_webhook_secret
+
         # Verify it doesn't short-circuit on first char mismatch
         # (behavioural test: same result regardless of where mismatch is)
         assert verify_webhook_secret("aaaaab", "aaaaac") is False
@@ -314,9 +315,9 @@ class TestMediaGroupItem:
 class TestMediaGroupAggregatorInit:
     def test_init_defaults(self):
         from transport.telegram.media_group_aggregator import (
-            MediaGroupAggregator,
             _DEBOUNCE_TTL_SECONDS,
             _MAX_GROUP_SIZE,
+            MediaGroupAggregator,
         )
         redis = MagicMock()
         cb = AsyncMock()
@@ -419,7 +420,10 @@ class TestMediaGroupAggregatorStop:
 class TestMediaGroupAggregatorAdd:
     @pytest.mark.asyncio
     async def test_add_calls_lua_script(self):
-        from transport.telegram.media_group_aggregator import MediaGroupAggregator, MediaGroupItem
+        from transport.telegram.media_group_aggregator import (
+            MediaGroupAggregator,
+            MediaGroupItem,
+        )
         redis = _make_redis_mock()
         lua_mock = AsyncMock(return_value=1)
         redis.register_script = MagicMock(return_value=lua_mock)
@@ -444,9 +448,9 @@ class TestMediaGroupAggregatorAdd:
     async def test_add_triggers_flush_at_max_size(self):
         """When lua returns max_group_size, _flush() must be called immediately."""
         from transport.telegram.media_group_aggregator import (
+            _MAX_GROUP_SIZE,
             MediaGroupAggregator,
             MediaGroupItem,
-            _MAX_GROUP_SIZE,
         )
         redis = _make_redis_mock()
 
