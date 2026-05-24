@@ -51,13 +51,15 @@ async def lifespan(app: FastAPI):
     async def _on_group_ready(group_id: str, items) -> None:
         """
         Called by the aggregator once all photos in an album have arrived.
-        Runs the full vision + pipeline path and sends the result to the user.
+        Routes through the full vision + orchestrator pipeline — same path
+        as a single photo, but using handle_vision_group for batch extraction.
         """
-        from transport.telegram.webhook import _send_message
+        from payments.access_controller import AccessController
+        from transport.telegram.message_router import UpdateType
+        from transport.telegram.update_handler import handle_message
+        from transport.telegram.webhook import _send_message, _send_message_with_topup
 
-        # Derive user context from first item's message_id via Supabase is not
-        # feasible here without chat_id, so we store it alongside items.
-        # The chat_id is encoded as a prefix in group_id: "{chat_id}:{tg_group_id}"
+        # chat_id is encoded as a prefix in group_id: "{chat_id}:{tg_group_id}"
         try:
             chat_id_str, _ = group_id.split(":", 1)
             chat_id = int(chat_id_str)
@@ -67,19 +69,62 @@ async def lifespan(app: FastAPI):
 
         caption = next((i.caption for i in items if i.caption), "")
         file_ids = [i.file_id for i in items]
+        user_id = chat_id  # for Telegram bots: chat_id == user_id for private chats
 
+        # Fetch user balance
+        user_balance = 0.0
+        try:
+            ac = AccessController(state["supabase"])
+            balance_result = await ac.get_balance(user_id)
+            user_balance = balance_result.balance_usd
+        except Exception as exc:
+            logger.error("MediaGroup: balance fetch failed", extra={"error": str(exc)})
+
+        # Run full vision pipeline via handle_vision_group + orchestrator
         try:
             vision_result = await handle_vision_group(
                 file_ids=file_ids,
                 caption=caption,
-                lang="en",   # TODO: persist lang in aggregator item
+                lang="ru",  # TODO: persist lang in MediaGroupItem
             )
         except Exception as exc:
             logger.error("MediaGroup vision group failed", extra={"error": str(exc)})
             await _send_message(chat_id, "❌ Could not process the images.")
             return
 
-        await _send_message(chat_id, vision_result.text or "❌ Could not process the images.")
+        if not vision_result.needs_pipeline:
+            # Direct vision answer — send as-is (no orchestrator needed)
+            text = vision_result.text or "❌ Could not process the images."
+            await _send_message(chat_id, text)
+            return
+
+        # needs_pipeline=True — forward extracted vision text into orchestrator
+        # Build a synthetic update so handle_message can process it normally
+        synthetic_update = {"_voice_transcript": vision_result.text}
+        try:
+            result = await handle_message(
+                update=synthetic_update,
+                update_type=UpdateType.MESSAGE,
+                user_id=user_id,
+                user_balance=user_balance,
+                lang="ru",
+                supabase=state["supabase"],
+                redis=state["redis"],
+                hf_client=app.state.hf_client,
+                request_id=f"mediagroup:{group_id}",
+                app_state=app.state,
+            )
+            if result.denied:
+                from i18n.t import get_system_message
+                await _send_message(chat_id, get_system_message("no_response", "ru"))
+                return
+            if result.text:
+                await _send_message_with_topup(chat_id, result.text, lang="ru")
+        except Exception as exc:
+            logger.error("MediaGroup orchestrator failed", extra={"error": str(exc)})
+            # Fallback: send raw vision extraction
+            fallback_text = vision_result.text or "❌ Could not process the images."
+            await _send_message(chat_id, fallback_text)
 
     aggregator._on_group_ready = _on_group_ready
     app.state.media_group_aggregator = aggregator
