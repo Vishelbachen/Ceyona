@@ -105,6 +105,7 @@ async def handle_message(
                 MediaGroupAggregator,
                 MediaGroupItem,
             )
+
             # Prefix group_id with chat_id so the callback can resolve the recipient.
             scoped_group_id = f"{user_id}:{group_id}"
 
