@@ -53,7 +53,8 @@ async def lifespan(app: FastAPI):
         Called by the aggregator once all photos in an album have arrived.
         Runs the full vision + pipeline path and sends the result to the user.
         """
-        from transport.telegram.webhook import _send_message, _send_message_with_topup
+        from transport.telegram.webhook import _send_message
+
         # Derive user context from first item's message_id via Supabase is not
         # feasible here without chat_id, so we store it alongside items.
         # The chat_id is encoded as a prefix in group_id: "{chat_id}:{tg_group_id}"
