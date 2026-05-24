@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 from dataclasses import dataclass
@@ -101,6 +102,17 @@ _EXTRACTION_SYSTEM = (
     "OUTPUT FORMAT: plain prose, no headers, no bullet points, no meta-commentary like "
     "'The image shows' or 'This image depicts' or 'Изображение представляет собой'. "
     "Start directly with the content."
+)
+
+
+# ─── UNCERTAINTY SIGNALS ──────────────────────────────────────────────────────
+# Signals that the extractor couldn't identify/understand the image.
+# These must always go through the pipeline — never returned raw to user.
+# Shared by handle_vision() and handle_vision_group().
+_UNCERTAINTY_SIGNALS = (
+    "не знаю", "не могу определить", "не удалось", "не удалось идентифицировать",
+    "don't know", "cannot identify", "unable to identify", "i'm not sure",
+    "not sure", "невозможно определить", "не могу распознать",
 )
 
 
@@ -279,14 +291,6 @@ async def handle_vision(
         else extracted
     )
 
-    # Signals that the extractor couldn't identify/understand the image.
-    # These must always go through the pipeline — never returned raw to user.
-    _UNCERTAINTY_SIGNALS = (
-        "не знаю", "не могу определить", "не удалось", "не удалось идентифицировать",
-        "don't know", "cannot identify", "unable to identify", "i'm not sure",
-        "not sure", "невозможно определить", "не могу распознать",
-    )
-
     intent_result  = None
     try:
         from cognition.intent_engine import Intent, classify
@@ -441,7 +445,7 @@ async def handle_vision_group(
     intent_result = None
     needs_pipeline = True
     try:
-        from cognition.intent_engine import classify
+        from cognition.intent_engine import Intent, classify
         classify_input = (
             f"{caption.strip()}\n\n{extracted}".strip()
             if caption.strip()
