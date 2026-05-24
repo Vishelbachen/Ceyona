@@ -336,6 +336,7 @@ async def telegram_webhook(
                     redis=request.app.state.redis,
                     hf_client=hf_client,
                     request_id=request_id,
+                    app_state=request.app.state,
                 )
         except Exception as exc:
             logger.error("handle_message crashed", extra={"error": str(exc)})
