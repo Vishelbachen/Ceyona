@@ -814,7 +814,8 @@ class TestWalletManager:
         supabase.table.return_value.insert.return_value.execute.return_value = MagicMock()
 
         with patch("payments.wallet_manager.ton_client") as mock_ton, \
-             patch("payments.wallet_manager.nano_to_usd", new_callable=AsyncMock, return_value=2.0) as mock_usd, \
+             patch("payments.wallet_manager.nano_to_usd",
+                   new_callable=AsyncMock, return_value=2.0), \
              patch("payments.wallet_manager.AccessController") as mock_ac_cls:
             mock_ton.get_transactions = AsyncMock(return_value=[tx])
             mock_ac = MagicMock()
