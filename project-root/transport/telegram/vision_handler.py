@@ -321,3 +321,153 @@ async def handle_vision(
         needs_pipeline=needs_pipeline,
         intent_result=intent_result if needs_pipeline else None,
     )
+
+# ─── MULTI-IMAGE (ALBUM) HANDLER ──────────────────────────────────────────────
+
+_GROUP_EXTRACTION_SYSTEM = (
+    "You are given multiple images from the same album sent by a user. "
+    "Describe what you see across all images as a coherent whole. "
+    "If images show multiple items (products, places, documents), list each briefly. "
+    "If they tell a story or sequence, describe the sequence. "
+    "Be concise and factual. Do not hallucinate. "
+    "If you cannot determine what an image shows, say so for that image only."
+)
+
+
+async def handle_vision_group(
+    file_ids: list[str],
+    caption: str = "",
+    lang: str = "en",
+) -> VisionResult:
+    """
+    Process a Telegram media group (album) as a single vision call.
+
+    Downloads all images concurrently, builds a multi-image Groq request,
+    and returns a single VisionResult — same contract as handle_vision().
+
+    Falls back to handle_vision() on the first image if the group has only
+    one item (degenerate case from a race in the aggregator).
+    """
+    from i18n.t import t
+    err_text = t("vision_error", lang)
+
+    if not file_ids:
+        return VisionResult(text=err_text, needs_pipeline=False)
+
+    # Degenerate case: aggregator flushed a single-item group.
+    if len(file_ids) == 1:
+        return await handle_vision(file_id=file_ids[0], caption=caption, lang=lang)
+
+    # ── download all images concurrently ─────────────────────────────────────
+    async def _fetch(fid: str) -> bytes | None:
+        url = await _get_file_url(fid)
+        if not url:
+            return None
+        raw = await _download_image(url)
+        if not raw:
+            return None
+        return _resize_image_if_needed(raw)
+
+    results = await asyncio.gather(*[_fetch(fid) for fid in file_ids], return_exceptions=True)
+
+    user_content: list[dict] = []
+    loaded = 0
+    for idx, res in enumerate(results):
+        if isinstance(res, Exception) or res is None:
+            logger.warning(
+                "Vision group: failed to load image",
+                extra={"index": idx, "error": str(res) if isinstance(res, Exception) else "None"},
+            )
+            continue
+        b64 = base64.b64encode(res).decode("ascii")
+        user_content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+        })
+        loaded += 1
+
+    if loaded == 0:
+        return VisionResult(text=err_text, needs_pipeline=False)
+
+    if caption.strip():
+        user_content.append({"type": "text", "text": caption.strip()})
+
+    # Group calls are inherently heavier — always use GENERAL token budget.
+    _max_tokens = RUNTIME.tier_configs[Tier.GENERAL].max_output_tokens
+
+    payload = {
+        "model": _VISION_MODEL,
+        "max_tokens": _max_tokens,
+        "temperature": 0.1,
+        "messages": [
+            {"role": "system", "content": _GROUP_EXTRACTION_SYSTEM},
+            {"role": "user",   "content": user_content},
+        ],
+    }
+
+    # ── call Groq vision API ──────────────────────────────────────────────────
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            r = await client.post(
+                _GROQ_ENDPOINT,
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {settings.groq_api_key}",
+                    "Content-Type":  "application/json",
+                },
+            )
+            r.raise_for_status()
+            data = r.json()
+            extracted = (
+                data.get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+                .strip()
+            )
+    except httpx.HTTPStatusError as exc:
+        logger.error("Groq vision group HTTP error", extra={
+            "status": exc.response.status_code,
+            "body":   exc.response.text[:300],
+        })
+        return VisionResult(text=err_text, needs_pipeline=False)
+    except Exception as exc:
+        logger.error("Groq vision group call failed", extra={"error": str(exc)})
+        return VisionResult(text=err_text, needs_pipeline=False)
+
+    if not extracted:
+        return VisionResult(text=err_text, needs_pipeline=False)
+
+    # ── classify extracted content ────────────────────────────────────────────
+    intent_result = None
+    needs_pipeline = True
+    try:
+        from cognition.intent_engine import classify
+        classify_input = (
+            f"{caption.strip()}\n\n{extracted}".strip()
+            if caption.strip()
+            else extracted
+        )
+        intent_result = await classify(classify_input, lang=lang)
+        _uncertainty = any(s in extracted.lower() for s in _UNCERTAINTY_SIGNALS)
+        needs_pipeline = (
+            intent_result.intent != Intent.CONVERSATION
+            or _uncertainty
+        )
+    except Exception as exc:
+        logger.warning("Intent classify failed in vision group", extra={"error": str(exc)})
+        needs_pipeline = True
+
+    logger.info("Vision group extraction complete", extra={
+        "lang":           lang,
+        "images_loaded":  loaded,
+        "images_total":   len(file_ids),
+        "caption_len":    len(caption),
+        "extracted_len":  len(extracted),
+        "needs_pipeline": needs_pipeline,
+    })
+
+    return VisionResult(
+        text=extracted,
+        needs_pipeline=needs_pipeline,
+        intent_result=intent_result if needs_pipeline else None,
+    )
