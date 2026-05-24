@@ -41,15 +41,36 @@ async def bootstrap() -> dict:
     except Exception as exc:
         logger.error("intent_examples seed failed — classify will use fallback", extra={"error": str(exc)})
 
+    # ─── MediaGroup aggregator ──────────────────────────────────────────────
+    # Wires the Redis-backed album aggregator.  The on_group_ready callback
+    # is intentionally left as a no-op here; webhook.py overrides it via
+    # app.state.media_group_aggregator after the app is created so it can
+    # access send_message helpers in the same module.
+    from transport.telegram.media_group_aggregator import MediaGroupAggregator
+
+    async def _media_group_noop(group_id: str, items) -> None:  # noqa: E731
+        logger.warning(
+            "MediaGroupAggregator: on_group_ready not wired — override in app setup",
+            extra={"group_id": group_id, "count": len(items)},
+        )
+
+    media_group_aggregator = MediaGroupAggregator(redis, _media_group_noop)
+    await media_group_aggregator.start()
+    logger.info("MediaGroupAggregator started")
+
     return {
         "redis": redis,
         "supabase": supabase,
         "settings": settings,
         "event_store": store,
+        "media_group_aggregator": media_group_aggregator,
     }
 
 
 async def shutdown(state: dict) -> None:
+    aggregator = state.get("media_group_aggregator")
+    if aggregator:
+        await aggregator.stop()
     redis = state.get("redis")
     if redis:
         await redis.aclose()
