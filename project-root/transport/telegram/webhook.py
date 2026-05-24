@@ -425,6 +425,24 @@ async def telegram_webhook(
         if ctx.action == CallbackAction.BALANCE:
             bal_text = f"💰 Balance: ${user_balance:.2f}"
             await _answer_callback(ctx.callback_query_id, bal_text)
+        elif ctx.action == CallbackAction.TOPUP:
+            # Acknowledge the button press immediately (removes spinner)
+            await _answer_callback(ctx.callback_query_id)
+            # Send TON wallet address as a message the user can act on
+            from app.settings import settings as _s
+            wallet = _s.ton_wallet
+            if wallet:
+                topup_text = (
+                    f"💳 *Top up your balance*\n\n"
+                    f"Send TON to the wallet below and include your Telegram user ID "
+                    f"(`{user_id}`) in the comment/memo so we can credit your account.\n\n"
+                    f"`{wallet}`\n\n"
+                    f"💰 Current balance: ${user_balance:.4f}"
+                )
+            else:
+                topup_text = get_system_message("topup_unavailable", lang)
+            if chat_id:
+                await _send_message(chat_id, topup_text)
         elif ctx.action == CallbackAction.HELP:
             await _answer_callback(
                 ctx.callback_query_id,
