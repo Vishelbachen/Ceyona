@@ -19,7 +19,7 @@ import asyncio
 import json
 import pathlib
 import sys
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
@@ -161,8 +161,8 @@ class TestAuthMiddleware:
 
     def test_verify_webhook_secret_timing_safe(self):
         """Must use constant-time comparison (hmac.compare_digest)."""
+        import hmac
         from transport.telegram.auth_middleware import verify_webhook_secret
-
         # Verify it doesn't short-circuit on first char mismatch
         # (behavioural test: same result regardless of where mismatch is)
         assert verify_webhook_secret("aaaaab", "aaaaac") is False
@@ -315,9 +315,9 @@ class TestMediaGroupItem:
 class TestMediaGroupAggregatorInit:
     def test_init_defaults(self):
         from transport.telegram.media_group_aggregator import (
+            MediaGroupAggregator,
             _DEBOUNCE_TTL_SECONDS,
             _MAX_GROUP_SIZE,
-            MediaGroupAggregator,
         )
         redis = MagicMock()
         cb = AsyncMock()
@@ -420,10 +420,7 @@ class TestMediaGroupAggregatorStop:
 class TestMediaGroupAggregatorAdd:
     @pytest.mark.asyncio
     async def test_add_calls_lua_script(self):
-        from transport.telegram.media_group_aggregator import (
-            MediaGroupAggregator,
-            MediaGroupItem,
-        )
+        from transport.telegram.media_group_aggregator import MediaGroupAggregator, MediaGroupItem
         redis = _make_redis_mock()
         lua_mock = AsyncMock(return_value=1)
         redis.register_script = MagicMock(return_value=lua_mock)
@@ -448,9 +445,9 @@ class TestMediaGroupAggregatorAdd:
     async def test_add_triggers_flush_at_max_size(self):
         """When lua returns max_group_size, _flush() must be called immediately."""
         from transport.telegram.media_group_aggregator import (
-            _MAX_GROUP_SIZE,
             MediaGroupAggregator,
             MediaGroupItem,
+            _MAX_GROUP_SIZE,
         )
         redis = _make_redis_mock()
 
@@ -487,7 +484,7 @@ class TestMediaGroupAggregatorAdd:
 class TestMediaGroupAggregatorFlush:
     @pytest.mark.asyncio
     async def test_flush_calls_callback_with_items(self):
-        from transport.telegram.media_group_aggregator import MediaGroupAggregator
+        from transport.telegram.media_group_aggregator import MediaGroupAggregator, MediaGroupItem
 
         raw_items = [
             json.dumps({"file_id": "fA", "message_id": 1, "caption": "cap1"}),
@@ -518,3 +515,225 @@ class TestMediaGroupAggregatorFlush:
         await agg._flush("user42:group7")
 
         cb.assert_awaited_once()
+        group_id_arg, items_arg = cb.call_args[0]
+        assert group_id_arg == "user42:group7"
+        assert len(items_arg) == 2
+        assert items_arg[0].file_id == "fA"
+        assert items_arg[0].caption == "cap1"
+        assert items_arg[1].file_id == "fB"
+
+        await agg.stop()
+
+    @pytest.mark.asyncio
+    async def test_flush_skips_when_lock_not_acquired(self):
+        """lua_flush returning None/empty means another instance already flushed."""
+        from transport.telegram.media_group_aggregator import MediaGroupAggregator
+
+        redis = _make_redis_mock()
+        lua_add_mock = AsyncMock(return_value=1)
+        lua_flush_mock = AsyncMock(return_value=None)
+        call_count = [0]
+
+        def register_side_effect(script):
+            call_count[0] += 1
+            return lua_add_mock if call_count[0] == 1 else lua_flush_mock
+
+        redis.register_script = MagicMock(side_effect=register_side_effect)
+
+        async def _empty_listen():
+            return
+            yield  # pragma: no cover
+
+        redis.pubsub.return_value.listen = _empty_listen
+
+        cb = AsyncMock()
+        agg = MediaGroupAggregator(redis, cb)
+        await agg.start()
+
+        await agg._flush("uid:gid")
+        cb.assert_not_awaited()  # callback must NOT be called if lock not acquired
+
+        await agg.stop()
+
+    @pytest.mark.asyncio
+    async def test_flush_skips_malformed_items(self):
+        """Malformed JSON items must be skipped without crashing."""
+        from transport.telegram.media_group_aggregator import MediaGroupAggregator
+
+        raw_items = [
+            b"not-valid-json",
+            json.dumps({"file_id": "fGood", "message_id": 5}),
+        ]
+
+        redis = _make_redis_mock()
+        lua_add_mock = AsyncMock(return_value=1)
+        lua_flush_mock = AsyncMock(return_value=raw_items)
+        call_count = [0]
+
+        def register_side_effect(script):
+            call_count[0] += 1
+            return lua_add_mock if call_count[0] == 1 else lua_flush_mock
+
+        redis.register_script = MagicMock(side_effect=register_side_effect)
+
+        async def _empty_listen():
+            return
+            yield  # pragma: no cover
+
+        redis.pubsub.return_value.listen = _empty_listen
+
+        cb = AsyncMock()
+        agg = MediaGroupAggregator(redis, cb)
+        await agg.start()
+
+        await agg._flush("uid:gid")
+
+        # Callback called with only the valid item
+        cb.assert_awaited_once()
+        _, items = cb.call_args[0]
+        assert len(items) == 1
+        assert items[0].file_id == "fGood"
+
+        await agg.stop()
+
+    @pytest.mark.asyncio
+    async def test_flush_callback_exception_does_not_propagate(self):
+        """Callback crash must be caught — aggregator must not crash."""
+        from transport.telegram.media_group_aggregator import MediaGroupAggregator
+
+        raw_items = [json.dumps({"file_id": "fX", "message_id": 99})]
+        redis = _make_redis_mock()
+        lua_add_mock = AsyncMock(return_value=1)
+        lua_flush_mock = AsyncMock(return_value=raw_items)
+        call_count = [0]
+
+        def register_side_effect(script):
+            call_count[0] += 1
+            return lua_add_mock if call_count[0] == 1 else lua_flush_mock
+
+        redis.register_script = MagicMock(side_effect=register_side_effect)
+
+        async def _empty_listen():
+            return
+            yield  # pragma: no cover
+
+        redis.pubsub.return_value.listen = _empty_listen
+
+        cb = AsyncMock(side_effect=RuntimeError("callback crash"))
+        agg = MediaGroupAggregator(redis, cb)
+        await agg.start()
+
+        await agg._flush("uid:gid")  # must not raise
+
+        await agg.stop()
+
+
+class TestMediaGroupKeyspaceListener:
+    @pytest.mark.asyncio
+    async def test_listener_ignores_non_ttl_keys(self):
+        """Keys not matching media_group:*:ttl must be ignored — no flush called."""
+        from transport.telegram.media_group_aggregator import MediaGroupAggregator
+
+        messages = [
+            {"type": "pmessage", "data": b"some_other_key"},
+            {"type": "pmessage", "data": b"media_group:uid:gid"},     # no :ttl suffix
+            {"type": "subscribe", "data": b"whatever"},
+        ]
+
+        redis = _make_redis_mock()
+        lua_add_mock = AsyncMock(return_value=1)
+        lua_flush_mock = AsyncMock(return_value=None)
+        call_count = [0]
+
+        def register_side_effect(script):
+            call_count[0] += 1
+            return lua_add_mock if call_count[0] == 1 else lua_flush_mock
+
+        redis.register_script = MagicMock(side_effect=register_side_effect)
+
+        async def _listen_messages():
+            for m in messages:
+                yield m
+
+        pubsub = AsyncMock()
+        pubsub.psubscribe = AsyncMock()
+        pubsub.close = AsyncMock()
+        pubsub.listen = _listen_messages
+        redis.pubsub.return_value = pubsub
+
+        cb = AsyncMock()
+        agg = MediaGroupAggregator(redis, cb)
+        await agg.start()
+        # Give listener time to process
+        await asyncio.sleep(0.05)
+        cb.assert_not_awaited()
+        await agg.stop()
+
+    @pytest.mark.asyncio
+    async def test_listener_fires_flush_on_ttl_expiry(self):
+        """A media_group:*:ttl expiry message must trigger _flush()."""
+        from transport.telegram.media_group_aggregator import MediaGroupAggregator
+
+        messages = [
+            {"type": "pmessage", "data": b"media_group:user1:grp5:ttl"},
+        ]
+
+        redis = _make_redis_mock()
+        lua_add_mock = AsyncMock(return_value=1)
+        # flush returns one item
+        raw = [json.dumps({"file_id": "fZ", "message_id": 77})]
+        lua_flush_mock = AsyncMock(return_value=raw)
+        call_count = [0]
+
+        def register_side_effect(script):
+            call_count[0] += 1
+            return lua_add_mock if call_count[0] == 1 else lua_flush_mock
+
+        redis.register_script = MagicMock(side_effect=register_side_effect)
+
+        async def _listen_messages():
+            for m in messages:
+                yield m
+
+        pubsub = AsyncMock()
+        pubsub.psubscribe = AsyncMock()
+        pubsub.close = AsyncMock()
+        pubsub.listen = _listen_messages
+        redis.pubsub.return_value = pubsub
+
+        cb = AsyncMock()
+        agg = MediaGroupAggregator(redis, cb)
+        await agg.start()
+        # Give asyncio time to process the spawned flush task
+        await asyncio.sleep(0.1)
+
+        cb.assert_awaited_once()
+        group_id_arg, items = cb.call_args[0]
+        assert group_id_arg == "user1:grp5"
+        assert items[0].file_id == "fZ"
+
+        await agg.stop()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Module-level constants
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestAggregatorConstants:
+    def test_debounce_ttl_positive(self):
+        from transport.telegram.media_group_aggregator import _DEBOUNCE_TTL_SECONDS
+        assert _DEBOUNCE_TTL_SECONDS > 0
+
+    def test_max_group_size_matches_telegram_limit(self):
+        from transport.telegram.media_group_aggregator import _MAX_GROUP_SIZE
+        assert _MAX_GROUP_SIZE == 10
+
+    def test_lua_add_script_is_string(self):
+        from transport.telegram.media_group_aggregator import _LUA_ADD
+        assert isinstance(_LUA_ADD, str)
+        assert "RPUSH" in _LUA_ADD
+
+    def test_lua_flush_script_is_string(self):
+        from transport.telegram.media_group_aggregator import _LUA_FLUSH
+        assert isinstance(_LUA_FLUSH, str)
+        assert "SETNX" in _LUA_FLUSH
