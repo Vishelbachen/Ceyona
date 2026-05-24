@@ -13,6 +13,8 @@ from core.execution.orchestrator import (
 )
 from transport.telegram.message_router import (
     UpdateType,
+    extract_media_group_id,
+    extract_message_id,
     extract_photo,
     extract_text,
     extract_voice,
@@ -79,19 +81,67 @@ async def handle_message(
     redis=None,
     hf_client=None,
     request_id: str = "",
+    app_state=None,
 ) -> OrchestratorResult:
 
     # ── photo handling ────────────────────────────────────────────────────────
     if has_photo(update):
-        photo_meta = extract_photo(update)
-        file_id    = photo_meta["file_id"]
-        caption    = photo_meta.get("caption", "")
+        photo_meta   = extract_photo(update)
+        file_id      = photo_meta["file_id"]
+        caption      = photo_meta.get("caption", "")
+        group_id     = extract_media_group_id(update)
+        message_id   = extract_message_id(update)
 
         logger.info("Photo message received", extra={
-            "user_id": user_id,
-            "file_id": file_id[:20],
-            "caption": caption[:50],
+            "user_id":  user_id,
+            "file_id":  file_id[:20],
+            "caption":  caption[:50],
+            "group_id": group_id,
         })
+
+        # ── album photo: buffer in aggregator, respond when group is ready ────
+        if group_id and redis is not None:
+            from transport.telegram.media_group_aggregator import (
+                MediaGroupAggregator,
+                MediaGroupItem,
+            )
+            # Prefix group_id with chat_id so the callback can resolve the recipient.
+            scoped_group_id = f"{user_id}:{group_id}"
+
+            # Retrieve the app-level aggregator from app state if available.
+            aggregator: MediaGroupAggregator | None = getattr(
+                app_state, "media_group_aggregator", None
+            )
+
+            if aggregator is None:
+                async def _noop_callback(gid: str, items) -> None:  # noqa: E731
+                    pass
+                aggregator = MediaGroupAggregator(redis, _noop_callback)
+
+            item = MediaGroupItem(
+                file_id=file_id,
+                message_id=message_id,
+                caption=caption,
+            )
+            await aggregator.add(scoped_group_id, item)
+
+            # Return early — the aggregator callback will send the reply once
+            # all photos in the album have arrived.
+            from i18n.t import get_system_message
+            return OrchestratorResult(
+                text="",   # empty → webhook suppresses send
+                tier=Tier.FAST,
+                model="",
+                epk_decision=EPKDecision.ALLOW,
+                usage=UsageRecord(
+                    input_tokens=0, output_tokens=0,
+                    embedding_tokens=0, rerank_tokens=0,
+                    tier=Tier.FAST, embedding_type="large", cost_usd=0.0,
+                ),
+                denied=False,
+                deny_reason="",
+                lang=lang,
+            )
 
         # Safety Gate Pass 1 on caption (photo text)
         if caption:
@@ -415,196 +465,4 @@ async def handle_message(
             conversation_history = await history_store.get_history(
                 user_id, token_budget=_history_budget
             )
-            logger.info("History loaded", extra={
-                "user_id":       user_id,
-                "turns":         len(conversation_history),
-                "token_budget":  _history_budget,
-            })
-        except Exception as exc:
-            logger.error("History load failed", extra={"error": str(exc)})
-            conversation_history = None
-
-    # ── token estimation ──────────────────────────────────────────────────────
-    message_tokens = _estimate_tokens(text)
-    history_tokens = _estimate_history_tokens(conversation_history)
-    input_tokens   = message_tokens + history_tokens
-
-    logger.info("Handling message", extra={
-        "user_id":        user_id,
-        "input_tokens":   input_tokens,
-        "message_tokens": message_tokens,
-        "history_tokens": history_tokens,
-        "complexity":     complexity,
-        "lang":           lang,
-    })
-
-    # ── retrieval ─────────────────────────────────────────────────────────────
-    # Fix §5.4: previously gated on `supabase is not None and redis is not None`.
-    # Redis is optional cache — pgvector similarity search only needs Supabase.
-    # If Redis is unavailable: retrieval runs without cache (degraded, not skipped).
-    # If Supabase is unavailable: retrieval is skipped (pgvector requires it).
-    retrieved_context = ""
-    embedding_tokens  = 0
-    rerank_tokens     = 0
-
-    if supabase is not None:
-        if redis is None:
-            logger.warning(
-                "Retrieval: Redis unavailable — running without cache (degraded)",
-                extra={"user_id": user_id},
-            )
-        try:
-            from contracts.retrieval_contracts import RetrievalQuery
-            from memory.supabase_store import SupabaseStore
-            from retrieval.retrieval_engine import RetrievalEngine
-
-            # Inject cache only when Redis is available.
-            # RetrievalEngine handles None values gracefully (no caching).
-            engine_kwargs: dict = {"supabase_store": SupabaseStore(supabase)}
-            if redis is not None:
-                from retrieval.cache.embedding_cache import EmbeddingCache
-                from retrieval.cache.query_cache import QueryCache
-                from retrieval.cache.rerank_cache import RerankCache
-                engine_kwargs["query_cache"]     = QueryCache(redis)
-                engine_kwargs["embedding_cache"] = EmbeddingCache(redis)
-                engine_kwargs["rerank_cache"]    = RerankCache(redis)
-
-            engine = RetrievalEngine(**engine_kwargs)
-
-            retrieval_result = await engine.retrieve(RetrievalQuery(
-                text=text,
-                user_id=str(user_id),
-                top_k=5,
-            ))
-
-            if retrieval_result.documents:
-                retrieved_context = "\n\n".join(
-                    d.content for d in retrieval_result.documents if d.content
-                )
-                # Use token counts from retrieval_engine (real estimation, fixed §5.2).
-                # Do not recompute here — retrieval_engine owns this calculation.
-                embedding_tokens = retrieval_result.embedding_tokens
-                rerank_tokens    = retrieval_result.rerank_tokens
-
-            logger.info("Retrieval done", extra={
-                "user_id":       user_id,
-                "docs":          len(retrieval_result.documents),
-                "reranked":      retrieval_result.reranked,
-                "cached":        retrieval_result.cached,
-                "redis_cache":   redis is not None,
-                "chars":         len(retrieved_context),
-                "emb_tokens":    embedding_tokens,
-                "rerank_tokens": rerank_tokens,
-            })
-
-        except Exception as exc:
-            logger.warning("Retrieval failed, continuing without context", extra={
-                "error": str(exc),
-            })
-    else:
-        logger.warning(
-            "Retrieval skipped — Supabase unavailable (pgvector requires it)",
-            extra={"user_id": user_id},
-        )
-
-    # ── run pipeline ──────────────────────────────────────────────────────────
-
-    request = OrchestratorRequest(
-        user_message=text,
-        user_balance=user_balance,
-        input_tokens=input_tokens,
-        complexity=complexity,
-        lang=lang,
-        supabase=supabase,
-        hf_client=hf_client,
-        conversation_history=conversation_history,
-        retrieved_context=retrieved_context,
-        embedding_tokens=embedding_tokens,
-        rerank_tokens=rerank_tokens,
-        vision_intent=locals().get("_vision_intent_result"),
-        # Vision path: image description is NOT a valid search query.
-        # skip_web_search prevents Tavily/SerpAPI from receiving extracted image text,
-        # which would result in 400 Bad Request (audit §Tavily-400-fix).
-        skip_web_search=locals().get("_vision_intent_result") is not None,
-        request_id=request_id,
-        analysis_report=_analysis_report,
-    )
-
-    result = await run(request)
-
-    # ── save history ──────────────────────────────────────────────────────────
-    if history_store is not None and not result.denied:
-        try:
-            # Vision path: save caption (what user actually typed), not the vision extraction dump.
-            # Saving the full vision text (potentially 1000+ tokens) into history causes
-            # 413 Payload Too Large on subsequent requests — audit §13.2 / vision history fix.
-            _user_message_for_history = (
-                locals().get("_vision_caption_for_history") or text
-            )
-            await history_store.append(user_id, "user", _user_message_for_history)
-            if result.text:
-                await history_store.append(user_id, "assistant", result.text)
-        except Exception as exc:
-            logger.error("History save failed", extra={"error": str(exc)})
-
-    # ── meta layer: reflection + memory_audit (async side-channel) ────────────
-    try:
-        from meta.memory_audit import MemorySnapshot, audit
-        from meta.reflection import ReflectionInput, reflect
-
-        ref_input = ReflectionInput(
-            intent=result.intent or str(result.epk_decision),  # real intent, not EPK decision
-            lang=lang,
-            tier=str(result.tier),
-            model=result.model or "",
-            response_text=result.text or "",
-            response_truncated=len(result.text or "") >= 4096,
-            cost_usd=result.usage.cost_usd,
-            was_degraded_mode=str(result.epk_decision) == "DEGRADED_MODE",
-            safety_blocked=result.deny_reason == "safety_block",
-            user_id=user_id,
-        )
-        report = reflect(ref_input)
-        logger.info("Reflection", extra=report.to_dict())
-
-        snap = MemorySnapshot(
-            user_id=user_id,
-            history_turn_count=len(conversation_history) if conversation_history else 0,
-            snapshot_available=True,
-        )
-        audit_report = audit(snap)
-        if not audit_report.is_healthy():
-            logger.warning("Memory audit", extra=audit_report.to_dict())
-
-    except Exception as exc:
-        logger.warning("Meta layer failed (non-critical)", extra={"error": str(exc)})
-
-    # ── TTS (voice response when input was voice) ─────────────────────────────
-    _tts_characters = 0
-    if _is_voice_input and result.text and not result.denied:
-        try:
-            from external.text_to_speech import synthesize as tts_synthesize
-            tts_result = await tts_synthesize(text=result.text, lang=lang)
-            if tts_result.success:
-                from dataclasses import replace
-                result = replace(result, tts_audio_bytes=tts_result.audio_bytes)
-                _tts_characters = tts_result.char_count
-                logger.info(
-                    "TTS synthesis complete",
-                    extra={"chars": tts_result.char_count, "model": tts_result.model_used},
-                )
-        except Exception as exc:
-            logger.warning("TTS failed — returning text-only", extra={"error": str(exc)})
-
-    # ── wire speech billing fields onto result ────────────────────────────────
-    # audio_seconds and tts_characters are captured in local vars above.
-    # They must be set on OrchestratorResult so webhook.py can pass them
-    # to UsageEntry — otherwise speech billing always records 0.
-    if _asr_audio_seconds or _tts_characters:
-        from dataclasses import replace as _replace
-        result = _replace(result,
-            audio_seconds=_asr_audio_seconds,
-            tts_characters=_tts_characters,
-        )
-
-    return result
+            logger.info
