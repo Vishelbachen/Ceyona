@@ -9,6 +9,7 @@ class CallbackAction(str, Enum):
     BALANCE = "balance"
     HELP = "help"
     CANCEL = "cancel"
+    TOPUP = "topup"
     UNKNOWN = "unknown"
 
 
