@@ -59,6 +59,30 @@ def has_photo(update: dict) -> bool:
     return extract_photo(update) is not None
 
 
+def extract_media_group_id(update: dict) -> str | None:
+    """
+    Return media_group_id if this photo belongs to an album, else None.
+    Telegram sets this field on every message that is part of a multi-photo send.
+    Single photos never have it.
+    """
+    for key in ("message", "edited_message"):
+        msg = update.get(key, {})
+        group_id = msg.get("media_group_id")
+        if group_id:
+            return str(group_id)
+    return None
+
+
+def extract_message_id(update: dict) -> int:
+    """Return message_id from the update, or 0 if not found."""
+    for key in ("message", "edited_message"):
+        msg = update.get(key, {})
+        mid = msg.get("message_id")
+        if mid is not None:
+            return int(mid)
+    return 0
+
+
 def extract_voice(update: dict) -> dict | None:
     """
     Extract voice/audio metadata from a message update.
