@@ -115,9 +115,17 @@ async def handle_message(
             )
 
             if aggregator is None:
+                # Fallback: app_state not wired (shouldn't happen in prod).
+                # Must call start() to register Lua scripts — skipping it
+                # leaves _lua_add=None and crashes on aggregator.add().
+                logger.warning(
+                    "MediaGroupAggregator not in app_state — creating ephemeral fallback",
+                    extra={"user_id": user_id},
+                )
                 async def _noop_callback(gid: str, items) -> None:  # noqa: E731
                     pass
                 aggregator = MediaGroupAggregator(redis, _noop_callback)
+                await aggregator.start()
 
             item = MediaGroupItem(
                 file_id=file_id,
