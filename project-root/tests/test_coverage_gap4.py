@@ -143,6 +143,7 @@ class TestMetrics:
 class TestTracing:
     def test_current_trace_id_none_outside_span(self):
         from observability.tracing import current_trace_id
+
         # Between tests there should be no active trace
         assert current_trace_id() is None
 
@@ -208,6 +209,7 @@ class TestTracing:
 
     def test_trace_tags_appear_in_log(self):
         import json
+
         from observability.tracing import trace
         with patch("observability.tracing.logger") as mock_log:
             with trace("tagged", intent="search", lang="ru"):
@@ -221,6 +223,7 @@ class TestTracing:
 
     def test_trace_status_error_on_exception(self):
         import json
+
         from observability.tracing import trace
         with patch("observability.tracing.logger") as mock_log:
             try:
@@ -315,6 +318,7 @@ class TestReflectionSignals:
 
     def test_intent_confidence_at_boundary(self):
         from meta.reflection import QualitySignal, reflect
+
         # 0.6 is NOT low confidence (< 0.6 triggers it)
         r = reflect(_make_input(intent_confidence=0.6))
         assert QualitySignal.INTENT_LOW_CONFIDENCE not in r.signals
@@ -390,6 +394,7 @@ class TestReflectionReport:
     def test_reflect_never_raises_on_bad_input(self):
         """reflect() must catch all exceptions and return a minimal report."""
         from meta.reflection import QualitySignal, reflect
+
         # Pass a broken object — reflect must not propagate
         r = reflect(object())  # type: ignore[arg-type]
         assert r.signals == [QualitySignal.RESPONSE_EMPTY]
@@ -402,7 +407,6 @@ class TestReflectionReport:
 
 class TestPromptEngine:
     def test_build_messages_minimal(self):
-        from contracts.shared_types import TruthMode
         from llm.prompt_engine import PromptContext, build_messages
         ctx = PromptContext(user_message="Hello")
         msgs = build_messages(ctx)
@@ -419,7 +423,7 @@ class TestPromptEngine:
 
     def test_build_messages_strict_truth_block(self):
         from contracts.shared_types import TruthMode
-        from llm.prompt_engine import PromptContext, build_messages, _TRUTH_STRICT
+        from llm.prompt_engine import _TRUTH_STRICT, PromptContext, build_messages
         ctx = PromptContext(user_message="q", truth_mode=TruthMode.STRICT)
         msgs = build_messages(ctx)
         system_msg = next(m for m in msgs if m["role"] == "system")
@@ -427,7 +431,7 @@ class TestPromptEngine:
 
     def test_build_messages_hybrid_truth_block(self):
         from contracts.shared_types import TruthMode
-        from llm.prompt_engine import PromptContext, build_messages, _TRUTH_HYBRID
+        from llm.prompt_engine import _TRUTH_HYBRID, PromptContext, build_messages
         ctx = PromptContext(user_message="q", truth_mode=TruthMode.HYBRID)
         msgs = build_messages(ctx)
         system_msg = next(m for m in msgs if m["role"] == "system")
@@ -435,7 +439,12 @@ class TestPromptEngine:
 
     def test_build_messages_generative_no_truth_block(self):
         from contracts.shared_types import TruthMode
-        from llm.prompt_engine import PromptContext, build_messages, _TRUTH_HYBRID, _TRUTH_STRICT
+        from llm.prompt_engine import (
+            _TRUTH_HYBRID,
+            _TRUTH_STRICT,
+            PromptContext,
+            build_messages,
+        )
         ctx = PromptContext(user_message="q", truth_mode=TruthMode.GENERATIVE)
         msgs = build_messages(ctx)
         system_msg = next((m for m in msgs if m["role"] == "system"), None)
@@ -509,7 +518,6 @@ class TestCompoundAgent:
     @pytest.mark.asyncio
     async def test_run_fast_success(self):
         from agents.compound_agent import run_fast
-        from agents.fast_agent import AgentResult
         mock_result = MagicMock()
         mock_result.text = "Search result"
         mock_result.model = "groq/compound-mini"
@@ -623,6 +631,7 @@ class TestEventNotifier:
     @pytest.mark.asyncio
     async def test_on_safety_block(self):
         from notifications.event_notifier import event_notifier
+
         # Just must not raise
         await event_notifier.on_safety_block(user_id=3, reason="harmful_content")
 
@@ -917,19 +926,23 @@ class TestCheckImports:
 
     def test_get_imported_module_import_from(self):
         import ast as _ast
+
         from scripts.check_imports import get_imported_module
         node = _ast.parse("from cognition.intent_engine import Intent").body[0]
         assert get_imported_module(node) == "cognition.intent_engine"
 
     def test_get_imported_module_plain_import(self):
         import ast as _ast
+
         from scripts.check_imports import get_imported_module
         node = _ast.parse("import agents.fast_agent").body[0]
         assert get_imported_module(node) == "agents.fast_agent"
 
     def test_get_imported_module_empty_import_from(self):
         import ast as _ast
+
         from scripts.check_imports import get_imported_module
+
         # ImportFrom with no module (relative import `from . import x`)
         node = _ast.parse("from . import something").body[0]
         result = get_imported_module(node)
@@ -944,10 +957,11 @@ class TestCheckImports:
         """The actual project must pass its own architecture gate."""
         from scripts.check_imports import check
         errors = check()
-        assert errors == [], f"Architecture violations found:\n" + "\n".join(errors)
+        assert errors == [], "Architecture violations found:\n" + "\n".join(errors)
 
     def test_main_returns_0_on_clean(self):
         from scripts.check_imports import main
+
         # The project is clean, so main() must return 0
         result = main()
         assert result == 0
@@ -959,11 +973,8 @@ class TestCheckImports:
 
     def test_check_detects_violation_in_temp_file(self, tmp_path):
         """Inject a synthetic violation and verify check() catches it."""
-        import ast as _ast
-        from scripts.check_imports import FORBIDDEN, check
-
         # Find a valid forbidden pair whose source dir exists
-        from scripts.check_imports import ROOT
+        from scripts.check_imports import FORBIDDEN, ROOT, check
         pair = None
         for src, tgt in FORBIDDEN:
             src_dir = ROOT / src.replace(".", "/")
