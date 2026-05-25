@@ -28,6 +28,14 @@ _PREAMBLE_PATTERNS: list[re.Pattern] = [
     re.compile(r"^(да,?\s+я\s+могу\s+помочь[.!]?\s*\n*)", re.IGNORECASE),
     re.compile(r"\n*если у вас (?:есть )?(?:ещё )?вопросы[^.!?\n]{0,40}[!.]?\s*$", re.IGNORECASE),
     re.compile(r"\n*надеюсь,? (?:это )?помогло[!.]?\s*$", re.IGNORECASE),
+    # Russian meta-commentary openers (vision / context analysis artifacts)
+    # These appear when the model describes what it "sees" instead of answering.
+    # Strip the opener phrase only — the real answer follows after it.
+    re.compile(r"^похоже,?\s+что\s+у\s+нас\s+есть\s+[^\n]{0,80}\.\s*\n+", re.IGNORECASE),
+    re.compile(r"^этот\s+вопрос\s+не\s+связан\s+с[^\n]{0,120}\.\s*\n+", re.IGNORECASE),
+    re.compile(r"^данный\s+вопрос\s+(?:не\s+)?[^\n]{0,80}\.\s*\n+", re.IGNORECASE),
+    re.compile(r"^изображение\s+представляет\s+собой\s+", re.IGNORECASE),
+    re.compile(r"^на\s+(?:данном|этом)\s+изображении\s+(?:представлен[аоы]?|находится|видн[аоы]?)\s+", re.IGNORECASE),
 
     # German preambles
     re.compile(r"^(natürlich[!,.]?\s*|selbstverständlich[!,.]?\s*|gerne[!,.]?\s*)", re.IGNORECASE),
