@@ -57,7 +57,7 @@ async def lifespan(app: FastAPI):
         from payments.access_controller import AccessController
         from transport.telegram.message_router import UpdateType
         from transport.telegram.update_handler import handle_message
-        from transport.telegram.webhook import _send_message, _send_message_with_topup
+        from transport.telegram.webhook import _send_message
 
         # chat_id is encoded as a prefix in group_id: "{chat_id}:{tg_group_id}"
         try:
@@ -92,14 +92,9 @@ async def lifespan(app: FastAPI):
             await _send_message(chat_id, "❌ Could not process the images.")
             return
 
-        if not vision_result.needs_pipeline:
-            # Direct vision answer — send as-is (no orchestrator needed)
-            text = vision_result.text or "❌ Could not process the images."
-            await _send_message(chat_id, text)
-            return
-
-        # needs_pipeline=True — forward extracted vision text into orchestrator
-        # Build a synthetic update so handle_message can process it normally
+        # Always run the full pipeline for albums — vision extraction is context
+        # for the LLM, never a final answer. Direct send produces robotic descriptions
+        # ("Young couple in various poses") instead of actual replies to the user.
         synthetic_update = {"_voice_transcript": vision_result.text}
         try:
             result = await handle_message(
@@ -119,7 +114,7 @@ async def lifespan(app: FastAPI):
                 await _send_message(chat_id, get_system_message("no_response", "ru"))
                 return
             if result.text:
-                await _send_message_with_topup(chat_id, result.text, lang="ru")
+                await _send_message(chat_id, result.text)
         except Exception as exc:
             logger.error("MediaGroup orchestrator failed", extra={"error": str(exc)})
             # Fallback: send raw vision extraction
