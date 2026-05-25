@@ -95,7 +95,14 @@ async def lifespan(app: FastAPI):
         # Always run the full pipeline for albums — vision extraction is context
         # for the LLM, never a final answer. Direct send produces robotic descriptions
         # ("Young couple in various poses") instead of actual replies to the user.
-        synthetic_update = {"_voice_transcript": vision_result.text}
+        # Annotate the vision text with caption so pipeline has full context.
+        # Caption (user's actual words) + vision description = what the model sees.
+        _annotated_vision = (
+            f"[Пользователь прислал альбом из {len(file_ids)} фото"
+            + (f' с подписью: "{caption.strip()}"' if caption.strip() else "")
+            + f"]\n\n{vision_result.text}"
+        )
+        synthetic_update = {"_voice_transcript": _annotated_vision}
         try:
             result = await handle_message(
                 update=synthetic_update,
