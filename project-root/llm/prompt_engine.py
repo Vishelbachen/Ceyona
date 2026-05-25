@@ -54,10 +54,14 @@ def build_messages(ctx: PromptContext) -> list[dict]:
         system_parts.append(_TRUTH_HYBRID)
     # GENERATIVE → no injection
 
-    # ── formatting rules (last in system — lowest priority, just hygiene) ─────
-    system_parts.append(
+    # ── formatting + diversity rules ─────────────────────────────────────────
+    # Inserted before truth block so the model treats it as a core constraint,
+    # not a low-priority hint. Anti-repetition is functional, not cosmetic.
+    system_parts.insert(1,
         "Write in plain text. No markdown tables, no headers, no bold. "
-        "Go straight to the answer — no filler openers."
+        "Go straight to the answer — no filler openers. "
+        "Never start two consecutive responses the same way. "
+        "Vary your sentence openings naturally across the conversation."
     )
 
     system = "\n\n".join(system_parts).strip()
