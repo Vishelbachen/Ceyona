@@ -57,12 +57,35 @@ def build_messages(ctx: PromptContext) -> list[dict]:
     # ── formatting + diversity rules ─────────────────────────────────────────
     # Inserted before truth block so the model treats it as a core constraint,
     # not a low-priority hint. Anti-repetition is functional, not cosmetic.
-    system_parts.insert(1,
-        "Write in plain text. No markdown tables, no headers, no bold. "
-        "Go straight to the answer — no filler openers. "
-        "Never start two consecutive responses the same way. "
-        "Vary your sentence openings naturally across the conversation."
-    )
+    #
+    # History-aware variation: if conversation history contains recent assistant
+    # turns, extract their opening phrases and inject them explicitly so the model
+    # knows what to avoid. This makes the variation instruction actionable rather
+    # than abstract — the model can only vary what it can see.
+    _recent_openings: list[str] = []
+    if ctx.conversation_history:
+        for turn in ctx.conversation_history[-6:]:  # last 3 pairs at most
+            if turn.get("role") == "assistant":
+                content = turn.get("content") or ""
+                opening = content.strip().split("\n")[0][:80].strip()
+                if opening:
+                    _recent_openings.append(opening)
+
+    if _recent_openings:
+        _openings_block = "; ".join(f'"{o}"' for o in _recent_openings[-3:])
+        _variation_rule = (
+            "Write in plain text. No markdown tables, no headers, no bold. "
+            "Go straight to the answer — no filler openers. "
+            f"Your recent responses started with: {_openings_block}. "
+            "Do NOT start this response the same way. Vary your opening naturally."
+        )
+    else:
+        _variation_rule = (
+            "Write in plain text. No markdown tables, no headers, no bold. "
+            "Go straight to the answer — no filler openers. "
+            "Vary your sentence openings naturally."
+        )
+    system_parts.insert(1, _variation_rule)
 
     system = "\n\n".join(system_parts).strip()
     if system:
