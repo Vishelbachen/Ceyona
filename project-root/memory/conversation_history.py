@@ -38,7 +38,7 @@ _MAX_HISTORY_FETCH = 40
 # Caller passes the appropriate budget based on complexity heuristic
 # (same logic as orchestrator._estimate_tier): LOW + short → FAST_BUDGET,
 # otherwise GENERAL_BUDGET.
-FAST_HISTORY_BUDGET    = 1800   # ~6-7 pairs (avg ~280 tokens/turn)
+FAST_HISTORY_BUDGET    = 2800   # ~10-11 pairs — raised from 1800 to reduce context loss on short messages
 GENERAL_HISTORY_BUDGET = 3500   # ~12-15 pairs
 
 
