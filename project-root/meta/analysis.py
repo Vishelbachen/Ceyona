@@ -224,6 +224,73 @@ def _lightweight_analysis(text: str) -> AnalysisReport:
 
 # ─── PUBLIC API ───────────────────────────────────────────────────────────────
 
+# Compiled once: opening phrases that signal a templated/meta-commentary response.
+# Used by detect_repetitive_opening() — pure heuristic, no LLM.
+_RE_TEMPLATED_OPENERS = re.compile(
+    r"^(?:"
+    r"похоже,?\s+что|"
+    r"этот\s+вопрос|"
+    r"данный\s+вопрос|"
+    r"изображение\s+представляет|"
+    r"на\s+(?:данном|этом)\s+изображении|"
+    r"поскольку\s+у\s+меня\s+нет|"
+    r"я\s+не\s+могу\s+просмотреть|"
+    r"it\s+seems\s+(like|that)|"
+    r"this\s+(?:question|image|request)|"
+    r"the\s+image\s+(?:shows|depicts|represents)"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def detect_repetitive_opening(text: str, history: list[dict]) -> bool:
+    """
+    Check whether the response opening is templated AND has appeared recently.
+
+    Two conditions must both be true to return True:
+      1. The response starts with a known meta-commentary / templated phrase.
+      2. The same opening (first 50 chars) appears in the last 3 assistant turns.
+
+    This is a smart guard (ChatGPT Level 2): strip only when repetition is confirmed,
+    not on every templated phrase — avoids false positives on first occurrence.
+
+    Args:
+        text:    Raw LLM output (before correction).
+        history: Conversation history list[{role, content}].
+
+    Returns:
+        True  → opening is templated AND was repeated recently → strip it.
+        False → leave text as-is.
+
+    Never raises.
+    """
+    if not text or not text.strip():
+        return False
+
+    try:
+        first_line = text.strip().split("\n")[0][:100]
+
+        # Condition 1: starts with a known templated opener
+        if not _RE_TEMPLATED_OPENERS.match(first_line):
+            return False
+
+        # Condition 2: the same opening appeared in the last 3 assistant turns
+        opening_50 = first_line[:50].lower().strip()
+        recent_assistant = [
+            t for t in (history or []) if t.get("role") == "assistant"
+        ][-3:]
+
+        for turn in recent_assistant:
+            prev_opening = (turn.get("content") or "").strip().split("\n")[0][:50].lower().strip()
+            if prev_opening and prev_opening == opening_50:
+                return True
+
+        # Templated but first occurrence — correction.py strip handles it as fallback
+        return False
+
+    except Exception:
+        return False
+
 def analyse(text: str, lightweight: bool = False) -> AnalysisReport:
     """
     Entry point for the meta analysis step.
