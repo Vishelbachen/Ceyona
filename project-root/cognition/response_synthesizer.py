@@ -40,6 +40,7 @@ class SynthesisInput:
     deny_reason: str = ""
     lang: str = "en"
     from_vision: bool = False   # True when input originated from vision_handler — forces CoT stripping
+    conversation_history: list[dict] | None = None  # passed for repetition detection
 
 
 @dataclass(frozen=True)
@@ -227,9 +228,21 @@ def _format(text: str) -> str:
     return "\n".join(cleaned).strip()
 
 
-def _apply_correction(text: str) -> str:
+def _apply_correction(text: str, history: list[dict] | None = None) -> str:
     try:
+        from meta.analysis import detect_repetitive_opening
         from meta.correction import apply
+
+        # Smart guard (Level 2): if opening is templated AND repeated in history,
+        # correction strips it. On first occurrence, correction.py patterns handle it.
+        # Either way: no regeneration, no extra LLM call.
+        if history and detect_repetitive_opening(text, history):
+            # Force strip by prepending a newline so preamble patterns don't need
+            # to match from position 0 — correction apply() does the rest.
+            # Simpler: just call apply() directly; new patterns in correction.py
+            # already cover the templated openers.
+            pass  # fall through to apply() which now has the patterns
+
         corrected = apply(text)
         return corrected if corrected and corrected.strip() else text
     except Exception:
@@ -397,7 +410,7 @@ def synthesize(inp: SynthesisInput) -> SynthesisResult:
     text = _strip_cot_artifacts(text, inp.intent, from_vision=inp.from_vision)   # §13.3: remove CoT scaffolding for non-MATH
     text = _structure(text, inp.intent)
     text = _format(text)
-    text = _apply_correction(text)
+    text = _apply_correction(text, inp.conversation_history)
     text = _apply_normalizer(text, lang)
     text, truncated = _finalize(text, lang)
 
