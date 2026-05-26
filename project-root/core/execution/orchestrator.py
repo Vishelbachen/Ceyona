@@ -94,6 +94,11 @@ class OrchestratorRequest:
     vision_intent: IntentResult | None = None
     supabase: object = None
     hf_client: object = None
+    # Input type tag — used by update_handler to skip history load for
+    # request types where conversation history is irrelevant or actively
+    # harmful (e.g. media group albums: each album is a fresh isolated task).
+    # Values: "text" (default), "image_group", "voice", "image"
+    input_type: str = "text"
     # Fix §10.4: request_id for log correlation across pipeline stages.
     # Format: "{update_id}:{user_id}" — set by webhook, propagated through pipeline.
     # Allows correlating logs from webhook → update_handler → orchestrator → coordinator.
@@ -307,6 +312,7 @@ async def _run_allow(
         tier=tier,
         lang=lang,
         from_vision=request.vision_intent is not None,  # §13.3: force CoT strip on vision path
+        conversation_history=request.conversation_history,
     ))
 
     return OrchestratorResult(
@@ -383,6 +389,7 @@ async def _run_degraded(
         tier=tier,
         lang=lang,
         from_vision=request.vision_intent is not None,  # §13.3: force CoT strip on vision path
+        conversation_history=request.conversation_history,
     ))
 
     return OrchestratorResult(
@@ -481,6 +488,7 @@ async def _run_heavy(
         tier=tier,
         lang=lang,
         from_vision=request.vision_intent is not None,  # §13.3: force CoT strip on vision path
+        conversation_history=request.conversation_history,
     ))
 
     return OrchestratorResult(
