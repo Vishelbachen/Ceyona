@@ -151,6 +151,7 @@ async def lifespan(app: FastAPI):
                 request_id=f"mediagroup:{group_id}",
                 app_state=app.state,
                 input_type="image_group",
+                vision_intent=vision_result.intent_result,
             )
             if result.denied:
                 from i18n.t import get_system_message
