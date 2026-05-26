@@ -101,6 +101,136 @@ media_group:{uid}:{gid}:seen  SET     — deduplicated message_ids
 
 **Требование к Redis конфигу:** `notify-keyspace-events Ex` (выставляется автоматически в `aggregator.start()`)
 
+
+bash
+
+python3 << 'EOF'
+addition = """
+---
+
+## ✅ 13.6.1 — ЗАКРЫТ (май 2026) — Media group: баги агрегатора и изоляция контекста
+
+### Контекст
+
+§13.6 закрыл базовую проблему (бот отвечал на каждое фото альбома по отдельности).
+После деплоя выявлены три новых бага в реализации — диагностика совместно с ChatGPT.
+
+### Симптомы в продакшне
+
+- Описывал 2 фото из 8 — остальные "не загрузились"
+- Вторая партия из 10 фото смешивалась с первой
+- Бот "возвращался к незавершённой задаче" — отвечал в контексте предыдущего альбома
+- lang захардкожен как `"ru"` независимо от языка пользователя
+
+### Диагностика (совместно с ChatGPT, май 2026)
+
+ChatGPT выявил три корневые причины:
+
+**1. Флашит слишком рано** — debounce запускается до того как все фото доставлены.
+Telegram отправляет альбом не атомарно: `photo1 (media_group_id=123)` ... `photo10 (media_group_id=123)` — каждое отдельным update. Бот начинал обработку до получения всех фото.
+
+**2. Нет reset после flush** — следующая партия смешивается с предыдущей.
+`_LUA_FLUSH` приобретал `lock_key` через SETNX, но не удалял его — оставлял с `EXPIRE 30`.
+Вторая партия в течение 30 секунд: `SETNX lock_key` → 0 → flush пропускался → группа терялась.
+
+**3. "Возвращается к старым фото"** — история содержит предыдущие vision-ответы.
+`_on_group_ready` → `handle_message` → загружает `conversation_history` для `user_id`.
+История содержит ответы по предыдущему альбому → модель думает что продолжает.
+
+**Что ChatGPT уточнил к плану:**
+- Lock надо удалять атомарно внутри того же Lua скрипта (не держать после flush).
+- Не обходить `handle_message` через прямой вызов `run()` — это сломает middleware, метрики, rate limiting. Правильно: добавить `input_type` в `OrchestratorRequest` и внутри `update_handler` при `input_type == "image_group"` пропустить загрузку истории.
+- lang: брать из item с caption, затем из первого item, затем "ru" — не из первого item вслепую.
+
+### Изменения (май 2026) ✅
+
+**`transport/telegram/media_group_aggregator.py`** — два фикса:
+
+*Фикс 1 — `_LUA_FLUSH`: атомарное удаление lock.*
+Убран `EXPIRE lock_key 30`. Lock теперь удаляется в том же `DEL` что list_key, ttl_key, seen_key.
+Атомарность сохранена: SETNX по-прежнему гарантирует что только один воркер входит в flush.
+После DEL — clean slate: вторая партия стартует немедленно без ожидания.
+
+```lua
+-- было:
+redis.call("EXPIRE", lock_key, 30)
+local items = redis.call("LRANGE", list_key, 0, -1)
+redis.call("DEL", list_key, ttl_key, seen_key)  -- lock_key НЕ удалялся
+
+-- стало:
+local items = redis.call("LRANGE", list_key, 0, -1)
+redis.call("DEL", list_key, lock_key, ttl_key, seen_key)  -- все ключи атомарно
+```
+
+*Фикс 2 — `MediaGroupItem.lang`.*
+Добавлено поле `lang: str = "ru"`. Сериализуется в JSON при `add()`, десериализуется при `_flush()`.
+
+**`core/execution/orchestrator.py`** — `OrchestratorRequest` получил поле:
+```python
+input_type: str = "text"  # значения: "text", "image_group", "voice", "image"
+```
+Дефолт "text" → все существующие call-sites не затронуты.
+
+**`transport/telegram/update_handler.py`** — два изменения:
+
+*Сигнатура `handle_message`*: добавлен параметр `input_type: str = "text"`.
+
+*Skip history load для `image_group`*:
+```python
+if supabase is not None and input_type != "image_group":
+    # image_group: каждый альбом — самостоятельная задача.
+    # Загрузка истории смешивает партии.
+    ...get_history(...)
+```
+История по-прежнему **пишется** после ответа — следующий текстовый запрос получит корректный контекст.
+
+`MediaGroupItem` получает `lang=lang` при создании в album-path.
+
+`OrchestratorRequest` получает `input_type=input_type`.
+
+**`app/main.py` — `_on_group_ready`** — три изменения:
+
+*Lang резолюция* (убран TODO/хардкод `"ru"`):
+```python
+item_with_caption = next((i for i in items if i.caption), None)
+lang = (
+    item_with_caption.lang
+    if item_with_caption
+    else (items[0].lang if items else "ru")
+)
+```
+
+*`handle_vision_group`*: теперь получает `lang=lang`.
+
+*`handle_message`*: теперь получает `lang=lang` и `input_type="image_group"`.
+
+### Архитектурный принцип
+
+Каждый альбом = изолированная задача. История не загружается при обработке, но пишется после — пользователь может продолжить диалог текстом с корректным контекстом.
+`input_type` в `OrchestratorRequest` — расширяемый механизм: в будущем аналогично можно изолировать другие типы входных данных без изменения pipeline.
+"""
+
+with open("/tmp/Ceyona-main/audit.md", "r") as f:
+    content = f.read()
+
+# Update header
+content = content.replace(
+    "**Статус:** 13.1, 13.5, 13.6, 17.3 закрыты. Открыто: 3 UX/качество + 1 архитектурный gap.",
+    "**Статус:** 13.1, 13.5, 13.6, 13.6.1, 17.3 закрыты. Открыто: 3 UX/качество + 1 архитектурный gap."
+)
+
+# Update summary table
+old_row = "| 17.3 | ✅ | Шаблонные ответы / отсутствие вариативности | prompt_engine, analysis, correction, synthesizer, vision_handler |"
+new_row = """| 17.3 | ✅ | Шаблонные ответы / отсутствие вариативности | prompt_engine, analysis, correction, synthesizer, vision_handler |
+| 13.6.1 | ✅ | Media group: lock bug, смешение партий, lang хардкод | media_group_aggregator, orchestrator, update_handler, main |"""
+content = content.replace(old_row, new_row)
+
+# Insert before CI planned line
+content = content.replace(
+    "📋 **CI (planned):**",
+    addition.strip() + "\n\n---\n\n📋 **CI (planned):**"
+)
+
 ---
 
 ## ⚡ КРИТИЧЕСКОЕ АРХИТЕКТУРНОЕ ОТКРЫТИЕ — compound (май 2026)
