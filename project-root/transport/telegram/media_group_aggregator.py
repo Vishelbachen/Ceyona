@@ -77,6 +77,17 @@ return redis.call("LLEN", list_key)
 """
 
 # Lua script: atomically grab the list + delete it (flush-once).
+#
+# Lock lifecycle (ChatGPT review, май 2026):
+#   The lock must be deleted in the SAME atomic script that acquires it,
+#   immediately after collecting the data. Keeping the lock alive after
+#   flush (even with a short TTL) blocks any second album the same user
+#   sends within that window — producing the "ghost of previous album" bug.
+#
+#   Safe against double-processing: SETNX still guarantees only one worker
+#   enters the critical section. Once data is collected and all keys are
+#   deleted, a concurrent worker that lost the SETNX race gets nil → bails.
+#   A new album that arrives after DEL starts with a clean slate.
 _LUA_FLUSH = """
 local list_key = KEYS[1]
 local lock_key = KEYS[2]
@@ -88,10 +99,12 @@ local seen_key = KEYS[4]
 if redis.call("SETNX", lock_key, "1") == 0 then
     return nil
 end
-redis.call("EXPIRE", lock_key, 30)   -- safety TTL on the lock itself
 
+-- Collect data and delete ALL keys including the lock atomically.
+-- The lock must not outlive the flush: a subsequent album from the same
+-- user must get a clean slate immediately, not after a 30-second TTL.
 local items = redis.call("LRANGE", list_key, 0, -1)
-redis.call("DEL", list_key, ttl_key, seen_key)
+redis.call("DEL", list_key, lock_key, ttl_key, seen_key)
 
 return items
 """
@@ -103,6 +116,7 @@ class MediaGroupItem:
     file_id: str
     message_id: int
     caption: str = ""
+    lang: str = "ru"  # detected language of the user's message / caption
 
 
 CallbackType = Callable[[str, list[MediaGroupItem]], Awaitable[None]]
@@ -186,6 +200,7 @@ class MediaGroupAggregator:
                     "file_id":    item.file_id,
                     "message_id": item.message_id,
                     "caption":    item.caption,
+                    "lang":       item.lang,
                 }),
                 str(self._debounce_ttl),
                 str(item.message_id),
@@ -281,6 +296,7 @@ class MediaGroupAggregator:
                     file_id=data["file_id"],
                     message_id=data["message_id"],
                     caption=data.get("caption", ""),
+                    lang=data.get("lang", "ru"),
                 ))
             except (json.JSONDecodeError, KeyError) as exc:
                 logger.warning(
