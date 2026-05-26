@@ -1,7 +1,7 @@
 # CEYONA — ARCHITECTURE AUDIT
 **Дата:** май 2026 (обновлён май 2026)
 **Проверено:** architecture.md v8.4, models.md v7.3, economic.md v5.2 + весь runtime код
-**Статус:** 13.1, 13.5, 13.6 закрыты. Открыто: 3 UX/качество + 1 архитектурный gap.
+**Статус:** 13.1, 13.5, 13.6, 17.3 закрыты. Открыто: 3 UX/качество + 1 архитектурный gap.
 
 Обозначения: ✅ Закрыто | ⚠️ Открыто | 🔴 Критично | 🟡 Средний | 🟢 Низкий
 
@@ -310,6 +310,135 @@ media_group:{uid}:{gid}:seen  SET     — deduplicated message_ids
 | 13.3 | 🟡 | CoT артефакты (остаточные случаи) | response_synthesizer, vision_handler |
 | 13.4 | 🟡 | Classifier теряет контекст на follow-up | intent_engine._llm_pre_classify |
 | 17.2 | 🟡 | TruthMode как flag, не verification layer | execution_policy_kernel |
+| 17.3 | ✅ | Шаблонные ответы / отсутствие вариативности | prompt_engine, analysis, correction, synthesizer, vision_handler |
 | 13.7 | 🟢 | Грузинский i18n fallback некорректен | i18n/strings.py |
+
+---
+
+## ✅ 17.3 — ЗАКРЫТ (май 2026) — Шаблонные ответы и отсутствие вариативности
+
+### Проблема
+
+Бот стабильно начинал ответы одинаковыми фразами — особенно на vision-запросы (фото, альбомы), но и на обычные текстовые тоже. Три наблюдаемых симптома:
+
+1. **Vision path:** бот отвечал `"Изображения представляют собой..."` / `"Похоже, что у нас есть задача по биологии..."` — мета-комментарий вместо ответа по существу.
+2. **Текстовые follow-up:** после vision-диалога бот писал `"Этот вопрос не связан с содержимым альбома..."` — тащил контекст предыдущего vision-разговора.
+3. **Повтор стиля:** на одинаковый тип запроса бот отвечал идентично 2-3 раза подряд.
+
+### Диагностика (совместно с ChatGPT, май 2026)
+
+ChatGPT выявил **четыре корневые причины:**
+
+1. **Prompt bias** — системный промпт или few-shot примеры создают шаблон.
+2. **Response synthesizer делает шаблон** — post-processing унифицирует стиль.
+3. **Temperature / sampling слишком стабильные** — модель выбирает одни и те же формулировки при одинаковых входах.
+4. **LLM "находит локальный минимум"** и зацикливается.
+
+**Дополнительно выявлено при анализе кода:**
+
+- `_GROUP_EXTRACTION_SYSTEM` (vision_handler) не имел OUTPUT FORMAT правил в отличие от `_EXTRACTION_SYSTEM` — экстрактор для альбомов сам писал `"Изображения представляют собой..."`.
+- `prompt_engine.py` содержал мёртвую инструкцию `"Never start two consecutive responses the same way"` — мёртвую, потому что модель не видела свои предыдущие ответы в нужном формате.
+- История уже содержала assistant-туры (`role: assistant`) — проблема не в хранении, а в том что prompt_engine не вытаскивал их для явного контроля вариативности.
+- `correction.py` не покрывал множественное число: `"Изображения представляют собой"` (plural) проходил мимо regex.
+- `meta/analysis.py` анализировал только входящий текст пользователя — исходящий ответ не проверялся никем.
+
+### Что сказал ChatGPT (архитектурное решение)
+
+**Стратегия трёх уровней:**
+
+```
+Уровень 1 — Default (strip opener)           — 0 токенов, мгновенно, детерминировано
+Уровень 2 — Smart guard (detect + strip)     — редко, быстро, лучше
+Уровень 3 — Всегда регенерировать            — НЕ делать: сжигает токены, latency, нестабильность
+```
+
+**Регенерация = fallback, не основной инструмент.** Retry только если:
+- Повторяется несколько ответов подряд
+- Стиль реально ломает UX
+- Простой strip делает текст хуже (обрывает смысл)
+- Ответ короткий и весь состоит из шаблона
+
+**Идеальная архитектура для проекта:**
+```
+vision_handler
+    ↓
+orchestrator
+    ↓
+prompt_engine  →  inject variation hints (history-aware)
+    ↓
+LLM
+    ↓
+meta.analysis  →  detect repetition
+    ↓
+meta.correction  →  light fix (no regen by default)
+    ↓
+response_synthesizer
+```
+
+**Дополнительно (variation layer):**
+- `adaptive temperature`: если `context.is_repeated_query` → temperature 0.7, иначе 0.4
+- `anti-repeat hint` в prompt: `"The user has asked a similar question before. Avoid repeating the same wording."`
+- `history-aware variation`: `"Previous answers: {last_answers}. Avoid repeating these responses."`
+- `Vision-specific фикс`: `"When describing images, vary structure and wording. Do not reuse previous phrasing."`
+
+**Чего НЕ делать:**
+- ❌ Запрещать конкретные фразы (whack-a-mole — модель найдёт синоним)
+- ❌ Всегда регенерировать
+- ❌ Игнорировать проблему
+
+### Принятое решение
+
+Реализованы направления 1 и 2 без регенерации.
+
+### Изменения (май 2026) ✅
+
+**`llm/prompt_engine.py`** — history-aware variation:
+- Вместо мёртвой инструкции `"Never start two consecutive responses the same way"` — реальный механизм.
+- Из `ctx.conversation_history[-6:]` извлекаются последние 3 assistant-ответа.
+- Первые 80 символов каждого → `_recent_openings`.
+- Если есть история: `"Your recent responses started with: '{o1}'; '{o2}'; '{o3}'. Do NOT start this response the same way. Vary your opening naturally."` — inject в system как core constraint (insert(1), перед truth block).
+- Если нет истории: базовое правило вариативности без конкретики.
+
+**`meta/analysis.py`** — новая функция `detect_repetitive_opening(text, history)`:
+- Анализирует **исходящий** ответ (не входящий — это было слепое пятно).
+- `_RE_TEMPLATED_OPENERS` — compiled regex на известные шаблонные opener'ы (RU + EN): `"похоже, что"`, `"этот вопрос"`, `"данный вопрос"`, `"изображение/изображения представляет/представляют"`, `"на данном/этом/всех изображениях"`, `"поскольку у меня нет"`, `"я не могу просмотреть"`, `"it seems like/that"`, `"this question/image/request"`, `"the image shows/depicts/represents"`.
+- **Два условия оба должны выполниться** (smart guard, не blacklist):
+  1. Ответ начинается с шаблонного opener'а.
+  2. Тот же opening (первые 50 символов) уже встречался в последних 3 assistant-турах истории.
+- `True` → opener шаблонный И повторяется → strip. `False` → оставить как есть.
+- Если opener шаблонный но первый раз → `correction.py` patterns перехватят как fallback.
+- Никаких LLM-вызовов. Никаких дополнительных токенов. Никогда не бросает исключение.
+
+**`meta/correction.py`** — расширены preamble patterns:
+- Добавлены Russian meta-commentary openers: `"Похоже, что у нас есть..."` (с `.+\n+`), `"Этот вопрос не связан с..."`, `"Данный вопрос..."`, `"Изображение представляет собой"` (ед.ч.), `"Изображения представляют собой {phrase}.\n"` (мн.ч.), `"На данном/этом/всех/представленных изображениях {phrase}.\n"`.
+- Strip opener — контент после него сохраняется. Не blacklist — не запрещаем фразы, убираем артефакт.
+- Реальные случаи из продакшна протестированы regex-тестом перед деплоем: все 4 варианта стрипаются до чистого контента.
+
+**`cognition/response_synthesizer.py`** — подключение `detect_repetitive_opening`:
+- `SynthesisInput` получил поле `conversation_history: list[dict] | None = None`.
+- `_apply_correction(text, history)` — принимает историю, вызывает `detect_repetitive_opening()` перед `correction.apply()`.
+- Smart guard: если detects повтор → `apply()` уже имеет нужные patterns → strip. Без регенерации.
+
+**`core/execution/orchestrator.py`** — все три `SynthesisInput(...)` call-sites:
+- Добавлен `conversation_history=request.conversation_history` во все основные SynthesisInput вызовы (lines 304, 380, 478). Deny-path вызовы (157, 731) не обновлялись — там нет реального контента.
+
+**`transport/telegram/vision_handler.py`** — `_GROUP_EXTRACTION_SYSTEM` переписан:
+- Добавлены те же 4 RULE блока что в `_EXTRACTION_SYSTEM` (TEXT/TASK, ANIMATED CHARACTER, REAL PERSON, OTHER).
+- Добавлен OUTPUT FORMAT блок с явным запретом: `"Do NOT use meta-commentary openers like 'The images show', 'These images represent', 'Изображения представляют собой', 'На изображениях'..."`.
+- `"Start each image description directly with its content."` — экстрактор теперь по контракту начинает с контента.
+- Это решает проблему на уровне источника — не только стрипает постфактум, но предотвращает генерацию.
+
+### Что осталось (не реализовано, следующий шаг)
+
+- **Adaptive temperature** — `get_temperature(context)`: если `context.is_repeated_query` → 0.7, иначе текущая. Требует изменений в `reasoning_engine.py` и добавления `is_repeated_query` флага в OrchestratorRequest. Запланировано.
+- **Регенерация как fallback** — условный retry при повторе 2-3 раза подряд. Не реализована намеренно (дополнительный LLM-вызов = токены + latency). Реализовать если текущих изменений недостаточно.
+
+### Тест результатов (деплой май 2026)
+
+После первого деплоя (без vision_handler фикса): `"Изображения представляют собой..."` продолжал появляться — plural форма не была в patterns, `_GROUP_EXTRACTION_SYSTEM` не был исправлен.
+
+После второго деплоя (все файлы): тест regex подтверждён локально. Production наблюдение продолжается.
+
+---
 
 📋 **CI (planned):** coverage floor 75%, asyncio stress tests (13.4), integration tests compound pipeline, retrieval quality regression, mypy.
