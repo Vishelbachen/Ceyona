@@ -101,6 +101,14 @@ async def lifespan(app: FastAPI):
             await _send_message(chat_id, "❌ Could not process the images.")
             return
 
+        # If vision extraction failed entirely — do not feed err_text into the
+        # pipeline. The LLM would hallucinate on "Содержимое изображений: ошибка".
+        # Send a localized error message directly instead.
+        if vision_result.failed:
+            from i18n.t import get_system_message
+            await _send_message(chat_id, get_system_message("vision_error", lang))
+            return
+
         # Always run the full pipeline for albums — vision extraction is context
         # Build the user_message that the pipeline LLM will receive.
         #
