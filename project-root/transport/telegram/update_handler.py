@@ -82,6 +82,7 @@ async def handle_message(
     hf_client=None,
     request_id: str = "",
     app_state=None,
+    input_type: str = "text",
 ) -> OrchestratorResult:
 
     # ── photo handling ────────────────────────────────────────────────────────
@@ -131,6 +132,7 @@ async def handle_message(
                 file_id=file_id,
                 message_id=message_id,
                 caption=caption,
+                lang=lang,
             )
             await aggregator.add(scoped_group_id, item)
 
@@ -468,7 +470,11 @@ async def handle_message(
     conversation_history: list[dict] | None = None
     history_store = None
 
-    if supabase is not None:
+    if supabase is not None and input_type != "image_group":
+        # image_group: each album is a self-contained task — loading previous
+        # conversation history would cause the model to treat it as a continuation
+        # of the last album, mixing batches. History is still WRITTEN after the
+        # response so the user's next text message has correct context.
         try:
             history_store = ConversationHistory(supabase)
             conversation_history = await history_store.get_history(
@@ -587,6 +593,7 @@ async def handle_message(
         skip_web_search=locals().get("_vision_intent_result") is not None,
         request_id=request_id,
         analysis_report=_analysis_report,
+        input_type=input_type,
     )
 
     result = await run(request)
