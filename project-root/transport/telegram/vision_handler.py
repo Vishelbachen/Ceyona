@@ -365,10 +365,10 @@ async def handle_vision(
 _MAX_IMAGES_PER_BATCH = 4
 
 _GROUP_EXTRACTION_SYSTEM = (
-    "You are an image analysis assistant processing a multi-image album.\n\n"
+    "You are an image description assistant. Your only role is to describe images.\n\n"
     "For each image, apply the first matching rule:\n\n"
-    "RULE 1 — TEXT/TASK IMAGE (exam, problem, formula, table, code, handwriting, diagram):\n"
-    "Transcribe ALL text EXACTLY as written. Preserve structure. Do NOT solve or interpret.\n\n"
+    "RULE 1 — TEXT IMAGE (exam, problem, formula, table, code, handwriting, diagram):\n"
+    "Transcribe ALL text EXACTLY as written. Preserve structure.\n\n"
     "RULE 2 — DRAWN / ANIMATED CHARACTER (anime, manga, game art, cartoon, illustration):\n"
     "Describe visible appearance: hair colour/style, clothing, accessories, art style. "
     "Attempt to identify character and franchise. State confidence explicitly.\n\n"
@@ -377,20 +377,31 @@ _GROUP_EXTRACTION_SYSTEM = (
     "NEVER name, identify, or guess who the person is.\n\n"
     "RULE 4 — OTHER (product, place, animal, object, screenshot, UI, meme):\n"
     "Describe clearly: objects, colours, layout, any visible text, context.\n\n"
+    "ABSOLUTE RULES — these override everything:\n"
+    "- Describe only. Never solve, analyse, validate, verify, or interpret.\n"
+    "- Never produce tables, checklists, or validation results.\n"
+    "- Never write OK, fixed, satisfied, correct, or similar judgement words.\n\n"
     "OUTPUT FORMAT: plain prose, no headers, no bullet points. "
-    "Do NOT use meta-commentary openers like \'The images show\', \'These images represent\', "
+    "Do NOT open with meta-commentary like \'The images show\', \'These images represent\', "
     "\'Изображения представляют собой\', \'На изображениях\', or any similar phrase. "
     "Start each image description directly with its content. "
-    "Separate image descriptions with a blank line. Do not hallucinate."
+    "Separate image descriptions with a blank line."
 )
 
-_GROUP_SYNTHESIS_SYSTEM = (
-    "You are an assistant that receives partial descriptions of images from a single album "
-    "and produces one coherent, unified response.\n\n"
-    "Your task: read all partial descriptions and synthesise them into a single clear response "
-    "as if you had seen all images at once. Do not list parts separately — write naturally.\n"
-    "If the images form a task (exam, problem set, instructions) — solve it.\n"
-    "If they are product or lifestyle photos — describe the album as a whole.\n"
+# _GROUP_SYNTHESIS_SYSTEM_TEMPLATE: verbosity_rule and image_count injected in code.
+# image_count >= 5 → verbosity_rule = "1-2 sentences per image"  (brief: large album)
+# image_count  < 5 → verbosity_rule = "2-3 sentences per image"  (balanced: small album)
+# Determined in code, not by LLM — prevents model from guessing what "many" means.
+_GROUP_SYNTHESIS_SYSTEM_TEMPLATE = (
+    "You are an image description assistant. Your only role is to describe what is in the images.\n\n"
+    "You have received descriptions of {image_count} image(s) from a single album. "
+    "Synthesise them into one clear, natural response as if you had seen all images at once.\n\n"
+    "Response length: {verbosity_rule}.\n\n"
+    "ABSOLUTE RULES — these override everything:\n"
+    "- Describe only. Never solve, analyse, validate, verify, or check.\n"
+    "- Never produce tables, checklists, or validation results.\n"
+    "- Never write OK, fixed, satisfied, correct, or similar judgement words.\n"
+    "- Do not list images separately — write as a unified natural response.\n\n"
     "Start directly with the content. No meta-commentary, no preamble."
 )
 
@@ -488,14 +499,26 @@ async def _synthesise_batch_descriptions(descriptions: list[str], lang: str) -> 
     Merge multiple batch descriptions into one coherent response via a single LLM call.
     Used when an album had to be split into multiple batches.
     Falls back to newline-joined descriptions if LLM call fails.
+
+    verbosity_rule is determined by image count in code — not left to LLM interpretation:
+      >= 5 images → brief (1-2 sentences per image)
+       < 5 images → balanced (2-3 sentences per image)
     """
+    image_count = len(descriptions)
+    verbosity_rule = (
+        "1-2 sentences per image" if image_count >= 5 else "2-3 sentences per image"
+    )
+    system_prompt = _GROUP_SYNTHESIS_SYSTEM_TEMPLATE.format(
+        image_count=image_count,
+        verbosity_rule=verbosity_rule,
+    )
     combined = "\n\n".join(f"Part {i+1}:\n{d}" for i, d in enumerate(descriptions))
     payload = {
         "model": _VISION_MODEL,
         "max_tokens": RUNTIME.tier_configs[Tier.GENERAL].max_output_tokens,
         "temperature": 0.2,
         "messages": [
-            {"role": "system", "content": _GROUP_SYNTHESIS_SYSTEM},
+            {"role": "system", "content": system_prompt},
             {"role": "user",   "content": combined},
         ],
     }
