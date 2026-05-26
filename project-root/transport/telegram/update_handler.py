@@ -83,6 +83,7 @@ async def handle_message(
     request_id: str = "",
     app_state=None,
     input_type: str = "text",
+    vision_intent=None,  # IntentResult | None — pre-classified by vision handler, skips re-classify
 ) -> OrchestratorResult:
 
     # ── photo handling ────────────────────────────────────────────────────────
@@ -586,11 +587,14 @@ async def handle_message(
         retrieved_context=retrieved_context,
         embedding_tokens=embedding_tokens,
         rerank_tokens=rerank_tokens,
-        vision_intent=locals().get("_vision_intent_result"),
-        # Vision path: image description is NOT a valid search query.
-        # skip_web_search prevents Tavily/SerpAPI from receiving extracted image text,
-        # which would result in 400 Bad Request (audit §Tavily-400-fix).
-        skip_web_search=locals().get("_vision_intent_result") is not None,
+        # vision_intent: pre-classified by vision handler (single photo or album).
+        # If provided, orchestrator uses it directly — skips re-classify.
+        # This prevents double-routing (vision → MAPS/SEARCH) on album path.
+        vision_intent=locals().get("_vision_intent_result") or vision_intent,
+        skip_web_search=(
+            locals().get("_vision_intent_result") is not None
+            or vision_intent is not None
+        ),
         request_id=request_id,
         analysis_report=_analysis_report,
         input_type=input_type,
