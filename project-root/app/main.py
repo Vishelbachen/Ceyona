@@ -102,14 +102,32 @@ async def lifespan(app: FastAPI):
             return
 
         # Always run the full pipeline for albums — vision extraction is context
-        # for the LLM, never a final answer. Direct send produces robotic descriptions
-        # ("Young couple in various poses") instead of actual replies to the user.
-        # Annotate the vision text with caption so pipeline has full context.
-        # Caption (user's actual words) + vision description = what the model sees.
-        _annotated_vision = (
-            f"[Пользователь прислал альбом из {len(file_ids)} фото"
+        # Build the user_message that the pipeline LLM will receive.
+        #
+        # Structure matters: without an explicit task the model has no instruction
+        # and falls back to generic reasoning ("Вопрос не имеет отношения...").
+        # Three parts are required:
+        #   1. Context  — how many images, user's own words if any
+        #   2. Task     — explicit instruction derived from caption or default
+        #   3. Content  — extraction output from handle_vision_group
+        #
+        # When the user provided a caption (e.g. "решите задачу", "что здесь?")
+        # that IS the task — use it verbatim.
+        # When there is no caption the default task is to describe the images.
+        _context_line = (
+            f"Пользователь прислал альбом из {len(file_ids)} изображений"
             + (f' с подписью: "{caption.strip()}"' if caption.strip() else "")
-            + f"]\n\n{vision_result.text}"
+            + "."
+        )
+        _task_line = (
+            f"Задача пользователя: {caption.strip()}"
+            if caption.strip()
+            else "Задача: опиши что на изображениях."
+        )
+        _annotated_vision = (
+            f"{_context_line}\n\n"
+            f"{_task_line}\n\n"
+            f"Содержимое изображений:\n{vision_result.text}"
         )
         synthetic_update = {"_voice_transcript": _annotated_vision}
         try:
