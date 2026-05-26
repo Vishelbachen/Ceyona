@@ -678,8 +678,17 @@ class TestVisionHandlerHelpers:
     @pytest.mark.asyncio
     async def test_handle_vision_success_conversation_intent(self):
         """
-        When extraction succeeds and intent=CONVERSATION,
-        needs_pipeline=False and text is returned directly.
+        Classifier is called ONLY on caption, never on extracted content.
+
+        Case 1: no caption → classify() is NOT called → intent_result=None →
+        needs_pipeline=True (orchestrator handles via its own fallback).
+
+        Case 2: caption with CONVERSATION intent → classify() called with caption →
+        needs_pipeline=False only when intent==CONVERSATION AND no uncertainty signals.
+
+        Rationale: extracted text is LLM output, not user input.
+        Classifying it caused CODE/HOW_TO misrouting (e.g. album description
+        containing "analyse images" → procedural answer).
         """
         from transport.telegram.vision_handler import handle_vision
 
@@ -692,32 +701,61 @@ class TestVisionHandlerHelpers:
         mock_resp.raise_for_status = MagicMock()
         mock_resp.json = MagicMock(return_value=groq_response)
 
-        # Import the real Intent enum so the comparison in vision_handler works:
-        #   needs_pipeline = intent_result.intent != Intent.CONVERSATION
-        # must evaluate to False (equal), so we set intent to the real enum member.
+        def _make_client(mock_cm):
+            mock_cm.__aenter__ = AsyncMock(return_value=mock_cm)
+            mock_cm.__aexit__ = AsyncMock(return_value=False)
+            mock_cm.post = AsyncMock(return_value=mock_resp)
+            return mock_cm
+
+        # ── Case 1: no caption — classify() must NOT be called ────────────────
+        mock_classify = AsyncMock()
+        with (
+            patch("transport.telegram.vision_handler._get_file_url",
+                  new_callable=AsyncMock, return_value="http://example.com/img.jpg"),
+            patch("transport.telegram.vision_handler._download_image",
+                  new_callable=AsyncMock, return_value=b"fake_bytes"),
+            patch("transport.telegram.vision_handler.httpx.AsyncClient",
+                  return_value=_make_client(AsyncMock())) as mock_client,
+            patch("cognition.intent_engine.classify", mock_classify),
+        ):
+            mock_client.return_value = _make_client(AsyncMock())
+            result = await handle_vision(file_id="ok_id", caption="", lang="en")
+
+        assert result.text == "A fluffy cat on a sofa."
+        assert result.needs_pipeline is True      # no caption → always pipeline
+        assert result.intent_result is None       # no classify → no intent
+        mock_classify.assert_not_called()         # extracted never enters classifier
+
+        # ── Case 2: caption with CONVERSATION intent ──────────────────────────
         from cognition.intent_engine import Intent
-        mock_intent_result = MagicMock()
-        type(mock_intent_result).intent = PropertyMock(return_value=Intent.CONVERSATION)
+        mock_intent_conv = MagicMock()
+        type(mock_intent_conv).intent = PropertyMock(return_value=Intent.CONVERSATION)
+
+        mock_resp2 = MagicMock()
+        mock_resp2.status_code = 200
+        mock_resp2.raise_for_status = MagicMock()
+        mock_resp2.json = MagicMock(return_value=groq_response)
 
         with (
             patch("transport.telegram.vision_handler._get_file_url",
                   new_callable=AsyncMock, return_value="http://example.com/img.jpg"),
             patch("transport.telegram.vision_handler._download_image",
                   new_callable=AsyncMock, return_value=b"fake_bytes"),
-            patch("transport.telegram.vision_handler.httpx.AsyncClient") as mock_client,
+            patch("transport.telegram.vision_handler.httpx.AsyncClient") as mock_client2,
             patch("cognition.intent_engine.classify",
-                  new_callable=AsyncMock, return_value=mock_intent_result),
+                  new_callable=AsyncMock, return_value=mock_intent_conv),
         ):
-            mock_cm = AsyncMock()
-            mock_cm.__aenter__ = AsyncMock(return_value=mock_cm)
-            mock_cm.__aexit__ = AsyncMock(return_value=False)
-            mock_cm.post = AsyncMock(return_value=mock_resp)
-            mock_client.return_value = mock_cm
+            mock_cm2 = AsyncMock()
+            mock_cm2.__aenter__ = AsyncMock(return_value=mock_cm2)
+            mock_cm2.__aexit__ = AsyncMock(return_value=False)
+            mock_cm2.post = AsyncMock(return_value=mock_resp2)
+            mock_client2.return_value = mock_cm2
 
-            result = await handle_vision(file_id="ok_id", caption="", lang="en")
+            result2 = await handle_vision(file_id="ok_id", caption="cute?", lang="en")
 
-        assert result.text == "A fluffy cat on a sofa."
-        assert result.needs_pipeline is False
+        assert result2.text == "A fluffy cat on a sofa."
+        assert result2.needs_pipeline is False    # caption → CONVERSATION → deliver directly
+        assert result2.intent_result is None      # needs_pipeline=False → intent not forwarded
 
     @pytest.mark.asyncio
     async def test_handle_vision_success_non_conversation_intent(self):
