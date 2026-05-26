@@ -44,9 +44,12 @@ from typing import Awaitable, Callable
 logger = logging.getLogger(__name__)
 
 # Debounce window: how long after the LAST photo arrives before we flush.
-# Telegram typically sends all album photos within ~300 ms; 0.7 s gives
-# ample margin even on slow connections without adding noticeable latency.
-_DEBOUNCE_TTL_SECONDS: int = 1
+# Telegram typically sends all album photos within ~300 ms on a good connection,
+# but on slow or congested mobile connections the last photo can arrive up to
+# 2 seconds after the first. 3 s gives a safe margin while keeping latency
+# acceptable. Anything below 2 s risks flushing before all photos arrive,
+# producing partial albums ("described 8 of 10").
+_DEBOUNCE_TTL_SECONDS: int = 3
 
 # Hard cap: flush immediately if the group reaches this size.
 # Telegram's own limit is 10 media per album; we honour that.
