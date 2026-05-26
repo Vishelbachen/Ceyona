@@ -360,6 +360,80 @@ content = content.replace(
 
 **Статус:** спроектировано. Реализация после стабилизации ответов.
 
+
+## 🟡 ОТКРЫТАЯ ПРОБЛЕМА — Vision pipeline: QA/validation mode на альбомах (май 2026)
+
+### Симптом
+Альбом без caption → бот отвечает в режиме "проверки ограничений": таблицы, "ОК", пронумерованные пункты. Одиночное фото без caption → иногда SEARCH/ANALYSIS ответ вместо описания.
+
+### Корневая причина (верифицирована)
+**Граница между vision pipeline и intent engine нарушена.**
+
+Vision output (`extracted`) попадал в `classify()` — это фундаментальная архитектурная ошибка. Classifier получал LLM-generated текст (описание изображений: "1. кружка, 2. пейзаж, 3. собака") и интерпретировал его как user intent → ANALYSIS/INSTRUCTION → QA-режим.
+
+Цепочка: `extracted → classify() → ANALYSIS → pipeline LLM → таблицы/OK/проверка ограничений`
+
+### Принятая итерация (май 2026)
+**Файл:** `transport/telegram/vision_handler.py`
+
+Три независимых изменения:
+
+**1. Classifier работает только на caption — никогда на extracted:**
+```python
+# ДО (неправильно):
+classify_input = f"{caption}\n\n{extracted}"  # LLM output в classifier
+# ПОСЛЕ:
+if caption.strip():
+    intent_result = await classify(caption.strip(), lang=lang)
+```
+
+**2. Убран QA-триггер из `_GROUP_EXTRACTION_SYSTEM`:**
+- Удалена строка `"If the images form a task (exam, problem set, instructions) — solve it."` из `_GROUP_SYNTHESIS_SYSTEM` — это был главный переключатель в validation mode
+- Добавлен блок `ABSOLUTE RULES`: никогда не решать, не валидировать, не писать OK/fixed/satisfied
+
+**3. Семантический контракт для фото без caption:**
+```python
+# Нет caption → фото без вопроса → описать напрямую
+intent_result = IntentResult(intent=Intent.CONVERSATION, confidence=1.0)
+needs_pipeline = _has_uncertainty  # False если extractor уверен
+# needs_pipeline=False → extracted отдаётся пользователю напрямую, минуя pipeline и classifier
+```
+Это не хардкод — это семантическая истина: фото без вопроса не имеет классифицируемого user intent. `needs_pipeline=False` → `update_handler` отдаёт `vision_result.text` напрямую без orchestrator.
+
+**4. Verbosity управляется кодом:**
+```python
+verbosity_rule = "1-2 sentences per image" if image_count >= 5 else "2-3 sentences per image"
+system_prompt = _GROUP_SYNTHESIS_SYSTEM_TEMPLATE.format(image_count=..., verbosity_rule=...)
+```
+Детализация не интерпретируется моделью — передаётся как факт.
+
+### Статус после деплоя
+⚠️ **Частично улучшено, не закрыто полностью.**
+
+Наблюдение (3:52): альбом с mixed content (Google search screenshot, кружка, биология, собака, обувь) → бот ответил `"Этномир\nSublimagia\nПроверьте Booking.com/2GIS/Google Maps для актуальных цен."` — это SEARCH intent, не описание.
+
+**Диагноз последнего симптома:** `needs_pipeline=True` срабатывает когда `_has_uncertainty=True` (extractor вернул что-то неоднозначное) → extracted идёт в pipeline → там classifier всё ещё видит текст с названиями сайтов ("Этномир", "Sublimagia") → SEARCH intent → web search ответ.
+
+Проблема в том что `_has_uncertainty` проверяет uncertainty signals в extracted, но не защищает от случая когда extracted содержит бренды/URL/названия — они тригерят SEARCH даже через `vision_intent=CONVERSATION` если `needs_pipeline=True`.
+
+### Следующая итерация (НЕ реализована, требует обсуждения)
+
+**Предложение ChatGPT (правильное архитектурно, но scope больше):**
+Добавить `is_vision: bool` флаг в `OrchestratorRequest`. В orchestrator: если `is_vision=True` → пропустить intent classification полностью, использовать vision-specific path. Это жёсткое разделение потоков:
+```
+USER TEXT → intent_engine → orchestrator routing
+VISION    → vision_handler → description LLM → ответ напрямую
+```
+Требует изменений: `OrchestratorRequest`, `orchestrator.py`, `update_handler.py`. Правильно для долгосрочного масштабирования.
+
+**Почему не сделано сейчас:** scope и лимиты. Это следующая итерация.
+
+### Что НЕ делать при следующей итерации
+- ❌ Не добавлять больше `ABSOLUTE RULES` в промпты — это фильтрация симптомов
+- ❌ Не форсировать intent через `IntentResult` для edge cases (таблица → CONVERSATION и т.д.) — система начнёт обрастать исключениями
+- ❌ Не пытаться фильтровать extracted постфактум regex — правильно разделить источники данных
+- ✅ `is_vision` флаг в OrchestratorRequest — единственное правильное долгосрочное решение
+
 ---
 
 ### 🟢 13.7 — Грузинский: i18n fallback некорректен
