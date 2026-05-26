@@ -61,15 +61,39 @@ async def _get_file_url(file_id: str) -> str | None:
         return None
 
 
-async def _download_image(url: str) -> bytes | None:
-    try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            r = await client.get(url)
-            r.raise_for_status()
-            return r.content
-    except Exception as exc:
-        logger.error("Image download failed", extra={"url": url[:80], "error": str(exc)})
-        return None
+async def _download_image(url: str, *, retries: int = 1) -> bytes | None:
+    """
+    Download image bytes from a Telegram file URL.
+
+    Retries once on transient errors (429 rate-limit, 5xx server errors).
+    Telegram Bot API can return 429 when too many getFile/download requests
+    are made concurrently — a single retry after 0.5 s resolves most cases.
+    Other errors (404, network timeout) are not retried.
+    """
+    _RETRYABLE = {429, 500, 502, 503}
+    for attempt in range(retries + 1):
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                r = await client.get(url)
+                r.raise_for_status()
+                return r.content
+        except httpx.HTTPStatusError as exc:
+            if attempt < retries and exc.response.status_code in _RETRYABLE:
+                logger.warning(
+                    "Image download retryable error — retrying",
+                    extra={"status": exc.response.status_code, "attempt": attempt + 1},
+                )
+                await asyncio.sleep(0.5)
+                continue
+            logger.error(
+                "Image download failed",
+                extra={"url": url[:80], "error": str(exc)},
+            )
+            return None
+        except Exception as exc:
+            logger.error("Image download failed", extra={"url": url[:80], "error": str(exc)})
+            return None
+    return None
 
 
 # ─── EXTRACTION SYSTEM PROMPT ─────────────────────────────────────────────────
@@ -373,15 +397,23 @@ async def handle_vision_group(
     if len(file_ids) == 1:
         return await handle_vision(file_id=file_ids[0], caption=caption, lang=lang)
 
-    # ── download all images concurrently ─────────────────────────────────────
+    # ── download all images concurrently, with throttling ────────────────────
+    # Telegram Bot API has undocumented rate limits on concurrent getFile /
+    # file download requests. In practice, >3-5 simultaneous requests on an
+    # album trigger 429 responses or transient failures — the classic symptom
+    # is "described 6 of 10" or "image download failed" in Sentry.
+    # Semaphore(3) keeps concurrency safe while still being faster than serial.
+    _sem = asyncio.Semaphore(3)
+
     async def _fetch(fid: str) -> bytes | None:
-        url = await _get_file_url(fid)
-        if not url:
-            return None
-        raw = await _download_image(url)
-        if not raw:
-            return None
-        return _resize_image_if_needed(raw)
+        async with _sem:
+            url = await _get_file_url(fid)
+            if not url:
+                return None
+            raw = await _download_image(url)
+            if not raw:
+                return None
+            return _resize_image_if_needed(raw)
 
     results = await asyncio.gather(*[_fetch(fid) for fid in file_ids], return_exceptions=True)
 
