@@ -71,6 +71,15 @@ async def lifespan(app: FastAPI):
         file_ids = [i.file_id for i in items]
         user_id = chat_id  # for Telegram bots: chat_id == user_id for private chats
 
+        # Resolve lang: prefer item that has a caption (user typed something),
+        # fall back to first item, then "ru" as last resort.
+        item_with_caption = next((i for i in items if i.caption), None)
+        lang = (
+            item_with_caption.lang
+            if item_with_caption
+            else (items[0].lang if items else "ru")
+        )
+
         # Fetch user balance
         user_balance = 0.0
         try:
@@ -85,7 +94,7 @@ async def lifespan(app: FastAPI):
             vision_result = await handle_vision_group(
                 file_ids=file_ids,
                 caption=caption,
-                lang="ru",  # TODO: persist lang in MediaGroupItem
+                lang=lang,
             )
         except Exception as exc:
             logger.error("MediaGroup vision group failed", extra={"error": str(exc)})
@@ -109,12 +118,13 @@ async def lifespan(app: FastAPI):
                 update_type=UpdateType.MESSAGE,
                 user_id=user_id,
                 user_balance=user_balance,
-                lang="ru",
+                lang=lang,
                 supabase=state["supabase"],
                 redis=state["redis"],
                 hf_client=app.state.hf_client,
                 request_id=f"mediagroup:{group_id}",
                 app_state=app.state,
+                input_type="image_group",
             )
             if result.denied:
                 from i18n.t import get_system_message
