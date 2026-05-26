@@ -536,7 +536,7 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
         # Use pre-computed intent from vision_handler (§15) when available
         # to avoid classifying the same text twice. For all other paths,
         # classify here — single classification, single authority.
-        if request.vision_intent is not None:
+        if request.vision_intent is not None and request.vision_intent.confidence >= 0.6:
             intent_result = request.vision_intent
             logger.info("Intent (vision)", extra={
                 "intent": intent_result.intent,
