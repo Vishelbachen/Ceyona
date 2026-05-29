@@ -779,6 +779,39 @@ _STRINGS: dict[str, dict[str, str]] = {
         "mn": "⚠️ Зургийг боловсруулж чадсангүй. Дахин оролдоно уу.",
     },
 
+
+    "too_many_images": {
+        "en": "⚠️ I can process up to 6 images at a time. Please send them in smaller groups.",
+        "ru": "⚠️ Я могу обработать до 6 изображений за раз. Пожалуйста, отправляйте меньшими группами.",
+        "de": "⚠️ Ich kann bis zu 6 Bilder auf einmal verarbeiten. Bitte in kleineren Gruppen senden.",
+        "fr": "⚠️ Je peux traiter jusqu'à 6 images à la fois. Veuillez les envoyer en petits groupes.",
+        "es": "⚠️ Puedo procesar hasta 6 imágenes a la vez. Por favor, envíalas en grupos más pequeños.",
+        "pt": "⚠️ Posso processar até 6 imagens de cada vez. Por favor, envie em grupos menores.",
+        "it": "⚠️ Posso elaborare fino a 6 immagini alla volta. Invia in gruppi più piccoli.",
+        "tr": "⚠️ Aynı anda en fazla 6 görsel işleyebilirim. Lütfen daha küçük gruplar halinde gönderin.",
+        "ar": "⚠️ يمكنني معالجة حتى 6 صور في المرة الواحدة. يرجى إرسالها في مجموعات أصغر.",
+        "zh": "⚠️ 我一次最多处理 6 张图片，请分批发送。",
+        "ja": "⚠️ 一度に処理できる画像は最大6枚です。小さいグループに分けて送ってください。",
+        "ko": "⚠️ 한 번에 최대 6개의 이미지를 처리할 수 있습니다. 더 작은 그룹으로 보내주세요.",
+        "pl": "⚠️ Mogę przetworzyć do 6 obrazów na raz. Proszę wysyłać w mniejszych grupach.",
+        "uk": "⚠️ Я можу обробити до 6 зображень за раз. Будь ласка, надсилайте меншими групами.",
+        "fa": "⚠️ می‌توانم تا ۶ تصویر را در یک بار پردازش کنم. لطفاً در گروه‌های کوچک‌تر ارسال کنید.",
+        "nl": "⚠️ Ik kan maximaal 6 afbeeldingen tegelijk verwerken. Stuur ze in kleinere groepen.",
+        "sv": "⚠️ Jag kan behandla upp till 6 bilder åt gången. Skicka dem i mindre grupper.",
+        "no": "⚠️ Jeg kan behandle opptil 6 bilder om gangen. Send dem i mindre grupper.",
+        "da": "⚠️ Jeg kan behandle op til 6 billeder ad gangen. Send dem i mindre grupper.",
+        "fi": "⚠️ Voin käsitellä enintään 6 kuvaa kerrallaan. Lähetä ne pienemmissä ryhmissä.",
+        "he": "⚠️ אני יכול לעבד עד 6 תמונות בכל פעם. אנא שלח בקבוצות קטנות יותר.",
+        "hi": "⚠️ मैं एक बार में अधिकतम 6 छवियाँ प्रोसेस कर सकता हूँ। कृपया छोटे समूहों में भेजें।",
+        "id": "⚠️ Saya dapat memproses hingga 6 gambar sekaligus. Kirim dalam kelompok lebih kecil.",
+        "az": "⚠️ Bir dəfədə maksimum 6 şəkil emal edə bilərəm. Zəhmət olmasa kiçik qruplarla göndərin.",
+        "kk": "⚠️ Мен бір жолы ең көп 6 сурет өңдей аламын. Кішірек топтармен жіберіңіз.",
+        "uz": "⚠️ Men bir vaqtda maksimal 6 ta rasmni qayta ishlay olaman. Iltimos kichikroq guruhlar bilan yuboring.",
+        "ka": "⚠️ ერთდროულად მაქსიმუმ 6 სურათის დამუშავება შემიძლია. გთხოვთ, გამოგზავნოთ პატარა ჯგუფებად.",
+        "hy": "⚠️ Կարող եմ մշակել մինչև 6 նկար միաժամանակ: Խնդրում ենք ուղարկել ավելի փոքր խմբերով:",
+        "mn": "⚠️ Нэг удаад хамгийн ихдээ 6 зураг боловсруулж чадна. Жижиг бүлгүүдээр илгээнэ үү.",
+    },
+
     # ── silent keys ───────────────────────────────────────────────────────────
     # ── weather labels ────────────────────────────────────────────────────────
     "weather_feels_like": {
