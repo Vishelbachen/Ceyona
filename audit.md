@@ -225,12 +225,6 @@ new_row = """| 17.3 | ✅ | Шаблонные ответы / отсутстви
 | 13.6.1 | ✅ | Media group: lock bug, смешение партий, lang хардкод | media_group_aggregator, orchestrator, update_handler, main |"""
 content = content.replace(old_row, new_row)
 
-# Insert before CI planned line
-content = content.replace(
-    "📋 **CI (planned):**",
-    addition.strip() + "\n\n---\n\n📋 **CI (planned):**"
-)
-
 ---
 
 ## ⚡ КРИТИЧЕСКОЕ АРХИТЕКТУРНОЕ ОТКРЫТИЕ — compound (май 2026)
@@ -646,4 +640,4 @@ response_synthesizer
 
 ---
 
-📋 **CI (planned):** coverage floor 75%, asyncio stress
+📋 **CI (planned):** coverage floor 75%, asyncio stress tests (13.4), integration tests compound pipeline, retrieval quality regression, mypy.
