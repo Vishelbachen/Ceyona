@@ -152,6 +152,11 @@ async def lifespan(app: FastAPI):
                 app_state=app.state,
                 input_type="image_group",
                 vision_intent=vision_result.intent_result,
+                # is_vision routing guard: album always carries extracted image
+                # descriptions as user_message — never a raw user query.
+                # Prevents CHAIN_OF_THOUGHT on ANALYSIS/INSTRUCTION intents.
+                # needs_pipeline=True path only (false path returns directly).
+                is_vision=True,
             )
             if result.denied:
                 from i18n.t import get_system_message
