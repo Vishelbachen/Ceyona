@@ -581,11 +581,7 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
         # Semantic contract: the LLM receives the description as text and
         # responds naturally without entering reasoning mode.
         if request.is_vision:
-            from cognition.intent_engine import (
-                Intent,
-                IntentResult,
-                build_system_prompt,
-            )
+            from cognition.intent_engine import Intent, IntentResult, build_system_prompt
             intent_result = IntentResult(
                 intent=Intent.CONVERSATION,
                 confidence=1.0,
@@ -595,7 +591,9 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             )
             # Override complexity so select_strategy() and plan_agents()
             # always resolve to FAST-equivalent path (DIRECT mode, no CoT).
-            from contracts.shared_types import Complexity
+            # Complexity is already imported at module level (line 15) —
+            # no local import needed; local import causes UnboundLocalError
+            # on non-vision paths (Python treats name as local in entire scope).
             request = type(request)(**{
                 **request.__dict__,
                 "complexity": Complexity.LOW,
