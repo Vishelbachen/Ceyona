@@ -84,6 +84,9 @@ async def handle_message(
     app_state=None,
     input_type: str = "text",
     vision_intent=None,  # IntentResult | None — pre-classified by vision handler, skips re-classify
+    is_vision: bool = False,  # routing guard: True when user_message is extracted image content
+                               # (not raw user text). Prevents CoT reasoning on vision pipeline path.
+                               # Set explicitly by callers on album path; auto-detected on single photo path.
 ) -> OrchestratorResult:
 
     # ── photo handling ────────────────────────────────────────────────────────
@@ -595,6 +598,12 @@ async def handle_message(
             locals().get("_vision_intent_result") is not None
             or vision_intent is not None
         ),
+        # is_vision: routing guard against CoT artefacts on vision pipeline path.
+        # True when user_message contains extracted image descriptions (not user text).
+        # Prevents _classify_complexity() from treating LLM-generated structured text
+        # as high-complexity user input → blocks CHAIN_OF_THOUGHT reasoning mode.
+        # Set on both single-photo and album paths when needs_pipeline=True.
+        is_vision=is_vision or (locals().get("_vision_text_override") is not None),
         request_id=request_id,
         analysis_report=_analysis_report,
         input_type=input_type,
