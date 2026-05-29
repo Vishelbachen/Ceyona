@@ -336,11 +336,17 @@ async def handle_message(
                 logger.error("Voice path crashed", extra={"user_id": user_id, "error": str(exc)})
 
     # ── text extraction ───────────────────────────────────────────────────────
-    text = (
-        locals().get("_vision_text_override")
-        or update.get("_voice_transcript")
-        or extract_text(update)
-    )
+    # Vision pipeline path with caption: caption is the user's question; image
+    # descriptions are supporting context, not the topic. Separating them prevents
+    # the main LLM from narrating the photos instead of answering the question.
+    _vision_override = locals().get("_vision_text_override")
+    _vision_caption  = locals().get("_vision_caption_for_history", "")
+    if _vision_override and _vision_caption and _vision_caption != "[фото]":
+        text = _vision_caption
+        _vision_image_context = _vision_override
+    else:
+        text = _vision_override or update.get("_voice_transcript") or extract_text(update)
+        _vision_image_context = None
 
     if not text:
         logger.info("Empty text update ignored", extra={"user_id": user_id})
@@ -577,6 +583,19 @@ async def handle_message(
         )
 
     # ── run pipeline ──────────────────────────────────────────────────────────
+
+    # Vision caption path: inject image descriptions into retrieved_context.
+    # _vision_image_context is set when caption is present (line 346) but was never
+    # wired into the pipeline — descriptions were silently dropped. Now they go into
+    # retrieved_context so the main LLM treats them as supporting material, not as
+    # the topic to narrate. Prevents inference/storytelling from unrelated photo sets.
+    _vic = locals().get("_vision_image_context")
+    if _vic:
+        retrieved_context = (
+            f"[Фото]\n{_vic}\n\n{retrieved_context}"
+            if retrieved_context
+            else f"[Фото]\n{_vic}"
+        )
 
     request = OrchestratorRequest(
         user_message=text,
