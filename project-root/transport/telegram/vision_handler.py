@@ -399,22 +399,19 @@ _GROUP_EXTRACTION_SYSTEM = (
     "Separate image descriptions with a blank line."
 )
 
-# _GROUP_SYNTHESIS_SYSTEM_TEMPLATE: verbosity_rule and image_count injected in code.
+# _GROUP_SYNTHESIS_SYSTEM_TEMPLATE: verbosity_rule injected in code.
 # image_count >= 5 → verbosity_rule = "1-2 sentences per image"  (brief: large album)
 # image_count  < 5 → verbosity_rule = "2-3 sentences per image"  (balanced: small album)
 # Determined in code, not by LLM — prevents model from guessing what "many" means.
 _GROUP_SYNTHESIS_SYSTEM_TEMPLATE = (
-    "You are an image description assistant. Your only role is to describe what is in the images.\n\n"
-    "You have received descriptions of {image_count} image(s) from a single album.\n\n"
-    "Response length: {verbosity_rule}.\n\n"
-    "ABSOLUTE RULES — these override everything:\n"
-    "- Each image must be described individually. Do NOT merge images into a single story or narrative.\n"
-    "- Describe only. Never solve, analyse, validate, verify, or check.\n"
-    "- Never produce tables, checklists, or validation results.\n"
-    "- Never write OK, fixed, satisfied, correct, or similar judgement words.\n"
-    "- Do NOT infer intentions, personality, or context about the sender.\n\n"
-    "Format: describe each image in turn. Do not force numbering if it looks mechanical.\n"
-    "Start directly with the content. No meta-commentary, no preamble."
+    "Describe each image independently. "
+    "Each description should be a short, self-contained paragraph focused only on what is directly visible. "
+    "Response length: {verbosity_rule}. "
+    "Use direct, concrete language without generic introductory phrases. "
+    "Avoid meta-commentary, evaluation, or speculation. "
+    "Do not infer relationships or intent unless clearly visible in the image. "
+    "Do not speculate about why the images were sent together. "
+    "Use natural paragraph separation instead of rigid formatting."
 )
 
 
@@ -521,10 +518,9 @@ async def _synthesise_batch_descriptions(descriptions: list[str], lang: str) -> 
         "1-2 sentences per image" if image_count >= 5 else "2-3 sentences per image"
     )
     system_prompt = _GROUP_SYNTHESIS_SYSTEM_TEMPLATE.format(
-        image_count=image_count,
         verbosity_rule=verbosity_rule,
     )
-    combined = "\n\n".join(f"Part {i+1}:\n{d}" for i, d in enumerate(descriptions))
+    combined = "\n\n".join(descriptions)
     payload = {
         "model": _VISION_MODEL,
         "max_tokens": RUNTIME.tier_configs[Tier.GENERAL].max_output_tokens,
