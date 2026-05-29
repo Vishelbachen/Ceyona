@@ -1,7 +1,7 @@
 # CEYONA — ARCHITECTURE AUDIT
 **Дата:** май 2026 (обновлён май 2026)
 **Проверено:** architecture.md v8.4, models.md v7.3, economic.md v5.2 + весь runtime код
-**Статус:** 13.1, 13.5, 13.6, 17.3 закрыты. Открыто: 3 UX/качество + 1 архитектурный gap.
+**Статус:** 13.1, 13.5, 13.6, 13.6.1, 17.3 закрыты. Открыто: 2 UX/качество + 1 prompt gap + 1 лёгкий. Vision pipeline gap — закрыт архитектурно (is_vision), остался prompt.
 
 Обозначения: ✅ Закрыто | ⚠️ Открыто | 🔴 Критично | 🟡 Средний | 🟢 Низкий
 
@@ -101,135 +101,6 @@ media_group:{uid}:{gid}:seen  SET     — deduplicated message_ids
 
 **Требование к Redis конфигу:** `notify-keyspace-events Ex` (выставляется автоматически в `aggregator.start()`)
 
-
-bash
-
-python3 << 'EOF'
-addition = """
----
-
-## ✅ 13.6.1 — ЗАКРЫТ (май 2026) — Media group: баги агрегатора и изоляция контекста
-
-### Контекст
-
-§13.6 закрыл базовую проблему (бот отвечал на каждое фото альбома по отдельности).
-После деплоя выявлены три новых бага в реализации — диагностика совместно с ChatGPT.
-
-### Симптомы в продакшне
-
-- Описывал 2 фото из 8 — остальные "не загрузились"
-- Вторая партия из 10 фото смешивалась с первой
-- Бот "возвращался к незавершённой задаче" — отвечал в контексте предыдущего альбома
-- lang захардкожен как `"ru"` независимо от языка пользователя
-
-### Диагностика (совместно с ChatGPT, май 2026)
-
-ChatGPT выявил три корневые причины:
-
-**1. Флашит слишком рано** — debounce запускается до того как все фото доставлены.
-Telegram отправляет альбом не атомарно: `photo1 (media_group_id=123)` ... `photo10 (media_group_id=123)` — каждое отдельным update. Бот начинал обработку до получения всех фото.
-
-**2. Нет reset после flush** — следующая партия смешивается с предыдущей.
-`_LUA_FLUSH` приобретал `lock_key` через SETNX, но не удалял его — оставлял с `EXPIRE 30`.
-Вторая партия в течение 30 секунд: `SETNX lock_key` → 0 → flush пропускался → группа терялась.
-
-**3. "Возвращается к старым фото"** — история содержит предыдущие vision-ответы.
-`_on_group_ready` → `handle_message` → загружает `conversation_history` для `user_id`.
-История содержит ответы по предыдущему альбому → модель думает что продолжает.
-
-**Что ChatGPT уточнил к плану:**
-- Lock надо удалять атомарно внутри того же Lua скрипта (не держать после flush).
-- Не обходить `handle_message` через прямой вызов `run()` — это сломает middleware, метрики, rate limiting. Правильно: добавить `input_type` в `OrchestratorRequest` и внутри `update_handler` при `input_type == "image_group"` пропустить загрузку истории.
-- lang: брать из item с caption, затем из первого item, затем "ru" — не из первого item вслепую.
-
-### Изменения (май 2026) ✅
-
-**`transport/telegram/media_group_aggregator.py`** — два фикса:
-
-*Фикс 1 — `_LUA_FLUSH`: атомарное удаление lock.*
-Убран `EXPIRE lock_key 30`. Lock теперь удаляется в том же `DEL` что list_key, ttl_key, seen_key.
-Атомарность сохранена: SETNX по-прежнему гарантирует что только один воркер входит в flush.
-После DEL — clean slate: вторая партия стартует немедленно без ожидания.
-
-```lua
--- было:
-redis.call("EXPIRE", lock_key, 30)
-local items = redis.call("LRANGE", list_key, 0, -1)
-redis.call("DEL", list_key, ttl_key, seen_key)  -- lock_key НЕ удалялся
-
--- стало:
-local items = redis.call("LRANGE", list_key, 0, -1)
-redis.call("DEL", list_key, lock_key, ttl_key, seen_key)  -- все ключи атомарно
-```
-
-*Фикс 2 — `MediaGroupItem.lang`.*
-Добавлено поле `lang: str = "ru"`. Сериализуется в JSON при `add()`, десериализуется при `_flush()`.
-
-**`core/execution/orchestrator.py`** — `OrchestratorRequest` получил поле:
-```python
-input_type: str = "text"  # значения: "text", "image_group", "voice", "image"
-```
-Дефолт "text" → все существующие call-sites не затронуты.
-
-**`transport/telegram/update_handler.py`** — два изменения:
-
-*Сигнатура `handle_message`*: добавлен параметр `input_type: str = "text"`.
-
-*Skip history load для `image_group`*:
-```python
-if supabase is not None and input_type != "image_group":
-    # image_group: каждый альбом — самостоятельная задача.
-    # Загрузка истории смешивает партии.
-    ...get_history(...)
-```
-История по-прежнему **пишется** после ответа — следующий текстовый запрос получит корректный контекст.
-
-`MediaGroupItem` получает `lang=lang` при создании в album-path.
-
-`OrchestratorRequest` получает `input_type=input_type`.
-
-**`app/main.py` — `_on_group_ready`** — три изменения:
-
-*Lang резолюция* (убран TODO/хардкод `"ru"`):
-```python
-item_with_caption = next((i for i in items if i.caption), None)
-lang = (
-    item_with_caption.lang
-    if item_with_caption
-    else (items[0].lang if items else "ru")
-)
-```
-
-*`handle_vision_group`*: теперь получает `lang=lang`.
-
-*`handle_message`*: теперь получает `lang=lang` и `input_type="image_group"`.
-
-### Архитектурный принцип
-
-Каждый альбом = изолированная задача. История не загружается при обработке, но пишется после — пользователь может продолжить диалог текстом с корректным контекстом.
-`input_type` в `OrchestratorRequest` — расширяемый механизм: в будущем аналогично можно изолировать другие типы входных данных без изменения pipeline.
-"""
-
-with open("/tmp/Ceyona-main/audit.md", "r") as f:
-    content = f.read()
-
-# Update header
-content = content.replace(
-    "**Статус:** 13.1, 13.5, 13.6, 17.3 закрыты. Открыто: 3 UX/качество + 1 архитектурный gap.",
-    "**Статус:** 13.1, 13.5, 13.6, 13.6.1, 17.3 закрыты. Открыто: 3 UX/качество + 1 архитектурный gap."
-)
-
-# Update summary table
-old_row = "| 17.3 | ✅ | Шаблонные ответы / отсутствие вариативности | prompt_engine, analysis, correction, synthesizer, vision_handler |"
-new_row = """| 17.3 | ✅ | Шаблонные ответы / отсутствие вариативности | prompt_engine, analysis, correction, synthesizer, vision_handler |
-| 13.6.1 | ✅ | Media group: lock bug, смешение партий, lang хардкод | media_group_aggregator, orchestrator, update_handler, main |"""
-content = content.replace(old_row, new_row)
-
-# Insert before CI planned line
-content = content.replace(
-    "📋 **CI (planned):**",
-    addition.strip() + "\n\n---\n\n📋 **CI (planned):**"
-)
 
 ---
 
@@ -409,7 +280,7 @@ system_prompt = _GROUP_SYNTHESIS_SYSTEM_TEMPLATE.format(image_count=..., verbosi
 Детализация не интерпретируется моделью — передаётся как факт.
 
 ### Статус после деплоя
-⚠️ **Частично улучшено, не закрыто полностью.**
+⚠️ **Архитектурно закрыто (is_vision флаг). Остался prompt gap — см. §18.2.**
 
 Наблюдение (3:52): альбом с mixed content (Google search screenshot, кружка, биология, собака, обувь) → бот ответил `"Этномир\nSublimagia\nПроверьте Booking.com/2GIS/Google Maps для актуальных цен."` — это SEARCH intent, не описание.
 
@@ -417,17 +288,9 @@ system_prompt = _GROUP_SYNTHESIS_SYSTEM_TEMPLATE.format(image_count=..., verbosi
 
 Проблема в том что `_has_uncertainty` проверяет uncertainty signals в extracted, но не защищает от случая когда extracted содержит бренды/URL/названия — они тригерят SEARCH даже через `vision_intent=CONVERSATION` если `needs_pipeline=True`.
 
-### Следующая итерация (НЕ реализована, требует обсуждения)
+### ✅ Следующая итерация — РЕАЛИЗОВАНА (май 2026)
 
-**Предложение ChatGPT (правильное архитектурно, но scope больше):**
-Добавить `is_vision: bool` флаг в `OrchestratorRequest`. В orchestrator: если `is_vision=True` → пропустить intent classification полностью, использовать vision-specific path. Это жёсткое разделение потоков:
-```
-USER TEXT → intent_engine → orchestrator routing
-VISION    → vision_handler → description LLM → ответ напрямую
-```
-Требует изменений: `OrchestratorRequest`, `orchestrator.py`, `update_handler.py`. Правильно для долгосрочного масштабирования.
-
-**Почему не сделано сейчас:** scope и лимиты. Это следующая итерация.
+Добавлен `is_vision: bool` флаг в `OrchestratorRequest` — routing guard блокирует reasoning mode на vision pipeline path. Подробности в §18.1.
 
 ### Что НЕ делать при следующей итерации
 - ❌ Не добавлять больше `ABSOLUTE RULES` в промпты — это фильтрация симптомов
@@ -517,6 +380,8 @@ VISION    → vision_handler → description LLM → ответ напрямую
 | 17.2 | 🟡 | TruthMode как flag, не verification layer | execution_policy_kernel |
 | 17.3 | ✅ | Шаблонные ответы / отсутствие вариативности | prompt_engine, analysis, correction, synthesizer, vision_handler |
 | 13.7 | 🟢 | Грузинский i18n fallback некорректен | i18n/strings.py |
+| 18.1 | ✅ | Vision pipeline gap: is_vision routing guard | orchestrator, update_handler, main |
+| 18.2 | ⚠️ 🟡 | Vision album: агрегация вместо описания каждого изображения | vision_handler _GROUP_SYNTHESIS_SYSTEM_TEMPLATE |
 
 ---
 
@@ -643,6 +508,113 @@ response_synthesizer
 После первого деплоя (без vision_handler фикса): `"Изображения представляют собой..."` продолжал появляться — plural форма не была в patterns, `_GROUP_EXTRACTION_SYSTEM` не был исправлен.
 
 После второго деплоя (все файлы): тест regex подтверждён локально. Production наблюдение продолжается.
+
+---
+
+---
+
+## ✅ 18.1 — ЗАКРЫТ (май 2026) — Vision routing guard: is_vision флаг
+
+### Проблема
+
+Vision pipeline gap: `needs_pipeline=True` (uncertainty в extracted) → extracted text как `user_message` → orchestrator видит длинный structured LLM-output → `_classify_complexity()` → HIGH/MEDIUM → ANALYSIS/INSTRUCTION intent → CHAIN_OF_THOUGHT reasoning → CoT артефакты ("Проверка ограничений", таблицы, "OK").
+
+Цепочка: `uncertainty=True → needs_pipeline=True → extracted → ANALYSIS → CoT → мусор`
+
+### Корневая причина
+
+Orchestrator не имел способа отличить:
+- "пользователь написал сложный текст" — complexity HIGH → reasoning OK
+- "vision extractor сгенерировал structured список описаний" — complexity должна быть LOW, reasoning запрещён
+
+### Решение: is_vision routing guard
+
+**Семантический контракт:** Vision output ≠ User intent. Vision pipeline requests несут extracted image descriptions как `user_message` — это LLM-generated text, не пользовательский запрос. Текстовый классификатор никогда не должен его роутить.
+
+**Три файла изменены:**
+
+**`core/execution/orchestrator.py`:**
+- `OrchestratorRequest` получил поле `is_vision: bool = False`
+- Routing guard в `run()` после intent resolution: если `is_vision=True` → форс `CONVERSATION` intent + `Complexity.LOW`
+- `IntentResult` создаётся с полными обязательными полями через `build_system_prompt(Intent.CONVERSATION, lang)`
+- `Complexity` используется из module-level импорта (строка 15) — **не** из локального импорта внутри if-блока (UnboundLocalError bug был поймал и исправлен)
+
+**`transport/telegram/update_handler.py`:**
+- Добавлен параметр `is_vision: bool = False` в сигнатуру `handle_message`
+- `OrchestratorRequest` получает `is_vision=is_vision or (locals().get("_vision_text_override") is not None)`
+- Auto-detect для single photo path через `_vision_text_override`; явный параметр для album path
+
+**`app/main.py`:**
+- `_on_group_ready` → вызов `handle_message` получил `is_vision=True`
+- Album path всегда несёт extracted descriptions — никогда raw user query
+
+### Баги в процессе (пойманы по Sentry)
+
+1. `IntentResult.__init__() missing 'system_prompt' and 'requires_retrieval'` — IntentResult в проекте имеет обязательные поля без дефолтов. Исправлено: добавлены `system_prompt=build_system_prompt(...)` и `requires_retrieval=False`.
+
+2. `UnboundLocalError: cannot access local variable 'Complexity'` — `from contracts.shared_types import Complexity` внутри `if request.is_vision:` блока резервирует имя как локальное для всей функции `run()`. На non-vision path до импорта не доходим → UnboundLocalError на строке 708. Исправлено: убран дублирующий локальный импорт, используется module-level `Complexity` (строка 15).
+
+### Результат (подтверждён ChatGPT и тестом в продакшне)
+
+- ✅ Нет "Проверки ограничений" и таблиц
+- ✅ Нет ухода в ANALYSIS mode
+- ✅ Формат ответа стал единым
+- ⚠️ Остался prompt gap — модель "склеивает" изображения в нарратив вместо отдельных описаний (§18.2)
+
+---
+
+## ⚠️ 18.2 — ОТКРЫТО (май 2026) — Vision album: агрегация вместо описания
+
+### Симптом
+
+Альбом из 10 разнородных изображений → бот отвечает: *"Наверное, этот человек просто отправил альбом... похоже, это были случайные фотографии и тексты без какого-то конкретного плана"* — нарратив о "пользователе" вместо описания каждого изображения.
+
+Более ранний тест (14:23): *"Похоже, что эти изображения представляют собой различные аспекты жизни человека. Татуировка на руке говорит о его индивидуальности..."* — то же поведение, другой формат.
+
+### Корневая причина
+
+**Это не архитектурный баг. Это prompt gap.**
+
+`_GROUP_SYNTHESIS_SYSTEM_TEMPLATE` содержит явную инструкцию:
+```
+"Do not list images separately — write as a unified natural response."
+```
+Модель следует контракту точно: объединяет изображения в единый нарратив. Поведение детерминировано промптом, не багом pipeline.
+
+### Диагностика совместно с ChatGPT (май 2026)
+
+ChatGPT правильно определил что это prompt-level проблема. Предложенные фиксы верны по направлению:
+- Запрет агрегации: `"Do NOT combine images into a single story"`
+- Нумерованный список: `"describe each image separately as a numbered list"`
+- Запрет инференса: `"Do NOT infer intentions, personality, or story"`
+
+**Где ChatGPT ошибся:** метаданные `Number of images: {n}` и `You will receive N images` в промпте — избыточны. Синтезатор уже получает `Part 1: ... Part 2: ...` и видит количество. Проблема не в незнании количества, а в инструкции объединять.
+
+### Необходимые изменения
+
+**`transport/telegram/vision_handler.py`** — `_GROUP_SYNTHESIS_SYSTEM_TEMPLATE`:
+
+```
+УБРАТЬ:  "Do not list images separately — write as a unified natural response."
+ДОБАВИТЬ:
+  "- Describe each image separately as a numbered list (1. ... 2. ... 3. ...)."
+  "- The number of descriptions MUST equal the number of images."
+  "- Treat each image independently. Do NOT combine images into a single story."
+  "- Do NOT infer intentions, personality, or context about the sender."
+  "- Describe only what is directly visible."
+```
+
+**Одна строка убирается, пять добавляются. Это минимальный правильный фикс.**
+
+### Статус
+
+⚠️ **Не реализовано.** Ждёт деплоя.
+
+### Что НЕ делать
+
+- ❌ Передавать `Number of images: {n}` как метаданные — синтезатор это уже знает
+- ❌ Добавлять правила в `_GROUP_EXTRACTION_SYSTEM` — extractor уже описывает корректно, проблема в синтезаторе
+- ❌ Трогать routing, orchestrator, is_vision — это prompt, не архитектура
 
 ---
 
