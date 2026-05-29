@@ -395,7 +395,7 @@ _GROUP_EXTRACTION_SYSTEM = (
     "OUTPUT FORMAT: plain prose, no headers, no bullet points. "
     "Do NOT open with meta-commentary like \'The images show\', \'These images represent\', "
     "\'Изображения представляют собой\', \'На изображениях\', or any similar phrase. "
-    "Start each image description directly with its content. "
+    "Start each image description directly with its content. Do not begin with ordinal labels like 'First image', 'Second image', 'Image N', 'Первое изображение', 'Второе изображение', or any similar numbering. "
     "Separate image descriptions with a blank line."
 )
 
@@ -579,6 +579,19 @@ async def handle_vision_group(
 
     if len(file_ids) == 1:
         return await handle_vision(file_id=file_ids[0], caption=caption, lang=lang)
+
+    # ── image count guardrail ─────────────────────────────────────────────────
+    # Llama-4-scout degrades beyond ~6 images per context: attention spreads thin,
+    # partial images are silently dropped, output quality collapses.
+    # Hard limit at orchestrator level — correct place per architecture.md.
+    _MAX_GROUP_IMAGES = 6
+    if len(file_ids) > _MAX_GROUP_IMAGES:
+        from i18n.t import t as _t
+        return VisionResult(
+            text=_t("too_many_images", lang),
+            needs_pipeline=False,
+            failed=False,
+        )
 
     # ── download all images concurrently, throttled ───────────────────────────
     _sem = asyncio.Semaphore(3)
