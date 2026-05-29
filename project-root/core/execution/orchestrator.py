@@ -113,6 +113,16 @@ class OrchestratorRequest:
     # Sending image descriptions to Tavily/SerpAPI returns 400 Bad Request.
     # Set to True by update_handler when forwarding a vision result to orchestrator.
     skip_web_search: bool = False
+    # is_vision: True when the request originates from the vision pipeline
+    # (single photo or album with uncertainty=True that requires pipeline).
+    # Used as a routing guard: prevents _classify_complexity() from treating
+    # extracted image descriptions as high-complexity user text, which would
+    # trigger CHAIN_OF_THOUGHT reasoning mode and produce CoT artefacts
+    # ("Проверка ограничений", tables, "OK" lines).
+    # Semantic truth: Vision output ≠ User intent.
+    # Vision requests must never enter reasoning mode regardless of text length.
+    # Set to True by update_handler on the vision pipeline path.
+    is_vision: bool = False
 
 
 @dataclass
@@ -554,6 +564,38 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             logger.info("Intent", extra={
                 "intent": intent_result.intent,
                 "confidence": intent_result.confidence,
+            })
+
+        # ── is_vision routing guard ──────────────────────────────────────────
+        # Vision pipeline requests carry extracted image descriptions as
+        # user_message. These are LLM-generated text, NOT user intent.
+        #
+        # Without this guard, _classify_complexity() sees a long structured
+        # string ("Изображение 1: ...\nИзображение 2: ...") and returns
+        # MEDIUM/HIGH complexity → reasoning_engine selects CHAIN_OF_THOUGHT
+        # for ANALYSIS/INSTRUCTION intents → CoT artefacts appear in the
+        # response ("Проверка ограничений", tables, pseudo-validation).
+        #
+        # Fix: force CONVERSATION intent and FAST complexity on vision path.
+        # Vision output ≠ user intent — a text classifier must never route it.
+        # Semantic contract: the LLM receives the description as text and
+        # responds naturally without entering reasoning mode.
+        if request.is_vision:
+            from cognition.intent_engine import Intent, IntentResult
+            intent_result = IntentResult(
+                intent=Intent.CONVERSATION,
+                confidence=1.0,
+                requires_tools=False,
+            )
+            # Override complexity so select_strategy() and plan_agents()
+            # always resolve to FAST-equivalent path (DIRECT mode, no CoT).
+            from contracts.shared_types import Complexity
+            request = type(request)(**{
+                **request.__dict__,
+                "complexity": Complexity.LOW,
+            })
+            logger.info("Vision routing guard applied — forced CONVERSATION + LOW complexity", extra={
+                "request_id": _rid,
             })
 
         # ── retrieval ────────────────────────────────────────────────────────
