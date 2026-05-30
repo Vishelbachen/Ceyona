@@ -437,11 +437,9 @@ class TestMetaCorrection:
     def _get_apply(self):
         import importlib
         mod = importlib.import_module("meta.correction")
-        # find the public apply/strip function
         for name in ("apply", "strip", "correct", "strip_boilerplate", "run"):
             if hasattr(mod, name):
                 return getattr(mod, name)
-        # fallback: look for any callable that takes a string
         for name in dir(mod):
             if not name.startswith("_"):
                 obj = getattr(mod, name)
@@ -449,68 +447,69 @@ class TestMetaCorrection:
                     return obj
         raise AttributeError("Cannot find public function in meta.correction")
 
-    def test_strips_english_preamble_sure(self):
+    def test_fixes_unclosed_code_block(self):
+        """Odd number of ``` → correction closes it."""
         import meta.correction as correction
-        fn = None
-        for name in ("apply", "strip_boilerplate", "correct", "run", "strip"):
-            fn = getattr(correction, name, None)
-            if fn and callable(fn):
-                break
+        fn = getattr(correction, "apply", None)
         if fn is None:
-            pytest.skip("No public function found in meta.correction")
-        result = fn("Sure! Here is your answer.")
-        # After correction, leading "Sure!" should be removed
-        assert not result.startswith("Sure!")
+            pytest.skip("No apply function in meta.correction")
+        text = "Here is some code:\n```python\nprint('hello')"
+        result = fn(text)
+        assert result.count("```") % 2 == 0, "Unclosed code block should be closed"
 
-    def test_strips_russian_preamble(self):
+    def test_fixes_unclosed_bold(self):
+        """Odd number of ** → correction closes it."""
         import meta.correction as correction
-        fn = None
-        for name in ("apply", "strip_boilerplate", "correct", "run", "strip"):
-            fn = getattr(correction, name, None)
-            if fn and callable(fn):
-                break
+        fn = getattr(correction, "apply", None)
         if fn is None:
-            pytest.skip("No public function found in meta.correction")
-        result = fn("Конечно! Вот ответ на ваш вопрос.")
-        assert not result.startswith("Конечно!")
+            pytest.skip("No apply function in meta.correction")
+        text = "This is **important text"
+        result = fn(text)
+        assert result.count("**") % 2 == 0, "Unclosed bold should be closed"
+
+    def test_collapses_excessive_blank_lines(self):
+        """4+ consecutive blank lines → collapsed to 3."""
+        import meta.correction as correction
+        fn = getattr(correction, "apply", None)
+        if fn is None:
+            pytest.skip("No apply function in meta.correction")
+        text = "First paragraph.\n\n\n\n\nSecond paragraph."
+        result = fn(text)
+        assert "\n\n\n\n" not in result, "4+ blank lines should be collapsed"
 
     def test_does_not_modify_clean_text(self):
+        """Clean text with no structural issues passes through unchanged."""
         import meta.correction as correction
-        fn = None
-        for name in ("apply", "strip_boilerplate", "correct", "run", "strip"):
-            fn = getattr(correction, name, None)
-            if fn and callable(fn):
-                break
+        fn = getattr(correction, "apply", None)
         if fn is None:
-            pytest.skip("No public function found in meta.correction")
+            pytest.skip("No apply function in meta.correction")
         clean = "Москва — столица России."
         result = fn(clean)
         assert "Москва" in result
 
+    def test_preamble_passes_through(self):
+        """
+        correction.py no longer strips preambles — that is the prompt's job.
+        Preamble text must survive correction unchanged (no false stripping).
+        """
+        import meta.correction as correction
+        fn = getattr(correction, "apply", None)
+        if fn is None:
+            pytest.skip("No apply function in meta.correction")
+        # These should NOT be stripped by correction.py
+        text = "Sure! Here is your answer."
+        result = fn(text)
+        assert "Sure" in result, (
+            "correction.py must not strip preambles — that is the prompt's job"
+        )
+
     def test_empty_string_safe(self):
         import meta.correction as correction
-        fn = None
-        for name in ("apply", "strip_boilerplate", "correct", "run", "strip"):
-            fn = getattr(correction, name, None)
-            if fn and callable(fn):
-                break
+        fn = getattr(correction, "apply", None)
         if fn is None:
-            pytest.skip("No public function found in meta.correction")
+            pytest.skip("No apply function in meta.correction")
         result = fn("")
         assert isinstance(result, str)
-
-    def test_strips_signoff_hope_this_helps(self):
-        import meta.correction as correction
-        fn = None
-        for name in ("apply", "strip_boilerplate", "correct", "run", "strip"):
-            fn = getattr(correction, name, None)
-            if fn and callable(fn):
-                break
-        if fn is None:
-            pytest.skip("No public function found in meta.correction")
-        text = "The answer is 42.\nI hope this helps!"
-        result = fn(text)
-        assert "I hope this helps" not in result
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
