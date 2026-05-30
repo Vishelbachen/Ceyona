@@ -66,3 +66,25 @@ def apply_margin(usd: float, margin: float = 1.3) -> float:
     Default 1.3 = 30% markup over raw LLM cost.
     """
     return usd * margin
+
+
+# llama-4-scout vision extraction rates (Groq, May 2026)
+# $0.11 input / $0.34 output per 1M tokens.
+_VISION_RATES: dict[str, float] = {"input": 0.11, "output": 0.34}
+
+
+def vision_cost(input_tokens: int, output_tokens: int) -> float:
+    """
+    Compute raw cost for a llama-4-scout vision extraction call.
+
+    This is the single authoritative billing function for vision tokens.
+    Called by update_handler before the balance guard — always based on
+    actual token counts from the Groq API response, never estimated.
+
+    Falls back to 0.001 conservative estimate at the call site when tokens
+    are unavailable (failed=True path in vision_handler).
+    """
+    return (
+        input_tokens * _VISION_RATES["input"]
+        + output_tokens * _VISION_RATES["output"]
+    ) / 1_000_000
