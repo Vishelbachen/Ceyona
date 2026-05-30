@@ -159,23 +159,13 @@ async def handle_message(
             )
 
         # Safety Gate Pass 1 on caption (photo text)
+        # NON-BLOCKING per architecture.md §21 — check_pass1 always returns PASS.
+        # DENY branch removed: safety_gate v2 (May 2026) is observability-only.
+        # Blocking authority: safety_agent (post-reasoning).
         if caption:
             try:
-                from security.safety_gate import GateVerdict, check_pass1
-                gate1 = await asyncio.wait_for(check_pass1(caption), timeout=8.0)
-                if gate1.verdict == GateVerdict.DENY:
-                    from i18n.t import get_system_message
-                    return OrchestratorResult(
-                        text=get_system_message("safety_block", lang),
-                        tier=Tier.FAST, model=gate1.model_used,
-                        epk_decision=EPKDecision.DENY,
-                        usage=UsageRecord(
-                            input_tokens=0, output_tokens=0,
-                            embedding_tokens=0, rerank_tokens=0,
-                            tier=Tier.FAST, embedding_type="large", cost_usd=0.0,
-                        ),
-                        denied=True, deny_reason="safety_gate_pass1", lang=lang,
-                    )
+                from security.safety_gate import check_pass1
+                await asyncio.wait_for(check_pass1(caption), timeout=8.0)
             except asyncio.TimeoutError:
                 logger.warning("Safety Gate Pass 1 (photo) timeout — skipping", extra={"user_id": user_id})
             except Exception as exc:
@@ -365,24 +355,13 @@ async def handle_message(
             lang=lang,
         )
 
-    # ── Safety Gate Pass 1 — fast rejection (BEFORE Feature Extraction) ───────
+    # ── Safety Gate Pass 1 — observability only (BEFORE Feature Extraction) ────
+    # NON-BLOCKING per architecture.md §21 — check_pass1 always returns PASS.
+    # DENY branch removed: safety_gate v2 (May 2026) is observability-only.
+    # Blocking authority: safety_agent (post-reasoning).
     try:
-        from security.safety_gate import GateVerdict, check_pass1
-        gate1 = await asyncio.wait_for(check_pass1(text), timeout=8.0)
-        if gate1.verdict == GateVerdict.DENY:
-            logger.warning("Safety Gate Pass 1 blocked message", extra={"user_id": user_id})
-            from i18n.t import get_system_message
-            return OrchestratorResult(
-                text=get_system_message("safety_block", lang),
-                tier=Tier.FAST, model=gate1.model_used,
-                epk_decision=EPKDecision.DENY,
-                usage=UsageRecord(
-                    input_tokens=0, output_tokens=0,
-                    embedding_tokens=0, rerank_tokens=0,
-                    tier=Tier.FAST, embedding_type="large", cost_usd=0.0,
-                ),
-                denied=True, deny_reason="safety_gate_pass1", lang=lang,
-            )
+        from security.safety_gate import check_pass1
+        await asyncio.wait_for(check_pass1(text), timeout=8.0)
     except asyncio.TimeoutError:
         logger.warning("Safety Gate Pass 1 timeout — skipping", extra={"user_id": user_id})
     except Exception as exc:
@@ -407,25 +386,13 @@ async def handle_message(
     except Exception as exc:
         logger.warning("Multilingual preprocessor failed (non-critical)", extra={"error": str(exc)})
 
-    # ── Safety Gate Pass 2 — deep classification (AFTER Feature Extraction) ───
+    # ── Safety Gate Pass 2 — observability only (AFTER Feature Extraction) ─────
+    # NON-BLOCKING per architecture.md §21 — check_pass2 always returns PASS.
+    # DENY branch removed: safety_gate v2 (May 2026) is observability-only.
+    # Blocking authority: safety_agent (post-reasoning).
     try:
-        from security.safety_gate import GateVerdict as GV2
         from security.safety_gate import check_pass2
-        gate2 = await asyncio.wait_for(check_pass2(text), timeout=12.0)
-        if gate2.verdict == GV2.DENY:
-            logger.warning("Safety Gate Pass 2 blocked message", extra={"user_id": user_id})
-            from i18n.t import get_system_message
-            return OrchestratorResult(
-                text=get_system_message("safety_block", lang),
-                tier=Tier.FAST, model=gate2.model_used,
-                epk_decision=EPKDecision.DENY,
-                usage=UsageRecord(
-                    input_tokens=0, output_tokens=0,
-                    embedding_tokens=0, rerank_tokens=0,
-                    tier=Tier.FAST, embedding_type="large", cost_usd=0.0,
-                ),
-                denied=True, deny_reason="safety_gate_pass2", lang=lang,
-            )
+        await asyncio.wait_for(check_pass2(text), timeout=12.0)
     except asyncio.TimeoutError:
         logger.warning("Safety Gate Pass 2 timeout — skipping", extra={"user_id": user_id})
     except Exception as exc:
