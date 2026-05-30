@@ -263,7 +263,7 @@ def _apply_normalizer(text: str, lang: str) -> str:
         return text
 
 
-def _strip_cot_artifacts(text: str, intent: "Intent | None", from_vision: bool = False) -> str:
+def _strip_cot_artifacts(text: str, intent: "Intent | None", from_vision: bool = False, lang: str = "en") -> str:
     """
     Step 2.5 (audit §13.3): Strip chain-of-thought reasoning artifacts from final response.
 
@@ -306,43 +306,41 @@ def _strip_cot_artifacts(text: str, intent: "Intent | None", from_vision: bool =
     loop_signal_count = sum(1 for p in _LOOP_SIGNALS if p.search(text))
 
     if loop_signal_count >= 2:
-        # Detect language by Cyrillic presence
-        _has_cyrillic = re.search(r"[а-яёА-ЯЁ]", text)
-        if _has_cyrillic:
-            return "Не могу точно определить — попробуй дать подсказку или уточнить вопрос."
-        return "I'm not sure — could you give me a hint or more context?"
+        # Fallback message via i18n — correct language guaranteed, no script detection heuristic.
+        # "cot_fallback" key must exist in strings.py; falls back to English if missing.
+        from i18n.t import t as _i18n_t
+        msg = _i18n_t("cot_fallback", lang)
+        if not msg:
+            msg = "I'm not sure — could you give me a hint or more context?"
+        return msg
 
     # ── Mode B: Partial CoT header stripping ─────────────────────────────────
     # Remove known scaffolding headers while preserving real answer content.
+    # Strategy: detect by structure, not by hardcoded words in specific languages.
+    # The language-agnostic structural pattern catches CoT in any language.
+    # A small set of high-confidence EN/RU named headers is retained because
+    # they appear reliably as training data artifacts and are unambiguous.
     _COT_HEADER_PATTERNS = [
-        # English scaffolding headers
+        # High-confidence named CoT headers (EN)
         re.compile(r"^Constraints?:\s*\n", re.MULTILINE | re.IGNORECASE),
         re.compile(r"^Candidates?:\s*\n", re.MULTILINE | re.IGNORECASE),
         re.compile(r"^Verification(?: table)?:\s*\n", re.MULTILINE | re.IGNORECASE),
         re.compile(r"^Step-by-step(?: reasoning)?:\s*\n", re.MULTILINE | re.IGNORECASE),
         re.compile(r"^Chain of thought:\s*\n", re.MULTILINE | re.IGNORECASE),
-        re.compile(r"^Reasoning:\s*\n", re.MULTILINE | re.IGNORECASE),
-        re.compile(r"^Analysis:\s*\n", re.MULTILINE | re.IGNORECASE),
         re.compile(r"^Think(ing| step):\s*\n", re.MULTILINE | re.IGNORECASE),
-        # English multi-line scaffold blocks (header + numbered/dash body)
-        re.compile(
-            r"^(?:Constraints?|Candidates?|Verification|Analysis|Reasoning):\s*\n"
-            r"(?:[ \t]*[-\d\.].+\n)+",
-            re.MULTILINE | re.IGNORECASE,
-        ),
-        # Russian scaffolding headers
+        # High-confidence named CoT headers (RU)
         re.compile(r"^Ограничения:\s*\n", re.MULTILINE | re.IGNORECASE),
         re.compile(r"^Кандидаты:\s*\n", re.MULTILINE | re.IGNORECASE),
         re.compile(r"^Верификация(?: таблица)?:\s*\n", re.MULTILINE | re.IGNORECASE),
         re.compile(r"^Проверка:\s*\n", re.MULTILINE | re.IGNORECASE),
-        re.compile(r"^Рассуждение:\s*\n", re.MULTILINE | re.IGNORECASE),
-        re.compile(r"^Анализ:\s*\n", re.MULTILINE | re.IGNORECASE),
         re.compile(r"^Шаг за шагом:\s*\n", re.MULTILINE | re.IGNORECASE),
-        # Russian multi-line scaffold blocks
+        # Language-agnostic structural pattern: single capitalised word header
+        # followed by 2+ numbered/dash list items → CoT scaffold in any language.
+        # Does NOT match normal prose like "Note: explanation sentence."
         re.compile(
-            r"^(?:Ограничения|Кандидаты|Верификация|Проверка|Рассуждение|Анализ):\s*\n"
-            r"(?:[ \t]*[-\d\.].+\n)+",
-            re.MULTILINE | re.IGNORECASE,
+            r"^[A-ZА-ЯЁ\u10d0-\u10ff\u0600-\u06ff][^\s:]{2,24}:\s*\n"
+            r"(?:[ \t]*[\-\d][.\s].+\n){2,}",
+            re.MULTILINE,
         ),
     ]
 
@@ -407,7 +405,7 @@ def synthesize(inp: SynthesisInput) -> SynthesisResult:
     # ── normal pipeline ───────────────────────────────────────────────────────
     text = _assemble(inp.raw_text)
     text = _normalize_for_telegram(text)
-    text = _strip_cot_artifacts(text, inp.intent, from_vision=inp.from_vision)   # §13.3: remove CoT scaffolding for non-MATH
+    text = _strip_cot_artifacts(text, inp.intent, from_vision=inp.from_vision, lang=lang)   # §13.3: remove CoT scaffolding for non-MATH
     text = _structure(text, inp.intent)
     text = _format(text)
     text = _apply_correction(text, inp.conversation_history)
