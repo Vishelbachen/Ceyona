@@ -224,44 +224,28 @@ def _lightweight_analysis(text: str) -> AnalysisReport:
 
 # ─── PUBLIC API ───────────────────────────────────────────────────────────────
 
-# Compiled once: opening phrases that signal a templated/meta-commentary response.
-# Used by detect_repetitive_opening() — pure heuristic, no LLM.
-_RE_TEMPLATED_OPENERS = re.compile(
-    r"^(?:"
-    r"похоже,?\s+что|"
-    r"этот\s+вопрос|"
-    r"данный\s+вопрос|"
-    r"изображени[ея]\s+представляет|"
-    r"изображени[ея]\s+представляют|"
-    r"на\s+(?:данном|этом|всех|представленных)\s+изображени|"
-    r"поскольку\s+у\s+меня\s+нет|"
-    r"я\s+не\s+могу\s+просмотреть|"
-    r"it\s+seems\s+(like|that)|"
-    r"this\s+(?:question|image|request)|"
-    r"the\s+image\s+(?:shows|depicts|represents)"
-    r")",
-    re.IGNORECASE,
-)
-
-
 def detect_repetitive_opening(text: str, history: list[dict]) -> bool:
     """
-    Check whether the response opening is templated AND has appeared recently.
+    Detect whether the model is repeating the same opening across turns.
 
-    Two conditions must both be true to return True:
-      1. The response starts with a known meta-commentary / templated phrase.
-      2. The same opening (first 50 chars) appears in the last 3 assistant turns.
+    Condition: the same opening (first 50 chars) appears verbatim in the last
+    3 assistant turns. Language-agnostic — works for any script.
 
-    This is a smart guard (ChatGPT Level 2): strip only when repetition is confirmed,
-    not on every templated phrase — avoids false positives on first occurrence.
+    This guard catches drift where the model settles into a fixed opener
+    across a conversation regardless of language or phrasing.
+
+    Preamble suppression by phrase lists is intentionally NOT done here.
+    That approach does not scale (the model finds synonyms) and creates
+    asymmetric language coverage. The correct layer for preamble control
+    is the prompt (intent_engine._FORMAT_RULES, prompt_engine._variation_rule).
 
     Args:
         text:    Raw LLM output (before correction).
         history: Conversation history list[{role, content}].
 
     Returns:
-        True  → opening is templated AND was repeated recently → strip it.
-        False → leave text as-is.
+        True  → same opening repeated in recent history → caller may flag it.
+        False → no repetition detected.
 
     Never raises.
     """
@@ -270,13 +254,10 @@ def detect_repetitive_opening(text: str, history: list[dict]) -> bool:
 
     try:
         first_line = text.strip().split("\n")[0][:100]
-
-        # Condition 1: starts with a known templated opener
-        if not _RE_TEMPLATED_OPENERS.match(first_line):
+        opening_50 = first_line[:50].lower().strip()
+        if not opening_50:
             return False
 
-        # Condition 2: the same opening appeared in the last 3 assistant turns
-        opening_50 = first_line[:50].lower().strip()
         recent_assistant = [
             t for t in (history or []) if t.get("role") == "assistant"
         ][-3:]
@@ -286,7 +267,6 @@ def detect_repetitive_opening(text: str, history: list[dict]) -> bool:
             if prev_opening and prev_opening == opening_50:
                 return True
 
-        # Templated but first occurrence — correction.py strip handles it as fallback
         return False
 
     except Exception:
