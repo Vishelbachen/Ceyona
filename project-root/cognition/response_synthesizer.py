@@ -230,18 +230,7 @@ def _format(text: str) -> str:
 
 def _apply_correction(text: str, history: list[dict] | None = None) -> str:
     try:
-        from meta.analysis import detect_repetitive_opening
         from meta.correction import apply
-
-        # Smart guard (Level 2): if opening is templated AND repeated in history,
-        # correction strips it. On first occurrence, correction.py patterns handle it.
-        # Either way: no regeneration, no extra LLM call.
-        if history and detect_repetitive_opening(text, history):
-            # Force strip by prepending a newline so preamble patterns don't need
-            # to match from position 0 — correction apply() does the rest.
-            # Simpler: just call apply() directly; new patterns in correction.py
-            # already cover the templated openers.
-            pass  # fall through to apply() which now has the patterns
 
         corrected = apply(text)
         return corrected if corrected and corrected.strip() else text
