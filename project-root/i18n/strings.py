@@ -563,6 +563,96 @@ _STRINGS: dict[str, dict[str, str]] = {
             "• Проверить баланс через /balance\n\n"
             "Я отвечаю на вашем языке автоматически."
         ),
+        "de": (
+            "ℹ️ *Hilfe*\n\n"
+            "Ich bin dein KI-Assistent. Du kannst:\n"
+            "• Alles fragen\n"
+            "• Code, Analysen oder kreative Texte anfordern\n"
+            "• Wetter oder Websuchen anfragen\n"
+            "• Dein Guthaben mit /balance prüfen\n\n"
+            "Ich antworte automatisch in deiner Sprache."
+        ),
+        "fr": (
+            "ℹ️ *Aide*\n\n"
+            "Je suis ton assistant IA. Tu peux :\n"
+            "• Me poser n'importe quelle question\n"
+            "• Demander du code, des analyses ou de l'écriture créative\n"
+            "• Demander la météo ou des recherches web\n"
+            "• Vérifier ton solde avec /balance\n\n"
+            "Je réponds automatiquement dans ta langue."
+        ),
+        "es": (
+            "ℹ️ *Ayuda*\n\n"
+            "Soy tu asistente de IA. Puedes:\n"
+            "• Preguntarme cualquier cosa\n"
+            "• Pedir código, análisis o escritura creativa\n"
+            "• Preguntar por el tiempo o hacer búsquedas web\n"
+            "• Consultar tu saldo con /balance\n\n"
+            "Respondo automáticamente en tu idioma."
+        ),
+        "pt": (
+            "ℹ️ *Ajuda*\n\n"
+            "Sou o teu assistente de IA. Podes:\n"
+            "• Perguntar qualquer coisa\n"
+            "• Pedir código, análises ou escrita criativa\n"
+            "• Perguntar sobre o tempo ou fazer pesquisas web\n"
+            "• Verificar o teu saldo com /balance\n\n"
+            "Respondo automaticamente no teu idioma."
+        ),
+        "it": (
+            "ℹ️ *Guida*\n\n"
+            "Sono il tuo assistente IA. Puoi:\n"
+            "• Chiedermi qualsiasi cosa\n"
+            "• Richiedere codice, analisi o testi creativi\n"
+            "• Chiedere il meteo o fare ricerche web\n"
+            "• Controllare il saldo con /balance\n\n"
+            "Rispondo automaticamente nella tua lingua."
+        ),
+        "tr": (
+            "ℹ️ *Yardım*\n\n"
+            "Ben senin yapay zeka asistanınım. Yapabileceklerin:\n"
+            "• Her şeyi sorabilirsin\n"
+            "• Kod, analiz veya yaratıcı yazı isteyebilirsin\n"
+            "• Hava durumu veya web araması yapabilirsin\n"
+            "• /balance ile bakiyeni kontrol edebilirsin\n\n"
+            "Otomatik olarak senin dilinde yanıt veririm."
+        ),
+        "ar": (
+            "ℹ️ *المساعدة*\n\n"
+            "أنا مساعدك الذكي. يمكنك:\n"
+            "• سؤالي عن أي شيء\n"
+            "• طلب كود أو تحليل أو كتابة إبداعية\n"
+            "• الاستفسار عن الطقس أو البحث على الويب\n"
+            "• التحقق من رصيدك بـ /balance\n\n"
+            "أرد تلقائياً بلغتك."
+        ),
+        "zh": (
+            "ℹ️ *帮助*\n\n"
+            "我是你的 AI 助手。你可以：\n"
+            "• 问我任何问题\n"
+            "• 请求代码、分析或创意写作\n"
+            "• 询问天气或进行网络搜索\n"
+            "• 用 /balance 查询余额\n\n"
+            "我会自动用你的语言回复。"
+        ),
+        "uk": (
+            "ℹ️ *Допомога*\n\n"
+            "Я твій ШІ-асистент. Ти можеш:\n"
+            "• Запитати будь-що\n"
+            "• Попросити код, аналіз або творчий текст\n"
+            "• Дізнатися погоду або зробити пошук\n"
+            "• Перевірити баланс через /balance\n\n"
+            "Я відповідаю твоєю мовою автоматично."
+        ),
+        "ka": (
+            "ℹ️ *დახმარება*\n\n"
+            "მე შენი AI ასისტენტი ვარ. შეგიძლია:\n"
+            "• ნებისმიერი კითხვა დასვა\n"
+            "• კოდი, ანალიზი ან კრეატიული ტექსტი მოითხოვო\n"
+            "• ამინდი ან ვებ-ძიება გამოიყენო\n"
+            "• ბალანსი შეამოწმო /balance-ით\n\n"
+            "ავტომატურად ვპასუხობ შენს ენაზე."
+        ),
     },
 
     # ── balance display ───────────────────────────────────────────────────────
@@ -819,12 +909,19 @@ _STRINGS: dict[str, dict[str, str]] = {
     # ── emotional fallback — last-resort when LLM is completely unavailable ────
     # NOT a conversational reply — a neutral system message.
     # Warm enough to not feel broken; short enough to not feel like LLM output.
-    # 4 languages cover the majority of the user base; all others fall back to en.
     "emotional_fallback": {
         "en": "Couldn't get a response right now. You can try again 🔄",
         "ru": "Сейчас не получилось ответить. Попробуй ещё раз 🔄",
+        "de": "Gerade keine Antwort möglich. Versuch es nochmal 🔄",
+        "fr": "Impossible de répondre pour l'instant. Réessaie 🔄",
+        "es": "No pude responder ahora. Puedes intentarlo de nuevo 🔄",
+        "pt": "Não foi possível responder agora. Tenta novamente 🔄",
+        "it": "Non è stato possibile rispondere ora. Riprova 🔄",
+        "tr": "Şu an yanıt veremedim. Tekrar deneyebilirsin 🔄",
         "ar": "لم أتمكن من الرد الآن. يمكنك المحاولة مرة أخرى 🔄",
         "zh": "暂时无法回复，请再试一次 🔄",
+        "uk": "Зараз не вдалося відповісти. Спробуй ще раз 🔄",
+        "ka": "ახლა ვერ ვუპასუხე. სცადე თავიდან 🔄",
     },
 
     # ── CoT loop fallback — shown when model produced a reasoning loop instead of answer ──
@@ -837,6 +934,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "de": "Ich bin nicht sicher — kannst du mir einen Hinweis oder mehr Kontext geben?",
         "fr": "Je ne suis pas sûr — pourrais-tu me donner un indice ou plus de contexte ?",
         "es": "No estoy seguro — ¿puedes darme una pista o más contexto?",
+        "pt": "Não tenho certeza — podes dar-me uma dica ou mais contexto?",
+        "it": "Non sono sicuro — potresti darmi un indizio o più contesto?",
         "ar": "لست متأكدًا — هل يمكنك إعطائي تلميحًا أو مزيدًا من السياق؟",
         "zh": "我不确定——能给我一个提示或更多背景吗？",
         "tr": "Emin değilim — bana bir ipucu veya daha fazla bağlam verebilir misin?",
