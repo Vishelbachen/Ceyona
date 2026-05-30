@@ -637,7 +637,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "az": "🔍 Etibarlı məlumat tapılmadı. Zəhmət olmasa sualınızı dəqiqləşdirin.",
         "kk": "🔍 Сенімді ақпарат табылмады. Сұрақты нақтылап көріңіз.",
         "uz": "🔍 Ishonchli ma'lumot topilmadi. Iltimos savolingizni aniqlashtiring.",
-        "ka": "🔍 სანდო ინფორმაცია ვერ მოიძებნა. გთხოვთ დააზუსტოთ კითხვა.",
+        "ka": "🔍 ამ მომენტში ვერ მოვიპოვე განახლებული ინფორმაცია — საძიებო სერვისი დროებით მიუწვდომელია. გთხოვთ, სცადოთ ოდნავ მოგვიანებით.",
         "hy": "🔍 Հուսալի տեղեկություն չի գտնվել: Խնդրում ենք հստակեցնել հարցը:",
         "mn": "🔍 Найдвартай мэдээлэл олдсонгүй. Асуултаа тодруулна уу.",
         "cs": "🔍 Nepodařilo se najít spolehlivé informace. Zkuste otázku upřesnit.",
