@@ -921,7 +921,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ar": "لم أتمكن من الرد الآن. يمكنك المحاولة مرة أخرى 🔄",
         "zh": "暂时无法回复，请再试一次 🔄",
         "uk": "Зараз не вдалося відповісти. Спробуй ще раз 🔄",
-        "ka": "ახლა ვერ ვუპასუხე. სცადე თავიდან 🔄",
+        "ka": "ახლა პასუხის გაცემა ვერ მოხერხდა. სცადეთ თავიდან 🔄",
     },
 
     # ── CoT loop fallback — shown when model produced a reasoning loop instead of answer ──
