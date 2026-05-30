@@ -827,6 +827,23 @@ _STRINGS: dict[str, dict[str, str]] = {
         "zh": "暂时无法回复，请再试一次 🔄",
     },
 
+    # ── CoT loop fallback — shown when model produced a reasoning loop instead of answer ──
+    # Used by response_synthesizer._strip_cot_artifacts() when loop_signal_count >= 2.
+    # Language-correct via inp.lang — no script detection heuristic.
+    # Minimal set: LLM handles remaining languages natively via lang_instruction.
+    "cot_fallback": {
+        "en": "I'm not sure — could you give me a hint or more context?",
+        "ru": "Не могу точно определить — попробуй дать подсказку или уточнить вопрос.",
+        "de": "Ich bin nicht sicher — kannst du mir einen Hinweis oder mehr Kontext geben?",
+        "fr": "Je ne suis pas sûr — pourrais-tu me donner un indice ou plus de contexte ?",
+        "es": "No estoy seguro — ¿puedes darme una pista o más contexto?",
+        "ar": "لست متأكدًا — هل يمكنك إعطائي تلميحًا أو مزيدًا من السياق؟",
+        "zh": "我不确定——能给我一个提示或更多背景吗？",
+        "tr": "Emin değilim — bana bir ipucu veya daha fazla bağlam verebilir misin?",
+        "uk": "Не можу точно визначити — спробуй дати підказку або уточни запитання.",
+        "ka": "დარწმუნებული არ ვარ — შეგიძლია მომცე მინიშნება ან დამატებითი კონტექსტი?",
+    },
+
     # ── top-up inline keyboard button label ──────────────────────────────────
     "top_up_button": {
         "en": "💵 Top Up Balance",
