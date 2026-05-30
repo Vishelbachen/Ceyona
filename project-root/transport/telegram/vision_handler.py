@@ -34,11 +34,16 @@ class VisionResult:
                      inject `text` into pipeline or user_message — it contains
                      an error string that would cause the LLM to hallucinate.
                      Caller should send a localized error message directly.
+    vision_input_tokens  — actual input tokens from Groq API response (for billing).
+    vision_output_tokens — actual output tokens from Groq API response (for billing).
+                           Both are 0 on failure — cost_usd will be 0, billing skipped.
     """
     text: str
     needs_pipeline: bool
     intent_result: object | None = None   # IntentResult — typed as object to avoid circular import
     failed: bool = False
+    vision_input_tokens: int = 0
+    vision_output_tokens: int = 0
 
 
 # ─── TELEGRAM FILE HELPERS ────────────────────────────────────────────────────
@@ -302,6 +307,9 @@ async def handle_vision(
                 .get("content", "")
                 .strip()
             )
+            _usage = data.get("usage", {})
+            _vision_input_tokens  = _usage.get("prompt_tokens", 0)
+            _vision_output_tokens = _usage.get("completion_tokens", 0)
 
     except httpx.HTTPStatusError as exc:
         logger.error("Groq vision HTTP error", extra={
@@ -376,6 +384,8 @@ async def handle_vision(
         text=extracted,
         needs_pipeline=needs_pipeline,
         intent_result=intent_result if needs_pipeline else None,
+        vision_input_tokens=_vision_input_tokens,
+        vision_output_tokens=_vision_output_tokens,
     )
 
 # ─── MULTI-IMAGE (ALBUM) HANDLER ──────────────────────────────────────────────
@@ -427,12 +437,20 @@ _GROUP_SYNTHESIS_SYSTEM_TEMPLATE = (
 )
 
 
+@dataclass(frozen=True)
+class _VisionBatchResult:
+    """Internal result from a single Groq vision batch call."""
+    text: str
+    input_tokens: int
+    output_tokens: int
+
+
 async def _call_groq_vision(
     image_bytes_list: list[bytes],
     caption: str,
     *,
     retry_on_400: bool = True,
-) -> str | None:
+) -> _VisionBatchResult | None:
     """
     Send a batch of images to Groq vision API.
 
@@ -442,7 +460,8 @@ async def _call_groq_vision(
     - if retry_on_400=True and batch == 1: single image still fails → return None.
     - if retry_on_400=False: return None immediately (prevents infinite recursion).
 
-    Returns extracted text string, or None on unrecoverable error.
+    Returns _VisionBatchResult with text and actual token counts, or None on error.
+    Token counts are used by handle_vision_group to compute exact billed cost.
     """
     user_content: list[dict] = []
     for img_bytes in image_bytes_list:
@@ -477,12 +496,20 @@ async def _call_groq_vision(
             )
             r.raise_for_status()
             data = r.json()
-            return (
+            text = (
                 data.get("choices", [{}])[0]
                 .get("message", {})
                 .get("content", "")
                 .strip()
-            ) or None
+            )
+            if not text:
+                return None
+            _usage = data.get("usage", {})
+            return _VisionBatchResult(
+                text=text,
+                input_tokens=_usage.get("prompt_tokens", 0),
+                output_tokens=_usage.get("completion_tokens", 0),
+            )
 
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 400 and retry_on_400 and len(image_bytes_list) > 1:
@@ -497,8 +524,15 @@ async def _call_groq_vision(
                 _call_groq_vision(image_bytes_list[mid:], caption="", retry_on_400=False),
                 return_exceptions=True,
             )
-            parts = [p for p in (left, right) if isinstance(p, str) and p]
-            return "\n\n".join(parts) if parts else None
+            parts = [p for p in (left, right) if isinstance(p, _VisionBatchResult)]
+            if not parts:
+                return None
+            merged_text = "\n\n".join(p.text for p in parts)
+            return _VisionBatchResult(
+                text=merged_text,
+                input_tokens=sum(p.input_tokens for p in parts),
+                output_tokens=sum(p.output_tokens for p in parts),
+            )
 
         logger.error("Groq vision group HTTP error", extra={
             "status": exc.response.status_code,
@@ -664,6 +698,8 @@ async def handle_vision_group(
     )
 
     descriptions: list[str] = []
+    _group_input_tokens  = 0
+    _group_output_tokens = 0
     for idx, res in enumerate(batch_results):
         if isinstance(res, Exception) or res is None:
             logger.warning(
@@ -671,7 +707,9 @@ async def handle_vision_group(
                 extra={"batch_index": idx, "error": str(res) if isinstance(res, Exception) else "None"},
             )
             continue
-        descriptions.append(res)
+        descriptions.append(res.text)
+        _group_input_tokens  += res.input_tokens
+        _group_output_tokens += res.output_tokens
 
     if not descriptions:
         logger.error("Vision group: all batches failed", extra={"loaded": loaded})
@@ -742,4 +780,6 @@ async def handle_vision_group(
         needs_pipeline=needs_pipeline,
         intent_result=intent_result if needs_pipeline else None,
         failed=False,
+        vision_input_tokens=_group_input_tokens,
+        vision_output_tokens=_group_output_tokens,
     )
