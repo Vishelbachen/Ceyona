@@ -227,6 +227,12 @@ async def handle_vision(
     from i18n.t import t
     err_text = t("vision_error", lang)
 
+    logger.info("[vision_input] single image received", extra={
+        "file_id":     file_id,
+        "caption_len": len(caption),
+        "lang":        lang,
+    })
+
     # ── download ──────────────────────────────────────────────────────────────
     file_url = await _get_file_url(file_id)
     if not file_url:
@@ -312,6 +318,11 @@ async def handle_vision(
         logger.error("Groq vision returned empty content", extra={"data": str(data)[:200]})
         return VisionResult(text=err_text, needs_pipeline=False)
 
+    logger.info("[after_extraction] single image extracted", extra={
+        "extracted_len":    len(extracted),
+        "extracted_preview": extracted[:120],
+    })
+
     # ── routing: caption → classify; no caption → CONVERSATION (describe) ──────
     # Classifier works on USER INPUT only — never on extracted (LLM output).
     #
@@ -353,11 +364,12 @@ async def handle_vision(
                        extra={"error": str(exc)})
         needs_pipeline = True
 
-    logger.info("Vision extraction complete", extra={
+    logger.info("[final_routing] single image routed", extra={
         "lang":           lang,
         "caption_len":    len(caption),
         "extracted_len":  len(extracted),
         "needs_pipeline": needs_pipeline,
+        "intent":         intent_result.intent.value if intent_result else None,
     })
 
     return VisionResult(
@@ -577,6 +589,12 @@ async def handle_vision_group(
     if not file_ids:
         return VisionResult(text=err_text, needs_pipeline=False, failed=True)
 
+    logger.info("[vision_input] album received", extra={
+        "image_count": len(file_ids),
+        "caption_len": len(caption),
+        "lang":        lang,
+    })
+
     if len(file_ids) == 1:
         return await handle_vision(file_id=file_ids[0], caption=caption, lang=lang)
 
@@ -659,19 +677,31 @@ async def handle_vision_group(
         logger.error("Vision group: all batches failed", extra={"loaded": loaded})
         return VisionResult(text=err_text, needs_pipeline=False, failed=True)
 
+    logger.info("[after_extraction] album batches extracted", extra={
+        "batches_total":    len(batches),
+        "batches_success":  len(descriptions),
+        "descriptions_preview": [d[:80] for d in descriptions],
+    })
+
     # ── synthesise batch descriptions ─────────────────────────────────────────
     if len(descriptions) == 1:
         extracted = descriptions[0]
     else:
         extracted = await _synthesise_batch_descriptions(descriptions, lang)
 
-    logger.info("Vision group extraction complete", extra={
+    logger.info("[after_synthesis] album descriptions merged", extra={
+        "batches_merged":  len(descriptions),
+        "extracted_len":   len(extracted),
+        "extracted_preview": extracted[:120],
+    })
+
+    logger.info("[final_routing] album routed", extra={
         "lang":          lang,
         "images_loaded": loaded,
         "images_total":  len(file_ids),
         "batches":       len(batches),
-        "descriptions":  len(descriptions),
-        "extracted_len": len(extracted),
+        "needs_pipeline": needs_pipeline,
+        "intent":        intent_result.intent.value if intent_result else None,
     })
 
     # ── routing: caption → classify; no caption → CONVERSATION (describe) ──────
