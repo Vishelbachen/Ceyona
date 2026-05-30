@@ -120,8 +120,7 @@ _EXTRACTION_SYSTEM = (
     "clothing, accessories, art style, setting, any visible name/logo/insignia.\n"
     "Then attempt to identify the character and their franchise/game/anime/series. "
     "State your confidence explicitly. If uncertain, say so and give your best guess with reasoning.\n"
-    "Example output: 'Персонаж с тёмными растрёпанными волосами, в длинном пальто, со швом на лбу. "
-    "По стилю — манга/аниме. Похоже на [Name] из [Series], но не уверен — уточни.'\n"
+    "Structure: appearance first, then identification attempt, then confidence statement. "
     "Only say you cannot identify if you have genuinely zero visual clues.\n\n"
     "RULE 3 — REAL PERSON (photograph of an actual human being):\n"
     "Describe ONLY what is literally visible: clothing (colours, style, brand if visible), "
@@ -133,8 +132,9 @@ _EXTRACTION_SYSTEM = (
     "RULE 4 — OTHER (product, place, animal, object, scene, app screenshot, UI):\n"
     "Describe what you see clearly and concisely. "
     "Include relevant details: objects, colours, layout, text visible, context.\n\n"
-    "OUTPUT FORMAT: plain prose, no headers, no bullet points, no meta-commentary like "
-    "'The image shows' or 'This image depicts' or 'Изображение представляет собой'. "
+    "OUTPUT FORMAT: plain prose, no headers, no bullet points. "
+    "Do not open with meta-commentary that describes the image rather than its content "
+    "('The image shows', 'This image depicts', or equivalents in any language). "
     "Start directly with the content."
 )
 
