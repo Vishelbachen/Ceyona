@@ -75,14 +75,14 @@ def build_messages(ctx: PromptContext) -> list[dict]:
         _openings_block = "; ".join(f'"{o}"' for o in _recent_openings[-3:])
         _variation_rule = (
             "Write in plain text. No markdown tables, no headers, no bold. "
-            "Go straight to the answer — no filler openers. "
+            "Open with the answer itself — the first word of your response is part of the answer. "
             f"Your recent responses started with: {_openings_block}. "
             "Do NOT start this response the same way. Vary your opening naturally."
         )
     else:
         _variation_rule = (
             "Write in plain text. No markdown tables, no headers, no bold. "
-            "Go straight to the answer — no filler openers. "
+            "Open with the answer itself — the first word of your response is part of the answer. "
             "Vary your sentence openings naturally."
         )
     system_parts.insert(1, _variation_rule)
