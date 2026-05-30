@@ -203,10 +203,14 @@ async def handle_message(
             # zero-balance users received free vision responses.
             # Now: run a balance guard before returning. We can't run a full EPK
             # estimate here (no embedding_tokens, no complexity), so we use the
-            # hardcoded cost estimate ($0.001 ≈ llama-4-scout vision call) and
-            # check it against balance. EPK authority is preserved: the check is
-            # structurally identical to EPK rule #1 (balance <= 0 or cost > balance).
-            _vision_cost_usd = 0.001  # conservative estimate for llama-4-scout vision call
+            # §D billing fix: compute actual cost from Groq token counts before guard.
+            # vision_actual_cost() uses VISION_MODEL_RATES ($0.11/$0.34 per 1M).
+            # Falls back to conservative $0.001 estimate if tokens weren't captured (failed=True path).
+            from core.kernel.cost_model import vision_actual_cost
+            _vision_cost_usd = vision_actual_cost(
+                input_tokens=vision_result.vision_input_tokens,
+                output_tokens=vision_result.vision_output_tokens,
+            ) or 0.001
             if user_balance <= 0 or _vision_cost_usd > user_balance:
                 logger.warning(
                     "Vision fast-path: balance insufficient — denying",
@@ -234,8 +238,8 @@ async def handle_message(
                 model=_VISION_MODEL,
                 epk_decision=EPKDecision.ALLOW,
                 usage=UsageRecord(
-                    input_tokens=_estimate_tokens(caption) + 500,
-                    output_tokens=_estimate_tokens(vision_result.text),
+                    input_tokens=vision_result.vision_input_tokens,
+                    output_tokens=vision_result.vision_output_tokens,
                     embedding_tokens=0, rerank_tokens=0,
                     tier=Tier.GENERAL, embedding_type="large", cost_usd=_vision_cost_usd,
                 ),
