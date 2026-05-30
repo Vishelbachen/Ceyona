@@ -416,6 +416,9 @@ async def telegram_webhook(
                     # sendVoice failed — fall back to text silently
                     logger.warning("sendVoice failed — falling back to text", extra={"chat_id": chat_id})
                     await _send_message(chat_id, result.text)
+            elif result.deny_reason == "insufficient_balance":
+                # Always show topup button on balance denial — user needs a clear action path.
+                await _send_message_with_topup(chat_id, result.text, lang)
             else:
                 await _send_message(chat_id, result.text)
 
