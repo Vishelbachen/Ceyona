@@ -1,7 +1,8 @@
 # CEYONA — АНАЛИЗ СЕССИИ 3
 **Дата:** май 2026  
 **Источники:** audit.md, architecture.md, models.md, economic.md, CI_README.md + 37 скринов обсуждений с ChatGPT  
-**Статус:** аналитический документ — не заменяет audit.md, дополняет его
+**Статус:** аналитический документ — не заменяет audit.md, дополняет его  
+**Обновлён:** май 2026 (сессия 3 — закрыты B, C, D, 8.1)
 
 ---
 
@@ -112,60 +113,58 @@
 
 ---
 
-### 🔴 B — i18n слой: 1355 строк вместо ~150
+### ✅ B — i18n слой: рефакторинг (май 2026)
 
-**Суть проблемы:** `strings.py` вырос до 1355 строк. Основная причина: попытка решить через код то, что LLM уже умеет делать сама.
+**Суть проблемы:** `strings.py` вырос до 1355 строк. Основная причина: попытка решить через код то, что LLM умеет делать сама.
 
-**Что верно оставить в i18n:**
-- Системные сообщения (кнопки UI, технические ошибки): `too_many_images`, `vision_error`, `search_unavailable`, `balance_exhausted`, `low_balance_warning`
-- Физические ограничения системы: лимиты, rate limits
-- Специализированные метки: `weather_feels_like`, OW_LANG_MAP, SUPPORTED_LANGS
+**Сделано:**
+- `LANG_INSTRUCTIONS` (51 строка, 50 языков) → `_LANG_ALIASES` (8 записей только для реально неоднозначных кодов: `zh`, `pt-br`, `zh-cn`, `zh-tw`, `sr`, `bs`, `ug`, `tt`)
+- `lang_instruction()` переписана: нормализация регистра (`lower`/`strip`) + алиасы. Без guard — `lang` нормализован через `normalize_lang()` до вызова, мусор физически не доходит
+- `help_display`: 8 языков → en+ru (описательный текст — LLM-домен, не инфраструктура)
+- `emotional_fallback`: 47 языков → 4 (en/ru/ar/zh), текст стал нейтральным системным сообщением
+- Дубль `maps_not_found` удалён (оставлен полный вариант с 34 языками)
+- Итог: 1356 → 1216 строк (−140)
 
-**Что нужно убрать (дублирует LLM):**
-- `LANG_INSTRUCTIONS` (35+ строк) — LLM уже знает все языки. Достаточно одного global контракта в system prompt: `"Always answer in the user's language. If unclear — default to English."` + передать `lang` как параметр.
-- Логика перевода ответов (`translate(response)`) если есть — убрать полностью.
-- Языковые ветки типа `if lang == "ru": ...` внутри пайплайна.
-- "Умные" системные тексты: объяснения, описания, форматирование — это делает LLM.
+**Примечание по цели ~150–200 строк:** нереалистична. 1216 строк объясняются 50+ языками × инфраструктурные ключи (weather, maps, balance, errors). Всё оставшееся — необходимо.
 
-**Правило (из обсуждений):**
-> Код — для ограничений. Модель — для смысла.
+**Принцип зафиксирован:** код — для ограничений и инфраструктуры. LLM — для смысла и контента.
 
-**Действие:** ревизия strings.py. Всё что LLM может сгенерировать сама — убрать. Цель: ~150–200 строк только инфраструктурных строк.
-
----
-
-### 🟡 C — Отсутствие логирования поэтапного вывода vision pipeline
-
-**Суть:** при дебаге нумерации две недели чинили не тот слой (`_GROUP_SYNTHESIS_SYSTEM_TEMPLATE` вместо `_GROUP_EXTRACTION_SYSTEM`). Причина — не было логов промежуточных состояний.
-
-**Решение:** добавить структурированные логи:
-```
-[vision_input]
-[after_extraction]
-[after_grouping]  
-[after_synthesis]
-[final_output]
-```
-Без этого при следующем дефекте снова будет blind debugging.
-
-**Файлы:** `transport/telegram/vision_handler.py`, `transport/telegram/update_handler.py`.
-
-**Приоритет:** высокий — профилактика повторения сессии "2 недели в неправильном слое".
+**Файл:** `i18n/strings.py`
+**Статус:** ✅ закрыт
 
 ---
 
-### 🟡 D — vision_handler.py делает прямые Groq вызовы без EPK
+### ✅ C — Логирование поэтапного вывода vision pipeline (май 2026)
 
-**Суть (из architecture.md §15):** vision_handler находится OUTSIDE EPK DAG by design — это ingress adapter. Но прямые Groq вызовы без EPK создают риск неконтролируемых расходов при больших альбомах.
+**Суть:** при дебаге нумерации две недели чинили не тот слой. Причина — не было логов промежуточных состояний.
 
-**Текущее состояние:**
-- `_MAX_GROUP_IMAGES = 6` — guardrail есть ✅
-- `max_tokens` читается из `RUNTIME.tier_configs` ✅ (фикс май 2026)
-- Но: нет биллинга vision вызовов в `usage_meter.py`
+**Верифицировано кодом:** все метки присутствуют в `vision_handler.py`:
+- `[vision_input]` — single (L235) и album (L626)
+- `[after_extraction]` — single (L329) и album (L718)
+- `[after_synthesis]` — album (L730)
+- `[final_routing]` — single (L375) и album (L736)
 
-**Риск:** vision extraction токены не попадают в billing flow (economic.md §2: "Every model call that produces a response MUST be billed"). При интенсивном использовании — revenue leak.
+Покрывает оба пути (single image + album). Blind debugging исключён.
 
-**Действие:** добавить запись токенов vision вызовов в usage_meter с пометкой `source="vision_extraction"`.
+**Файл:** `transport/telegram/vision_handler.py`
+**Статус:** ✅ закрыт (верифицировано по коду)
+
+---
+
+### ✅ D — Vision токены в usage_meter (май 2026)
+
+**Суть:** прямые Groq вызовы из vision_handler без биллинга → revenue leak.
+
+**Верифицировано кодом:**
+- `vision_handler.py` собирает `vision_input_tokens` / `vision_output_tokens` из Groq API response (поля `prompt_tokens` / `completion_tokens`)
+- `update_handler.py` вызывает `vision_actual_cost()` из `cost_model.py` с этими токенами
+- `cost_model.py` содержит `vision_actual_cost()` с тарифами `VISION_MODEL_RATES` и комментарием `# Used exclusively by vision_handler for image extraction`
+- При `cost_usd == 0` (failure) биллинг пропускается — корректно
+
+Revenue leak закрыт. Биллинг vision вызовов работает.
+
+**Файлы:** `transport/telegram/vision_handler.py`, `transport/telegram/update_handler.py`, `core/kernel/cost_model.py`
+**Статус:** ✅ закрыт (верифицировано по коду)
 
 ---
 
@@ -241,7 +240,7 @@
 |------|-------|--------|----------|
 | `transport/telegram/vision_handler.py` | 714 | Актуален, фиксы 18.x задеплоены | Нет поэтапных логов (C) |
 | `transport/telegram/update_handler.py` | 707 | Актуален, 18.2 задеплоен | Нет поэтапных логов (C) |
-| `i18n/strings.py` | 1355 | Разросся | Дублирует LLM (B) |
+| `i18n/strings.py` | 1216 | ✅ Рефакторинг B закрыт | — |
 | `cognition/intent_engine.py` | 541 | 13.4 частично закрыт | Нет стресс-тестов |
 | `cognition/response_synthesizer.py` | 416 | 7-step pipeline корректен | 13.3 не полностью покрыт |
 | `llm/prompt_engine.py` | 120 | Компактный | — |
@@ -252,11 +251,11 @@
 
 ### Немедленно
 1. Убедиться что 18.3 держит в продакшне (мониторинг нумерации в логах)
-2. Добавить логи `[after_extraction]` / `[after_synthesis]` в vision pipeline (C)
+2. ~~Добавить логи vision pipeline (C)~~ — ✅ закрыто
 
 ### Ближайшие задачи
-3. Ревизия `strings.py`: убрать всё что делает LLM (B) → цель ~150–200 строк
-4. Добавить vision токены в `usage_meter.py` (D)
+3. ~~Ревизия strings.py (B)~~ — ✅ закрыто
+4. ~~Vision токены в usage_meter (D)~~ — ✅ закрыто
 5. Закрыть 13.7 (грузинский i18n fallback — строка в strings.py)
 6. Диагностика 13.1 через `fly logs | grep compound_agent`
 
@@ -280,17 +279,18 @@
 
 ---
 
-### 8.1 — Мёртвый DENY-check в update_handler (новое, не задокументировано ранее)
+### ✅ 8.1 — Мёртвый DENY-check в update_handler (май 2026)
 
-**Суть:** `safety_gate.py` всегда возвращает `GateVerdict.PASS` (оба pass NON-BLOCKING). Но `update_handler.py` в трёх местах (строки 166, 372, 415) проверяет `gate.verdict == GateVerdict.DENY` и блокирует выполнение. Мёртвый код — ветка никогда не сработает.
+**Суть:** `safety_gate.py` всегда возвращает `GateVerdict.PASS`, но три места в `update_handler.py` проверяли `gate.verdict == GateVerdict.DENY` — мёртвый код.
 
-**Почему возникло:** контракт safety_gate изменился (стал PASS always), update_handler остался написан под старую семантику.
+**Верифицировано кодом:** все три ветки заменены комментарием:
+```
+# DENY branch removed: safety_gate v2 (May 2026) is observability-only.
+```
+(строки 163, 364, 395 актуальной версии)
 
-**Риск:** нулевой функционально, но это ложная уверенность при чтении кода и технический долг.
-
-**Действие:** убрать три `if gate.verdict == GateVerdict.DENY` блока из update_handler, или явно закомментировать с объяснением почему они never-fire.
-
-**Файл:** `transport/telegram/update_handler.py`, строки 166, 372, 415.
+**Файл:** `transport/telegram/update_handler.py`
+**Статус:** ✅ закрыт (верифицировано по коду)
 
 ---
 
@@ -306,12 +306,11 @@
 - `transport/telegram/vision_handler.py` → `t("vision_error", lang)`, `t("too_many_images", lang)`.
 - `transport/telegram/webhook.py` → UI-строки, low_balance_warning.
 - `meta/output_normalizer.py` → `SUPPORTED_LANGS` для валидации _LEAK_MAPS.
-- `llm/prompt_engine.py` и `cognition/intent_engine.py` → `lang_instruction(lang)` из `LANG_INSTRUCTIONS`.
+- `llm/prompt_engine.py` и `cognition/intent_engine.py` → `lang_instruction(lang)` — теперь через `_LANG_ALIASES`.
 
-**LANG_INSTRUCTIONS жива** — используется через `lang_instruction()`. Это одна строка в system prompt ("Отвечай ТОЛЬКО на русском языке."). Архитектура уже правильная: нет `if lang ==` веток в pipeline, нет `translate(response)`. ChatGPT рекомендовал именно это — и это уже реализовано.
+**`LANG_INSTRUCTIONS` удалена** (май 2026, пункт B). Заменена на `_LANG_ALIASES` (8 записей для неоднозначных кодов) + `lang_instruction()` с нормализацией регистра. Архитектура корректна: нет `if lang ==` веток, нет `translate()`.
 
-**Что реально избыточно в strings.py:** нет ничего явно избыточного. 1355 строк объясняются 50+ языками × количество ключей. WEATHER_FEELS_LIKE, WEATHER_HUMIDITY, WEATHER_WIND — нужны для форматирования weather-карточки (LLM их не генерирует). LANG_INSTRUCTIONS — активна. Единственный реальный вопрос: стоит ли продолжать добавлять новые "умные" строки объяснений в strings.py или давать их генерировать LLM — это вопрос будущих решений, не текущий баг.
-
+**Итоговое состояние strings.py:** 1216 строк. Оставшееся — необходимо: weather-метки, maps-строки, системные ошибки, balance/billing, UI-кнопки. Цель ~150–200 строк была нереалистична при 50+ языках.
 ---
 
 ### 8.3 — Полный аудит слоёв влияющих на ответы бота
