@@ -16,6 +16,11 @@ MODEL_RATES: dict[str, dict[str, float]] = {
     Tier.HEAVY:   {"input": 0.15,  "output": 0.60},
 }
 
+# llama-4-scout is billed separately — it is NOT a pipeline tier model.
+# Used exclusively by vision_handler for image extraction.
+# Rates: $0.11 input / $0.34 output per 1M tokens (Groq, May 2026).
+VISION_MODEL_RATES: dict[str, float] = {"input": 0.11, "output": 0.34}
+
 # HuggingFace Inference API — BGE embeddings
 # bge-large-en-v1.5: ~$0.10/1M tokens (HF serverless)
 # bge-small-en-v1.5: ~$0.02/1M tokens
@@ -86,4 +91,21 @@ def actual_cost(
         + output_tokens * rates["output"]
         + embedding_tokens * EMBEDDING_RATES[embedding_type]
         + rerank_tokens * RERANK_RATE
+    ) / 1_000_000
+
+
+def vision_actual_cost(input_tokens: int, output_tokens: int) -> float:
+    """
+    Compute actual cost for a llama-4-scout vision extraction call.
+
+    Uses VISION_MODEL_RATES ($0.11 input / $0.34 output per 1M tokens).
+    Called by update_handler with token counts from Groq API response —
+    never estimated, always based on actual usage data.
+
+    economic.md §2: every model call MUST be billed; vision is not a pipeline
+    tier so it cannot go through actual_cost(tier=...).
+    """
+    return (
+        input_tokens * VISION_MODEL_RATES["input"]
+        + output_tokens * VISION_MODEL_RATES["output"]
     ) / 1_000_000
