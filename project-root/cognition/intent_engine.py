@@ -83,7 +83,7 @@ _FORMAT_RULES = (
     "FORMATTING — mandatory: "
     "Never use Markdown tables (no | pipes |). "
     "Never use Markdown headers (no ###, ##, #). "
-    "Never open with filler preamble phrases — go straight to the answer. "
+    "Open with the answer itself — the first word of your response is part of the answer. "
     "Use plain text, numbered lists, or dashes only. "
 )
 
