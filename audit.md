@@ -1,6 +1,6 @@
 # CEYONA — AUDIT
-**Обновлён:** май 2026
-**Статус:** открыто 3 задачи (13.3, 13.4, 17.2) + текущая 18.x (vision synthesis)
+**Обновлён:** май 2026 (сессия 2 — vision debugging + ChatGPT analysis)
+**Статус:** открыто 2 задачи (13.3, 13.4) + 17.2 (spd) + 19.x (global formatting contract)
 
 ---
 
@@ -21,54 +21,219 @@
 
 | Файл | Что решает |
 |------|-----------|
-| `transport/telegram/vision_handler.py` | Промпты для vision (группа и одиночное фото) |
+| `transport/telegram/vision_handler.py` | Промпты для vision (группа и одиночное фото), лимиты |
+| `transport/telegram/update_handler.py` | Flow ответа, caption/vision routing, история |
 | `cognition/intent_engine.py` | System prompts для каждого intent — голос и стиль |
-| `transport/telegram/update_handler.py` | Flow ответа, история |
 | `llm/prompt_engine.py` | Сборка промпта перед LLM |
 | `core/execution/orchestrator.py` | intent → путь → ответ |
 | `cognition/response_synthesizer.py` | Финальная обработка перед отправкой |
+| `i18n/strings.py` | Все локализованные строки бота |
 
 ### Симптомы сломанных ответов
 
-- `"Изображение представляет собой"` / `"The image shows"` → дефолтный шаблон модели, нужен target pattern в промпте
+- `"Изображение N представляет собой"` / `"Первое/Второе изображение..."` → дефолтный шаблон модели в `_GROUP_EXTRACTION_SYSTEM`, нумерация при отсутствии constraint
 - `"наименее интересно для анализа"` / `"вероятно связано"` → инференс и оценка, не запрещены явно
 - `Constraints:`, `Candidates:` → CoT артефакты (13.3)
-- Нумерация `Изображение 1... 2... 3...` → поведение по умолчанию при 10 объектах без target pattern
 - Тон сухой на простых вопросах → CONVERSATION system prompt
+- Модель строит единый нарратив по альбому → caption+фото смешиваются в user_message
+
+---
+
+## АРХИТЕКТУРА VISION PIPELINE (задокументировано май 2026)
+
+### Реальный путь данных
+
+```
+telegram album
+    ↓
+update_handler.py
+    ↓
+handle_vision_group()  [vision_handler.py]
+    ├── лимит > 6 → ответ пользователю (too_many_images)
+    ├── скачать все фото параллельно
+    ├── split в батчи по _MAX_IMAGES_PER_BATCH=4
+    ├── _call_groq_vision() на каждый батч  ← _GROUP_EXTRACTION_SYSTEM
+    └── если батчей > 1: _synthesise_batch_descriptions()  ← _GROUP_SYNTHESIS_SYSTEM_TEMPLATE
+         ↓
+VisionResult(text, needs_pipeline, intent_result)
+    ↓
+update_handler.py routing:
+    ├── needs_pipeline=False → ответ напрямую (CONVERSATION, нет uncertainty)
+    └── needs_pipeline=True  → основной pipeline
+         ├── caption есть → text=caption, image_descriptions → retrieved_context [ФОТО]
+         └── caption нет  → text=descriptions (но этот путь не вызывается при needs_pipeline=False)
+```
+
+### Ключевые инсайты (из отладки май 2026)
+
+**Инсайт 1: Два разных шаблона, разное назначение**
+
+- `_GROUP_EXTRACTION_SYSTEM` — то, что видит каждый батч фото. Генерирует текст, который пользователь видит напрямую при needs_pipeline=False. **Это главный шаблон для обычного кейса.**
+- `_GROUP_SYNTHESIS_SYSTEM_TEMPLATE` — вызывается только если батчей > 1 (т.е. > 4 фото). Склеивает описания батчей. **При 1–4 фото не вызывается никогда.**
+
+Две недели симптом не лечился, потому что чинили `_GROUP_SYNTHESIS_SYSTEM_TEMPLATE`, а реально использовался `_GROUP_EXTRACTION_SYSTEM`.
+
+**Инсайт 2: Путь без caption обходит синтезатор**
+
+При отсутствии caption: `needs_pipeline=False` → ответ = вывод экстрактора напрямую. `_GROUP_SYNTHESIS_SYSTEM_TEMPLATE` не участвует вообще.
+
+**Инсайт 3: "Part N:" в user content синтезатора провоцировало нумерацию**
+
+```python
+# было:
+combined = "\n\n".join(f"Part {i+1}:\n{d}" for i, d in enumerate(descriptions))
+# модель видела Part 1 / Part 2 и зеркалила как Изображение 1 / Изображение 2
+# стало:
+combined = "\n\n".join(descriptions)
+```
+
+**Инсайт 4: caption+фото смешивались в user_message**
+
+`_vision_image_context` ставился в строке 346 но нигде не передавался в pipeline — переменная молча терялась. Описания фото не попадали в OrchestratorRequest. После фикса: caption = user_message, описания = retrieved_context с меткой [Фото].
+
+**Инсайт 5: Проблема кросс-слойная (вывод из анализа с ChatGPT)**
+
+Один и тот же паттерн (нумерация, "представляет собой") может всплывать в разных слоях:
+- Synthesis слой: если descriptions приходят как "Описание 1 / Описание 2"
+- Core/LLM слой: если image_descriptions уходят в user_message без контракта
+- Meta/formatting слой: если есть response templates с нумерацией
+- Retrieval/context: если контекст содержит нумерованные структуры
+
+Правильное решение — не чинить один промпт, а зафиксировать контракт на уровне global formatting rule. Это задача 19.x (см. ниже).
+
+---
+
+## СЛОИ И ЧТО В НИХ МОЖНО (задокументировано по итогам анализа)
+
+| Слой | Правило |
+|------|---------|
+| LLM / Response | ДА — контракт формата ответа живёт здесь. describe individually, no merge, no speculation, natural paragraphs |
+| Cognition (intent, reasoning) | НЕТ — здесь модель должна свободно связывать, строить гипотезы. "do not infer" здесь убьёт анализ |
+| Core / Orchestrator | ЧАСТИЧНО — выбор режима (vision batch vs single), выбор контракта ответа. Не сами правила описания |
+| Contracts | ДА — но как типы поведения, а не текст промпта |
+| Retrieval | НЕТ — только данные, никакого влияния на стиль |
+| Context | НЕТ (почти всегда) — максимум сигнал "images are unrelated" |
+| External / Tools | НЕТ |
+| Events / Meta | Максимум флаги: `{"vision_mode": "independent"}` |
+
+---
+
+## ЗАКРЫТЫЕ ЗАДАЧИ СЕССИИ 2 (май 2026)
+
+### ✅ 18.1 — _GROUP_SYNTHESIS_SYSTEM_TEMPLATE: запреты → target pattern
+
+**Симптом:** `"наименее интересно для анализа"`, `"вероятно связано с биологией"`, нумерация
+**Корень:** шаблон содержал `ABSOLUTE RULES: Do NOT merge...` — запреты без target pattern
+**Решение:**
+```python
+_GROUP_SYNTHESIS_SYSTEM_TEMPLATE = (
+    "Describe each image independently. "
+    "Each description should be a short, self-contained paragraph focused only on what is directly visible. "
+    "Response length: {verbosity_rule}. "
+    "Use direct, concrete language without generic introductory phrases. "
+    "Avoid meta-commentary, evaluation, or speculation. "
+    "Do not infer relationships or intent unless clearly visible in the image. "
+    "Do not speculate about why the images were sent together. "
+    "Use natural paragraph separation instead of rigid formatting."
+)
+```
+Убран `image_count` из `.format()` (больше не нужен).
+Убраны `Part N:` лейблы из `combined` (провоцировали нумерацию в ответе).
+**Файл:** `vision_handler.py`
+**Статус:** ✅ закрыт
+
+---
+
+### ✅ 18.2 — _vision_image_context не передавался в pipeline
+
+**Симптом:** при album + caption бот строил нарратив по фото вместо ответа на вопрос (пример: история про отношения с девушкой из набора несвязанных фото)
+**Корень:** переменная `_vision_image_context` устанавливалась в строке 346 `update_handler.py` но нигде не использовалась — молча терялась. Pipeline получал descriptions как `user_message` и основная модель строила нарратив.
+**Решение:** перед сборкой `OrchestratorRequest` инжектировать `_vision_image_context` в `retrieved_context`:
+```python
+_vic = locals().get("_vision_image_context")
+if _vic:
+    retrieved_context = (
+        f"[Фото]\n{_vic}\n\n{retrieved_context}"
+        if retrieved_context
+        else f"[Фото]\n{_vic}"
+    )
+```
+Теперь: caption = вопрос пользователя в `user_message`, описания фото = контекст в `retrieved_context`.
+**Файл:** `update_handler.py`
+**Статус:** ✅ закрыт
+
+---
+
+### ✅ 18.3 — _GROUP_EXTRACTION_SYSTEM: нумерация "Первое/Второе изображение"
+
+**Симптом:** бот нумерует описания фото `"Первое изображение представляет собой..."` при обычном альбоме без caption
+**Корень:** `_GROUP_EXTRACTION_SYSTEM` заканчивался `"Separate image descriptions with a blank line."` — без запрета на ordinal labels. Модель выбирала нумерацию как safest структуру для multiple objects.
+**Почему не лечилось 2 недели:** чинили `_GROUP_SYNTHESIS_SYSTEM_TEMPLATE`, который при обычном кейсе (≤4 фото без uncertainty) не вызывается никогда. Execution path шёл через экстрактор напрямую к пользователю.
+**Решение:**
+```python
+# в _GROUP_EXTRACTION_SYSTEM заменить финальную строку:
+"Start each image description directly with its content. "
+"Do not begin with ordinal labels like 'First image', 'Second image', 'Image N', "
+"'Первое изображение', 'Второе изображение', or any similar numbering. "
+"Separate image descriptions with a blank line."
+```
+**Файл:** `vision_handler.py`
+**Статус:** ✅ закрыт, задеплоено
+
+---
+
+### ✅ 18.4 — Лимит изображений: нет ограничения на входе
+
+**Симптом:** при 7+ фото модель (llama-4-scout) начинает терять контекст, attention размазывается, часть фото игнорируется, качество описания деградирует. Бот пытается обработать любое количество.
+**Корень:** в `handle_vision_group` не было проверки количества file_ids. Лимит 6 — не магическое число, это эмпирический предел где модель ещё держит контекст (норма 4–8 для мультимодальных моделей).
+**Решение:** guardrail на входе в `handle_vision_group`:
+```python
+_MAX_GROUP_IMAGES = 6
+if len(file_ids) > _MAX_GROUP_IMAGES:
+    return VisionResult(
+        text=t("too_many_images", lang),
+        needs_pipeline=False,
+        failed=False,  # не ошибка системы, guardrail
+    )
+```
+Добавлена строка `too_many_images` в `i18n/strings.py` на всех языках бота (28 языков).
+**Правильно:** это не костыль, это ограничение входа вместо лечения выхода. production-grade fail-safe.
+**Не делать:** тихий обрез `images[:6]` без уведомления — пользователь не понимает что часть проигнорирована.
+**Файлы:** `vision_handler.py`, `i18n/strings.py`
+**Статус:** ✅ закрыт
 
 ---
 
 ## ОТКРЫТЫЕ ЗАДАЧИ
 
-### 🔴 18.x — Vision synthesis: модель оценивает и инферирует (ТЕКУЩАЯ)
+### 🔴 19.x — Global formatting contract (новая, выявлена май 2026)
 
-**Симптом (продакшн, май 2026):**
-- `"наименее интересно для анализа"` — оценка вместо описания
-- `"вероятно имеет отношение к теме изменчивости в биологии"` — инференс по контексту альбома
-- `"Изображение 3 представляет собой..."` — дефолтный шаблон + нумерация
+**Суть:** паттерн нумерации и шаблонных открытий ("На изображении видно...", "Данное изображение демонстрирует...") потенциально кросс-слойный. Фикс extraction решает симптом, но тот же паттерн может всплыть:
+- в synthesis при получении нумерованных descriptions
+- в core/LLM если image_descriptions уходят в user_message
+- в meta/formatting если есть response templates
 
-**Корень:** `_GROUP_SYNTHESIS_SYSTEM_TEMPLATE` содержал запреты (`Do not merge`, `Do not infer`), но не задавал target pattern. Модель при 10 разнородных фото выбирала safest формат — нумерацию и шаблонные открытия. Запреты не работают системно — модель находит обходные формулировки.
+**Правильное решение (2 уровня):**
 
-**Решение (май 2026) — target pattern вместо запретов:**
+Уровень 1 — уже сделан (18.3): локальный фикс `_GROUP_EXTRACTION_SYSTEM`
 
+Уровень 2 — нужно сделать: global formatting constraint в core
+```
+Do not introduce structure not present in input.
+Do not enumerate unless explicitly required by user.
+```
+или normalize_output post-processing в meta слое:
 ```python
-# vision_handler.py — _GROUP_SYNTHESIS_SYSTEM_TEMPLATE
-"Describe each image independently. "
-"Each description should be a short, self-contained paragraph focused only on what is directly visible. "
-"Use direct, concrete language without generic introductory phrases. "
-"Avoid meta-commentary, evaluation, or speculation. "
-"Do not infer relationships or intent unless clearly visible in the image. "
-"Use natural paragraph separation instead of rigid formatting."
+def normalize_output(text: str) -> str:
+    text = remove_ordinals(text)
+    text = remove_numbering(text)
+    return text
 ```
 
-**Что изменилось:**
-- Убрано: `Synthesise them into one clear natural response` (форсировал нарратив)
-- Убрано: `Do not list images separately` (запрет)
-- Добавлено: позитивный контракт — каждое фото = самостоятельный абзац, прямой язык, без вводных фраз
+**Важно:** НЕ добавлять в cognition/intent/reasoning — там модель должна свободно думать. Только в LLM/response layer.
 
-**Файл:** `transport/telegram/vision_handler.py`
-
-**Статус:** ⚠️ Задеплоить, наблюдать. Если `"представляет собой"` продолжает появляться — проверить `_GROUP_EXTRACTION_SYSTEM` (экстрактор тоже может генерировать шаблонные описания, которые синтезатор транслирует).
+**Приоритет:** средний. Сначала убедиться что 18.3 держит в продакшне, потом если паттерн всплывёт снова — делать уровень 2.
+**Статус:** 🔴 спроектировано, не реализовано
 
 ---
 
@@ -106,7 +271,23 @@
 
 ---
 
-## ЗАКРЫТЫЕ ЗАДАЧИ (краткая история)
+## ГОЛОСОВЫЕ СООБЩЕНИЯ — СТАТУС (май 2026)
+
+Голосовой pipeline работает стабильно. Ответы "не идеально, но не сырые" — production-ready.
+
+**Лимит:** 5 минут. После этого задержка может вырасти до десятков минут. Реализовано в ASR.
+
+**Почему голос стабильнее изображений:**
+- вход → один поток (audio → text) → обычный LLM pipeline
+- нет batching, нет branching, нет composition
+- меньше мест где может сломаться поведение
+- нет `_GROUP_EXTRACTION_SYSTEM`, нет синтезатора
+
+Вывод: система голоса линейная → поведение предсказуемое. Vision система ветвистая → поведение нестабильное. Это не баг, это архитектурная разница.
+
+---
+
+## ЗАКРЫТЫЕ ЗАДАЧИ (полная история)
 
 | # | Закрыт | Суть | Ключевое решение |
 |---|--------|------|-----------------|
@@ -116,8 +297,20 @@
 | 13.6.1 | май 2026 | lock bug, смешение партий, lang хардкод | `_LUA_FLUSH` атомарный DEL, `MediaGroupItem.lang`, `input_type` в OrchestratorRequest |
 | 17.1 | май 2026 | CoT infinite loop | `reasoning_engine.py`: QUESTION → mode=DIRECT |
 | 17.3 | май 2026 | шаблонные ответы, "Изображения представляют собой" | history-aware variation в `prompt_engine`, `detect_repetitive_opening` в `analysis`, расширены patterns в `correction` |
+| 18.1 | май 2026 | synthesis шаблон: запреты вместо target pattern | target pattern в `_GROUP_SYNTHESIS_SYSTEM_TEMPLATE`, убраны `Part N:` лейблы |
+| 18.2 | май 2026 | caption+фото → нарратив вместо ответа на вопрос | `_vision_image_context` → `retrieved_context` в `update_handler.py` |
+| 18.3 | май 2026 | нумерация "Первое/Второе изображение" | constraint в `_GROUP_EXTRACTION_SYSTEM` — запрет ordinal labels |
+| 18.4 | май 2026 | нет лимита на количество фото → деградация | `_MAX_GROUP_IMAGES=6` guardrail + `too_many_images` i18n |
 
 ---
 
 ## CI (planned)
 coverage floor 75%, asyncio stress tests (13.4), integration tests compound pipeline, retrieval quality regression, mypy.
+
+---
+
+## СЛЕДУЮЩИЙ ШАГ
+
+1. Задеплоить все файлы из сессии 2: `vision_handler.py`, `update_handler.py`, `strings.py`
+2. Протестировать: альбом 1 фото / 3 фото / 6 фото / 7 фото (должен вернуть too_many_images) — без caption и с caption
+3. Если нумерация всплывёт снова → смотреть в каком именно слое (логи after_extraction / after_synthesis) → тогда делать 19.x уровень 2
