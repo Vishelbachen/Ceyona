@@ -268,6 +268,177 @@
 
 ---
 
+## 8. ПОЛНЫЙ АУДИТ ПО 37 СКРИНАМ (сессия 3 — Claude, май 2026)
+
+### 8.0 — Что обсуждалось в 37 скринах: полный список тем
+
+Скрины 1–4 (19:16): pipeline как система, разделение "как думать" vs "как говорить", слои cognition/llm/meta/contracts, предложение VisionResponseMode.
+Скрины 5–12 (3:37): причина 2 недель дебага (_GROUP_SYNTHESIS вместо _GROUP_EXTRACTION), кто прав локально vs стратегически, cross-layer паттерн нумерации, два уровня решения (локальный + global rule), batching pipeline без cross-batch reasoning.
+Скрины 13–16 (3:37–3:38): контракт данных (Extraction output: plain descriptions, no ordering), "чинить слой — тупик", поток данных vs вертикальные слои, поэтапные логи, Final Authority Layer, голос vs изображения.
+Скрины 17–20 (3:37–3:40): guardrail 6 фото (правильное решение), классификация костыль/guardrail/архитектура, batching pipeline (Stage 1→2→3).
+Скрины 4, 6, 10–12, 14, 16 (4:21–4:22): i18n разрастание до 1400 строк, Lingua vs мультиязычность через модель, что убрать из strings.py, "код для ограничений — модель для смысла", Final Authority Layer (ввести одну точку контроля финального текста).
+
+---
+
+### 8.1 — Мёртвый DENY-check в update_handler (новое, не задокументировано ранее)
+
+**Суть:** `safety_gate.py` всегда возвращает `GateVerdict.PASS` (оба pass NON-BLOCKING). Но `update_handler.py` в трёх местах (строки 166, 372, 415) проверяет `gate.verdict == GateVerdict.DENY` и блокирует выполнение. Мёртвый код — ветка никогда не сработает.
+
+**Почему возникло:** контракт safety_gate изменился (стал PASS always), update_handler остался написан под старую семантику.
+
+**Риск:** нулевой функционально, но это ложная уверенность при чтении кода и технический долг.
+
+**Действие:** убрать три `if gate.verdict == GateVerdict.DENY` блока из update_handler, или явно закомментировать с объяснением почему они never-fire.
+
+**Файл:** `transport/telegram/update_handler.py`, строки 166, 372, 415.
+
+---
+
+### 8.2 — i18n/strings.py: что реально используется и где
+
+**strings.py используется в следующих слоях (верифицировано grep):**
+
+- `external/weather.py` → `_t("weather_feels_like", lang)`, `_t("weather_humidity", lang)`, `_t("weather_wind", lang)` — локализованные метки weather-карточки. Убирать нельзя, LLM их не генерирует — они часть форматированного вывода.
+- `external/maps.py` → `_t("maps_coord_label", ...)`, `_t("maps_poi_result", ...)`, `_t("maps_route_result", ...)`, `_t("maps_not_found", ...)` — все user-facing строки maps приходят из i18n. Правильно.
+- `cognition/response_synthesizer.py` → `_t` для deny-сообщений, truncation_suffix, emotional_fallback.
+- `cognition/multi_agent_coordinator.py` → `_t` для блокирующих сообщений safety_agent.
+- `transport/telegram/update_handler.py` → `get_system_message` в 8+ местах для ошибок pipeline.
+- `transport/telegram/vision_handler.py` → `t("vision_error", lang)`, `t("too_many_images", lang)`.
+- `transport/telegram/webhook.py` → UI-строки, low_balance_warning.
+- `meta/output_normalizer.py` → `SUPPORTED_LANGS` для валидации _LEAK_MAPS.
+- `llm/prompt_engine.py` и `cognition/intent_engine.py` → `lang_instruction(lang)` из `LANG_INSTRUCTIONS`.
+
+**LANG_INSTRUCTIONS жива** — используется через `lang_instruction()`. Это одна строка в system prompt ("Отвечай ТОЛЬКО на русском языке."). Архитектура уже правильная: нет `if lang ==` веток в pipeline, нет `translate(response)`. ChatGPT рекомендовал именно это — и это уже реализовано.
+
+**Что реально избыточно в strings.py:** нет ничего явно избыточного. 1355 строк объясняются 50+ языками × количество ключей. WEATHER_FEELS_LIKE, WEATHER_HUMIDITY, WEATHER_WIND — нужны для форматирования weather-карточки (LLM их не генерирует). LANG_INSTRUCTIONS — активна. Единственный реальный вопрос: стоит ли продолжать добавлять новые "умные" строки объяснений в strings.py или давать их генерировать LLM — это вопрос будущих решений, не текущий баг.
+
+---
+
+### 8.3 — Полный аудит слоёв влияющих на ответы бота
+
+#### transport/ (update_handler, vision_handler, webhook)
+
+**Состояние:** pipeline соответствует architecture.md §4. Порядок: Safety Pass 1 → complexity → multilingual → Safety Pass 2 → analysis → history → retrieval → orchestrator.
+
+**Проблемы:**
+- Три мёртвых DENY-check (строки 166, 372, 415 update_handler) — safety_gate всегда PASS. Технический долг, не функциональный баг.
+- `is_vision` определяется через `locals().get("_vision_text_override") is not None` — хрупко. Работает, но если имя переменной изменится — сломается молча без ошибки.
+- Vision токены групповых батчей (`_call_groq_vision`, `_synthesise_batch_descriptions`) не биллятся. Fast-path биллится через hardcoded `$0.001` — неточно. Revenue leak при интенсивном использовании.
+- **Нет поэтапных логов** `[vision_input]` / `[after_extraction]` / `[after_synthesis]` / `[final_output]`. Главная причина 2 недель слепого дебага.
+
+---
+
+#### cognition/ (intent_engine, reasoning_engine, multi_agent_coordinator, response_synthesizer)
+
+**intent_engine:**
+- System prompts для каждого intent детальные и продуманные. `_NO_CUTOFF` блок корректен. `_FORMAT_RULES` применяется где нужно.
+- `_llm_pre_classify` с history context для сообщений ≤ 8 слов (§13.4 частично закрыт). Asyncio stress tests не написаны.
+- **analysis_hints реально используется** в classify(): IS_SHORT/IS_MULTILINGUAL поднимают effective_min порог, HAS_CODE_BLOCK снижает. Это правильная интеграция meta → cognition без нарушения authority.
+
+**reasoning_engine:**
+- Матрица (Intent, Tier) → ReasoningStrategy корректна. instruction_prefix'ы защищают от CoT утечки через явные запреты ("Never list internal reasoning steps").
+- Нет стратегий для EMOTIONAL, WEATHER, SEARCH, MAPS — они идут через default FAST plan. Это правильно: для этих intent'ов CoT не нужен.
+
+**multi_agent_coordinator:**
+- Все agentic intents (WEATHER, MAPS, MAPS_POI, MAPS_ROUTE, SEARCH) → compound_agent. Архитектурное решение май 2026, задокументировано в audit.md §12.1.
+- EMOTIONAL → FAST с temperature=0.85. Правильно — тепло, быстро, без CoT.
+- CREATIVE → consensus=True с FAST validator. Разумно для качества.
+
+**response_synthesizer:**
+- 7-step pipeline соответствует architecture.md §19.
+- `_strip_cot_artifacts` — два режима (loop detection + header stripping). `from_vision=True` форсирует strip даже для MATH/EXAM. Правильно.
+- `_apply_correction` с history-aware детекцией повторений через `detect_repetitive_opening` из meta/analysis. Правильная интеграция.
+- **variation_rule вставляется на позицию 1 всегда** через `system_parts.insert(1, ...)`. Для EMOTIONAL может конфликтовать с "Keep it SHORT (1-3 sentences)" из intent prompt. Конфликт не критичный, но есть.
+- **13.3 не полностью закрыт:** vision + не-MATH intent + CoT в ответе не покрыт отдельными тестами.
+
+---
+
+#### llm/ (prompt_engine, model_router, groq_client)
+
+**prompt_engine (120 строк — компактный):**
+- Правильный порядок: lang_instruction → variation_rule → intent system_prompt → truth_mode → history → user_message+context.
+- Context инжектируется в user turn, не в system — правильно для small models (они читают user turn ближе к генерации).
+- History-aware variation: извлекает последние 3 opening фразы assistant и явно запрещает их повторение. Это конкретная, actionable инструкция — не абстрактная.
+
+---
+
+#### meta/ (analysis, correction, output_normalizer, reflection, memory_audit)
+
+**meta/analysis.py:**
+- Pure function, no I/O. Структурный анализ (code blocks, math, URLs, script detection, length).
+- `detect_repetitive_opening` — используется в response_synthesizer для smart guard повторений. Правильно.
+- Hints передаются в intent_engine как non-binding — не нарушает Single Policy Authority.
+
+**meta/correction.py:**
+- Паттерны preamble для RU/EN/DE/FR/ES/TR/KA/AR.
+- Паттерны для "изображение представляет собой" (строки 37–39) **уже есть**. Это и есть та "Final Authority Layer" которую ChatGPT предлагал добавить — она существует в correction.py.
+
+**meta/output_normalizer.py:**
+- Source tags, garbled URLs, language leak maps для 30+ языков.
+- **Vision-специфичные артефакты ("На изображении видно...", "Данное изображение демонстрирует...")** не покрыты здесь. Частично покрыты в correction.py (строки 37–39), но не полностью. Это 19.x уровень 2 — реализовывать только если 18.3 не держит.
+
+---
+
+#### retrieval/ (retrieval_engine, source_credibility, reranker)
+
+- Полностью изолирован от стиля ответа. Только данные.
+- source_credibility фильтрует BLOCKED/VERY_LOW тиры до LLM. Правильно.
+- Call site B (pgvector → source_credibility.score_documents) — pass-through пока у MemoryRecord нет source_url.
+- **Retrieval не влияет на стиль** — это правильно и нарушать не нужно. ChatGPT подтвердил: retrieval = только данные.
+
+---
+
+#### context/ (assembler)
+
+- `resolve_truth_mode()` — чистая функция, маппинг intent → TruthMode.
+- `assemble()` — склейка документов с лимитом по символам.
+- **Contracts содержат только типы данных** (TruthMode, Tier, EPKDecision, Complexity). ChatGPT предлагал добавить "типы поведения ответа" в contracts — это было бы нарушением архитектуры §2.3 (contracts не должны содержать policy). Правильно что этого нет.
+
+---
+
+#### events/ (event_bus, event_dispatcher, event_types)
+
+- `event_bus.publish()` **нигде не вызывается** в основном pipeline. EventBus инициализируется в bootstrap но реально не используется для доставки сообщений.
+- События типа `LLM_CALLED`, `RETRIEVAL_COMPLETED` задекларированы, но не эмитируются из orchestrator/agents.
+- Это не баг — events слой зарезервирован для future observability. На качество ответов не влияет.
+
+---
+
+#### core/ (orchestrator, EPK, cost_model, decision_matrix)
+
+- EPK: sole policy authority. Читает только estimated_cost + user_balance. Не обращается к LLM, агентам, модели.
+- cost_model и model_router не импортируют друг друга — separation of authority соблюдена.
+- `_fast_token_threshold = 300` hardcoded в orchestrator.py — это магическое число. Не критично, но по архитектуре должно быть в policy_registry.
+
+---
+
+### 8.4 — Итоговая оценка советов ChatGPT по 37 скринам
+
+**Правильно и реализовано/подтверждено:**
+- Guardrail `_MAX_GROUP_IMAGES=6` + `too_many_images` — правильный производственный guardrail (18.4 ✅).
+- "Код для ограничений, модель для смысла" — уже реализовано. Нет `if lang ==` веток, нет `translate()`, lang_instruction = одна строка в system prompt.
+- Чинить локально → смотреть держит ли → только потом global rule — правильная инженерная стратегия.
+- "Final Authority Layer" как концепция — correction.py строки 37–39 уже содержат паттерны "изображение представляет собой". Концепция реализована, новый слой не нужен.
+- Поэтапные логи `[after_extraction]` / `[after_synthesis]` — правильная рекомендация, не реализована.
+
+**Правильно стратегически, не применимо сейчас:**
+- `VisionResponseMode` enum — архитектурно грамотно для масштабирования multimodal. Оверхед для текущей проблемы. Реализовывать когда batching pipeline будет расширяться.
+- Stage 1→2→3 batching (partial insights → synthesis → optional refinement) — правильная архитектура для 20+ фото. При guardrail 6 не актуально.
+
+**Неверно или введено в заблуждение:**
+- "`contracts/` — недоиспользованный потенциал, добавь типы поведения ответа" — нарушает архитектуру §2.3. Contracts содержат только типы данных. Policy в EPK, поведение в system prompts.
+- `detect_vision_mode(images, user_input)` в orchestrator — сам ChatGPT признал это оверхедом. Orchestrator не видит images напрямую.
+- "Нет единой точки истины для формата ответа" — неверно. Точки контроля существуют: correction.py (step 5) + output_normalizer (step 6) + _strip_cot_artifacts + variation_rule в prompt_engine.
+
+**Что упустил ChatGPT (не обсуждалось в скринах):**
+- Мёртвые DENY-check в update_handler (строки 166/372/415).
+- `is_vision` через `locals().get()` — хрупкость.
+- `_fast_token_threshold = 300` hardcoded в orchestrator — нарушает Single Policy Authority (должно быть в policy_registry).
+- Events слой (event_bus, event_dispatcher) задекларирован но нигде не используется для эмитирования событий из pipeline.
+- variation_rule конфликт с EMOTIONAL intent prompt.
+
+---
+
 ## 7. ЧТО НЕ ТРОГАТЬ
 
 - `cognition/*` (intent_engine, reasoning_engine, multi_agent_coordinator) — здесь формируется смысл, нельзя добавлять format constraints
