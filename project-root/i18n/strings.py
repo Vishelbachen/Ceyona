@@ -1073,36 +1073,6 @@ _STRINGS: dict[str, dict[str, str]] = {
         "sw": "📍 *${name}*\n${address}\nUratibu: ${lat}, ${lon}",
     },
 
-    # ── Maps: route result ─────────────────────────────────────────────────────
-    "maps_route_result": {
-        "en": "🗺 Route: ${origin} → ${destination}\n📏 Distance: ${dist} km\n⏱ Drive time: ~${dur} min",
-        "ru": "🗺 Маршрут: ${origin} → ${destination}\n📏 Расстояние: ${dist} км\n⏱ Время в пути: ~${dur} мин",
-        "de": "🗺 Route: ${origin} → ${destination}\n📏 Entfernung: ${dist} km\n⏱ Fahrzeit: ~${dur} Min.",
-        "fr": "🗺 Itinéraire: ${origin} → ${destination}\n📏 Distance: ${dist} km\n⏱ Durée: ~${dur} min",
-        "es": "🗺 Ruta: ${origin} → ${destination}\n📏 Distancia: ${dist} km\n⏱ Tiempo: ~${dur} min",
-        "pt": "🗺 Rota: ${origin} → ${destination}\n📏 Distância: ${dist} km\n⏱ Tempo: ~${dur} min",
-        "it": "🗺 Percorso: ${origin} → ${destination}\n📏 Distanza: ${dist} km\n⏱ Durata: ~${dur} min",
-        "tr": "🗺 Güzergah: ${origin} → ${destination}\n📏 Mesafe: ${dist} km\n⏱ Süre: ~${dur} dak",
-        "ar": "🗺 المسار: ${origin} → ${destination}\n📏 المسافة: ${dist} كم\n⏱ وقت القيادة: ~${dur} دقيقة",
-        "zh": "🗺 路线：${origin} → ${destination}\n📏 距离：${dist} 公里\n⏱ 行驶时间：约 ${dur} 分钟",
-        "ja": "🗺 ルート：${origin} → ${destination}\n📏 距離：${dist} km\n⏱ 所要時間：約 ${dur} 分",
-        "ko": "🗺 경로: ${origin} → ${destination}\n📏 거리: ${dist} km\n⏱ 이동 시간: 약 ${dur}분",
-        "pl": "🗺 Trasa: ${origin} → ${destination}\n📏 Odległość: ${dist} km\n⏱ Czas jazdy: ~${dur} min",
-        "uk": "🗺 Маршрут: ${origin} → ${destination}\n📏 Відстань: ${dist} км\n⏱ Час у дорозі: ~${dur} хв",
-        "nl": "🗺 Route: ${origin} → ${destination}\n📏 Afstand: ${dist} km\n⏱ Rijtijd: ~${dur} min",
-        "sv": "🗺 Rutt: ${origin} → ${destination}\n📏 Avstånd: ${dist} km\n⏱ Körtid: ~${dur} min",
-        "fi": "🗺 Reitti: ${origin} → ${destination}\n📏 Etäisyys: ${dist} km\n⏱ Ajoaika: ~${dur} min",
-        "he": "🗺 מסלול: ${origin} → ${destination}\n📏 מרחק: ${dist} ק\"מ\n⏱ זמן נסיעה: ~${dur} דקות",
-        "ka": "🗺 მარშრუტი: ${origin} → ${destination}\n📏 მანძილი: ${dist} კმ\n⏱ გზაში: ~${dur} წთ",
-        "hy": "🗺 Երթուղի: ${origin} → ${destination}\n📏 Հեռավورություн: ${dist} կм\n⏱ Ճанапархازгайин ժаманак: ~${dur} рոп",
-        "az": "🗺 Marşrut: ${origin} → ${destination}\n📏 Məsafə: ${dist} km\n⏱ Yol vaxtı: ~${dur} dəq",
-        "kk": "🗺 Бағыт: ${origin} → ${destination}\n📏 Қашықтық: ${dist} км\n⏱ Жол уақыты: ~${dur} мин",
-        "uz": "🗺 Marshrut: ${origin} → ${destination}\n📏 Masofa: ${dist} km\n⏱ Yo'l vaqti: ~${dur} daq",
-        "fa": "🗺 مسیر: ${origin} → ${destination}\n📏 فاصله: ${dist} کیلومتر\n⏱ زمان رانندگی: ~${dur} دقیقه",
-        "hi": "🗺 मार्ग: ${origin} → ${destination}\n📏 दूरी: ${dist} किमी\n⏱ ड्राइव समय: ~${dur} मिनट",
-        "mn": "🗺 Чиглэл: ${origin} → ${destination}\n📏 Зай: ${dist} км\n⏱ Явах хугацаа: ~${dur} мин",
-    },
-
     # ── Maps: route not found ──────────────────────────────────────────────────
     "maps_route_not_found": {
         "en": "🗺 Could not build a route. Check that both locations are correct.",
@@ -1187,21 +1157,9 @@ def t(key: str, lang: str, **kwargs: str) -> str:
 
 
 def lang_instruction(lang: str) -> str:
-    """Return a single-line LLM language directive for the given lang code.
-
-    Normalises input (lowercase, strip) before alias lookup so Telegram
-    variants like 'pt-BR' or 'ZH-cn' resolve correctly. The garbage guard
-    applies only to raw codes that had no alias match — alias results are
-    trusted by definition.
-    """
     lang = lang.lower().strip()
     name = _LANG_ALIASES.get(lang, lang)
-    # Guard only for raw codes (no alias found): reject garbage like
-    # 'asdasd123' or excessively long strings — fall back to English.
-    if name == lang:
-        if len(name) > 12 or not name.replace("-", "").replace("_", "").isalpha():
-            name = "English"
-    return f"Always answer in {name}. If the user's language is unclear — default to English."
+    return f"Always answer in {name}. If unclear — default to English."
 
 
 def ow_lang(lang: str) -> str:
