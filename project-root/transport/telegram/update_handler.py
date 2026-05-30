@@ -204,10 +204,10 @@ async def handle_message(
             # Now: run a balance guard before returning. We can't run a full EPK
             # estimate here (no embedding_tokens, no complexity), so we use the
             # §D billing fix: compute actual cost from Groq token counts before guard.
-            # vision_actual_cost() uses VISION_MODEL_RATES ($0.11/$0.34 per 1M).
+            # vision_cost() uses _VISION_RATES ($0.11/$0.34 per 1M) from payments/pricing_engine.
             # Falls back to conservative $0.001 estimate if tokens weren't captured (failed=True path).
-            from core.kernel.cost_model import vision_actual_cost
-            _vision_cost_usd = vision_actual_cost(
+            from payments.pricing_engine import vision_cost
+            _vision_cost_usd = vision_cost(
                 input_tokens=vision_result.vision_input_tokens,
                 output_tokens=vision_result.vision_output_tokens,
             ) or 0.001
