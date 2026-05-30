@@ -415,9 +415,10 @@ _GROUP_EXTRACTION_SYSTEM = (
     "- Never produce tables, checklists, or validation results.\n"
     "- Never write OK, fixed, satisfied, correct, or similar judgement words.\n\n"
     "OUTPUT FORMAT: plain prose, no headers, no bullet points. "
-    "Do NOT open with meta-commentary like \'The images show\', \'These images represent\', "
-    "\'Изображения представляют собой\', \'На изображениях\', or any similar phrase. "
-    "Start each image description directly with its content. Do not begin with ordinal labels like 'First image', 'Second image', 'Image N', 'Первое изображение', 'Второе изображение', or any similar numbering. "
+    "Do NOT open with meta-commentary like 'The images show', 'These images represent', "
+    "or any similar phrase that describes the set rather than individual content. "
+    "Start each image description directly with its content — the first word describes what is in the image. "
+    "Do not use ordinal or sequential labels to introduce individual images (no 'First', 'Second', 'Image N', or equivalents in any language). "
     "Separate image descriptions with a blank line."
 )
 
