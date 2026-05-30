@@ -31,61 +31,20 @@ OW_LANG_MAP: dict[str, str] = {
     "ps": "en", "ku": "en", "ug": "en", "tt": "en",
 }
 
-# Maps lang code to LLM instruction ("reply only in X")
-LANG_INSTRUCTIONS: dict[str, str] = {
-    "ru": "Отвечай ТОЛЬКО на русском языке.",
-    "en": "Reply ONLY in English.",
-    "de": "Antworte NUR auf Deutsch.",
-    "fr": "Réponds UNIQUEMENT en français.",
-    "es": "Responde SÓLO en español.",
-    "uk": "Відповідай ТІЛЬКИ українською мовою.",
-    "tr": "YALNIZCA Türkçe yanıtla.",
-    "ar": "أجب باللغة العربية فقط.",
-    "zh": "只用中文回答。",
-    "ja": "日本語のみで答えてください。",
-    "ko": "한국어로만 답하세요.",
-    "pl": "Odpowiadaj TYLKO po polsku.",
-    "it": "Rispondi SOLO in italiano.",
-    "pt": "Responda APENAS em português.",
-    "fa": "فقط به فارسی پاسخ بده.",
-    "nl": "Antwoord ALLEEN in het Nederlands.",
-    "sv": "Svara BARA på svenska.",
-    "no": "Svar KUN på norsk.",
-    "da": "Svar KUN på dansk.",
-    "fi": "Vastaa VAIN suomeksi.",
-    "he": "ענה רק בעברית.",
-    "hi": "केवल हिंदी में जवाब दें।",
-    "id": "Jawab HANYA dalam bahasa Indonesia.",
-    "az": "YALNIZ Azərbaycanca cavab ver.",
-    "kk": "ТЕК қазақша жауап бер.",
-    "uz": "FAQAT o'zbekcha javob bering.",
-    "ka": "უპასუხე ᲛᲮᲝᲚᲝᲓ ქართულად.",
-    "hy": "Պատասխանիր ՄԻԱՅՆ հայերեն.",
-    "mn": "ЗӨВХӨН монголоор хариулна уу.",
-    "bg": "Отговаряй САМО на български.",
-    "hr": "Odgovaraj SAMO na hrvatskom.",
-    "sr": "Одговарај САМО на српском.",
-    "cs": "Odpovídej POUZE česky.",
-    "sk": "Odpovedaj IBA po slovensky.",
-    "ro": "Răspunde DOAR în română.",
-    "hu": "Csak magyarul válaszolj.",
-    "th": "ตอบเป็นภาษาไทยเท่านั้น",
-    "vi": "Chỉ trả lời bằng tiếng Việt.",
-    "ms": "Jawab HANYA dalam Bahasa Malaysia.",
-    "bn": "শুধু বাংলায় উত্তর দাও।",
-    "ur": "صرف اردو میں جواب دیں۔",
-    "sw": "Jibu kwa Kiswahili tu.",
-    "am": "በአማርኛ ብቻ መልስ ስጥ።",
-    "ha": "Amsa KAWAI da Hausa.",
-    "yo": "Dahun NIKAN ni Yorùbá.",
-    "ig": "Zaghachi NAANỊ n'Igbo.",
-    "so": "Ku jawaab KALIYA Soomaali.",
-    "ku": "Bersivê TENÊ bi Kurdî bide.",
-    "ps": "یوازې پښتو کې ځواب ورکړئ.",
-    "ug": "پەقەت ئۇيغۇرچە جاۋاب بېرىڭ.",
-    "tt": "Тик татарча жавап бир.",
+# Maps ambiguous/non-obvious lang codes to canonical English names.
+# Only codes where raw ISO 639-1 would be misread by the LLM are listed.
+# Standard codes (ru→Russian, fr→French, de→German, etc.) are passed directly —
+# the model knows them. Aliases cover regional variants and lesser-known codes.
+_LANG_ALIASES: dict[str, str] = {
+    "zh": "Chinese",
+    "pt-br": "Brazilian Portuguese",
+    "zh-cn": "Simplified Chinese",
+    "zh-tw": "Traditional Chinese",
+    "sr": "Serbian",
+    "bs": "Bosnian",
+    "ug": "Uyghur",
+    "tt": "Tatar",
 }
-
 _TON_WALLET = "UQA78muNWF-tW4bhePG8GMdXzj1RuByOtf1XAwZ9VDOBElSA"
 
 # ─── WEATHER LABEL KEYS ───────────────────────────────────────────────────────
@@ -582,6 +541,9 @@ _STRINGS: dict[str, dict[str, str]] = {
     },
 
     # ── help text ─────────────────────────────────────────────────────────────
+    # Static fallback shown by /start and /help. Two languages hardcoded;
+    # all others fall back to English (acceptable — this is a rare edge,
+    # and the bot already replies in the user's language for everything else).
     "help_display": {
         "en": (
             "ℹ️ *Help*\n\n"
@@ -600,60 +562,6 @@ _STRINGS: dict[str, dict[str, str]] = {
             "• Узнать погоду или сделать поиск\n"
             "• Проверить баланс через /balance\n\n"
             "Я отвечаю на вашем языке автоматически."
-        ),
-        "de": (
-            "ℹ️ *Hilfe*\n\n"
-            "Ich bin dein KI-Assistent. Du kannst:\n"
-            "• Alles fragen\n"
-            "• Code, Analysen oder kreative Texte anfordern\n"
-            "• Wetter oder Websuche anfragen\n"
-            "• Mit /balance dein Guthaben prüfen\n\n"
-            "Ich antworte automatisch in deiner Sprache."
-        ),
-        "fr": (
-            "ℹ️ *Aide*\n\n"
-            "Je suis votre assistant IA. Vous pouvez :\n"
-            "• Poser n'importe quelle question\n"
-            "• Demander du code, une analyse ou un texte créatif\n"
-            "• Demander la météo ou une recherche web\n"
-            "• Vérifier votre solde avec /balance\n\n"
-            "Je réponds automatiquement dans votre langue."
-        ),
-        "es": (
-            "ℹ️ *Ayuda*\n\n"
-            "Soy tu asistente de IA. Puedes:\n"
-            "• Preguntar lo que quieras\n"
-            "• Pedir código, análisis o escritura creativa\n"
-            "• Consultar el clima o buscar en la web\n"
-            "• Ver tu saldo con /balance\n\n"
-            "Respondo automáticamente en tu idioma."
-        ),
-        "ar": (
-            "ℹ️ *مساعدة*\n\n"
-            "أنا مساعدك الذكي. يمكنك:\n"
-            "• السؤال عن أي شيء\n"
-            "• طلب كود أو تحليل أو كتابة إبداعية\n"
-            "• الاستفسار عن الطقس أو البحث على الويب\n"
-            "• التحقق من رصيدك بـ /balance\n\n"
-            "أرد تلقائياً بلغتك."
-        ),
-        "zh": (
-            "ℹ️ *帮助*\n\n"
-            "我是您的AI助手。您可以：\n"
-            "• 问我任何问题\n"
-            "• 请求代码、分析或创意写作\n"
-            "• 查询天气或搜索网页\n"
-            "• 用 /balance 查看余额\n\n"
-            "我会自动用您的语言回复。"
-        ),
-        "ka": (
-            "ℹ️ *დახმარება*\n\n"
-            "მე ვარ თქვენი AI ასისტენტი. შეგიძლიათ:\n"
-            "• დამისვათ ნებისმიერი კითხვა\n"
-            "• მოითხოვოთ კოდი, ანალიზი ან შემოქმედებითი წერა\n"
-            "• ჰკითხოთ ამინდი ან ვებ ძიება\n"
-            "• შეამოწმოთ ბალანსი /balance-ით\n\n"
-            "ავტომატურად ვპასუხობ თქვენს ენაზე."
         ),
     },
 
@@ -907,78 +815,16 @@ _STRINGS: dict[str, dict[str, str]] = {
         "so": "🔍 Natiijooyin lama helin.",
     },
 
-    # ── maps ──────────────────────────────────────────────────────────────────
-    "maps_not_found": {
-        "en": "📍 Location not found. Try a more specific name.",
-        "ru": "📍 Место не найдено. Попробуйте уточнить название.",
-        "de": "📍 Ort nicht gefunden. Versuche einen genaueren Namen.",
-        "fr": "📍 Lieu introuvable. Essayez un nom plus précis.",
-        "es": "📍 Lugar no encontrado. Intenta con un nombre más específico.",
-        "pt": "📍 Local não encontrado. Tente um nome mais específico.",
-        "it": "📍 Luogo non trovato. Prova con un nome più specifico.",
-        "tr": "📍 Konum bulunamadı. Daha spesifik bir isim deneyin.",
-        "ar": "📍 الموقع غير موجود. جرّب اسماً أكثر تحديداً.",
-        "zh": "📍 未找到该位置。请尝试更具体的名称。",
-        "ja": "📍 場所が見つかりませんでした。より具体的な名前を試してください。",
-        "ko": "📍 위치를 찾을 수 없습니다. 더 구체적인 이름을 시도해보세요.",
-        "pl": "📍 Nie znaleziono miejsca. Spróbuj bardziej precyzyjnej nazwy.",
-        "uk": "📍 Місце не знайдено. Спробуйте уточнити назву.",
-        "ka": "📍 ადგილი ვერ მოიძებნა. სცადეთ უფრო კონკრეტული სახელი.",
-        "hy": "📍 Վայրը չի գտնվել: Փորձեք ավելի կոնկրետ անուն:",
-        "az": "📍 Yer tapılmadı. Daha konkret ad sınayın.",
-        "kk": "📍 Орын табылмады. Нақтырақ атауды қолданып көріңіз.",
-        "uz": "📍 Joy topilmadi. Aniqroq nom bilan sinab ko'ring.",
-        "hi": "📍 स्थान नहीं मिला। अधिक विशिष्ट नाम आज़माएं।",
-        "fa": "📍 مکان پیدا نشد. نام دقیق‌تری امتحان کنید.",
-        "mn": "📍 Байршил олдсонгүй. Илүү тодорхой нэр ашиглана уу.",
-    },
 
-    # ── emotional fallback — when LLM unavailable for a pure emotional reaction ─
-    # Used by synthesize() as last resort before no_response.
+    # ── emotional fallback — last-resort when LLM is completely unavailable ────
+    # NOT a conversational reply — a neutral system message.
+    # Warm enough to not feel broken; short enough to not feel like LLM output.
+    # 4 languages cover the majority of the user base; all others fall back to en.
     "emotional_fallback": {
-        "ru": "Понимаю, это неприятно. Расскажи, что случилось — постараюсь помочь.",
-        "en": "That sounds rough. Want to tell me more about what happened?",
-        "de": "Das klingt wirklich frustrierend. Erzähl mir, was passiert ist.",
-        "fr": "Ça a l'air difficile. Dis-moi ce qui s'est passé.",
-        "es": "Entiendo, eso es difícil. Cuéntame qué pasó.",
-        "pt": "Entendo, isso é difícil. Me conta o que aconteceu.",
-        "it": "Capisco, sembra brutto. Dimmi cosa è successo.",
-        "tr": "Anlıyorum, bu zor. Ne olduğunu anlatır mısın?",
-        "ar": "أفهم ذلك، يبدو صعباً. أخبرني ماذا حدث.",
-        "zh": "听起来很糟。跟我说说发生了什么？",
-        "ja": "それは大変だったね。何があったか話してみて。",
-        "ko": "힘들었겠네요. 무슨 일이 있었는지 얘기해줄래요?",
-        "pl": "Rozumiem, to musi być frustrujące. Opowiedz, co się stało.",
-        "uk": "Розумію, це неприємно. Розкажи, що сталося.",
-        "fa": "می‌فهمم، این سخته. بگو چی شده.",
-        "nl": "Dat klinkt vervelend. Vertel me wat er is gebeurd.",
-        "sv": "Det låter jobbigt. Berätta vad som hände.",
-        "no": "Det høres tøft ut. Fortell meg hva som skjedde.",
-        "da": "Det lyder svært. Fortæl mig hvad der skete.",
-        "fi": "Kuulostaa raskaalta. Kerro mitä tapahtui.",
-        "he": "נשמע קשה. ספר לי מה קרה.",
-        "hi": "समझ सकता हूँ, यह मुश्किल है। बताओ क्या हुआ।",
-        "id": "Kedengarannya berat. Ceritakan apa yang terjadi.",
-        "az": "Anlayıram, bu çətindir. De görüm nə baş verdi.",
-        "kk": "Түсінемін, бұл ауыр. Не болғанын айтшы.",
-        "uz": "Tushunaman, bu qiyin. Nima bo'lganini ayt.",
-        "ka": "მესმის, ეს ძნელია. მიამბე, რა მოხდა.",
-        "hy": "Հասկանում եմ, դա ծանր է: Պատմիր՝ ինչ եղավ:",
-        "mn": "Ойлгож байна, энэ хэцүү. Юу болсноо хэлж өгнө үү.",
-        "sw": "Naelewa, ni vigumu. Niambie kilichotokea.",
-        "am": "እረዳለሁ፣ ይህ ከባድ ነው። ምን እንደሆነ ንገረኝ።",
-        "bg": "Разбирам, това е неприятно. Разкажи ми какво се е случило.",
-        "hr": "Razumijem, to zvuči teško. Ispričaj mi što se dogodilo.",
-        "sr": "Разумем, то звучи тешко. Причај ми шта се догодило.",
-        "cs": "Chápu, to musí být nepříjemné. Řekni mi, co se stalo.",
-        "sk": "Chápem, musí to byť nepríjemné. Povedz mi, čo sa stalo.",
-        "ro": "Înțeleg, sună greu. Spune-mi ce s-a întâmplat.",
-        "hu": "Értem, ez nehéz lehet. Mesélj, mi történt.",
-        "vi": "Nghe có vẻ khó khăn. Kể cho tôi nghe chuyện gì đã xảy ra.",
-        "th": "ฟังดูยากเลย บอกฉันหน่อยได้ไหมว่าเกิดอะไรขึ้น?",
-        "ms": "Kedengarannya berat. Ceritakan apa yang berlaku.",
-        "bn": "বুঝতে পারছি, এটা কঠিন। কী হয়েছে বলো।",
-        "ur": "سمجھ سکتا ہوں، یہ مشکل ہے۔ بتاؤ کیا ہوا۔",
+        "en": "Couldn't get a response right now. You can try again 🔄",
+        "ru": "Сейчас не получилось ответить. Попробуй ещё раз 🔄",
+        "ar": "لم أتمكن من الرد الآن. يمكنك المحاولة مرة أخرى 🔄",
+        "zh": "暂时无法回复，请再试一次 🔄",
     },
 
     # ── top-up inline keyboard button label ──────────────────────────────────
@@ -1341,7 +1187,21 @@ def t(key: str, lang: str, **kwargs: str) -> str:
 
 
 def lang_instruction(lang: str) -> str:
-    return LANG_INSTRUCTIONS.get(lang, "Reply in the same language the user wrote in.")
+    """Return a single-line LLM language directive for the given lang code.
+
+    Normalises input (lowercase, strip) before alias lookup so Telegram
+    variants like 'pt-BR' or 'ZH-cn' resolve correctly. The garbage guard
+    applies only to raw codes that had no alias match — alias results are
+    trusted by definition.
+    """
+    lang = lang.lower().strip()
+    name = _LANG_ALIASES.get(lang, lang)
+    # Guard only for raw codes (no alias found): reject garbage like
+    # 'asdasd123' or excessively long strings — fall back to English.
+    if name == lang:
+        if len(name) > 12 or not name.replace("-", "").replace("_", "").isalpha():
+            name = "English"
+    return f"Always answer in {name}. If the user's language is unclear — default to English."
 
 
 def ow_lang(lang: str) -> str:
