@@ -2,37 +2,65 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Mapping
 
 logger = logging.getLogger(__name__)
+
+
+def _pick(params: Mapping[str, object], *keys: str, default: str = "") -> str:
+    for key in keys:
+        value = params.get(key)
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            return text
+    return default
 
 
 # ─── TOOL IMPLEMENTATIONS ─────────────────────────────────────────────────────
 # Imports are lazy (inside each function) so that a startup failure in one
 # external service does NOT kill the entire tool dispatcher.
 
-async def _weather(query: str, lang: str = "en") -> str:
+async def _weather(params: Mapping[str, object], lang: str = "en") -> str:
     from external.weather import _extract_city, weather_service
+
+    query = _pick(params, "query", "city")
+    if not query:
+        return ""
+
     city = await _extract_city(query)
     if not city:
         return ""
+
     data = await weather_service.get_current(city, lang=lang)
     if not data:
         return ""
+
     return weather_service.format_current(data, lang=lang)
 
 
-async def _search(query: str, lang: str = "en") -> str:
-    # query is already rewritten by _understand_query() in intent_engine.classify().
+async def _search(params: Mapping[str, object], lang: str = "en") -> str:
+    # Query is already rewritten by _understand_query() in intent_engine.classify().
     # web_tools receives the final search query — no transformation needed here.
     from external.search import search_service
+
+    query = _pick(params, "query")
+    if not query:
+        return ""
+
     results = await search_service.search(query, lang=lang)
     return search_service.format_results(results, lang=lang)
 
 
-async def _maps(query: str, lang: str = "en") -> str:
+async def _maps(params: Mapping[str, object], lang: str = "en") -> str:
     from external.maps import maps_service
 
     # Pass query directly to Mapbox; it handles any language natively.
+    query = _pick(params, "query", "location", "place")
+    if not query:
+        return ""
+
     feature = await maps_service.geocode(query, lang=lang)
     if not feature:
         return maps_service.format_not_found(lang=lang)
@@ -61,14 +89,14 @@ async def _extract_poi_parts_via_llm(query: str) -> tuple[str, str, bool]:
             "(navigation, directions, transit, transport, routes, travel time, distance between two points): "
             'reply {"is_navigation": true, "category": "", "location": ""}.\n\n'
             "Otherwise extract the POI category and location:\n"
-            '{"is_navigation": false, "category": "...", "location": "..."}.\n\n'
+            '{"is_navigation": false, "category": "...", "location": "..."}\n\n'
             "RULES for category/location (only when is_navigation=false):\n"
             "1. category = what the user is looking for (e.g. 'cheap hotels', 'restaurants', 'pharmacies', 'ATMs').\n"
             "2. location = the FULL city or area name suitable for geocoding. "
             "Never return just 'center', 'downtown', 'центр', 'here'. "
             "Always return the actual city name, e.g. 'Voronezh', 'Saint Petersburg city center'.\n"
             "3. Include price qualifiers (cheap, budget, luxury, дешёвые) in category, NOT in location.\n"
-            "4. If you cannot determine a field, use empty string \"\".\n"
+            "4. If you cannot determine a field, use empty string "".\n"
             "Output JSON only.\n\n"
             f"Query: {query}"
         )
@@ -109,36 +137,42 @@ async def _extract_poi_parts_via_llm(query: str) -> tuple[str, str, bool]:
     return query, query, False
 
 
-async def _maps_poi(query: str, lang: str = "en") -> str:
+async def _maps_poi(params: Mapping[str, object], lang: str = "en") -> str:
     from external.maps import maps_service
-    category, location, is_navigation = await _extract_poi_parts_via_llm(query)
 
-    # Guard: embedding classifier misrouted a navigation query as MAPS_POI.
-    # LLM detected the true intent — redirect to web search (language-agnostic).
-    # Works for all 75 lingua languages without hardcoded signal strings.
-    if is_navigation:
-        logger.info(
-            "_maps_poi: navigation query misrouted as POI — redirecting to search",
-            extra={"query": query[:80], "lang": lang},
-        )
-        return await _search(query, lang)
+    query = _pick(params, "query")
+    category = _pick(params, "category")
+    location = _pick(params, "location")
+
+    if category and location:
+        pass
+    elif query:
+        category, location, is_navigation = await _extract_poi_parts_via_llm(query)
+        if is_navigation:
+            logger.info(
+                "_maps_poi: navigation query misrouted as POI — redirecting to search",
+                extra={"query": query[:80], "lang": lang},
+            )
+            return await _search({"query": query}, lang)
+    else:
+        return ""
 
     feature = await maps_service.search_poi(
-        category=category,
-        location=location,
+        category=category or query,
+        location=location or query,
         lang=lang,
     )
     if not feature:
         return maps_service.format_poi_not_found(
-            category=category,
-            location=location,
+            category=category or query,
+            location=location or query,
             lang=lang,
         )
     return maps_service.format_poi(feature, lang=lang)
 
 
-async def _web_search_fallback(query: str, lang: str = "en") -> str:
-    return await _search(query, lang)
+async def _web_search_fallback(params: Mapping[str, object], lang: str = "en") -> str:
+    return await _search(params, lang)
 
 
 async def _extract_route_endpoints_via_llm(query: str) -> tuple[str, str]:
@@ -173,7 +207,7 @@ async def _extract_route_endpoints_via_llm(query: str) -> tuple[str, str]:
         raw = response.text
         raw = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
         data = json.loads(raw)
-        origin      = data.get("origin", "").strip()
+        origin = data.get("origin", "").strip()
         destination = data.get("destination", "").strip()
         return origin, destination
     except Exception as exc:
@@ -181,17 +215,24 @@ async def _extract_route_endpoints_via_llm(query: str) -> tuple[str, str]:
         return "", ""
 
 
-async def _maps_route(query: str, lang: str = "en") -> str:
+async def _maps_route(params: Mapping[str, object], lang: str = "en") -> str:
     """
     Build a driving route between two locations using Mapbox Directions API.
-    Endpoint extraction is delegated to the LLM (Groq).
+    Endpoint extraction is delegated to the LLM (Groq) only when structured
+    origin/destination fields are not already provided.
     """
     from external.maps import maps_service
-    origin, destination = await _extract_route_endpoints_via_llm(query)
+
+    origin = _pick(params, "origin")
+    destination = _pick(params, "destination")
+    query = _pick(params, "query")
+
+    if (not origin or not destination) and query:
+        origin, destination = await _extract_route_endpoints_via_llm(query)
 
     if not origin or not destination:
         # Can't parse endpoints — fall back to web search for transport info
-        return await _search(query, lang)
+        return await _search({"query": query or _pick(params, "location")}, lang)
 
     route = await maps_service.get_route(origin=origin, destination=destination, lang=lang)
     if not route:
@@ -209,21 +250,24 @@ _TOOL_MAP = {
     "maps_poi":            _maps_poi,
     "maps_route":          _maps_route,
     "web_search":          _web_search_fallback,
-    "web_search_fallback": _web_search_fallback,
+    "web_search_fallback":  _web_search_fallback,
 }
 
 
-async def run_tool(tool_name: str, params: dict, lang: str = "en") -> str:
+async def run_tool(tool_name: str, params: dict | None, lang: str = "en") -> str:
     fn = _TOOL_MAP.get(tool_name)
     if fn is None:
         logger.warning("Unknown tool", extra={"tool": tool_name})
         return ""
 
-    query = params.get("query", "")
-    lang  = params.get("lang", lang)
+    safe_params: Mapping[str, object] = params or {}
+    call_lang = _pick(safe_params, "lang", default=lang)
 
-    logger.info("Running tool", extra={"tool": tool_name, "query": query[:80]})
-    result = await fn(query, lang)
+    logger.info("Running tool", extra={
+        "tool": tool_name,
+        "query": _pick(safe_params, "query")[:80],
+    })
+    result = await fn(safe_params, call_lang)
 
     if not result:
         logger.warning("Tool returned empty result", extra={"tool": tool_name})
