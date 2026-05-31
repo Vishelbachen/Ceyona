@@ -6,7 +6,6 @@ import unicodedata
 
 import httpx
 from app.settings import settings
-from i18n.t import t as _t
 
 logger = logging.getLogger(__name__)
 
