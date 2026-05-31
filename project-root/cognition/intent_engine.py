@@ -14,6 +14,7 @@ from contracts.shared_types import (
 )
 from i18n.t import lang_instruction as _lang_directive
 from llm.prompt_policy import FORMAT_RULES as _FORMAT_RULES
+from llm.prompt_policy import NO_CUTOFF_RULE as _NO_CUTOFF
 
 if TYPE_CHECKING:
     pass
