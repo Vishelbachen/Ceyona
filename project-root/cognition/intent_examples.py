@@ -3,6 +3,14 @@ from __future__ import annotations
 # ─── EXAMPLES ─────────────────────────────────────────────────────────────────
 # Структура: { "intent_name": ["пример 1", "пример 2", ...] }
 # Минимум 15 примеров на интент для надёжной классификации.
+#
+# Augmentation (сессия 4, май 2026):
+#   search — добавлены примеры recall / media identification / descriptive search.
+#   Это не новая категория — это заполнение семантической дыры в distribution.
+#   Раньше "помоги вспомнить аниме" падало в QUESTION (нет embedding-примеров).
+#   Теперь embedding-пространство SEARCH покрывает recall как подкласс.
+#   _llm_pre_classify перехватывает явные recall запросы через label "recall"
+#   до embedding — эти примеры усиливают embedding-слой как второй уровень защиты.
 
 INTENT_EXAMPLES: dict[str, list[str]] = {
 
@@ -187,7 +195,7 @@ INTENT_EXAMPLES: dict[str, list[str]] = {
         "Shin za a yi ruwa gobe a Abuja?",
         "Yanayi a Dubai yanzu",
         "Yaya yanayin yake a Moscow?",
-        # Georgian (additional)
+        # Georgian
         "რა ამინდია ამ წუთას ლონდონში?",
         "ამინდის პროგნოზი თბილისში ხვალ",
         # Armenian
@@ -201,6 +209,7 @@ INTENT_EXAMPLES: dict[str, list[str]] = {
     ],
 
     "search": [
+        # ── Explicit web search ───────────────────────────────────────────────
         "Find information about Elon Musk",
         "Latest news about AI",
         "Search for best Python frameworks 2024",
@@ -209,11 +218,11 @@ INTENT_EXAMPLES: dict[str, list[str]] = {
         "What happened in the tech industry this week?",
         "Look up the population of Brazil",
         "Find reviews for iPhone 15",
-    "Какие дешёвые отели в центре Воронежа?",
-    "Best cheap hotels in city center",
-    "Недорогие гостиницы в Москве",
-    "Список отелей рядом с аэропортом",
-    "Посоветуй гостиницу в центре Киева",
+        "Какие дешёвые отели в центре Воронежа?",
+        "Best cheap hotels in city center",
+        "Недорогие гостиницы в Москве",
+        "Список отелей рядом с аэропортом",
+        "Посоветуй гостиницу в центре Киева",
         "Найди информацию о квантовых компьютерах",
         "Последние новости о криптовалюте",
         "Поищи рецепты тирамису",
@@ -242,6 +251,29 @@ INTENT_EXAMPLES: dict[str, list[str]] = {
         "How to get from Heathrow airport to central London",
         "Best way from JFK to Manhattan",
         "Public transport from airport to city centre",
+        # ── Media recall / descriptive identification ─────────────────────────
+        # Augmentation (май 2026): covers the semantic gap where QUESTION was
+        # incorrectly receiving descriptive "I'm trying to remember..." queries.
+        # These are retrieval tasks — the answer exists on the web, not in the
+        # model's parametric knowledge. They route as SEARCH so web retrieval fires.
+        "Помоги вспомнить аниме где девочка сражается с демонами",
+        "Помоги найти мультфильм, который я смотрел в детстве",
+        "Вспомни название фильма где главный герой теряет память",
+        "Не помню название аниме, там был синеволосый персонаж",
+        "Help me remember a movie where the main character can see ghosts",
+        "I'm trying to recall an anime with a girl who has a magical sword",
+        "What's the name of that film where people are stuck in a time loop?",
+        "I saw an anime once about a school for assassins, what was it called?",
+        "There was a movie about a pianist who goes blind, what's the title?",
+        "Что за аниме, где у главного героя есть тетрадь смерти?",
+        "Помоги вспомнить игру где нужно строить подземелья",
+        "Что за фильм, где все живут в симуляции?",
+        "I'm looking for a book where kids go to a wizard school",
+        "What song goes 'we will we will rock you'?",
+        "Не могу вспомнить название сериала про химика который варит наркотики",
+        "Help me find the anime where the protagonist reincarnates as a slime",
+        "What's the game where you're stranded on an island and have to survive?",
+        "Вспомни аниме где главный герой получает суперсилу от призрака",
     ],
 
     "maps": [
@@ -274,7 +306,7 @@ INTENT_EXAMPLES: dict[str, list[str]] = {
         "Сколько стоит билет в Третьяковскую галерею?",
         "Is IKEA open on Sunday?",
         "Reviews for this cafe",
-            "Режим работы Московского зоопарка",
+        "Режим работы Московского зоопарка",
         "Contact details for the US Embassy in Berlin",
         "What time does this museum close?",
         "ما هي ساعات عمل متحف اللوفر؟",
@@ -314,6 +346,12 @@ async def seed_intent_examples(supabase, hf_client, force: bool = False) -> int:
 
     Returns:
         Количество загруженных примеров.
+
+    Note:
+        После добавления примеров (май 2026) необходимо запустить
+        seed_intent_examples(force=True) для пересева таблицы.
+        Новые примеры recall/media_identification в search-пространстве
+        не активируются до пересева.
     """
     import logging
 
