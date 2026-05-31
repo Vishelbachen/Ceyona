@@ -19,11 +19,10 @@ import re
 #   Listing prohibited phrases here is a losing strategy — the model finds
 #   synonyms: ban "Конечно!" → it writes "Разумеется!" → ban that →
 #   "С удовольствием!" → indefinitely, with no end and with asymmetric
-#   coverage across languages. The correct fix is a target-pattern prompt
-#   instruction enforced in intent_engine._FORMAT_RULES and prompt_engine
-#   _variation_rule: "Open with the answer itself. First word of your
-#   response is part of the answer." correction.py is the last-resort
-#   structural cleaner, not a style enforcer.
+#   coverage across languages. The correct fix is prompt-layer policy in
+#   llm.prompt_policy.FORMAT_RULES / llm.prompt_policy.VARIATION_RULE and
+#   intent_engine._FORMAT_RULES. correction.py is the last-resort structural
+#   cleaner, not a style enforcer.
 #
 # Authority boundary: architecture.md §19, models.md §10.
 
