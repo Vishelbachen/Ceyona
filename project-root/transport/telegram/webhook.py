@@ -437,9 +437,11 @@ async def telegram_webhook(
             if wallet:
                 topup_text = (
                     f"💳 *Top up your balance*\n\n"
-                    f"Send TON to the wallet below and include your Telegram user ID "
-                    f"(`{user_id}`) in the comment/memo so we can credit your account.\n\n"
+                    f"1️⃣ Send TON to this address:\n"
                     f"`{wallet}`\n\n"
+                    f"2️⃣ In the comment/memo field, paste your ID exactly as shown:\n"
+                    f"`{user_id}`\n\n"
+                    f"⚠️ *The comment is required.* Without it we cannot credit your account.\n\n"
                     f"💰 Current balance: ${user_balance:.4f}"
                 )
             else:
