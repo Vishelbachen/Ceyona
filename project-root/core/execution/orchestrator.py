@@ -12,7 +12,15 @@ from cognition.multi_agent_coordinator import (
 from cognition.reasoning_engine import select_strategy
 from cognition.response_synthesizer import SynthesisInput, synthesize
 from context.assembler import resolve_truth_mode
-from contracts.shared_types import Complexity, EPKDecision, Tier, TruthMode
+from contracts.shared_types import (
+    Complexity,
+    DomainHint,
+    EPKDecision,
+    ReasoningDepth,
+    RoutingProfile,
+    Tier,
+    TruthMode,
+)
 from core.kernel.cost_model import actual_cost, estimate_cost, estimate_output_tokens
 from core.kernel.decision_matrix import select_tier
 from core.kernel.execution_policy_kernel import EPKInput, evaluate
@@ -23,20 +31,16 @@ from observability.tracing import trace
 
 logger = logging.getLogger(__name__)
 
-# ─── TRUTH ENFORCEMENT ────────────────────────────────────────────────────────
-
-# Intents for which pre-EPK generic web search MUST NOT be triggered.
-# Self-contained intents only — they generate freely without external data.
-# Agentic intents (search, weather, maps, maps_poi, maps_route) are NOT here:
-# they collect context via explicit intent-specific retrieval (see below).
+# ─── RETRIEVAL ROUTING ────────────────────────────────────────────────────────
+# Authority over web search and tool retrieval now lives in RoutingProfile.
+# routing.retrieval_required == False → skip both paths.
+# routing.domain_hint == GEO + intent in _AGENTIC_TOOL_MAP → intent-specific tool.
+# routing.retrieval_required == True + not GEO → generic web search.
+#
+# _AGENTIC_TOOL_MAP is kept here for the intent-specific tool call dispatch.
+# It maps tool intents to their tool_name — internal to orchestrator.
 # Owned here — not in transport layer.
-_NO_SEARCH_INTENTS = {
-    "creative", "conversation", "emotional", "code", "math",
-}
 
-# Intents that require intent-specific retrieval via web_tools.run_tool().
-# Each maps to its tool_name in web_tools._TOOL_MAP.
-# compound_agent receives the collected context in messages and synthesizes.
 _AGENTIC_TOOL_MAP: dict[str, str] = {
     "search":      "search",
     "weather":     "weather",
@@ -45,15 +49,7 @@ _AGENTIC_TOOL_MAP: dict[str, str] = {
     "maps_route":  "maps_route",
 }
 
-# Intents that MUST have retrieved context — no context = don't call LLM.
-# Agentic intents (WEATHER, MAPS, MAPS_POI, MAPS_ROUTE, SEARCH) ARE included:
-# orchestrator now collects their context explicitly before EPK (see below).
-# If retrieval fails → STRICT gate fires → no hallucination.
-_STRICT_INTENTS: set[Intent] = set()
-
 # All tool intents that go through compound_agent as synthesizer.
-# compound_agent no longer executes tools — it receives pre-assembled context
-# in messages and synthesizes the final response.
 _AGENTIC_INTENTS = {
     Intent.SEARCH,
     Intent.WEATHER,
@@ -62,12 +58,17 @@ _AGENTIC_INTENTS = {
     Intent.MAPS_ROUTE,
 }
 
+# _NO_SEARCH_INTENTS is preserved as a named constant for test compatibility
+# (test_orchestrator_web_search.py asserts it exists on orchestrator).
+# It is NO LONGER consulted in the retrieval decision path — that decision
+# is now made exclusively via routing.retrieval_required from RoutingProfile.
+# The set is kept accurate for observability / documentation purposes.
+_NO_SEARCH_INTENTS = {
+    "creative", "conversation", "emotional", "code", "math",
+}
+
 # No-data fallback message key (goes to synthesizer)
 _NO_GROUNDED_DATA = "no_grounded_data"
-
-
-def _needs_grounding(intent: Intent | None) -> bool:
-    return intent in _STRICT_INTENTS
 
 
 # ─── REQUEST / RESULT CONTRACTS ───────────────────────────────────────────────
@@ -90,38 +91,25 @@ class OrchestratorRequest:
     context_size: int = 0
     # Pre-computed intent from vision_handler (§15 ingress adapter).
     # Set ONLY on the vision pipeline path — never from transport logic.
-    # When set, orchestrator skips classify() to avoid a duplicate call.
     vision_intent: IntentResult | None = None
     supabase: object = None
     hf_client: object = None
     # Input type tag — used by update_handler to skip history load for
     # request types where conversation history is irrelevant or actively
-    # harmful (e.g. media group albums: each album is a fresh isolated task).
+    # harmful (e.g. media group albums).
     # Values: "text" (default), "image_group", "voice", "image"
     input_type: str = "text"
-    # Fix §10.4: request_id for log correlation across pipeline stages.
+    # request_id for log correlation across pipeline stages.
     # Format: "{update_id}:{user_id}" — set by webhook, propagated through pipeline.
-    # Allows correlating logs from webhook → update_handler → orchestrator → coordinator.
     request_id: str = ""
     # analysis_report: pre-reasoning structural hints from meta/analysis.py (§4 lifecycle).
     # Non-binding — passed to intent_engine.classify() for confidence adjustment only.
-    # None when analysis is unavailable (DENY path, error). Never authoritative.
     analysis_report: object = None  # meta.analysis.AnalysisReport | None
     # skip_web_search: True on the vision pipeline path.
-    # Reason: vision_handler sends extracted image description as user_message.
-    # That description is NOT a valid search query — it must never trigger web_search.
-    # Sending image descriptions to Tavily/SerpAPI returns 400 Bad Request.
-    # Set to True by update_handler when forwarding a vision result to orchestrator.
+    # Vision descriptions are NOT valid search queries.
     skip_web_search: bool = False
-    # is_vision: True when the request originates from the vision pipeline
-    # (single photo or album with uncertainty=True that requires pipeline).
-    # Used as a routing guard: prevents _classify_complexity() from treating
-    # extracted image descriptions as high-complexity user text, which would
-    # trigger CHAIN_OF_THOUGHT reasoning mode and produce CoT artefacts
-    # ("Проверка ограничений", tables, "OK" lines).
-    # Semantic truth: Vision output ≠ User intent.
-    # Vision requests must never enter reasoning mode regardless of text length.
-    # Set to True by update_handler on the vision pipeline path.
+    # is_vision: True when the request originates from the vision pipeline.
+    # Forces CONVERSATION intent + LOW complexity to prevent CoT artefacts.
     is_vision: bool = False
 
 
@@ -149,12 +137,10 @@ class OrchestratorResult:
     intent: str = ""          # classified intent value, for reflection/observability
     tool_used: bool = False   # whether an external tool was called
     tool_failed: bool = False # whether the tool call failed
-    tts_audio_bytes: bytes = b""  # TTS audio — set by update_handler after speech synthesis
-                                   # non-empty only when is_voice_input=True and TTS succeeded
-                                   # webhook sends sendVoice when this is non-empty
-    audio_seconds: float = 0.0    # ASR billing: whisper transcription duration (set by update_handler)
-    tts_characters: int = 0        # TTS billing: orpheus character count (set by update_handler)
-    tool_calls: int = 0            # compound tool calls executed — billing counter (set by orchestrator)
+    tts_audio_bytes: bytes = b""
+    audio_seconds: float = 0.0
+    tts_characters: int = 0
+    tool_calls: int = 0
 
 
 # ─── INTERNAL HELPERS ─────────────────────────────────────────────────────────
@@ -214,10 +200,7 @@ def _empty_usage(
 
 # ─── TOOL RUNNER ──────────────────────────────────────────────────────────────
 
-
-
-
-async def _run_tool(intent_result, lang: str) -> str | None:
+async def _run_tool(intent_result: IntentResult, lang: str) -> str | None:
     if not intent_result.requires_tools or not intent_result.tool_name:
         return None
     try:
@@ -244,14 +227,13 @@ async def _run_tool(intent_result, lang: str) -> str | None:
 
 def _build_messages(
     request: OrchestratorRequest,
-    intent_result,
+    intent_result: IntentResult,
     retrieved_context: str,
     truth_mode: TruthMode,
     tier: Tier = Tier.GENERAL,
 ) -> list[dict]:
-    # Use real tier so FAST requests get lightweight instruction_prefix,
-    # not the heavy GENERAL strategy prompt. Fixes audit §1.3 + §6.3.
-    strategy = select_strategy(intent_result.intent, tier)
+    # Use real tier so FAST requests get lightweight instruction_prefix.
+    strategy = select_strategy(intent_result.routing, tier)
     user_msg = (
         f"{strategy.instruction_prefix} {request.user_message}".strip()
         if strategy.instruction_prefix
@@ -271,14 +253,14 @@ def _build_messages(
 
 async def _run_allow(
     request: OrchestratorRequest,
-    intent_result,
+    intent_result: IntentResult,
     messages: list[dict],
     tier: Tier,
     epk_decision: EPKDecision,
     lang: str,
 ) -> OrchestratorResult:
-    strategy = select_strategy(intent_result.intent, tier)
-    plan = plan_agents(intent_result.intent, tier, strategy)
+    strategy = select_strategy(intent_result.routing, tier)
+    plan = plan_agents(intent_result.routing, tier, strategy, intent=intent_result.intent)
 
     increment(f"orchestrator.tier.{tier.value.lower()}")
     with trace("coordinator", tier=tier.value, intent=str(intent_result.intent)):
@@ -286,6 +268,7 @@ async def _run_allow(
             plan=plan,
             messages=messages,
             user_message=request.user_message,
+            routing=intent_result.routing,
             temperature=strategy.temperature,
             intent=intent_result.intent,
             lang=lang,
@@ -304,8 +287,6 @@ async def _run_allow(
             epk_decision=epk_decision,
         )
 
-    # Use actual_tier for billing — may be lower than requested tier after cascade.
-    # audit.md §3.4 / §9.1: fallback cascade must not overbill at requested tier.
     _billing_tier = coordination.actual_tier or tier
     cost = actual_cost(
         input_tokens=coordination.input_tokens,
@@ -321,7 +302,7 @@ async def _run_allow(
         intent=intent_result.intent,
         tier=tier,
         lang=lang,
-        from_vision=request.vision_intent is not None,  # §13.3: force CoT strip on vision path
+        from_vision=request.vision_intent is not None,
         conversation_history=request.conversation_history,
     ))
 
@@ -348,14 +329,14 @@ async def _run_allow(
 
 async def _run_degraded(
     request: OrchestratorRequest,
-    intent_result,
+    intent_result: IntentResult,
     messages: list[dict],
     epk_decision: EPKDecision,
     lang: str,
 ) -> OrchestratorResult:
     tier = Tier.FAST
-    strategy = select_strategy(intent_result.intent, tier)
-    plan = plan_agents(intent_result.intent, tier, strategy)
+    strategy = select_strategy(intent_result.routing, tier)
+    plan = plan_agents(intent_result.routing, tier, strategy, intent=intent_result.intent)
 
     increment(f"orchestrator.tier.{tier.value.lower()}")
     with trace("coordinator", tier=tier.value, intent=str(intent_result.intent)):
@@ -363,6 +344,7 @@ async def _run_degraded(
             plan=plan,
             messages=messages,
             user_message=request.user_message,
+            routing=intent_result.routing,
             temperature=strategy.temperature,
             intent=intent_result.intent,
             lang=lang,
@@ -381,8 +363,6 @@ async def _run_degraded(
             epk_decision=epk_decision,
         )
 
-    # Use actual_tier for billing — may be lower than requested tier after cascade.
-    # audit.md §3.4 / §9.1: fallback cascade must not overbill at requested tier.
     _billing_tier = coordination.actual_tier or tier
     cost = actual_cost(
         input_tokens=coordination.input_tokens,
@@ -398,7 +378,7 @@ async def _run_degraded(
         intent=intent_result.intent,
         tier=tier,
         lang=lang,
-        from_vision=request.vision_intent is not None,  # §13.3: force CoT strip on vision path
+        from_vision=request.vision_intent is not None,
         conversation_history=request.conversation_history,
     ))
 
@@ -425,13 +405,13 @@ async def _run_degraded(
 
 async def _run_heavy(
     request: OrchestratorRequest,
-    intent_result,
+    intent_result: IntentResult,
     messages: list[dict],
     epk_decision: EPKDecision,
     lang: str,
 ) -> OrchestratorResult:
     tier = Tier.HEAVY
-    strategy = select_strategy(intent_result.intent, tier)
+    strategy = select_strategy(intent_result.routing, tier)
 
     shaper_result = shape(ShaperInput(
         text=request.user_message,
@@ -445,7 +425,7 @@ async def _run_heavy(
         logger.info("heavy_input_shaper shaped input", extra={
             "operation": shaper_result.operation,
         })
-        truth_mode = resolve_truth_mode(intent_result.intent)
+        truth_mode = resolve_truth_mode(intent_result.routing)
         messages = build_messages(PromptContext(
             user_message=shaper_result.text,
             system_prompt=request.system_prompt or intent_result.system_prompt,
@@ -455,12 +435,13 @@ async def _run_heavy(
             lang=request.lang,
         ))
 
-    plan = plan_agents(intent_result.intent, tier, strategy)
+    plan = plan_agents(intent_result.routing, tier, strategy, intent=intent_result.intent)
 
     coordination: CoordinationResult = await coordinate(
         plan=plan,
         messages=messages,
         user_message=request.user_message,
+        routing=intent_result.routing,
         reasoning_plan="",
         temperature=strategy.temperature,
         intent=intent_result.intent,
@@ -480,8 +461,6 @@ async def _run_heavy(
             epk_decision=epk_decision,
         )
 
-    # Use actual_tier for billing — may be lower than requested tier after cascade.
-    # audit.md §3.4 / §9.1: fallback cascade must not overbill at requested tier.
     _billing_tier = coordination.actual_tier or tier
     cost = actual_cost(
         input_tokens=coordination.input_tokens,
@@ -497,7 +476,7 @@ async def _run_heavy(
         intent=intent_result.intent,
         tier=tier,
         lang=lang,
-        from_vision=request.vision_intent is not None,  # §13.3: force CoT strip on vision path
+        from_vision=request.vision_intent is not None,
         conversation_history=request.conversation_history,
     ))
 
@@ -527,7 +506,6 @@ async def _run_heavy(
 async def run(request: OrchestratorRequest) -> OrchestratorResult:
     lang = request.lang or "en"
 
-    # Propagate request_id to all orchestrator-level logs for pipeline correlation.
     _rid = request.request_id or ""
     logger.info("Orchestrator start", extra={
         "request_id":  _rid,
@@ -543,9 +521,7 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
 
     try:
         # ── intent ───────────────────────────────────────────────────────────
-        # Use pre-computed intent from vision_handler (§15) when available
-        # to avoid classifying the same text twice. For all other paths,
-        # classify here — single classification, single authority.
+        # Use pre-computed intent from vision_handler (§15) when available.
         if request.vision_intent is not None and request.vision_intent.confidence >= 0.6:
             intent_result = request.vision_intent
             logger.info("Intent (vision)", extra={
@@ -562,42 +538,33 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
                 analysis_hints=request.analysis_report,
             )
             logger.info("Intent", extra={
-                "intent": intent_result.intent,
-                "confidence": intent_result.confidence,
+                "intent":           intent_result.intent,
+                "confidence":       intent_result.confidence,
+                "routing.depth":    intent_result.routing.reasoning_depth,
+                "routing.domain":   intent_result.routing.domain_hint,
+                "routing.retrieval":intent_result.routing.retrieval_required,
+                "routing.truth":    intent_result.routing.truth_mode,
             })
 
         # ── is_vision routing guard ──────────────────────────────────────────
-        # Vision pipeline requests carry extracted image descriptions as
-        # user_message. These are LLM-generated text, NOT user intent.
-        #
-        # Without this guard, _classify_complexity() sees a long structured
-        # string ("Изображение 1: ...\nИзображение 2: ...") and returns
-        # MEDIUM/HIGH complexity → reasoning_engine selects CHAIN_OF_THOUGHT
-        # for ANALYSIS/INSTRUCTION intents → CoT artefacts appear in the
-        # response ("Проверка ограничений", tables, pseudo-validation).
-        #
-        # Fix: force CONVERSATION intent and FAST complexity on vision path.
-        # Vision output ≠ user intent — a text classifier must never route it.
-        # Semantic contract: the LLM receives the description as text and
-        # responds naturally without entering reasoning mode.
+        # Vision descriptions are LLM-generated text, NOT user intent.
+        # Force CONVERSATION + LOW complexity to prevent CoT artefacts (§15).
         if request.is_vision:
             from cognition.intent_engine import (
                 Intent,
                 IntentResult,
                 build_system_prompt,
+                _resolve_routing,
             )
+            _conv_routing = _resolve_routing(Intent.CONVERSATION)
             intent_result = IntentResult(
                 intent=Intent.CONVERSATION,
                 confidence=1.0,
                 system_prompt=build_system_prompt(Intent.CONVERSATION, lang),
-                requires_retrieval=False,
+                requires_retrieval=_conv_routing.retrieval_required,
                 requires_tools=False,
+                routing=_conv_routing,
             )
-            # Override complexity so select_strategy() and plan_agents()
-            # always resolve to FAST-equivalent path (DIRECT mode, no CoT).
-            # Complexity is already imported at module level (line 15) —
-            # no local import needed; local import causes UnboundLocalError
-            # on non-vision paths (Python treats name as local in entire scope).
             request = type(request)(**{
                 **request.__dict__,
                 "complexity": Complexity.LOW,
@@ -607,27 +574,25 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             })
 
         # ── retrieval ────────────────────────────────────────────────────────
-        # All external data collection happens here, before EPK.
-        # Two paths:
-        #   (a) Agentic intents (SEARCH, WEATHER, MAPS, MAPS_POI, MAPS_ROUTE):
-        #       explicit intent-specific retrieval via web_tools.run_tool().
-        #       compound_agent receives the result in messages and synthesizes.
-        #   (b) Other retrieval-benefiting intents (QUESTION, ANALYSIS, etc.):
-        #       generic web search via Tavily → SerpAPI → SearXNG fallback chain.
-        # Self-contained intents (_NO_SEARCH_INTENTS) skip both paths.
-        # Vision pipeline requests skip search (image context is not a valid query).
-        # Zero-balance users skip search (pre-EPK cost guard).
+        # Decision authority: routing.retrieval_required from RoutingProfile.
+        # routing.retrieval_required == False → skip both retrieval paths.
+        # routing.domain_hint == GEO → intent-specific tool call (path a).
+        # routing.retrieval_required == True + not GEO → generic web search (path b).
+        #
+        # Zero-balance guard and skip_web_search flag apply before both paths.
         _retrieved_context = request.retrieved_context
+        _intent_value      = intent_result.intent.value
+        _routing           = intent_result.routing
 
-        _intent_value = intent_result.intent.value
         _can_fetch = (
             not _retrieved_context
             and request.user_balance > 0
             and not request.skip_web_search
+            and _routing.retrieval_required   # ← RoutingProfile authority
         )
 
         if _can_fetch and _intent_value in _AGENTIC_TOOL_MAP:
-            # Path (a): intent-specific retrieval
+            # Path (a): intent-specific retrieval for GEO domain tool intents
             _tool_name = _AGENTIC_TOOL_MAP[_intent_value]
             try:
                 from external.web_tools import run_tool as _web_run_tool
@@ -655,8 +620,9 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
                     "error":  str(exc),
                 })
 
-        elif _can_fetch and _intent_value not in _NO_SEARCH_INTENTS:
-            # Path (b): generic web search for non-agentic intents
+        elif _can_fetch:
+            # Path (b): generic web search for all other retrieval_required intents
+            # (QUESTION, ANALYSIS, INSTRUCTION, and recall/descriptive via SEARCH intent)
             try:
                 from external.web_tools import run_tool as _web_run_tool
                 web_result = await _web_run_tool(
@@ -673,25 +639,23 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             except Exception as exc:
                 logger.warning("Web search failed — continuing without", extra={"error": str(exc)})
 
-        # ── truth mode ───────────────────────────────────────────────────────
-        truth_mode = resolve_truth_mode(intent_result.intent)
+        # ── truth mode — from RoutingProfile ──────────────────────────────────
+        # Single source of truth: declared in _resolve_routing(), read here.
+        # assembler.resolve_truth_mode() is the accessor — orchestrator passes routing.
+        truth_mode = resolve_truth_mode(_routing)
 
         # ── non-agentic tool execution (reserved for future intents) ─────────
-        # Agentic intents (WEATHER, MAPS, MAPS_POI, MAPS_ROUTE, SEARCH) collect
-        # context above. _run_tool() is kept for future non-agentic tool intents.
         tool_output: str | None = None
         if intent_result.requires_tools and intent_result.intent not in _AGENTIC_INTENTS:
             tool_output = await _run_tool(intent_result, lang)
 
         # ── STRICT truth gate ─────────────────────────────────────────────────
-        # If TruthMode is STRICT and there is no grounding data → deny.
-        # Agentic intents are NO LONGER excluded: compound_agent is now a
-        # synthesizer, not a self-grounding agent. Grounding is the orchestrator's
-        # responsibility. If retrieval failed → gate fires → no hallucination.
+        # TruthMode.STRICT + no grounding data → deny rather than hallucinate.
         has_grounding = bool(_retrieved_context) or bool(tool_output)
         if truth_mode == TruthMode.STRICT and not has_grounding:
-            logger.info("Truth gate: STRICT intent with no grounding data", extra={
+            logger.info("Truth gate: STRICT with no grounding data", extra={
                 "intent": intent_result.intent,
+                "domain": _routing.domain_hint,
             })
             return _denied_result(
                 reason="no_grounded_data",
@@ -704,11 +668,7 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             )
 
         # ── estimate ─────────────────────────────────────────────────────────
-        # Adaptive tier for EPK estimation (fixes audit §6.1):
-        # Short LOW-complexity requests are estimated at FAST rates (~10x cheaper).
-        # Larger or complex requests fall back to GENERAL (conservative, safe overestimate).
-        # This prevents legitimate short queries from hitting DEGRADED_MODE.
-        _fast_token_threshold = 300  # input tokens below which FAST estimate applies
+        _fast_token_threshold = 300
         _estimate_tier = (
             Tier.FAST
             if request.complexity == Complexity.LOW and request.input_tokens < _fast_token_threshold
