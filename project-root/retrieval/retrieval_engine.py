@@ -8,7 +8,7 @@ from contracts.retrieval_contracts import (
     RetrievedDocument,
 )
 from retrieval.dense.bge_engine import bge_engine
-from retrieval.query_preprocessor import preprocess
+from retrieval.query_preprocessor import extract_query_profile, preprocess
 from retrieval.reranker.cross_encoder import cross_encoder
 from retrieval.source_credibility import source_credibility
 
@@ -30,10 +30,10 @@ class RetrievalEngine:
         embedding_cache=None,
         rerank_cache=None,
     ) -> None:
-        self._supabase_store    = supabase_store
-        self._query_cache       = query_cache
-        self._embedding_cache   = embedding_cache
-        self._rerank_cache      = rerank_cache
+        self._supabase_store = supabase_store
+        self._query_cache = query_cache
+        self._embedding_cache = embedding_cache
+        self._rerank_cache = rerank_cache
 
     async def retrieve(self, query: RetrievalQuery) -> RetrievalResult:
         # Pass supabase_store so pgvector similarity search actually fires.
@@ -59,10 +59,21 @@ async def retrieve(
     pgvector similarity search fires when supabase + user_id are provided.
     Falls back gracefully to empty candidates if unavailable.
     """
-    clean_query      = preprocess(query.text)
+    profile = extract_query_profile(query.text)
+    clean_query = preprocess(query.text)
     embedding_tokens = 0
-    rerank_tokens    = 0
-    cache_hit        = False
+    rerank_tokens = 0
+    cache_hit = False
+
+    logger.debug(
+        "Retrieval query profile",
+        extra={
+            "kind": profile.query_kind,
+            "is_geo": profile.is_geo_query,
+            "location": profile.location,
+            "lang": profile.lang,
+        },
+    )
 
     # ── embedding ─────────────────────────────────────────────────────────────
     use_fast = query.embedding_type == "small"
@@ -80,8 +91,6 @@ async def retrieve(
     embedding_tokens = dense_result.tokens_used
 
     # ── memory similarity search via pgvector ─────────────────────────────────
-    # BUG FIX: previously candidates was always [], pgvector was never called.
-    # Now we invoke SupabaseStore.similarity_search() with the fresh embedding.
     candidates: list[tuple[str, float]] = []
 
     effective_user_id = user_id or getattr(query, "user_id", None)
@@ -100,7 +109,7 @@ async def retrieve(
             logger.info(
                 "pgvector similarity search completed",
                 extra={
-                    "user_id":    str(effective_user_id),
+                    "user_id": str(effective_user_id),
                     "candidates": len(candidates),
                 },
             )
@@ -114,16 +123,13 @@ async def retrieve(
         logger.debug(
             "pgvector skipped",
             extra={
-                "has_supabase":  supabase is not None,
-                "has_user_id":   effective_user_id is not None,
+                "has_supabase": supabase is not None,
+                "has_user_id": effective_user_id is not None,
                 "has_embedding": bool(dense_result.embedding),
             },
         )
 
     # ── credibility weighting for memory documents ───────────────────────────
-    # score_documents() is a pass-through today: MemoryRecord has no source_url
-    # yet (architecture.md §20, call site B — reserved).
-    # Logging the candidate count makes it observable when this activates.
     pre_credibility_count = len(candidates)
     candidates = source_credibility.score_documents(candidates)
     if len(candidates) != pre_credibility_count:
@@ -139,40 +145,45 @@ async def retrieve(
 
     # ── rerank if candidates available ────────────────────────────────────────
     if candidates:
-        reranked = await cross_encoder.rerank(clean_query, candidates)
-        top      = reranked[: query.rerank_top_k]
+        reranked = await cross_encoder.rerank(clean_query, [content for content, _ in candidates])
+        top = reranked[: query.rerank_top_k]
 
-        # Fix §5.2: real rerank token-pair estimation.
-        # BGE-reranker-large scores (query, document) pairs.
-        # Approximation: 1 token ≈ 4 chars (conservative for mixed-language text).
-        # rerank_tokens = (query_tokens + avg_doc_tokens) * num_pairs
-        # This matches economic.md §1.5 billing unit: "per 1M token-pairs".
-        _query_tokens   = max(1, len(clean_query) // 4)
+        _query_tokens = max(1, len(clean_query) // 4)
         _candidate_texts = [c if isinstance(c, str) else c[0] for c in candidates]
-        _avg_doc_tokens  = max(1, sum(len(t) for t in _candidate_texts) // (4 * len(_candidate_texts)))
-        rerank_tokens    = (_query_tokens + _avg_doc_tokens) * len(candidates)
+        _avg_doc_tokens = max(1, sum(len(t) for t in _candidate_texts) // (4 * len(_candidate_texts)))
+        rerank_tokens = (_query_tokens + _avg_doc_tokens) * len(candidates)
         logger.debug(
             "Rerank token estimation",
             extra={
-                "query_tokens":   _query_tokens,
+                "query_tokens": _query_tokens,
                 "avg_doc_tokens": _avg_doc_tokens,
                 "num_candidates": len(candidates),
-                "rerank_tokens":  rerank_tokens,
+                "rerank_tokens": rerank_tokens,
+                "query_kind": profile.query_kind,
+                "location": profile.location,
             },
         )
     else:
         top = []
 
     documents = [
-        RetrievedDocument(content=content, score=score)
+        RetrievedDocument(
+            content=content,
+            score=score,
+            metadata={
+                "query_kind": profile.query_kind,
+                "query_location": profile.location,
+                "query_lang": profile.lang,
+            },
+        )
         for content, score in top
     ]
 
     logger.info("Retrieval complete", extra={
-        "query_len":        len(clean_query),
-        "docs_returned":    len(documents),
+        "query_len": len(clean_query),
+        "docs_returned": len(documents),
         "embedding_tokens": embedding_tokens,
-        "rerank_tokens":    rerank_tokens,
+        "rerank_tokens": rerank_tokens,
     })
 
     return RetrievalResult(
