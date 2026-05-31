@@ -13,6 +13,8 @@ from contracts.shared_types import (
     TruthMode,
 )
 from i18n.t import lang_instruction as _lang_directive
+from llm.prompt_policy import FORMAT_RULES as _FORMAT_RULES
+from llm.prompt_policy import LIVE_CONTEXT_RULE as _LIVE_CONTEXT_RULE
 
 if TYPE_CHECKING:
     pass
@@ -217,23 +219,6 @@ def _resolve_routing(intent: Intent, confidence: float = 1.0) -> RoutingProfile:
 
 # ─── SYSTEM PROMPTS ───────────────────────────────────────────────────────────
 
-_NO_CUTOFF = (
-    "ABSOLUTE RULE: You have access to live web search results fetched RIGHT NOW. "
-    "NEVER say your information is outdated, has a cutoff date, or may not be current. "
-    "NEVER use: 'as of my last update', 'I cannot access real-time data', "
-    "'my knowledge cutoff', 'this may have changed', 'I don't have current info'. "
-    "If information is present in your input — treat it as fully current. "
-    "If absent, answer from general knowledge without disclaimers."
-)
-
-_FORMAT_RULES = (
-    "FORMATTING — mandatory: "
-    "Never use Markdown tables (no | pipes |). "
-    "Never use Markdown headers (no ###, ##, #). "
-    "Open with the answer itself — the first word of your response is part of the answer. "
-    "Use plain text, numbered lists, or dashes only. "
-)
-
 _BASE_PROMPTS: dict[Intent, str] = {
     Intent.QUESTION: (
         "You are a knowledgeable, warm, and direct assistant. "
@@ -265,7 +250,7 @@ _BASE_PROMPTS: dict[Intent, str] = {
         "the setting/background. Be thorough and natural — like describing "
         "a photo to a friend. Don't announce that you 'cannot identify people' — "
         "just describe naturally without any identification attempt."
-        + "\n\n" + _NO_CUTOFF + _FORMAT_RULES
+        + "\n\n" + _LIVE_CONTEXT_RULE + _FORMAT_RULES
     ),
     Intent.INSTRUCTION: (
         "You are a helpful assistant. "
@@ -278,13 +263,13 @@ _BASE_PROMPTS: dict[Intent, str] = {
         "Write clean, correct, well-commented code. "
         "Always specify the programming language. "
         "Briefly explain your approach before the code block. "
-        + _NO_CUTOFF + _FORMAT_RULES
+        + _LIVE_CONTEXT_RULE + _FORMAT_RULES
     ),
     Intent.ANALYSIS: (
         "You are an analytical assistant. "
         "Structure your analysis with key findings first. "
         "Be objective, evidence-based, and avoid filler. "
-        + _NO_CUTOFF + _FORMAT_RULES
+        + _LIVE_CONTEXT_RULE + _FORMAT_RULES
     ),
     Intent.CREATIVE: (
         "You are a creative writing assistant. "
@@ -346,7 +331,7 @@ _BASE_PROMPTS: dict[Intent, str] = {
         "NEVER say you cannot provide current weather. "
         "NEVER say your information might be outdated. "
         "The data IS current. "
-        + _NO_CUTOFF + _FORMAT_RULES
+        + _LIVE_CONTEXT_RULE + _FORMAT_RULES
     ),
     Intent.SEARCH: (
         "You are a research assistant with access to live web search results. "
@@ -358,7 +343,7 @@ _BASE_PROMPTS: dict[Intent, str] = {
         "2. If nothing in the context matches the query — say so honestly.\n"
         "3. If sources conflict or are insufficient — say so. "
         "'I could not find this in the results' is always better than a guess."
-        + _NO_CUTOFF + _FORMAT_RULES
+        + _LIVE_CONTEXT_RULE + _FORMAT_RULES
     ),
     Intent.MAPS_POI: (
         "You are a location display assistant. Your ONLY job is to present the place data "
@@ -384,7 +369,7 @@ _BASE_PROMPTS: dict[Intent, str] = {
         "If asked for a route or directions and no route data is in context — "
         "say you can show the location but cannot build a route, and suggest Google Maps. "
         "NEVER say you cannot show maps or provide location data — you have it in context. "
-        + _NO_CUTOFF + _FORMAT_RULES
+        + _LIVE_CONTEXT_RULE + _FORMAT_RULES
     ),
     Intent.MAPS_ROUTE: (
         "You are a route display assistant. Your ONLY job is to present the route data "
@@ -402,7 +387,7 @@ _BASE_PROMPTS: dict[Intent, str] = {
         "You are a helpful, versatile assistant. "
         "If the request is ambiguous, make a reasonable interpretation and answer it. "
         "Never refuse to respond — always try. "
-        + _NO_CUTOFF + _FORMAT_RULES
+        + _LIVE_CONTEXT_RULE + _FORMAT_RULES
     ),
 }
 
