@@ -286,22 +286,15 @@ def _strip_cot_artifacts(text: str, intent: "Intent | None", from_vision: bool =
     # If 2+ loop signals present → entire response is a constraint-matching loop
     # with no real answer. Replace with honest admission instead of showing debug.
     _LOOP_SIGNALS = [
-        re.compile(r"Ограничения:\s*
-\s*\d+\.", re.IGNORECASE),
-        re.compile(r"Кандидаты:\s*
-\s*\d+\.", re.IGNORECASE),
+        re.compile(r"Ограничения:\s*\n\s*\d+\.", re.IGNORECASE),
+        re.compile(r"Кандидаты:\s*\n\s*\d+\.", re.IGNORECASE),
         re.compile(r"После(?:\s+долгого)?\s+поиска\s+я\s+нашёл", re.IGNORECASE),
         re.compile(r"Однако\s+я\s+нашёл\s+ещё\s+одного", re.IGNORECASE),
         re.compile(r"Чтобы\s+исправить\s+нарушенные\s+ограничения", re.IGNORECASE),
-        re.compile(r"Constraints?:\s*
-\s*\d+\.", re.IGNORECASE),
-        re.compile(r"Candidates?:\s*
-\s*\d+\.", re.IGNORECASE),
+        re.compile(r"Constraints?:\s*\n\s*\d+\.", re.IGNORECASE),
+        re.compile(r"Candidates?:\s*\n\s*\d+\.", re.IGNORECASE),
         re.compile(r"After\s+(?:a\s+)?(?:long\s+)?search\s+I\s+found", re.IGNORECASE),
         re.compile(r"However,?\s+I\s+found\s+another", re.IGNORECASE),
-        re.compile(r"Я\s+наш[её]л\s+несколько", re.IGNORECASE),
-        re.compile(r"Я\s+также\s+наш[её]л\s+ещ[её]\s+одно", re.IGNORECASE),
-        re.compile(r"может\s+соответствовать\s+вашему\s+описанию", re.IGNORECASE),
     ]
     loop_signal_count = sum(1 for p in _LOOP_SIGNALS if p.search(text))
 
