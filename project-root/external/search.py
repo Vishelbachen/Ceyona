@@ -6,6 +6,7 @@ import unicodedata
 
 import httpx
 from app.settings import settings
+from i18n.t import t as _t
 
 logger = logging.getLogger(__name__)
 
@@ -360,33 +361,34 @@ class SearchService:
         if not results:
             return ""
 
+        header = "SEARCH RESULTS"
+
         # Structured hotel pack — deterministic formatter (SerpAPI-specific)
         if results[0].get("_structured"):
-            lines: list[str] = []
+            lines: list[str] = [header]
             for i, r in enumerate(results, 1):
-                entry = f"{i}. {r.get('title', '')}"
+                entry = [f"{i}. {r.get('title', '')}"]
                 if r.get("address"):
-                    entry += f"\n   📍 {r['address']}"
+                    entry.append(f"   ADDRESS: {r['address']}")
                 if r.get("rating"):
-                    entry += f"\n   ⭐ {r['rating']}"
+                    entry.append(f"   RATING: {r['rating']}")
                 if r.get("price"):
-                    entry += f"\n   💰 {r['price']}"
+                    entry.append(f"   PRICE: {r['price']}")
                 if r.get("link"):
-                    entry += f"\n   🔗 {r['link']}"
-                lines.append(entry)
-            header = "=== ДАННЫЕ ИЗ ПОИСКА ===\n"
-            footer = "\n\nПроверьте актуальные цены на Booking.com или официальных сайтах."
-            return header + "\n\n".join(lines) + footer
+                    entry.append(f"   SOURCE: {r['link']}")
+                lines.append("\n".join(entry))
+            lines.append("Check official booking sites for live prices.")
+            return "\n\n".join(lines)
 
         # Standard organic results
-        lines = []
+        lines = [header]
         for i, r in enumerate(results, 1):
             lines.append(
-                f"[{i}] {r.get('title', '')}\n"
-                f"{r.get('snippet', '')}\n"
-                f"Источник: {r.get('link', '')}"
+                f"{i}. {r.get('title', '')}\n"
+                f"   SNIPPET: {r.get('snippet', '')}\n"
+                f"   SOURCE: {r.get('link', '')}"
             )
-        return "=== ДАННЫЕ ИЗ ПОИСКА ===\n" + "\n\n".join(lines)
+        return "\n\n".join(lines)
 
 
 # Singleton
