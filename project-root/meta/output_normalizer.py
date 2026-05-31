@@ -487,9 +487,44 @@ def _collapse_whitespace(text: str) -> str:
     return text.strip()
 
 
+# ─── VISION OPENING CLEANUP ───────────────────────────────────────────────────
+# These are surface-only prefixes that appear when the vision model narrates
+# the image instead of directly describing its content. Applied only for vision
+# outputs, so ordinary text responses keep their wording unchanged.
+
+_VISION_OPENING_PATTERNS: tuple[re.Pattern, ...] = (
+    # English
+    re.compile(r"^\s*(?:the|this)\s+(?:image|photo|picture)\s+(?:shows|depicts|contains|features|includes)\b[\s,:\-–—]*", re.IGNORECASE),
+    re.compile(r"^\s*in\s+the\s+(?:image|photo|picture)\b[\s,:\-–—]*", re.IGNORECASE),
+    re.compile(r"^\s*on\s+the\s+(?:image|photo|picture)\b[\s,:\-–—]*", re.IGNORECASE),
+    # Russian
+    re.compile(r"^\s*изображение\s+представляет\s+собой\b[\s,:\-–—]*", re.IGNORECASE),
+    re.compile(r"^\s*(?:на\s+)?(?:изображении|фото|фотографии)\s+(?:видно|показано|изображено)\b[\s,:\-–—]*", re.IGNORECASE),
+    re.compile(r"^\s*(?:это|данное)\s+изображение\b[\s,:\-–—]*", re.IGNORECASE),
+)
+
+
+def _strip_vision_opening(text: str) -> str:
+    """Remove meta-openings from vision outputs without changing meaning."""
+    original = text
+    stripped = text.lstrip()
+
+    for pattern in _VISION_OPENING_PATTERNS:
+        stripped = pattern.sub("", stripped, count=1)
+
+    # Remove leftover leading punctuation/whitespace introduced by stripping.
+    stripped = re.sub(r"^[\s,;:—–\-]+", "", stripped)
+
+    # Re-capitalise the first alphabetic character when the sentence opener was removed.
+    if stripped and stripped[0].islower():
+        stripped = stripped[0].upper() + stripped[1:]
+
+    return stripped if stripped.strip() else original
+
+
 # ─── PUBLIC API ───────────────────────────────────────────────────────────────
 
-def apply(text: str, lang: str = "en") -> str:
+def apply(text: str, lang: str = "en", *, from_vision: bool = False) -> str:
     """
     Apply language output normalization.
 
@@ -511,6 +546,8 @@ def apply(text: str, lang: str = "en") -> str:
     result = _strip_source_tags(text)
     result = _strip_garbled_urls(result)
     result = _apply_leak_map(result, lang)
+    if from_vision:
+        result = _strip_vision_opening(result)
     result = _collapse_whitespace(result)
 
     return result if result.strip() else text
