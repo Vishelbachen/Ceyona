@@ -1,9 +1,11 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 from contracts.shared_types import EPKDecision
 from core.kernel.policy_registry import RUNTIME
 
-# ─── THRESHOLDS ───────────────────────────────────────────────────────────────
+# ─── THRESHOLDS ───────────────────────────────────────────────────────────
 # Read from policy_registry.RUNTIME — single source of truth.
 # economic.md §5 defines the values; policy_registry.py holds them at runtime.
 #
@@ -20,8 +22,8 @@ from core.kernel.policy_registry import RUNTIME
 # HEAVY:   cost > $0.008  (≈ ~5000 input token GENERAL / 3000 HEAVY request)
 # ALLOW:   otherwise
 
-_DENY_THRESHOLD:    float = RUNTIME.epk.deny_threshold
-_HEAVY_THRESHOLD:   float = RUNTIME.epk.heavy_threshold
+_DENY_THRESHOLD: float = RUNTIME.epk.deny_threshold
+_HEAVY_THRESHOLD: float = RUNTIME.epk.heavy_threshold
 _DEGRADE_THRESHOLD: float = RUNTIME.epk.degrade_threshold
 
 
@@ -39,10 +41,11 @@ class EPKOutput:
 
 def evaluate(epk_input: EPKInput) -> EPKOutput:
     """
-    SOLE POLICY AUTHORITY.
+    Sole policy authority for execution gating.
+
     OUTPUT: ALLOW | DENY | DEGRADED_MODE | HEAVY_REQUIRED
 
-    Thresholds read from policy_registry.RUNTIME — do not hardcode here.
+    Thresholds are read from policy_registry.RUNTIME — do not hardcode here.
 
     Rules (evaluated in order):
       1. balance ≤ 0 or cost > balance → DENY
@@ -50,29 +53,25 @@ def evaluate(epk_input: EPKInput) -> EPKOutput:
       3. cost > DEGRADE_THRESHOLD      → DEGRADED_MODE
       4. otherwise                     → ALLOW
     """
-    cost    = epk_input.estimated_cost
+    cost = epk_input.estimated_cost
     balance = epk_input.user_balance
 
-    # ── 1. DENY ───────────────────────────────────────────────────────────────
     if balance <= 0 or cost > balance:
         return EPKOutput(
             decision=EPKDecision.DENY,
             reason=f"Insufficient balance: need {cost:.6f}, have {balance:.6f}",
         )
 
-    # ── 2. HEAVY_REQUIRED ─────────────────────────────────────────────────────
     if cost > _HEAVY_THRESHOLD:
         return EPKOutput(
             decision=EPKDecision.HEAVY_REQUIRED,
             reason=f"Cost {cost:.6f} exceeds heavy threshold {_HEAVY_THRESHOLD}",
         )
 
-    # ── 3. DEGRADED_MODE ──────────────────────────────────────────────────────
     if cost > _DEGRADE_THRESHOLD:
         return EPKOutput(
             decision=EPKDecision.DEGRADED_MODE,
             reason=f"Cost {cost:.6f} exceeds degrade threshold {_DEGRADE_THRESHOLD}",
         )
 
-    # ── 4. ALLOW ──────────────────────────────────────────────────────────────
     return EPKOutput(decision=EPKDecision.ALLOW, reason="OK")
