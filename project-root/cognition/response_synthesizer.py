@@ -232,7 +232,11 @@ def _apply_correction(text: str, history: list[dict] | None = None) -> str:
     try:
         from meta.correction import apply
 
-        corrected = apply(text)
+        try:
+            corrected = apply(text, history=history)
+        except TypeError:
+            # Backward compatibility with older correction.py signatures.
+            corrected = apply(text)
         return corrected if corrected and corrected.strip() else text
     except Exception:
         return text
