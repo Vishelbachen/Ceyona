@@ -468,6 +468,8 @@ async def test_handle_message_vision_path_direct_response_sufficient_balance():
     vision_result = MagicMock()
     vision_result.needs_pipeline = False
     vision_result.text = "A dog running in a park."
+    vision_result.vision_input_tokens = 100
+    vision_result.vision_output_tokens = 50
 
     gate_verdict = MagicMock()
     gate_verdict.verdict = None
