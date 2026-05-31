@@ -14,7 +14,10 @@ from cognition.response_synthesizer import SynthesisInput, synthesize
 from context.assembler import resolve_truth_mode
 from contracts.shared_types import (
     Complexity,
+    DomainHint,
     EPKDecision,
+    ReasoningDepth,
+    RoutingProfile,
     Tier,
     TruthMode,
 )
@@ -550,8 +553,8 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             from cognition.intent_engine import (
                 Intent,
                 IntentResult,
-                _resolve_routing,
                 build_system_prompt,
+                _resolve_routing,
             )
             _conv_routing = _resolve_routing(Intent.CONVERSATION)
             intent_result = IntentResult(
