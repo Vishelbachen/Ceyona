@@ -55,6 +55,13 @@ _GARBLED_URL = re.compile(
 )
 
 
+
+# ─── INVISIBLE CHARACTERS ────────────────────────────────────────────────────
+# Remove zero-width and soft-hyphen artifacts that sometimes leak from OCR,
+# copied snippets, or retrieval text. These characters do not carry meaning
+# in user-facing output and can break downstream formatting.
+_INVISIBLE_CHARS = re.compile(r"[‌‍﻿­]")
+
 # ─── LANGUAGE LEAK MAPS ───────────────────────────────────────────────────────
 # Deterministic term substitution per target language.
 # Only applied when target lang matches — never globally.
@@ -432,6 +439,11 @@ def _strip_source_tags(text: str) -> str:
     return text
 
 
+def _strip_invisible_chars(text: str) -> str:
+    """Remove invisible formatting characters that should never reach users."""
+    return _INVISIBLE_CHARS.sub("", text)
+
+
 def _strip_garbled_urls(text: str) -> str:
     """Remove URLs containing non-ASCII characters."""
     return _GARBLED_URL.sub("", text)
@@ -509,11 +521,15 @@ def _strip_vision_meta_opening(text: str) -> str:
     result = text
     for pattern in _VISION_META_PREFIXES:
         if pattern.search(result):
-            idx = result.find(".")
-            if idx != -1 and idx < 220:
-                result = result[idx + 1 :].lstrip()
+            match = pattern.match(result)
+            if match:
+                result = result[match.end():].lstrip(" \t\r\n:—-")
             else:
-                result = pattern.sub("", result, count=1).lstrip()
+                idx = re.search(r"[.!?]\s", result[:240])
+                if idx:
+                    result = result[idx.end():].lstrip()
+                else:
+                    result = pattern.sub("", result, count=1).lstrip()
             break
     return result
 
@@ -541,7 +557,8 @@ def apply(text: str, lang: str = "en", from_vision: bool = False) -> str:
     if not text or not text.strip():
         return text
 
-    result = _strip_source_tags(text)
+    result = _strip_invisible_chars(text)
+    result = _strip_source_tags(result)
     result = _strip_garbled_urls(result)
     result = _apply_leak_map(result, lang)
 
