@@ -310,7 +310,7 @@ async def telegram_webhook(
         raw_text = extract_text(update).strip()
         if raw_text.startswith("/balance"):
             bal_text = f"💰 Balance: ${user_balance:.4f}"
-            await _send_message(chat_id, bal_text)
+            await _send_message_with_topup(chat_id, bal_text, lang)
             return {"ok": True}
         if raw_text.startswith("/start"):
             await _send_message(chat_id, get_system_message("help_display", lang))
