@@ -46,6 +46,48 @@ class VisionResult:
     vision_output_tokens: int = 0
 
 
+# ─── INTENT BUILDER ───────────────────────────────────────────────────────────
+# Single factory for all manually constructed IntentResult objects in this module.
+#
+# Architecture contract (§2.1, §15):
+# - _resolve_routing() is the sole authority for RoutingProfile construction.
+# - vision_handler must NOT construct RoutingProfile directly or rely on
+#   IntentResult's default_factory — that bypasses the policy layer.
+# - All IntentResult objects built here go through _build_vision_intent(),
+#   which calls _resolve_routing() explicitly.
+# - system_prompt is built via build_system_prompt() — same path as classify().
+# - requires_retrieval mirrors routing.retrieval_required (legacy alias contract).
+#
+# This factory is called ONLY for the no-caption path where user intent is absent
+# and CONVERSATION is the correct semantic choice. When a caption is present,
+# classify() is called directly and owns the full IntentResult construction.
+
+def _build_vision_intent(intent_enum, lang: str) -> object:
+    """
+    Build a fully populated IntentResult for the vision no-caption path.
+
+    Uses _resolve_routing() as the single RoutingProfile authority and
+    build_system_prompt() for the system prompt — identical to the classify() path.
+
+    Returns an IntentResult. Typed as object to avoid circular import at module level.
+    Caller imports are deferred inside the routing block (same pattern as classify()).
+    """
+    from cognition.intent_engine import (
+        IntentResult,
+        _resolve_routing,
+        build_system_prompt,
+    )
+    routing = _resolve_routing(intent_enum)
+    return IntentResult(
+        intent=intent_enum,
+        confidence=1.0,
+        system_prompt=build_system_prompt(intent_enum, lang),
+        requires_retrieval=routing.retrieval_required,
+        requires_tools=False,
+        routing=routing,
+    )
+
+
 # ─── TELEGRAM FILE HELPERS ────────────────────────────────────────────────────
 
 def _telegram_api(method: str) -> str:
@@ -342,17 +384,22 @@ async def handle_vision(
     # a photo without a question has no user intent to classify. The correct
     # response is always a description. Letting orchestrator classify the
     # extracted text causes ANALYSIS/INSTRUCTION misrouting (QA-mode artifacts).
+    #
+    # Architecture contract (§2.1):
+    # _build_vision_intent() is the single factory for manually constructed
+    # IntentResult objects — it calls _resolve_routing() explicitly, ensuring
+    # RoutingProfile is always built through the canonical policy authority.
 
     intent_result = None
     needs_pipeline = True
     try:
-        from cognition.intent_engine import Intent, IntentResult, classify
+        from cognition.intent_engine import Intent, classify
 
         _extracted_lower = extracted.lower()
         _has_uncertainty = any(s in _extracted_lower for s in _UNCERTAINTY_SIGNALS)
 
         if caption.strip():
-            # User asked something — classify the actual question
+            # User asked something — classify the actual question.
             intent_result = await classify(caption.strip(), lang=lang)
             needs_pipeline = (
                 _has_uncertainty
@@ -360,13 +407,11 @@ async def handle_vision(
             )
         else:
             # No caption — photo only. Contract: describe it.
-            # Force CONVERSATION so orchestrator delivers extracted directly.
-            intent_result = IntentResult(
-                intent=Intent.CONVERSATION,
-                confidence=1.0,
-                requires_tools=False,
-            )
+            # _build_vision_intent() calls _resolve_routing(CONVERSATION) —
+            # single policy authority, no default_factory bypass.
+            intent_result = _build_vision_intent(Intent.CONVERSATION, lang)
             needs_pipeline = _has_uncertainty  # only pipeline if extractor was uncertain
+
     except Exception as exc:
         logger.warning("Intent classify failed in vision, defaulting to pipeline",
                        extra={"error": str(exc)})
@@ -378,6 +423,8 @@ async def handle_vision(
         "extracted_len":  len(extracted),
         "needs_pipeline": needs_pipeline,
         "intent":         intent_result.intent.value if intent_result else None,
+        "routing.depth":  intent_result.routing.reasoning_depth if intent_result else None,
+        "routing.truth":  intent_result.routing.truth_mode if intent_result else None,
     })
 
     return VisionResult(
@@ -741,11 +788,16 @@ async def handle_vision_group(
     #
     # No caption = user just sent an album → intent = CONVERSATION → describe.
     # Letting orchestrator classify extracted causes ANALYSIS/INSTRUCTION misrouting.
+    #
+    # Architecture contract (§2.1):
+    # _build_vision_intent() is the single factory for manually constructed
+    # IntentResult objects — it calls _resolve_routing() explicitly, ensuring
+    # RoutingProfile is always built through the canonical policy authority.
 
     intent_result = None
     needs_pipeline = True
     try:
-        from cognition.intent_engine import Intent, IntentResult, classify
+        from cognition.intent_engine import Intent, classify
 
         _uncertainty = any(s in extracted.lower() for s in _UNCERTAINTY_SIGNALS)
 
@@ -757,23 +809,24 @@ async def handle_vision_group(
             )
         else:
             # No caption — album only. Contract: describe it.
-            intent_result = IntentResult(
-                intent=Intent.CONVERSATION,
-                confidence=1.0,
-                requires_tools=False,
-            )
+            # _build_vision_intent() calls _resolve_routing(CONVERSATION) —
+            # single policy authority, no default_factory bypass.
+            intent_result = _build_vision_intent(Intent.CONVERSATION, lang)
             needs_pipeline = _uncertainty  # only pipeline if extractor was uncertain
+
     except Exception as exc:
         logger.warning("Intent classify failed in vision group", extra={"error": str(exc)})
         needs_pipeline = True
 
     logger.info("[final_routing] album routed", extra={
-        "lang":          lang,
-        "images_loaded": loaded,
-        "images_total":  len(file_ids),
-        "batches":       len(batches),
+        "lang":           lang,
+        "images_loaded":  loaded,
+        "images_total":   len(file_ids),
+        "batches":        len(batches),
         "needs_pipeline": needs_pipeline,
-        "intent":        intent_result.intent.value if intent_result else None,
+        "intent":         intent_result.intent.value if intent_result else None,
+        "routing.depth":  intent_result.routing.reasoning_depth if intent_result else None,
+        "routing.truth":  intent_result.routing.truth_mode if intent_result else None,
     })
 
     return VisionResult(
