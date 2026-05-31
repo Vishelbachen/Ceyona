@@ -22,9 +22,9 @@ from contracts.shared_types import (
 from core.kernel.cost_model import actual_cost, estimate_cost, estimate_output_tokens
 from core.kernel.decision_matrix import select_tier
 from core.kernel.execution_policy_kernel import EPKInput, evaluate
+from external.search import search_service
 from llm.heavy_input_shaper import ShaperInput, shape
 from llm.prompt_engine import PromptContext, build_messages
-from external.search import search_service
 from observability.metrics import gauge, increment
 from observability.tracing import trace
 
