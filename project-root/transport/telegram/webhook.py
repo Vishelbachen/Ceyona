@@ -319,6 +319,46 @@ async def telegram_webhook(
             await _send_message(chat_id, get_system_message("help_display", lang))
             return {"ok": True}
 
+        # ── /clear — Mode A: session reset (conversation history only) ────────
+        # Clears conversation_history from Supabase.
+        # Long-term memory (SupabaseStore) is intentionally preserved —
+        # the user wants a fresh dialogue, not to lose personalisation.
+        # Cache is not touched: it is infrastructure, not user identity.
+        if raw_text.startswith("/clear"):
+            if supabase is not None:
+                from memory.conversation_history import ConversationHistory
+                history_store = ConversationHistory(supabase)
+                await history_store.clear(user_id)
+            await _send_message(chat_id, get_system_message("session_cleared", lang))
+            return {"ok": True}
+
+        # ── /reset_memory — Mode B: full memory wipe (irreversible) ──────────
+        # Two-step confirmation: first call shows warning, second with "confirm"
+        # executes the wipe. Both conversation_history and long-term memory
+        # (SupabaseStore) are deleted. QueryCache is also cleared — it is the
+        # only user-scoped cache (keyed by user_id hash).
+        # EmbeddingCache and RerankCache are NOT touched: they are global
+        # infrastructure caches with no user identity, not memory layers.
+        if raw_text.startswith("/reset_memory"):
+            confirmed = "confirm" in raw_text
+            if not confirmed:
+                await _send_message(chat_id, get_system_message("memory_reset_confirm", lang))
+                return {"ok": True}
+            # Confirmed — execute full wipe
+            if supabase is not None:
+                from memory.conversation_history import ConversationHistory
+                from memory.supabase_store import SupabaseStore
+                await ConversationHistory(supabase).clear(user_id)
+                await SupabaseStore(supabase).delete_by_user(str(user_id))
+            # QueryCache: clear user-scoped retrieval cache from Redis
+            if request.app.state.redis is not None:
+                from retrieval.cache.query_cache import QueryCache
+                qcache = QueryCache(request.app.state.redis)
+                await qcache.delete_by_user(str(user_id))
+            logger.info("Full memory reset executed", extra={"user_id": user_id})
+            await _send_message(chat_id, get_system_message("memory_reset_done", lang))
+            return {"ok": True}
+
     # ── message handling ──────────────────────────────────────────────────────
     if update_type in (UpdateType.MESSAGE, UpdateType.EDITED_MESSAGE):
         import time as _time
