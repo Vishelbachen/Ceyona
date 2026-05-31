@@ -96,7 +96,7 @@ async def retrieve(
                 limit=query.top_k,
                 threshold=0.7,
             )
-            candidates = [(r.content, 1.0) for r in records]
+            candidates = [(r.content, r.similarity) for r in records]
             logger.info(
                 "pgvector similarity search completed",
                 extra={
