@@ -237,7 +237,7 @@ def detect_repetitive_opening(text: str, history: list[dict]) -> bool:
     Preamble suppression by phrase lists is intentionally NOT done here.
     That approach does not scale (the model finds synonyms) and creates
     asymmetric language coverage. The correct layer for preamble control
-    is the prompt (intent_engine._FORMAT_RULES, prompt_engine._variation_rule).
+    is the prompt (llm.prompt_policy.FORMAT_RULES, llm.prompt_policy.VARIATION_RULE).
 
     Args:
         text:    Raw LLM output (before correction).
