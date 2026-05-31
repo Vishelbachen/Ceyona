@@ -5,7 +5,6 @@ import logging
 import unicodedata
 
 import httpx
-
 from app.settings import settings
 from contracts.retrieval_contracts import SearchOutcome, SearchStatus
 from retrieval.query_preprocessor import extract_query_profile, geo_relevance_score
