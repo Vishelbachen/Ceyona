@@ -220,6 +220,72 @@ async def _run_tool(intent_result: IntentResult, lang: str) -> str | None:
         return None
 
 
+async def _fetch_external_grounding(
+    request: OrchestratorRequest,
+    intent_result: IntentResult,
+    lang: str,
+) -> str:
+    """
+    Resolve external grounding context for the current request.
+
+    Agentic intents go through the same dispatcher as non-agentic tools, but
+    use normalized tool parameters coming from intent classification.
+    """
+    if request.retrieved_context:
+        return request.retrieved_context
+
+    if request.user_balance <= 0 or request.skip_web_search or not intent_result.routing.retrieval_required:
+        return ""
+
+    _intent_value = intent_result.intent.value
+
+    if _intent_value in _AGENTIC_TOOL_MAP:
+        _tool_name = _AGENTIC_TOOL_MAP[_intent_value]
+        try:
+            from external.web_tools import run_tool as _web_run_tool
+            tool_result = await _web_run_tool(
+                tool_name=_tool_name,
+                params=intent_result.tool_params or {"query": request.user_message, "lang": lang},
+                lang=lang,
+            )
+            if tool_result:
+                logger.info("Agentic retrieval: context acquired", extra={
+                    "intent": _intent_value,
+                    "tool": _tool_name,
+                    "chars": len(tool_result),
+                })
+                return tool_result
+            logger.warning("Agentic retrieval: empty result", extra={
+                "intent": _intent_value,
+                "tool": _tool_name,
+            })
+        except Exception as exc:
+            logger.warning("Agentic retrieval failed — continuing without", extra={
+                "intent": _intent_value,
+                "tool": _tool_name,
+                "error": str(exc),
+            })
+        return ""
+
+    try:
+        from external.web_tools import run_tool as _web_run_tool
+        web_result = await _web_run_tool(
+            tool_name="search",
+            params={"query": request.user_message, "lang": lang},
+            lang=lang,
+        )
+        if web_result:
+            logger.info("Web search: context acquired", extra={
+                "intent": _intent_value,
+                "chars": len(web_result),
+            })
+            return web_result
+    except Exception as exc:
+        logger.warning("Web search failed — continuing without", extra={"error": str(exc)})
+
+    return ""
+
+
 # ─── PROMPT BUILDER (truth-aware) ────────────────────────────────────────────
 
 def _build_messages(
@@ -577,64 +643,8 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
         # routing.retrieval_required == True + not GEO → generic web search (path b).
         #
         # Zero-balance guard and skip_web_search flag apply before both paths.
-        _retrieved_context = request.retrieved_context
-        _intent_value      = intent_result.intent.value
-        _routing           = intent_result.routing
-
-        _can_fetch = (
-            not _retrieved_context
-            and request.user_balance > 0
-            and not request.skip_web_search
-            and _routing.retrieval_required   # ← RoutingProfile authority
-        )
-
-        if _can_fetch and _intent_value in _AGENTIC_TOOL_MAP:
-            # Path (a): intent-specific retrieval for GEO domain tool intents
-            _tool_name = _AGENTIC_TOOL_MAP[_intent_value]
-            try:
-                from external.web_tools import run_tool as _web_run_tool
-                _tool_result = await _web_run_tool(
-                    tool_name=_tool_name,
-                    params={"query": request.user_message, "lang": lang},
-                    lang=lang,
-                )
-                if _tool_result:
-                    _retrieved_context = _tool_result
-                    logger.info("Agentic retrieval: context acquired", extra={
-                        "intent": _intent_value,
-                        "tool":   _tool_name,
-                        "chars":  len(_tool_result),
-                    })
-                else:
-                    logger.warning("Agentic retrieval: empty result", extra={
-                        "intent": _intent_value,
-                        "tool":   _tool_name,
-                    })
-            except Exception as exc:
-                logger.warning("Agentic retrieval failed — continuing without", extra={
-                    "intent": _intent_value,
-                    "tool":   _tool_name,
-                    "error":  str(exc),
-                })
-
-        elif _can_fetch:
-            # Path (b): generic web search for all other retrieval_required intents
-            # (QUESTION, ANALYSIS, INSTRUCTION, and recall/descriptive via SEARCH intent)
-            try:
-                from external.web_tools import run_tool as _web_run_tool
-                web_result = await _web_run_tool(
-                    tool_name="search",
-                    params={"query": request.user_message, "lang": lang},
-                    lang=lang,
-                )
-                if web_result:
-                    _retrieved_context = web_result
-                    logger.info("Web search: context acquired", extra={
-                        "intent": _intent_value,
-                        "chars":  len(web_result),
-                    })
-            except Exception as exc:
-                logger.warning("Web search failed — continuing without", extra={"error": str(exc)})
+        _routing = intent_result.routing
+        _retrieved_context = await _fetch_external_grounding(request, intent_result, lang)
 
         # ── truth mode — from RoutingProfile ──────────────────────────────────
         # Single source of truth: declared in _resolve_routing(), read here.
