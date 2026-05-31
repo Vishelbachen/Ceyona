@@ -432,15 +432,21 @@ async def telegram_webhook(
             # Acknowledge the button press immediately (removes spinner)
             await _answer_callback(ctx.callback_query_id)
             # Send TON wallet address as a message the user can act on
+            import secrets
             from app.settings import settings as _s
             wallet = _s.ton_wallet
             if wallet:
+                # Generate a random suffix to prevent memo-guessing attacks:
+                # attacker knowing someone's Telegram ID cannot credit their account
+                # by sending TON with just the ID as memo.
+                _memo_suffix = secrets.token_hex(4)  # e.g. "a3f9c2b1"
+                _memo = f"{user_id}_{_memo_suffix}"
                 topup_text = (
                     f"💳 *Top up your balance*\n\n"
                     f"1️⃣ Send TON to this address:\n"
                     f"`{wallet}`\n\n"
-                    f"2️⃣ In the comment/memo field, paste your ID exactly as shown:\n"
-                    f"`{user_id}`\n\n"
+                    f"2️⃣ In the comment/memo field, paste this exactly:\n"
+                    f"`{_memo}`\n\n"
                     f"⚠️ *The comment is required.* Without it we cannot credit your account.\n\n"
                     f"💰 Current balance: ${user_balance:.4f}"
                 )
