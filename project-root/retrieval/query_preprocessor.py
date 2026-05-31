@@ -114,8 +114,14 @@ def _truncate_at_boundary(text: str) -> str:
         idx = lower.find(cue)
         if idx > 0:
             cut = min(cut, idx)
-    return text[:cut].strip(" ,.;:!?\t\n\r")
 
+    candidate = text[:cut]
+    stop_chars = [",", ";", ":", "?", "!", "\n", "\r"]
+    stop_points = [candidate.find(ch) for ch in stop_chars if candidate.find(ch) > 0]
+    if stop_points:
+        candidate = candidate[:min(stop_points)]
+
+    return candidate.strip(" ,.;:!?\t\n\r")
 
 def _strip_leading_modifiers(candidate: str) -> str:
     text = _normalize_text(candidate)
@@ -129,22 +135,23 @@ def _strip_leading_modifiers(candidate: str) -> str:
     def folded_token(token: str) -> str:
         return _ascii_fold(token).replace(" ", "")
 
+    leading_modifiers_folded = {_ascii_fold(mod).replace(" ", "") for mod in _LEADING_GEO_MODIFIERS}
+
     idx = 0
     while idx < len(tokens):
         token = folded_token(tokens[idx])
-        if token in _LEADING_GEO_MODIFIERS:
+        if token in leading_modifiers_folded:
             idx += 1
             continue
         if idx + 1 < len(tokens):
             pair = f"{token} {folded_token(tokens[idx + 1])}"
-            if pair in _LEADING_GEO_MODIFIERS:
+            if pair in leading_modifiers_folded:
                 idx += 2
                 continue
         break
 
     cleaned = " ".join(tokens[idx:]).strip(" ,.;:!?\t\n\r")
     return cleaned
-
 
 def _candidate_from_cues(text: str) -> str:
     normalized = _normalize_text(text)
@@ -172,19 +179,23 @@ def _extract_location(text: str) -> str:
     if not normalized:
         return ""
 
-    candidate = _candidate_from_cues(normalized)
+    primary_segment = normalized.split(",")[0].strip()
+    candidate = _candidate_from_cues(primary_segment) or _candidate_from_cues(normalized)
 
     if not candidate and _contains_marker(normalized, _HOTEL_MARKERS | _TRAVEL_MARKERS):
         tail = _truncate_at_boundary(normalized)
-        parts = [p for p in re.split(r"[,.!?;:/\\\\]", tail) if p.strip()]
+        parts = [p for p in re.split(r"[,.!?;:/\\]", tail) if p.strip()]
         if parts:
-            candidate = parts[-1].strip()
+            candidate = parts[0].strip()
 
     candidate = _strip_leading_modifiers(candidate)
     candidate = _truncate_at_boundary(candidate)
     candidate = _normalize_text(candidate)
+    if candidate:
+        tokens = candidate.split()
+        if len(tokens) > 6:
+            candidate = " ".join(tokens[:6])
     return candidate
-
 
 def _location_aliases(location: str) -> tuple[str, ...]:
     if not location:
@@ -247,7 +258,8 @@ def extract_query_profile(text: str, lang: str | None = None) -> QueryProfile:
     )
     keywords_ascii = tuple(token for token in normalized_folded.split(" ") if token)
     if location_folded:
-        keywords_ascii = tuple(token for token in keywords_ascii if token not in set(location_folded.split()))
+        location_tokens = {token for token in location_folded.split() if token}
+        keywords_ascii = tuple(token for token in keywords_ascii if token not in location_tokens)
 
     return QueryProfile(
         raw_text=text,
@@ -261,7 +273,6 @@ def extract_query_profile(text: str, lang: str | None = None) -> QueryProfile:
         keywords_ascii=keywords_ascii,
         is_geo_query=bool(location) or query_kind in {"hotel", "travel"},
     )
-
 
 def _best_ratio(a: str, b: str) -> float:
     if not a or not b:
