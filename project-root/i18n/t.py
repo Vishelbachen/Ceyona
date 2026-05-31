@@ -5,6 +5,7 @@
 # Also exposes get_system_message / format_balance_message as pure i18n helpers.
 # These functions MUST NOT live in cognition/ — transport layer is allowed to
 # import from i18n but NOT from cognition (architecture.md §19).
+# This module is the canonical place for lightweight i18n accessors.
 from i18n.strings import (
     SUPPORTED_LANGS,
     is_supported,
