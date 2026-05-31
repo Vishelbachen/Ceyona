@@ -246,7 +246,7 @@ def _apply_normalizer(text: str, lang: str) -> str:
     """
     try:
         from meta.output_normalizer import apply as _norm
-        result = _norm(text, lang)
+        result = _norm(text, lang, from_vision=inp.from_vision)
         return result if result and result.strip() else text
     except Exception:
         return text
