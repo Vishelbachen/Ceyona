@@ -1,4 +1,3 @@
-cat > /home/claude/ceyona_work/cognition/intent_engine.py << 'PYEOF'
 from __future__ import annotations
 
 import logging
