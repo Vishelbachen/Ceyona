@@ -6,6 +6,7 @@ import unicodedata
 
 import httpx
 from app.settings import settings
+from retrieval.query_preprocessor import extract_query_profile, geo_relevance_score
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +45,29 @@ _SERP_LANG_MAP: dict[str, str] = {
 }
 
 
+
 # ─── SOURCE CREDIBILITY ───────────────────────────────────────────────────────
 from retrieval.source_credibility import source_credibility as _credibility
+
+# ─── QUERY NORMALIZATION ──────────────────────────────────────────────────────
+
+def _compose_search_query(query: str, lang: str) -> str:
+    """
+    Keep the original query intact, but add stable location aliases when the
+    query is geo-sensitive. This helps providers converge on the right city
+    without biasing toward any single language.
+    """
+    profile = extract_query_profile(query, lang)
+    if not profile.is_geo_query or not profile.location:
+        return query.strip()
+
+    parts = [query.strip()]
+    for variant in profile.aliases:
+        if variant and variant.casefold() not in query.casefold():
+            parts.append(variant)
+
+    composed = " ".join(part for part in parts if part)
+    return composed.strip()
 
 # ─── URL SANITIZATION ─────────────────────────────────────────────────────────
 
@@ -72,22 +94,24 @@ def _sanitize_url(url: str) -> str:
 
 # ─── FILTER ───────────────────────────────────────────────────────────────────
 
-def _filter_results(results: list[dict]) -> list[dict]:
-    """Sanitize URLs then delegate trust filtering to source_credibility."""
+def _filter_results(results: list[dict], query: str = "", lang: str = "en") -> list[dict]:
+    """Sanitize URLs then delegate trust + geo filtering to source_credibility."""
     sanitized = [
         {**r, "link": _sanitize_url(r.get("link", ""))}
         for r in results
     ]
-    return _credibility.filter_results(sanitized, max_results=5)
+    return _credibility.filter_results(sanitized, max_results=5, query=query, lang=lang)
 
 
 # ─── VALIDATION ──────────────────────────────────────────────────────────────
 
 _SUSPICIOUS_PATTERNS = {"негород", "negород", "dubrava_fake"}
 
-def _validate_results(results: list[dict]) -> list[dict]:
+def _validate_results(results: list[dict], query: str = "", lang: str = "en") -> list[dict]:
     if not results or not results[0].get("_structured"):
         return results
+
+    profile = extract_query_profile(query, lang) if query else None
     validated = []
     for r in results:
         title = r.get("title", "").lower()
@@ -96,6 +120,16 @@ def _validate_results(results: list[dict]) -> list[dict]:
             continue
         if not r.get("title", "").strip():
             continue
+        if profile and profile.is_geo_query and profile.location:
+            affinity = geo_relevance_score(query, " ".join([
+                r.get("title", ""), r.get("address", ""), r.get("snippet", "")
+            ]), lang=lang)
+            if affinity < 0.50:
+                logger.debug(
+                    "Validation: removed location mismatch",
+                    extra={"title": r.get("title"), "affinity": round(affinity, 3), "location": profile.location},
+                )
+                continue
         validated.append(r)
     return validated
 
@@ -138,7 +172,7 @@ async def _search_tavily(query: str, lang: str, num: int) -> list[dict] | None:
                 for r in raw
                 if r.get("title") or r.get("content")
             ]
-            filtered = _filter_results(results)
+            filtered = _filter_results(results, query=query, lang=lang)
             logger.info("Tavily search completed", extra={
                 "query": query[:50], "attempt": attempt + 1,
                 "raw": len(results), "filtered": len(filtered), "lang": lang,
@@ -206,7 +240,7 @@ async def _search_serpapi(query: str, lang: str, num: int) -> list[dict] | None:
                             "_structured": True,
                         })
                 if structured:
-                    validated = _validate_results(structured)
+                    validated = _validate_results(structured, query=query, lang=lang)
                     logger.info("SerpAPI hotel pack", extra={
                         "query": query[:50], "attempt": attempt + 1,
                         "hotels": len(validated), "lang": lang,
@@ -224,7 +258,7 @@ async def _search_serpapi(query: str, lang: str, num: int) -> list[dict] | None:
                 }
                 for r in raw_results
             ]
-            filtered = _filter_results(results)
+            filtered = _filter_results(results, query=query, lang=lang)
             logger.info("SerpAPI search completed", extra={
                 "query": query[:50], "attempt": attempt + 1,
                 "raw": len(results), "filtered": len(filtered), "lang": lang,
@@ -284,7 +318,7 @@ async def _search_searxng(query: str, lang: str, num: int) -> list[dict]:
                 for r in raw
                 if r.get("title") or r.get("content")
             ]
-            filtered = _filter_results(results)
+            filtered = _filter_results(results, query=query, lang=lang)
             logger.info("SearXNG search completed", extra={
                 "query": query[:50], "attempt": attempt + 1,
                 "raw": len(results), "filtered": len(filtered), "lang": lang,
@@ -336,18 +370,20 @@ class SearchService:
 
         Returns [] when all providers fail or are unconfigured.
         """
+        query_for_search = _compose_search_query(query, lang)
+
         # 1. Tavily primary
-        results = await _search_tavily(query, lang, num)
+        results = await _search_tavily(query_for_search, lang, num)
         if results is not None:
             return results
 
         # 2. SerpAPI secondary
-        results = await _search_serpapi(query, lang, num)
+        results = await _search_serpapi(query_for_search, lang, num)
         if results is not None:
             return results
 
         # 3. SearXNG tertiary
-        return await _search_searxng(query, lang, num)
+        return await _search_searxng(query_for_search, lang, num)
 
     def format_results(self, results: list[dict], lang: str = "en") -> str:
         """
