@@ -17,7 +17,6 @@ History:
 """
 from unittest.mock import MagicMock
 
-import pytest
 from contracts.shared_types import Complexity, DomainHint, ReasoningDepth, TruthMode
 from core.execution.orchestrator import (
     _AGENTIC_INTENTS,
@@ -25,7 +24,6 @@ from core.execution.orchestrator import (
     _NO_SEARCH_INTENTS,
     OrchestratorRequest,
 )
-
 
 # ─── _NO_SEARCH_INTENTS: dead constant, still present for compatibility ────────
 # This set is NO LONGER consulted at runtime — routing.retrieval_required owns
@@ -274,7 +272,6 @@ class TestRoutingProfileAuthority:
     def test_routing_profile_fields_complete(self):
         """Every RoutingProfile returned by _resolve_routing has all required fields."""
         from cognition.intent_engine import Intent, _resolve_routing
-        from contracts.shared_types import RoutingProfile
 
         for intent in Intent:
             routing = _resolve_routing(intent)
@@ -481,6 +478,7 @@ class TestTransportLayerClean:
 
     def test_no_search_routing_artifacts_in_update_handler(self):
         import inspect
+
         import transport.telegram.update_handler as uh
         source = inspect.getsource(uh)
 
@@ -491,6 +489,7 @@ class TestTransportLayerClean:
 
     def test_forced_intent_not_in_update_handler_source(self):
         import inspect
+
         import transport.telegram.update_handler as uh
         source = inspect.getsource(uh)
         assert "forced_intent" not in source, (
