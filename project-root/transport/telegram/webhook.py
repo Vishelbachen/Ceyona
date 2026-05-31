@@ -433,6 +433,7 @@ async def telegram_webhook(
             await _answer_callback(ctx.callback_query_id)
             # Send TON wallet address as a message the user can act on
             import secrets
+
             from app.settings import settings as _s
             wallet = _s.ton_wallet
             if wallet:
