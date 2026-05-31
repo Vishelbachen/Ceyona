@@ -461,12 +461,12 @@ _GROUP_EXTRACTION_SYSTEM = (
     "- Describe only. Never solve, analyse, validate, verify, or interpret.\n"
     "- Never produce tables, checklists, or validation results.\n"
     "- Never write OK, fixed, satisfied, correct, or similar judgement words.\n\n"
-    "OUTPUT FORMAT: plain prose, no headers, no bullet points. "
-    "Do NOT open with meta-commentary like 'The images show', 'These images represent', "
-    "or any similar phrase that describes the set rather than individual content. "
-    "Start each image description directly with its content — the first word describes what is in the image. "
-    "Do not use ordinal or sequential labels to introduce individual images (no 'First', 'Second', 'Image N', or equivalents in any language). "
-    "Separate image descriptions with a blank line."
+    "OUTPUT FORMAT — mandatory: "
+    "Return a JSON array. One element per image, in order. Each element is a plain string "
+    "containing the description of that image — no keys, no nesting, no metadata. "
+    "Example for 3 images: [\"description of first\", \"description of second\", \"description of third\"] "
+    "Each description: plain prose, starts directly with the visible content. "
+    "No JSON keys. No markdown. No prose outside the array. Output the array only."
 )
 
 # _GROUP_SYNTHESIS_SYSTEM_TEMPLATE: verbosity_rule injected in code.
@@ -487,8 +487,15 @@ _GROUP_SYNTHESIS_SYSTEM_TEMPLATE = (
 
 @dataclass(frozen=True)
 class _VisionBatchResult:
-    """Internal result from a single Groq vision batch call."""
-    text: str
+    """Internal result from a single Groq vision batch call.
+
+    descriptions: structured list — one entry per image in the batch.
+    Extraction prompt returns JSON array; parser fills this field.
+    Falls back to [raw_text] if JSON parse fails.
+    text: raw LLM output, kept for logging and fallback only.
+    """
+    descriptions: list  # list[str] — one description per image
+    text: str           # raw LLM output (logging / fallback)
     input_tokens: int
     output_tokens: int
 
@@ -553,7 +560,33 @@ async def _call_groq_vision(
             if not text:
                 return None
             _usage = data.get("usage", {})
+
+            # Parse structured JSON array from extraction prompt.
+            # Extraction now returns: ["desc1", "desc2", ...] — one string per image.
+            # Fallback: wrap raw text as single-element list (maintains contract downstream).
+            import json as _json
+            _descriptions: list[str] = []
+            try:
+                _raw = text.strip()
+                # Strip possible markdown code fences the model might add
+                if _raw.startswith("```"):
+                    _raw = _raw.split("```")[1]
+                    if _raw.startswith("json"):
+                        _raw = _raw[4:]
+                    _raw = _raw.strip()
+                parsed = _json.loads(_raw)
+                if isinstance(parsed, list) and all(isinstance(x, str) for x in parsed):
+                    _descriptions = [x.strip() for x in parsed if x.strip()]
+                else:
+                    logger.warning("Groq vision: unexpected JSON structure — using raw text fallback")
+                    _descriptions = [text]
+            except (_json.JSONDecodeError, Exception) as _e:
+                logger.warning("Groq vision: JSON parse failed — using raw text fallback",
+                               extra={"error": str(_e), "preview": text[:80]})
+                _descriptions = [text]
+
             return _VisionBatchResult(
+                descriptions=_descriptions,
                 text=text,
                 input_tokens=_usage.get("prompt_tokens", 0),
                 output_tokens=_usage.get("completion_tokens", 0),
@@ -575,8 +608,13 @@ async def _call_groq_vision(
             parts = [p for p in (left, right) if isinstance(p, _VisionBatchResult)]
             if not parts:
                 return None
+            # Merge structured descriptions from both halves — preserves order.
+            merged_descriptions = []
+            for p in parts:
+                merged_descriptions.extend(p.descriptions)
             merged_text = "\n\n".join(p.text for p in parts)
             return _VisionBatchResult(
+                descriptions=merged_descriptions,
                 text=merged_text,
                 input_tokens=sum(p.input_tokens for p in parts),
                 output_tokens=sum(p.output_tokens for p in parts),
@@ -597,55 +635,22 @@ async def _call_groq_vision(
         return None
 
 
-async def _synthesise_batch_descriptions(descriptions: list[str], lang: str) -> str:
+async def _merge_descriptions(all_descriptions: list[str]) -> str:
     """
-    Merge multiple batch descriptions into one coherent response via a single LLM call.
-    Used when an album had to be split into multiple batches.
-    Falls back to newline-joined descriptions if LLM call fails.
+    Merge structured per-image descriptions into the final album response.
 
-    verbosity_rule is determined by image count in code — not left to LLM interpretation:
-      >= 5 images → brief (1-2 sentences per image)
-       < 5 images → balanced (2-3 sentences per image)
+    Architecture contract:
+    - Input: list[str] — one clean description per image, already extracted
+      by _call_groq_vision via JSON array output format.
+    - No LLM call needed: descriptions are already clean, unnumbered prose.
+    - Separator: blank line between images — standard Telegram paragraph spacing.
+
+    This replaces the previous LLM synthesis step which received raw prose
+    (potentially numbered) and reproduced that numbering in output.
+    Structured extraction eliminates the source of the artifact — no downstream
+    cleanup needed.
     """
-    image_count = len(descriptions)
-    verbosity_rule = (
-        "1-2 sentences per image" if image_count >= 5 else "2-3 sentences per image"
-    )
-    system_prompt = _GROUP_SYNTHESIS_SYSTEM_TEMPLATE.format(
-        verbosity_rule=verbosity_rule,
-    )
-    combined = "\n\n".join(descriptions)
-    payload = {
-        "model": _VISION_MODEL,
-        "max_tokens": RUNTIME.tier_configs[Tier.GENERAL].max_output_tokens,
-        "temperature": 0.2,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user",   "content": combined},
-        ],
-    }
-    try:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            r = await client.post(
-                _GROQ_ENDPOINT,
-                json=payload,
-                headers={
-                    "Authorization": f"Bearer {settings.groq_api_key}",
-                    "Content-Type":  "application/json",
-                },
-            )
-            r.raise_for_status()
-            data = r.json()
-            result = (
-                data.get("choices", [{}])[0]
-                .get("message", {})
-                .get("content", "")
-                .strip()
-            )
-            return result if result else combined
-    except Exception as exc:
-        logger.warning("Synthesis call failed — using joined descriptions", extra={"error": str(exc)})
-        return combined
+    return "\n\n".join(desc.strip() for desc in all_descriptions if desc.strip())
 
 
 async def handle_vision_group(
@@ -745,7 +750,7 @@ async def handle_vision_group(
         return_exceptions=True,
     )
 
-    descriptions: list[str] = []
+    all_descriptions: list[str] = []  # flat list — one str per image across all batches
     _group_input_tokens  = 0
     _group_output_tokens = 0
     for idx, res in enumerate(batch_results):
@@ -755,28 +760,29 @@ async def handle_vision_group(
                 extra={"batch_index": idx, "error": str(res) if isinstance(res, Exception) else "None"},
             )
             continue
-        descriptions.append(res.text)
+        # Extend with structured per-image descriptions from this batch.
+        # res.descriptions is list[str] — one clean string per image, no numbering.
+        all_descriptions.extend(res.descriptions)
         _group_input_tokens  += res.input_tokens
         _group_output_tokens += res.output_tokens
 
-    if not descriptions:
+    if not all_descriptions:
         logger.error("Vision group: all batches failed", extra={"loaded": loaded})
         return VisionResult(text=err_text, needs_pipeline=False, failed=True)
 
     logger.info("[after_extraction] album batches extracted", extra={
-        "batches_total":    len(batches),
-        "batches_success":  len(descriptions),
-        "descriptions_preview": [d[:80] for d in descriptions],
+        "batches_total":       len(batches),
+        "descriptions_total":  len(all_descriptions),
+        "descriptions_preview": [d[:80] for d in all_descriptions],
     })
 
-    # ── synthesise batch descriptions ─────────────────────────────────────────
-    if len(descriptions) == 1:
-        extracted = descriptions[0]
-    else:
-        extracted = await _synthesise_batch_descriptions(descriptions, lang)
+    # ── merge per-image descriptions ──────────────────────────────────────────
+    # all_descriptions is list[str] — one clean string per image, no numbering.
+    # _merge_descriptions joins with blank lines — no LLM call needed.
+    extracted = await _merge_descriptions(all_descriptions)
 
     logger.info("[after_synthesis] album descriptions merged", extra={
-        "batches_merged":  len(descriptions),
+        "images_total":    len(all_descriptions),
         "extracted_len":   len(extracted),
         "extracted_preview": extracted[:120],
     })
