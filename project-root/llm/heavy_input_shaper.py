@@ -7,9 +7,9 @@ logger = logging.getLogger(__name__)
 
 # ─── LIMITS ───────────────────────────────────────────────────────────────────
 
-_TOKEN_THRESHOLD     = 2048   # above this → compression candidate
-_CHUNK_SIZE          = 1800   # max tokens per chunk after split
-_SUMMARY_THRESHOLD   = 4096   # above this → summarization preferred over chunking
+_TOKEN_THRESHOLD = 2048   # above this → compression candidate
+_CHUNK_SIZE = 1800        # max tokens per chunk after split
+_SUMMARY_THRESHOLD = 4096 # above this → summarization preferred over chunking
 
 # llama-3.1-8b-instant is used here NOT as Fast Tier — it is a utility model
 _SHAPER_MODEL = "llama-3.1-8b-instant"
@@ -46,25 +46,72 @@ def _select_operation(inp: ShaperInput) -> str:
     return "compressed"
 
 
-def _compress(text: str) -> str:
-    """Remove redundant blank lines and deduplicate repeated sentences."""
-    seen: set[str] = set()
-    result: list[str] = []
+def _normalize_whitespace(text: str) -> str:
+    lines: list[str] = []
     blank_run = 0
 
-    for line in text.splitlines():
+    for raw_line in text.splitlines():
+        line = raw_line.rstrip()
         stripped = line.strip()
-        if stripped == "":
+        if not stripped:
             blank_run += 1
             if blank_run <= 1:
-                result.append("")
+                lines.append("")
             continue
-        blank_run = 0
-        if stripped not in seen:
-            seen.add(stripped)
-            result.append(line)
 
-    return "\n".join(result).strip()
+        blank_run = 0
+        lines.append(line)
+
+    return "\n".join(lines).strip()
+
+
+def _split_fenced_blocks(text: str) -> list[tuple[bool, str]]:
+    """Split text into fenced-code and prose segments without losing order."""
+    segments: list[tuple[bool, str]] = []
+    buffer: list[str] = []
+    in_fence = False
+
+    for line in text.splitlines():
+        is_fence = line.lstrip().startswith("```") or line.lstrip().startswith("~~~")
+        if is_fence:
+            if buffer:
+                segments.append((in_fence, "\n".join(buffer)))
+                buffer = []
+            in_fence = not in_fence
+            buffer.append(line)
+            continue
+        buffer.append(line)
+
+    if buffer:
+        segments.append((in_fence, "\n".join(buffer)))
+
+    return segments
+
+
+def _compress_prose(text: str) -> str:
+    """Conservative compression that preserves meaning and structure."""
+    segments = _split_fenced_blocks(text)
+    out: list[str] = []
+    last_prose: str | None = None
+
+    for is_code, segment in segments:
+        if is_code:
+            out.append(segment.rstrip())
+            last_prose = None
+            continue
+
+        normalized = _normalize_whitespace(segment)
+        if not normalized:
+            continue
+
+        # Deduplicate only consecutive repeated prose blocks, not every line.
+        if normalized == last_prose:
+            continue
+
+        out.append(normalized)
+        last_prose = normalized
+
+    return "\n\n".join(part for part in out if part).strip()
 
 
 def _chunk(text: str) -> str:
@@ -74,8 +121,11 @@ def _chunk(text: str) -> str:
     Preserves code blocks and JSON shapes intact within chunks.
     """
     words = text.split()
+    if not words:
+        return text
+
     # ~0.75 words per token approximation — conservative
-    words_per_chunk = int(_CHUNK_SIZE * 0.75)
+    words_per_chunk = max(256, int(_CHUNK_SIZE * 0.75))
 
     chunks: list[str] = []
     for i in range(0, len(words), words_per_chunk):
@@ -97,36 +147,37 @@ def _summarize(text: str) -> str:
     total = len(lines)
 
     if total <= 60:
-        return _compress(text)
+        return _compress_prose(text)
 
     head = lines[:20]
     tail = lines[-20:]
     middle = lines[20 : total - 20]
 
-    # Compress middle: deduplicate + drop pure-blank runs
     compressed_middle: list[str] = []
-    seen: set[str] = set()
-    blank_run = 0
+    last_block: str | None = None
+    pending_blank = False
     for line in middle:
-        stripped = line.strip()
-        if stripped == "":
-            blank_run += 1
-            if blank_run <= 1:
-                compressed_middle.append("")
+        stripped = line.rstrip()
+        if not stripped.strip():
+            pending_blank = True
             continue
-        blank_run = 0
-        if stripped not in seen:
-            seen.add(stripped)
-            compressed_middle.append(line)
 
-    parts = (
-        "\n".join(head)
-        + "\n\n---\n\n"
-        + "\n".join(compressed_middle)
-        + "\n\n---\n\n"
-        + "\n".join(tail)
-    )
-    return parts.strip()
+        block = stripped.strip()
+        if block == last_block:
+            continue
+
+        if pending_blank and compressed_middle:
+            compressed_middle.append("")
+        pending_blank = False
+        compressed_middle.append(stripped)
+        last_block = block
+
+    parts = [
+        "\n".join(head).strip(),
+        "\n".join(compressed_middle).strip(),
+        "\n".join(tail).strip(),
+    ]
+    return "\n\n---\n\n".join(part for part in parts if part).strip()
 
 
 # ─── PUBLIC API ───────────────────────────────────────────────────────────────
@@ -158,7 +209,7 @@ def shape(inp: ShaperInput) -> ShaperResult:
         elif operation == "chunked":
             shaped = _chunk(inp.text)
         else:
-            shaped = _compress(inp.text)
+            shaped = _compress_prose(inp.text)
 
         # Safety: if shaping produced empty result, return original
         if not shaped or not shaped.strip():
