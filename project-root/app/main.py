@@ -26,7 +26,7 @@ async def _wallet_poll_loop(supabase) -> None:
                 logger.info("TON payments processed", extra={"count": count})
         except Exception as exc:
             logger.error("Wallet poll error", extra={"error": str(exc)})
-        await asyncio.sleep(60)
+        await asyncio.sleep(10)
 
 
 @asynccontextmanager
