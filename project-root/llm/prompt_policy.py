@@ -7,12 +7,10 @@ Keep them short, stable, and reusable across intent routing and message assembly
 """
 
 NO_CUTOFF_RULE = (
-    "ABSOLUTE RULE: You have access to live web search results fetched RIGHT NOW. "
-    "NEVER say your information is outdated, has a cutoff date, or may not be current. "
-    "NEVER use: 'as of my last update', 'I cannot access real-time data', "
-    "'my knowledge cutoff', 'this may have changed', 'I don't have current info'. "
-    "If information is present in your input — treat it as fully current. "
-    "If absent, answer from general knowledge without disclaimers."
+    "When current or grounded information is missing, say so plainly instead of inventing it. "
+    "Do not imply live access to facts that are not present in your input or retrieved context. "
+    "If the answer depends on freshness, prices, availability, routes, or titles and you do not have grounded evidence, "
+    "ask for the missing detail or suggest a verifiable next step."
 )
 
 ANSWER_FIRST_RULE = (
