@@ -12,6 +12,7 @@ from cognition.multi_agent_coordinator import (
 from cognition.reasoning_engine import select_strategy
 from cognition.response_synthesizer import SynthesisInput, synthesize
 from context.assembler import resolve_truth_mode
+from contracts.retrieval_contracts import SearchStatus
 from contracts.shared_types import (
     Complexity,
     EPKDecision,
@@ -23,6 +24,7 @@ from core.kernel.decision_matrix import select_tier
 from core.kernel.execution_policy_kernel import EPKInput, evaluate
 from llm.heavy_input_shaper import ShaperInput, shape
 from llm.prompt_engine import PromptContext, build_messages
+from external.search import search_service
 from observability.metrics import gauge, increment
 from observability.tracing import trace
 
@@ -140,6 +142,14 @@ class OrchestratorResult:
     tool_calls: int = 0
 
 
+@dataclass
+class GroundingResult:
+    text: str = ""
+    status: SearchStatus = SearchStatus.NO_RESULTS
+    provider: str = ""
+    error: str = ""
+
+
 # ─── INTERNAL HELPERS ─────────────────────────────────────────────────────────
 
 def _denied_result(
@@ -224,18 +234,19 @@ async def _fetch_external_grounding(
     request: OrchestratorRequest,
     intent_result: IntentResult,
     lang: str,
-) -> str:
+) -> GroundingResult:
     """
     Resolve external grounding context for the current request.
 
-    Agentic intents go through the same dispatcher as non-agentic tools, but
-    use normalized tool parameters coming from intent classification.
+    Agentic intents continue to use the tool dispatcher.
+    Generic web search goes through the status-aware search service so the
+    orchestrator can distinguish provider failure from empty evidence.
     """
     if request.retrieved_context:
-        return request.retrieved_context
+        return GroundingResult(text=request.retrieved_context, status=SearchStatus.SUCCESS, provider="request")
 
     if request.user_balance <= 0 or request.skip_web_search or not intent_result.routing.retrieval_required:
-        return ""
+        return GroundingResult()
 
     _intent_value = intent_result.intent.value
 
@@ -254,36 +265,40 @@ async def _fetch_external_grounding(
                     "tool": _tool_name,
                     "chars": len(tool_result),
                 })
-                return tool_result
+                return GroundingResult(text=tool_result, status=SearchStatus.SUCCESS, provider=_tool_name)
             logger.warning("Agentic retrieval: empty result", extra={
                 "intent": _intent_value,
                 "tool": _tool_name,
             })
+            return GroundingResult(status=SearchStatus.NO_RESULTS, provider=_tool_name)
         except Exception as exc:
             logger.warning("Agentic retrieval failed — continuing without", extra={
                 "intent": _intent_value,
                 "tool": _tool_name,
                 "error": str(exc),
             })
-        return ""
+            return GroundingResult(status=SearchStatus.PROVIDER_ERROR, provider=_tool_name, error=str(exc))
 
     try:
-        from external.web_tools import run_tool as _web_run_tool
-        web_result = await _web_run_tool(
-            tool_name="search",
-            params={"query": request.user_message, "lang": lang},
-            lang=lang,
-        )
-        if web_result:
+        outcome = await search_service.search_with_status(request.user_message, lang=lang)
+        if outcome.results:
+            text = search_service.format_results(outcome.results, lang=lang)
             logger.info("Web search: context acquired", extra={
                 "intent": _intent_value,
-                "chars": len(web_result),
+                "provider": outcome.provider,
+                "status": outcome.status.value,
+                "chars": len(text),
             })
-            return web_result
+            return GroundingResult(text=text, status=outcome.status, provider=outcome.provider, error=outcome.error)
+        logger.info("Web search finished without grounded context", extra={
+            "intent": _intent_value,
+            "provider": outcome.provider,
+            "status": outcome.status.value,
+        })
+        return GroundingResult(status=outcome.status, provider=outcome.provider, error=outcome.error)
     except Exception as exc:
         logger.warning("Web search failed — continuing without", extra={"error": str(exc)})
-
-    return ""
+        return GroundingResult(status=SearchStatus.PROVIDER_ERROR, provider="search", error=str(exc))
 
 
 # ─── PROMPT BUILDER (truth-aware) ────────────────────────────────────────────
@@ -644,7 +659,8 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
         #
         # Zero-balance guard and skip_web_search flag apply before both paths.
         _routing = intent_result.routing
-        _retrieved_context = await _fetch_external_grounding(request, intent_result, lang)
+        _grounding = await _fetch_external_grounding(request, intent_result, lang)
+        _retrieved_context = _grounding.text
 
         # ── truth mode — from RoutingProfile ──────────────────────────────────
         # Single source of truth: declared in _resolve_routing(), read here.
@@ -657,22 +673,34 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             tool_output = await _run_tool(intent_result, lang)
 
         # ── STRICT truth gate ─────────────────────────────────────────────────
-        # TruthMode.STRICT + no grounding data → deny rather than hallucinate.
+        # TruthMode.STRICT + no grounded data usually denies.
+        # Provider failure is treated as a retrieval degradation, not a policy failure.
         has_grounding = bool(_retrieved_context) or bool(tool_output)
         if truth_mode == TruthMode.STRICT and not has_grounding:
-            logger.info("Truth gate: STRICT with no grounding data", extra={
-                "intent": intent_result.intent,
-                "domain": _routing.domain_hint,
-            })
-            return _denied_result(
-                reason="no_grounded_data",
-                lang=lang,
-                input_tokens=request.input_tokens,
-                embedding_tokens=request.embedding_tokens,
-                rerank_tokens=request.rerank_tokens,
-                embedding_type=request.embedding_type,
-                epk_decision=EPKDecision.DENY,
-            )
+            if _grounding.status == SearchStatus.PROVIDER_ERROR:
+                logger.warning("Truth gate: STRICT but retrieval provider failed; degrading truth mode", extra={
+                    "intent": intent_result.intent,
+                    "domain": _routing.domain_hint,
+                    "provider": _grounding.provider,
+                    "error": _grounding.error,
+                })
+                truth_mode = TruthMode.BALANCED
+            else:
+                logger.info("Truth gate: STRICT with no grounding data", extra={
+                    "intent": intent_result.intent,
+                    "domain": _routing.domain_hint,
+                    "status": _grounding.status.value,
+                    "provider": _grounding.provider,
+                })
+                return _denied_result(
+                    reason="no_grounded_data",
+                    lang=lang,
+                    input_tokens=request.input_tokens,
+                    embedding_tokens=request.embedding_tokens,
+                    rerank_tokens=request.rerank_tokens,
+                    embedding_type=request.embedding_type,
+                    epk_decision=EPKDecision.DENY,
+                )
 
         # ── estimate ─────────────────────────────────────────────────────────
         _fast_token_threshold = 300
