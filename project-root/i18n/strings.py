@@ -127,252 +127,53 @@ _STRINGS: dict[str, dict[str, str]] = {
 
     # ── balance ───────────────────────────────────────────────────────────────
     "insufficient_balance": {
-        "en": (
-            "⚠️ *Insufficient balance.*\n\n"
-            "To continue, please top up your account via TON:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "After sending, your balance will be updated automatically."
-        ),
-        "ru": (
-            "⚠️ *Недостаточно средств.*\n\n"
-            "Для продолжения пополните счёт через TON:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "После перевода баланс обновится автоматически."
-        ),
-        "de": (
-            "⚠️ *Unzureichendes Guthaben.*\n\n"
-            "Bitte lade dein Konto über TON auf:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "Nach der Überweisung wird dein Guthaben automatisch aktualisiert."
-        ),
-        "fr": (
-            "⚠️ *Solde insuffisant.*\n\n"
-            "Veuillez recharger votre compte via TON :\n"
-            f"`{_TON_WALLET}`\n\n"
-            "Après le virement, votre solde sera mis à jour automatiquement."
-        ),
-        "es": (
-            "⚠️ *Saldo insuficiente.*\n\n"
-            "Por favor recarga tu cuenta vía TON:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "Tras el envío, tu saldo se actualizará automáticamente."
-        ),
-        "pt": (
-            "⚠️ *Saldo insuficiente.*\n\n"
-            "Por favor recarregue sua conta via TON:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "Após o envio, seu saldo será atualizado automaticamente."
-        ),
-        "it": (
-            "⚠️ *Saldo insufficiente.*\n\n"
-            "Ricarica il tuo account tramite TON:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "Dopo il trasferimento il saldo verrà aggiornato automaticamente."
-        ),
-        "tr": (
-            "⚠️ *Yetersiz bakiye.*\n\n"
-            "Lütfen TON aracılığıyla hesabınızı doldurun:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "Gönderdikten sonra bakiyeniz otomatik olarak güncellenecektir."
-        ),
-        "ar": (
-            "⚠️ *رصيد غير كافٍ.*\n\n"
-            "يرجى شحن حسابك عبر TON:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "بعد الإرسال سيتم تحديث رصيدك تلقائياً."
-        ),
-        "zh": (
-            "⚠️ *余额不足。*\n\n"
-            "请通过 TON 充值您的账户：\n"
-            f"`{_TON_WALLET}`\n\n"
-            "转账后余额将自动更新。"
-        ),
-        "ja": (
-            "⚠️ *残高不足です。*\n\n"
-            "TON でアカウントをチャージしてください：\n"
-            f"`{_TON_WALLET}`\n\n"
-            "送金後、残高は自動的に更新されます。"
-        ),
-        "ko": (
-            "⚠️ *잔액이 부족합니다.*\n\n"
-            "TON을 통해 계정을 충전해 주세요:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "전송 후 잔액이 자동으로 업데이트됩니다."
-        ),
-        "pl": (
-            "⚠️ *Niewystarczające środki.*\n\n"
-            "Doładuj konto przez TON:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "Po przelewie saldo zostanie automatycznie zaktualizowane."
-        ),
-        "uk": (
-            "⚠️ *Недостатньо коштів.*\n\n"
-            "Поповніть рахунок через TON:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "Після переказу баланс оновиться автоматично."
-        ),
-        "fa": (
-            "⚠️ *موجودی کافی نیست.*\n\n"
-            "لطفاً حساب خود را از طریق TON شارژ کنید:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "پس از ارسال، موجودی شما به‌صورت خودکار به‌روز می‌شود."
-        ),
-        "nl": (
-            "⚠️ *Onvoldoende saldo.*\n\n"
-            "Laad uw account op via TON:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "Na de overschrijving wordt uw saldo automatisch bijgewerkt."
-        ),
-        "sv": (
-            "⚠️ *Otillräckligt saldo.*\n\n"
-            "Fyll på ditt konto via TON:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "Efter överföringen uppdateras ditt saldo automatiskt."
-        ),
-        "no": (
-            "⚠️ *Utilstrekkelig saldo.*\n\n"
-            "Fyll på kontoen din via TON:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "Etter overføringen oppdateres saldoen automatisk."
-        ),
-        "da": (
-            "⚠️ *Utilstrækkelig saldo.*\n\n"
-            "Optank din konto via TON:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "Efter overførslen opdateres din saldo automatisk."
-        ),
-        "fi": (
-            "⚠️ *Saldo ei riitä.*\n\n"
-            "Lataa tilisi TON:n kautta:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "Siirron jälkeen saldosi päivittyy automaattisesti."
-        ),
-        "he": (
-            "⚠️ *יתרה לא מספיקה.*\n\n"
-            "אנא טען את החשבון שלך דרך TON:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "לאחר ההעברה היתרה תתעדכן אוטומטית."
-        ),
-        "hi": (
-            "⚠️ *अपर्याप्त शेष।*\n\n"
-            "कृपया TON के माध्यम से अपना खाता टॉप अप करें:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "भेजने के बाद आपका बैलेंस अपने आप अपडेट हो जाएगा।"
-        ),
-        "id": (
-            "⚠️ *Saldo tidak mencukupi.*\n\n"
-            "Silakan isi ulang akun Anda melalui TON:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "Setelah pengiriman, saldo Anda akan diperbarui secara otomatis."
-        ),
-        "az": (
-            "⚠️ *Balans kifayət deyil.*\n\n"
-            "Zəhmət olmasa TON vasitəsilə hesabınızı doldurun:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "Göndərdikdən sonra balansınız avtomatik yenilənəcək."
-        ),
-        "kk": (
-            "⚠️ *Баланс жеткіліксіз.*\n\n"
-            "TON арқылы шотыңызды толтырыңыз:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "Жібергеннен кейін баланс автоматты түрде жаңартылады."
-        ),
-        "uz": (
-            "⚠️ *Balans yetarli emas.*\n\n"
-            "Iltimos, TON orqali hisobingizni to'ldiring:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "Yuborilgandan so'ng balans avtomatik yangilanadi."
-        ),
-        "ka": (
-            "⚠️ *არასაკმარისი ბალანსი.*\n\n"
-            "გთხოვთ შეავსოთ ანგარიში TON-ის მეშვეობით:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "გადარიცხვის შემდეგ ბალანსი ავტომატურად განახლდება."
-        ),
-        "hy": (
-            "⚠️ *Անբավարար մնացորդ։*\n\n"
-            "Խնդրում ենք համալրել հաշիվը TON-ի միջոցով:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "Ուղարկելուց հետո մնացորդը ավտոմատ կթարմացվի:"
-        ),
-        "cs": (
-            "⚠️ *Nedostatečný zůstatek.*\n\n"
-            "Prosím dobijte svůj účet přes TON:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "Po převodu bude váš zůstatek automaticky aktualizován."
-        ),
-        "ro": (
-            "⚠️ *Sold insuficient.*\n\n"
-            "Vă rugăm să reîncărcați contul prin TON:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "După transfer, soldul se va actualiza automat."
-        ),
-        "hu": (
-            "⚠️ *Elégtelen egyenleg.*\n\n"
-            "Kérjük, töltse fel fiókját TON-on keresztül:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "Az átutalás után az egyenleg automatikusan frissül."
-        ),
-        "th": (
-            "⚠️ *ยอดเงินไม่เพียงพอ*\n\n"
-            "กรุณาเติมเงินในบัญชีผ่าน TON:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "หลังจากส่งแล้ว ยอดเงินจะอัปเดตโดยอัตโนมัติ"
-        ),
-        "vi": (
-            "⚠️ *Số dư không đủ.*\n\n"
-            "Vui lòng nạp tiền vào tài khoản qua TON:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "Sau khi gửi, số dư sẽ được cập nhật tự động."
-        ),
-        "ms": (
-            "⚠️ *Baki tidak mencukupi.*\n\n"
-            "Sila tambah nilai akaun anda melalui TON:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "Selepas penghantaran, baki anda akan dikemas kini secara automatik."
-        ),
-        "bn": (
-            "⚠️ *অপর্যাপ্ত ব্যালেন্স।*\n\n"
-            "অনুগ্রহ করে TON এর মাধ্যমে আপনার অ্যাকাউন্ট টপ আপ করুন:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "পাঠানোর পরে আপনার ব্যালেন্স স্বয়ংক্রিয়ভাবে আপডেট হবে।"
-        ),
-        "ur": (
-            "⚠️ *ناکافی بیلنس۔*\n\n"
-            "براہ کرم TON کے ذریعے اپنا اکاؤنٹ ٹاپ اپ کریں:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "بھیجنے کے بعد آپ کا بیلنس خود بخود اپ ڈیٹ ہو جائے گا۔"
-        ),
-        "bg": (
-            "⚠️ *Недостатъчен баланс.*\n\n"
-            "Моля, заредете акаунта си чрез TON:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "След превода балансът ще се актуализира автоматично."
-        ),
-        "hr": (
-            "⚠️ *Nedovoljan saldo.*\n\n"
-            "Molimo dopunite račun putem TON-a:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "Nakon prijenosa saldo će se automatski ažurirati."
-        ),
-        "sr": (
-            "⚠️ *Недовољан салдо.*\n\n"
-            "Молимо допуните налог преко TON-а:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "Након преноса салдо ће се аутоматски ажурирати."
-        ),
-        "sk": (
-            "⚠️ *Nedostatočný zostatok.*\n\n"
-            "Prosím dobite si účet cez TON:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "Po prevode bude váš zostatok automaticky aktualizovaný."
-        ),
-        "mn": (
-            "⚠️ *Үлдэгдэл хүрэлцэхгүй байна.*\n\n"
-            "TON-оор дансаа цэнэглэнэ үү:\n"
-            f"`{_TON_WALLET}`\n\n"
-            "Илгээсний дараа үлдэгдэл автоматаар шинэчлэгдэнэ."
-        ),
+        # ⚠️ CRITICAL: Do NOT put wallet address here — user_id is unavailable at
+        # string-definition time. The wallet address + user_id are shown together
+        # in the callback handler (webhook.py CallbackAction.TOPUP) where user_id
+        # is guaranteed. Without user_id in the TON memo, payments cannot be credited.
+        # These strings direct the user to tap the button below — that is the only
+        # safe path to send payment details.
+        "en": "⚠️ *Insufficient balance.*\n\nTap the button below to top up — you'll see the wallet address and your personal payment ID.",
+        "ru": "⚠️ *Недостаточно средств.*\n\nНажми кнопку ниже для пополнения — там будет адрес кошелька и твой личный ID платежа.",
+        "de": "⚠️ *Unzureichendes Guthaben.*\n\nTippe unten auf die Schaltfläche — du siehst die Wallet-Adresse und deine persönliche Zahlungs-ID.",
+        "fr": "⚠️ *Solde insuffisant.*\n\nAppuie sur le bouton ci-dessous — tu verras l'adresse du portefeuille et ton identifiant de paiement personnel.",
+        "es": "⚠️ *Saldo insuficiente.*\n\nPulsa el botón de abajo — verás la dirección de la cartera y tu ID de pago personal.",
+        "pt": "⚠️ *Saldo insuficiente.*\n\nToca no botão abaixo — verás o endereço da carteira e o teu ID de pagamento pessoal.",
+        "it": "⚠️ *Saldo insufficiente.*\n\nPremi il pulsante in basso — vedrai l'indirizzo del wallet e il tuo ID di pagamento personale.",
+        "tr": "⚠️ *Yetersiz bakiye.*\n\nAşağıdaki düğmeye dokun — cüzdan adresini ve kişisel ödeme kimliğini göreceksin.",
+        "ar": "⚠️ *رصيد غير كافٍ.*\n\naاضغط على الزر أدناه — ستجد عنوان المحفظة ومعرّف الدفع الخاص بك.",
+        "zh": "⚠️ *余额不足。*\n\n点击下方按钮充值——你将看到钱包地址和你的个人支付ID。",
+        "ja": "⚠️ *残高不足です。*\n\n下のボタンをタップしてください — ウォレットアドレスとあなた専用の支払いIDが表示されます。",
+        "ko": "⚠️ *잔액이 부족합니다.*\n\n아래 버튼을 탭하세요 — 지갑 주소와 개인 결제 ID가 표시됩니다.",
+        "pl": "⚠️ *Niewystarczające środki.*\n\nKliknij przycisk poniżej — zobaczysz adres portfela i swoje osobiste ID płatności.",
+        "uk": "⚠️ *Недостатньо коштів.*\n\nНатисни кнопку нижче — там буде адреса гаманця та твій особистий ID платежу.",
+        "fa": "⚠️ *موجودی کافی نیست.*\n\nروی دکمه زیر ضربه بزن — آدرس کیف پول و شناسه پرداخت شخصی‌ات را خواهی دید.",
+        "nl": "⚠️ *Onvoldoende saldo.*\n\nTik op de knop hieronder — je ziet het walletadres en je persoonlijke betalings-ID.",
+        "sv": "⚠️ *Otillräckligt saldo.*\n\nTryck på knappen nedan — du ser plånboksadressen och ditt personliga betalnings-ID.",
+        "no": "⚠️ *Utilstrekkelig saldo.*\n\nTrykk på knappen nedenfor — du vil se lommebokadresse og din personlige betalings-ID.",
+        "da": "⚠️ *Utilstrækkelig saldo.*\n\nTryk på knappen nedenfor — du vil se wallet-adressen og dit personlige betalings-ID.",
+        "fi": "⚠️ *Saldo ei riitä.*\n\nNapauta alla olevaa painiketta — näet lompakko-osoitteen ja henkilökohtaisen maksu-ID:si.",
+        "he": "⚠️ *יתרה לא מספיקה.*\n\nלחץ על הכפתור למטה — תראה את כתובת הארנק ואת מזהה התשלום האישי שלך.",
+        "hi": "⚠️ *अपर्याप्त शेष।*\n\nनीचे बटन दबाएं — आपको वॉलेट पता और अपना व्यक्तिगत भुगतान ID दिखाई देगा।",
+        "id": "⚠️ *Saldo tidak mencukupi.*\n\nKetuk tombol di bawah — Anda akan melihat alamat dompet dan ID pembayaran pribadi Anda.",
+        "az": "⚠️ *Balans kifayət deyil.*\n\nAşağıdakı düyməyə toxunun — cüzdan ünvanını və şəxsi ödəniş ID-nizi görəcəksiniz.",
+        "kk": "⚠️ *Баланс жеткіліксіз.*\n\nТөмендегі түймені басыңыз — әмиян мекенжайын және жеке төлем ID-іңізді көресіз.",
+        "uz": "⚠️ *Balans yetarli emas.*\n\nQuyidagi tugmani bosing — hamyon manzili va shaxsiy to'lov ID'ingizni ko'rasiz.",
+        "ka": "⚠️ *არასაკმარისი ბალანსი.*\n\nდააჭირე ქვემოთ ღილაკს — დაინახავ საფულის მისამართს და შენს პირად გადახდის ID-ს.",
+        "hy": "⚠️ *Անբավարար մնացորդ։*\n\nՍեղմեք ստորև բերված կոճակը — կտեսնեք դրամապանակի հասցեն և ձեր անձնական վճարային ID-ն:",
+        "cs": "⚠️ *Nedostatečný zůstatek.*\n\nKlikněte na tlačítko níže — uvidíte adresu peněženky a své osobní platební ID.",
+        "ro": "⚠️ *Sold insuficient.*\n\nApasă butonul de mai jos — vei vedea adresa portofelului și ID-ul tău personal de plată.",
+        "hu": "⚠️ *Elégtelen egyenleg.*\n\nKoppintson az alábbi gombra — látni fogja a pénztárca címét és személyes fizetési azonosítóját.",
+        "th": "⚠️ *ยอดเงินไม่เพียงพอ*\n\nแตะปุ่มด้านล่าง — คุณจะเห็นที่อยู่กระเป๋าเงินและ ID การชำระเงินส่วนตัวของคุณ",
+        "vi": "⚠️ *Số dư không đủ.*\n\nNhấn nút bên dưới — bạn sẽ thấy địa chỉ ví và ID thanh toán cá nhân của bạn.",
+        "ms": "⚠️ *Baki tidak mencukupi.*\n\nKetik butang di bawah — anda akan melihat alamat dompet dan ID pembayaran peribadi anda.",
+        "bn": "⚠️ *অপর্যাপ্ত ব্যালেন্স।*\n\nনিচের বোতামটি ট্যাপ করুন — আপনি ওয়ালেটের ঠিকানা এবং আপনার ব্যক্তিগত পেমেন্ট ID দেখতে পাবেন।",
+        "ur": "⚠️ *ناکافی بیلنس۔*\n\nنیچے بٹن دبائیں — آپ کو والیٹ ایڈریس اور اپنا ذاتی پیمنٹ ID نظر آئے گا۔",
+        "bg": "⚠️ *Недостатъчен баланс.*\n\nНатиснете бутона по-долу — ще видите адреса на портфейла и личния си ID за плащане.",
+        "hr": "⚠️ *Nedovoljan saldo.*\n\nPritisnite gumb ispod — vidjet ćete adresu novčanika i svoj osobni ID plaćanja.",
+        "sr": "⚠️ *Недовољан салдо.*\n\nПритисните дугме испод — видећете адресу новчаника и свој лични ID за плаћање.",
+        "sk": "⚠️ *Nedostatočný zostatok.*\n\nKliknite na tlačidlo nižšie — uvidíte adresu peňaženky a svoje osobné platobné ID.",
+        "mn": "⚠️ *Үлдэгдэл хүрэлцэхгүй байна.*\n\nДоорх товчийг дарна уу — хэтэвчний хаяг болон таны хувийн төлбөрийн ID-г харах болно.",
     },
 
     # ── no LLM response received ──────────────────────────────────────────────
@@ -921,7 +722,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ar": "لم أتمكن من الرد الآن. يمكنك المحاولة مرة أخرى 🔄",
         "zh": "暂时无法回复，请再试一次 🔄",
         "uk": "Зараз не вдалося відповісти. Спробуй ще раз 🔄",
-        "ka": "ახლა პასუხის გაცემა ვერ მოხერხდა. სცადეთ თავიდან 🔄",
+        "ka": "ახლა ვერ ვუპასუხე. სცადე თავიდან 🔄",
     },
 
     # ── CoT loop fallback — shown when model produced a reasoning loop instead of answer ──
