@@ -1,16 +1,15 @@
 from dataclasses import dataclass
 from enum import Enum
 
-from cognition.intent_engine import Intent
-from contracts.shared_types import Tier
+from contracts.shared_types import DomainHint, ReasoningDepth, RoutingProfile, Tier
 
 # ─── STRATEGY DEFINITIONS ────────────────────────────────────────────────────
 
 class ReasoningMode(str, Enum):
-    DIRECT          = "direct"          # answer immediately, no preamble
-    CHAIN_OF_THOUGHT = "chain_of_thought"  # think step by step
-    STRUCTURED      = "structured"      # use headers / numbered lists
-    EXPLORATORY     = "exploratory"     # consider multiple angles
+    DIRECT           = "direct"           # answer immediately, no preamble
+    CHAIN_OF_THOUGHT = "chain_of_thought" # think step by step
+    STRUCTURED       = "structured"       # use headers / numbered lists
+    EXPLORATORY      = "exploratory"      # consider multiple angles
 
 
 @dataclass(frozen=True)
@@ -22,17 +21,47 @@ class ReasoningStrategy:
 
 
 # ─── STRATEGY MATRIX ─────────────────────────────────────────────────────────
-# (Intent, Tier) → ReasoningStrategy
-# FAST tier always favours DIRECT to stay within token cap.
+# (ReasoningDepth, DomainHint, Tier) → ReasoningStrategy
+#
+# Architecture contract (§7):
+# - Reasoning engine consumes RoutingProfile axes, NOT Intent directly.
+# - Intent is preserved in IntentResult for observability (logs, billing).
+# - DomainHint selects the specialised pipeline (MATH CoT, CODE structured, etc.).
+# - ReasoningDepth controls how much structured reasoning is applied.
+# - Tier controls token budget and model capacity.
+#
+# Key invariants:
+# - MATH CoT prefix fires ONLY when domain_hint == MATH.
+#   MATH reasoning_depth == HEAVY ensures heavy CoT budget.
+#   No other domain receives constraint-enumeration instructions.
+# - FAST tier always favours DIRECT to stay within token cap.
+# - NONE depth always resolves to DIRECT regardless of domain.
 
-_STRATEGY_MATRIX: dict[tuple[str, str], ReasoningStrategy] = {
+_STRATEGY_MATRIX: dict[tuple[str, str, str], ReasoningStrategy] = {
 
-    # ── QUESTION ─────────────────────────────────────────
-    # instruction_prefix must NOT trigger constraint-listing or candidate-matching
-    # CoT patterns — those leak into user-facing output (audit §13.3).
-    # Graceful exit rule is mandatory: if you don't know, say so directly.
-    # Never simulate a search loop or list internal reasoning steps.
-    (Intent.QUESTION, Tier.FAST): ReasoningStrategy(
+    # ── NONE depth — conversational, emotional, simple replies ────────────────
+    # All NONE requests: always DIRECT, never CoT, warm temperature.
+    (ReasoningDepth.NONE, DomainHint.GENERAL, Tier.FAST): ReasoningStrategy(
+        mode=ReasoningMode.DIRECT,
+        temperature=0.7,
+        instruction_prefix="",
+        max_reasoning_steps=1,
+    ),
+    (ReasoningDepth.NONE, DomainHint.GENERAL, Tier.GENERAL): ReasoningStrategy(
+        mode=ReasoningMode.DIRECT,
+        temperature=0.7,
+        instruction_prefix="",
+        max_reasoning_steps=1,
+    ),
+    (ReasoningDepth.NONE, DomainHint.GENERAL, Tier.HEAVY): ReasoningStrategy(
+        mode=ReasoningMode.DIRECT,
+        temperature=0.7,
+        instruction_prefix="",
+        max_reasoning_steps=1,
+    ),
+
+    # ── LIGHT depth, GENERAL domain — factual, search, instruction, analysis ──
+    (ReasoningDepth.LIGHT, DomainHint.GENERAL, Tier.FAST): ReasoningStrategy(
         mode=ReasoningMode.DIRECT,
         temperature=0.3,
         instruction_prefix=(
@@ -42,7 +71,7 @@ _STRATEGY_MATRIX: dict[tuple[str, str], ReasoningStrategy] = {
         ),
         max_reasoning_steps=1,
     ),
-    (Intent.QUESTION, Tier.GENERAL): ReasoningStrategy(
+    (ReasoningDepth.LIGHT, DomainHint.GENERAL, Tier.GENERAL): ReasoningStrategy(
         mode=ReasoningMode.DIRECT,
         temperature=0.4,
         instruction_prefix=(
@@ -53,7 +82,7 @@ _STRATEGY_MATRIX: dict[tuple[str, str], ReasoningStrategy] = {
         ),
         max_reasoning_steps=2,
     ),
-    (Intent.QUESTION, Tier.HEAVY): ReasoningStrategy(
+    (ReasoningDepth.LIGHT, DomainHint.GENERAL, Tier.HEAVY): ReasoningStrategy(
         mode=ReasoningMode.DIRECT,
         temperature=0.3,
         instruction_prefix=(
@@ -65,72 +94,74 @@ _STRATEGY_MATRIX: dict[tuple[str, str], ReasoningStrategy] = {
         max_reasoning_steps=3,
     ),
 
-    # ── CODE ─────────────────────────────────────────────
-    (Intent.CODE, Tier.FAST): ReasoningStrategy(
+    # ── LIGHT depth, GEO domain — search/maps/weather tool synthesis ──────────
+    # compound_agent synthesises over retrieved tool output; no heavy CoT needed.
+    (ReasoningDepth.LIGHT, DomainHint.GEO, Tier.FAST): ReasoningStrategy(
         mode=ReasoningMode.DIRECT,
         temperature=0.2,
         instruction_prefix="",
         max_reasoning_steps=1,
     ),
-    (Intent.CODE, Tier.GENERAL): ReasoningStrategy(
+    (ReasoningDepth.LIGHT, DomainHint.GEO, Tier.GENERAL): ReasoningStrategy(
+        mode=ReasoningMode.DIRECT,
+        temperature=0.3,
+        instruction_prefix="",
+        max_reasoning_steps=2,
+    ),
+    (ReasoningDepth.LIGHT, DomainHint.GEO, Tier.HEAVY): ReasoningStrategy(
+        mode=ReasoningMode.DIRECT,
+        temperature=0.2,
+        instruction_prefix="",
+        max_reasoning_steps=2,
+    ),
+
+    # ── LIGHT depth, CODE domain ──────────────────────────────────────────────
+    (ReasoningDepth.LIGHT, DomainHint.CODE, Tier.FAST): ReasoningStrategy(
+        mode=ReasoningMode.DIRECT,
+        temperature=0.2,
+        instruction_prefix="",
+        max_reasoning_steps=1,
+    ),
+    (ReasoningDepth.LIGHT, DomainHint.CODE, Tier.GENERAL): ReasoningStrategy(
         mode=ReasoningMode.STRUCTURED,
         temperature=0.2,
         instruction_prefix="",
         max_reasoning_steps=3,
     ),
-    (Intent.CODE, Tier.HEAVY): ReasoningStrategy(
+    (ReasoningDepth.LIGHT, DomainHint.CODE, Tier.HEAVY): ReasoningStrategy(
         mode=ReasoningMode.STRUCTURED,
         temperature=0.15,
         instruction_prefix="",
         max_reasoning_steps=5,
     ),
 
-    # ── ANALYSIS ─────────────────────────────────────────
-    (Intent.ANALYSIS, Tier.FAST): ReasoningStrategy(
-        mode=ReasoningMode.STRUCTURED,
-        temperature=0.4,
-        instruction_prefix="",
-        max_reasoning_steps=2,
-    ),
-    (Intent.ANALYSIS, Tier.GENERAL): ReasoningStrategy(
-        mode=ReasoningMode.EXPLORATORY,
-        temperature=0.5,
-        instruction_prefix="Consider multiple perspectives:",
-        max_reasoning_steps=4,
-    ),
-    (Intent.ANALYSIS, Tier.HEAVY): ReasoningStrategy(
-        mode=ReasoningMode.EXPLORATORY,
-        temperature=0.4,
-        instruction_prefix="Consider multiple perspectives:",
-        max_reasoning_steps=6,
-    ),
-
-    # ── CREATIVE ─────────────────────────────────────────
-    (Intent.CREATIVE, Tier.FAST): ReasoningStrategy(
+    # ── LIGHT depth, MEDIA domain — creative exploration ──────────────────────
+    (ReasoningDepth.LIGHT, DomainHint.MEDIA, Tier.FAST): ReasoningStrategy(
         mode=ReasoningMode.DIRECT,
         temperature=0.8,
         instruction_prefix="",
         max_reasoning_steps=1,
     ),
-    (Intent.CREATIVE, Tier.GENERAL): ReasoningStrategy(
+    (ReasoningDepth.LIGHT, DomainHint.MEDIA, Tier.GENERAL): ReasoningStrategy(
         mode=ReasoningMode.EXPLORATORY,
         temperature=0.85,
         instruction_prefix="",
         max_reasoning_steps=2,
     ),
-    (Intent.CREATIVE, Tier.HEAVY): ReasoningStrategy(
+    (ReasoningDepth.LIGHT, DomainHint.MEDIA, Tier.HEAVY): ReasoningStrategy(
         mode=ReasoningMode.EXPLORATORY,
         temperature=0.9,
         instruction_prefix="",
         max_reasoning_steps=3,
     ),
 
-    # ── MATH ─────────────────────────────────────────────
+    # ── HEAVY depth, MATH domain — constraint satisfaction + verification loop ─
     # instruction_prefix triggers the constraint-propagation protocol
     # defined in the MATH system prompt in intent_engine.py:
     # list all constraints → enumerate candidates → verify ALL simultaneously
     # → backtrack on contradiction → show verification table.
-    (Intent.MATH, Tier.FAST): ReasoningStrategy(
+    # This prefix fires ONLY for domain_hint == MATH. No other domain receives it.
+    (ReasoningDepth.HEAVY, DomainHint.MATH, Tier.FAST): ReasoningStrategy(
         mode=ReasoningMode.CHAIN_OF_THOUGHT,
         temperature=0.1,
         instruction_prefix=(
@@ -141,7 +172,7 @@ _STRATEGY_MATRIX: dict[tuple[str, str], ReasoningStrategy] = {
         ),
         max_reasoning_steps=4,
     ),
-    (Intent.MATH, Tier.GENERAL): ReasoningStrategy(
+    (ReasoningDepth.HEAVY, DomainHint.MATH, Tier.GENERAL): ReasoningStrategy(
         mode=ReasoningMode.CHAIN_OF_THOUGHT,
         temperature=0.1,
         instruction_prefix=(
@@ -153,7 +184,7 @@ _STRATEGY_MATRIX: dict[tuple[str, str], ReasoningStrategy] = {
         ),
         max_reasoning_steps=6,
     ),
-    (Intent.MATH, Tier.HEAVY): ReasoningStrategy(
+    (ReasoningDepth.HEAVY, DomainHint.MATH, Tier.HEAVY): ReasoningStrategy(
         mode=ReasoningMode.CHAIN_OF_THOUGHT,
         temperature=0.05,
         instruction_prefix=(
@@ -168,87 +199,24 @@ _STRATEGY_MATRIX: dict[tuple[str, str], ReasoningStrategy] = {
         max_reasoning_steps=10,
     ),
 
-    # ── EXAM ──────────────────────────────────────────────
-    (Intent.EXAM, Tier.FAST): ReasoningStrategy(
+    # ── HEAVY depth, GENERAL domain — exam, deep analysis ────────────────────
+    (ReasoningDepth.HEAVY, DomainHint.GENERAL, Tier.FAST): ReasoningStrategy(
         mode=ReasoningMode.DIRECT,
         temperature=0.1,
         instruction_prefix="",
         max_reasoning_steps=1,
     ),
-    (Intent.EXAM, Tier.GENERAL): ReasoningStrategy(
-        mode=ReasoningMode.DIRECT,
-        temperature=0.1,
-        instruction_prefix="",
-        max_reasoning_steps=2,
-    ),
-    (Intent.EXAM, Tier.HEAVY): ReasoningStrategy(
-        mode=ReasoningMode.DIRECT,
-        temperature=0.1,
-        instruction_prefix="",
-        max_reasoning_steps=2,
-    ),
-
-    # ── INSTRUCTION ──────────────────────────────────────
-    (Intent.INSTRUCTION, Tier.FAST): ReasoningStrategy(
-        mode=ReasoningMode.STRUCTURED,
-        temperature=0.3,
-        instruction_prefix="",
-        max_reasoning_steps=2,
-    ),
-    (Intent.INSTRUCTION, Tier.GENERAL): ReasoningStrategy(
-        mode=ReasoningMode.STRUCTURED,
+    (ReasoningDepth.HEAVY, DomainHint.GENERAL, Tier.GENERAL): ReasoningStrategy(
+        mode=ReasoningMode.EXPLORATORY,
         temperature=0.35,
-        instruction_prefix="",
+        instruction_prefix="Consider multiple perspectives:",
         max_reasoning_steps=4,
     ),
-    (Intent.INSTRUCTION, Tier.HEAVY): ReasoningStrategy(
-        mode=ReasoningMode.STRUCTURED,
+    (ReasoningDepth.HEAVY, DomainHint.GENERAL, Tier.HEAVY): ReasoningStrategy(
+        mode=ReasoningMode.EXPLORATORY,
         temperature=0.3,
-        instruction_prefix="",
+        instruction_prefix="Consider multiple perspectives:",
         max_reasoning_steps=6,
-    ),
-
-    # ── CONVERSATION ─────────────────────────────────────
-    (Intent.CONVERSATION, Tier.FAST): ReasoningStrategy(
-        mode=ReasoningMode.DIRECT,
-        temperature=0.7,
-        instruction_prefix="",
-        max_reasoning_steps=1,
-    ),
-    (Intent.CONVERSATION, Tier.GENERAL): ReasoningStrategy(
-        mode=ReasoningMode.DIRECT,
-        temperature=0.7,
-        instruction_prefix="",
-        max_reasoning_steps=1,
-    ),
-    (Intent.CONVERSATION, Tier.HEAVY): ReasoningStrategy(
-        mode=ReasoningMode.DIRECT,
-        temperature=0.7,
-        instruction_prefix="",
-        max_reasoning_steps=1,
-    ),
-
-    # ── EMOTIONAL ────────────────────────────────────────────
-    # Short empathetic reaction — always DIRECT, warm temperature,
-    # no instruction prefix (the system prompt already handles framing),
-    # single step (no chain-of-thought needed for a 1–3 sentence reply).
-    (Intent.EMOTIONAL, Tier.FAST): ReasoningStrategy(
-        mode=ReasoningMode.DIRECT,
-        temperature=0.85,
-        instruction_prefix="",
-        max_reasoning_steps=1,
-    ),
-    (Intent.EMOTIONAL, Tier.GENERAL): ReasoningStrategy(
-        mode=ReasoningMode.DIRECT,
-        temperature=0.85,
-        instruction_prefix="",
-        max_reasoning_steps=1,
-    ),
-    (Intent.EMOTIONAL, Tier.HEAVY): ReasoningStrategy(
-        mode=ReasoningMode.DIRECT,
-        temperature=0.85,
-        instruction_prefix="",
-        max_reasoning_steps=1,
     ),
 }
 
@@ -260,9 +228,22 @@ _DEFAULT_STRATEGY = ReasoningStrategy(
 )
 
 
-def select_strategy(intent: Intent, tier: Tier) -> ReasoningStrategy:
+def select_strategy(routing: RoutingProfile, tier: Tier) -> ReasoningStrategy:
     """
-    Select reasoning strategy for a given intent + tier combination.
+    Select reasoning strategy for a given RoutingProfile + Tier combination.
     Pure function. No I/O. No state.
+
+    Lookup order: (depth, domain, tier) → exact match → (depth, GENERAL, tier)
+    → default strategy. This ensures MEDIA/CODE/GEO domains always have coverage
+    without requiring exhaustive cross-product entries for every depth × tier.
     """
-    return _STRATEGY_MATRIX.get((intent, tier), _DEFAULT_STRATEGY)
+    key = (routing.reasoning_depth, routing.domain_hint, tier)
+    if key in _STRATEGY_MATRIX:
+        return _STRATEGY_MATRIX[key]
+
+    # Domain-agnostic fallback: try with GENERAL domain at same depth + tier
+    general_key = (routing.reasoning_depth, DomainHint.GENERAL, tier)
+    if general_key in _STRATEGY_MATRIX:
+        return _STRATEGY_MATRIX[general_key]
+
+    return _DEFAULT_STRATEGY
