@@ -7,10 +7,10 @@ Keep them short, stable, and reusable across intent routing and message assembly
 """
 
 NO_CUTOFF_RULE = (
-    "When current or grounded information is missing, say so plainly instead of inventing it. "
-    "Do not imply live access to facts that are not present in your input or retrieved context. "
-    "If the answer depends on freshness, prices, availability, routes, or titles and you do not have grounded evidence, "
-    "ask for the missing detail or suggest a verifiable next step."
+    "GROUNDING RULE: treat live tool output as current only when it is present in the request context. "
+    "If evidence is missing, incomplete, or conflicting, say so plainly and ask for more context when helpful. "
+    "Do not invent freshness, prices, availability, routes, or facts that are not grounded in the input. "
+    "Never imply certainty without evidence."
 )
 
 ANSWER_FIRST_RULE = (
