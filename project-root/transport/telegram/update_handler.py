@@ -11,6 +11,7 @@ from core.execution.orchestrator import (
     UsageRecord,
     run,
 )
+from cognition.response_synthesizer import SynthesisInput, synthesize
 from transport.telegram.message_router import (
     UpdateType,
     extract_media_group_id,
@@ -232,8 +233,16 @@ async def handle_message(
                     lang=lang,
                 )
             logger.info("Vision fast-path: direct response", extra={"user_id": user_id})
+            final_text = synthesize(SynthesisInput(
+                raw_text=vision_result.text,
+                intent=None,
+                tier=Tier.GENERAL,
+                denied=False,
+                lang=lang,
+                from_vision=True,
+            )).text
             return OrchestratorResult(
-                text=vision_result.text,
+                text=final_text,
                 tier=Tier.GENERAL,
                 model=_VISION_MODEL,
                 epk_decision=EPKDecision.ALLOW,
