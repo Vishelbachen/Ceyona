@@ -16,11 +16,14 @@ _TRUTH_STRICT = (
     "If the context is empty or incomplete — say so directly instead of filling the gap."
 )
 
-_TRUTH_HYBRID = (
-    "Context below may be partial or imperfect — use it as your primary source, "
-    "but apply judgment. If context and common sense conflict, note the discrepancy. "
-    "If you are unsure about something, say so instead of guessing."
-)
+# TRUTH_HYBRID deliberately removed.
+# Rationale: HYBRID intents (QUESTION, ANALYSIS, INSTRUCTION) receive retrieved
+# context injected directly into the user turn — the model reads it as part of
+# the input, not as a named object. Adding an explicit "use the context" layer
+# turns context into a "semantic object of discourse" (ChatGPT analysis, May 2026)
+# and causes the model to narrate its reasoning about the context instead of
+# simply answering. STRICT is kept for intents where hallucination is
+# architecturally forbidden (MAPS, WEATHER, SEARCH). See audit.md §session-4.
 
 
 @dataclass(frozen=True)
@@ -45,14 +48,17 @@ def build_messages(ctx: PromptContext) -> list[dict]:
     if ctx.system_prompt:
         system_parts.append(ctx.system_prompt)
 
-    # ── truth enforcement (only when retrieval is involved) ───────────────────
-    # GENERATIVE intents (CONVERSATION, EMOTIONAL, CREATIVE, UNKNOWN) get no
-    # truth block — they don't use retrieval.
+    # ── truth enforcement (STRICT intents only) ───────────────────────────────
+    # STRICT: MAPS, WEATHER, SEARCH — hallucination architecturally forbidden.
+    #         Explicit "use only the context" instruction is required.
+    # HYBRID: QUESTION, ANALYSIS, INSTRUCTION — retrieved context is injected
+    #         directly into the user turn as raw text (no label). The model reads
+    #         it as part of the input without being told "this is context".
+    #         No truth block needed — adding one creates meta-awareness loop.
+    # GENERATIVE: CONVERSATION, EMOTIONAL, CREATIVE — no retrieval, no block.
     if ctx.truth_mode == TruthMode.STRICT:
         system_parts.append(_TRUTH_STRICT)
-    elif ctx.truth_mode == TruthMode.HYBRID:
-        system_parts.append(_TRUTH_HYBRID)
-    # GENERATIVE → no injection
+    # HYBRID and GENERATIVE → no injection
 
     # ── formatting + diversity rules ─────────────────────────────────────────
     # Inserted before truth block so the model treats it as a core constraint,
@@ -96,13 +102,13 @@ def build_messages(ctx: PromptContext) -> list[dict]:
         messages.extend(ctx.conversation_history)
 
     # ── current user message (context injected into user turn) ───────────────
-    # Context goes into the USER turn, not system — forces model to read it
-    # immediately before generating, preventing "forgetting" on small models.
+    # Context is injected as raw text BEFORE the user message — no label, no
+    # header, no "Context:" prefix. The model reads it as part of the input,
+    # not as a named semantic object. Labelling it ("Context (may be partial):")
+    # was causing the model to narrate about the context instead of using it
+    # silently. Raw injection = invisible grounding. See audit.md §session-4.
     if ctx.retrieved_context:
-        user_content = (
-            f"Context (may be partial):\n{ctx.retrieved_context}\n\n"
-            f"{ctx.user_message}"
-        )
+        user_content = f"{ctx.retrieved_context}\n\n{ctx.user_message}"
     else:
         user_content = ctx.user_message
 
