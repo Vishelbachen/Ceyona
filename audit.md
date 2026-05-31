@@ -1,9 +1,3 @@
-# CEYONA — AUDIT
-**Обновлён:** май 2026 (сессия 2 — vision debugging + ChatGPT analysis)
-**Статус:** открыто 2 задачи (13.3, 13.4) + 17.2 (spd) + 19.x (global formatting contract)
-
----
-
 ## ПРИНЦИП — ЧИТАТЬ ПЕРВЫМ
 
 **Пользователь видит только ответ бота. Не архитектуру, не pipeline — только ответ.**
@@ -22,18 +16,22 @@
 | Файл | Что решает |
 |------|-----------|
 | `transport/telegram/vision_handler.py` | Промпты для vision (группа и одиночное фото), лимиты |
-| `transport/telegram/update_handler.py` | Flow ответа, caption/vision routing, история |
+| `transport/telegram/update_handler.py` | Flow ответа, caption/vision routing, история, retrieval score filter |
+| `transport/telegram/webhook.py` | Команды /balance, /start, /help, /clear, /reset_memory |
 | `cognition/intent_engine.py` | System prompts для каждого intent — голос и стиль |
 | `llm/prompt_engine.py` | Сборка промпта перед LLM |
-| `core/execution/orchestrator.py` | intent → путь → ответ |
+| `core/execution/orchestrator.py` | intent → путь → ответ, STRICT truth gate |
 | `cognition/response_synthesizer.py` | Финальная обработка перед отправкой |
+| `memory/supabase_store.py` | Хранение и retrieval памяти, similarity scores |
+| `retrieval/retrieval_engine.py` | Retrieval pipeline, score propagation |
+| `retrieval/cache/query_cache.py` | User-scoped retrieval cache, delete_by_user |
 | `i18n/strings.py` | Все локализованные строки бота |
 
 ### Симптомы сломанных ответов
 
-- `"Изображение N представляет собой"` / `"Первое/Второе изображение..."` → дефолтный шаблон модели в `_GROUP_EXTRACTION_SYSTEM`, нумерация при отсутствии constraint
-- `"наименее интересно для анализа"` / `"вероятно связано"` → инференс и оценка, не запрещены явно
-- `Constraints:`, `Candidates:` → CoT артефакты (13.3)
+- `«Из контекста можно сделать вывод»` → retrieval достаёт нерелевантную старую память, модель строит ответ по мусорному контексту
+- `«Изображение N представляет собой»` / `«Первое/Второе изображение...»` → дефолтный шаблон модели в `_GROUP_EXTRACTION_SYSTEM`
+- `Constraints:`, `Candidates:`, `Проверка каждого constraints:` → CoT артефакты (13.3)
 - Тон сухой на простых вопросах → CONVERSATION system prompt
 - Модель строит единый нарратив по альбому → caption+фото смешиваются в user_message
 
@@ -61,229 +59,212 @@ update_handler.py routing:
     ├── needs_pipeline=False → ответ напрямую (CONVERSATION, нет uncertainty)
     └── needs_pipeline=True  → основной pipeline
          ├── caption есть → text=caption, image_descriptions → retrieved_context [ФОТО]
-         └── caption нет  → text=descriptions (но этот путь не вызывается при needs_pipeline=False)
+         └── caption нет  → text=descriptions
 ```
-
-### Ключевые инсайты (из отладки май 2026)
-
-**Инсайт 1: Два разных шаблона, разное назначение**
-
-- `_GROUP_EXTRACTION_SYSTEM` — то, что видит каждый батч фото. Генерирует текст, который пользователь видит напрямую при needs_pipeline=False. **Это главный шаблон для обычного кейса.**
-- `_GROUP_SYNTHESIS_SYSTEM_TEMPLATE` — вызывается только если батчей > 1 (т.е. > 4 фото). Склеивает описания батчей. **При 1–4 фото не вызывается никогда.**
-
-Две недели симптом не лечился, потому что чинили `_GROUP_SYNTHESIS_SYSTEM_TEMPLATE`, а реально использовался `_GROUP_EXTRACTION_SYSTEM`.
-
-**Инсайт 2: Путь без caption обходит синтезатор**
-
-При отсутствии caption: `needs_pipeline=False` → ответ = вывод экстрактора напрямую. `_GROUP_SYNTHESIS_SYSTEM_TEMPLATE` не участвует вообще.
-
-**Инсайт 3: "Part N:" в user content синтезатора провоцировало нумерацию**
-
-```python
-# было:
-combined = "\n\n".join(f"Part {i+1}:\n{d}" for i, d in enumerate(descriptions))
-# модель видела Part 1 / Part 2 и зеркалила как Изображение 1 / Изображение 2
-# стало:
-combined = "\n\n".join(descriptions)
-```
-
-**Инсайт 4: caption+фото смешивались в user_message**
-
-`_vision_image_context` ставился в строке 346 но нигде не передавался в pipeline — переменная молча терялась. Описания фото не попадали в OrchestratorRequest. После фикса: caption = user_message, описания = retrieved_context с меткой [Фото].
-
-**Инсайт 5: Проблема кросс-слойная (вывод из анализа с ChatGPT)**
-
-Один и тот же паттерн (нумерация, "представляет собой") может всплывать в разных слоях:
-- Synthesis слой: если descriptions приходят как "Описание 1 / Описание 2"
-- Core/LLM слой: если image_descriptions уходят в user_message без контракта
-- Meta/formatting слой: если есть response templates с нумерацией
-- Retrieval/context: если контекст содержит нумерованные структуры
-
-Правильное решение — не чинить один промпт, а зафиксировать контракт на уровне global formatting rule. Это задача 19.x (см. ниже).
 
 ---
 
-## СЛОИ И ЧТО В НИХ МОЖНО (задокументировано по итогам анализа)
+## АРХИТЕКТУРА RETRIEVAL + TRUTH MODEL (задокументировано май 2026, сессия 3)
 
-| Слой | Правило |
-|------|---------|
-| LLM / Response | ДА — контракт формата ответа живёт здесь. describe individually, no merge, no speculation, natural paragraphs |
-| Cognition (intent, reasoning) | НЕТ — здесь модель должна свободно связывать, строить гипотезы. "do not infer" здесь убьёт анализ |
-| Core / Orchestrator | ЧАСТИЧНО — выбор режима (vision batch vs single), выбор контракта ответа. Не сами правила описания |
-| Contracts | ДА — но как типы поведения, а не текст промпта |
-| Retrieval | НЕТ — только данные, никакого влияния на стиль |
-| Context | НЕТ (почти всегда) — максимум сигнал "images are unrelated" |
-| External / Tools | НЕТ |
-| Events / Meta | Максимум флаги: `{"vision_mode": "independent"}` |
+### Реальный путь данных retrieval
+
+```
+update_handler.py
+    ↓
+RetrievalEngine.retrieve(query, user_id)
+    ↓
+bge_engine.embed(query)           → dense embedding
+    ↓
+SupabaseStore.similarity_search() → MemoryRecord[] с реальным similarity score
+    ↓
+source_credibility.score_documents()  → pass-through (нет source_url пока)
+    ↓
+cross_encoder.rerank()            → отсортированные (content, score) пары
+    ↓
+RetrievalResult.documents[]       → RetrievedDocument(content, score)
+    ↓
+update_handler: score filter ≥ 0.75  → отбрасывает нерелевантные документы
+    ↓
+retrieved_context → OrchestratorRequest
+    ↓
+orchestrator: STRICT truth gate
+    has_grounding = bool(retrieved_context) or bool(tool_output)
+    если STRICT и нет grounding → DENY (no_grounded_data)
+    ↓
+LLM получает только релевантный контекст
+```
+
+### Ключевые инсайты (сессия 3)
+
+**Инсайт 1: score 1.0 хардкод скрывал нерелевантность**
+
+До фикса: `candidates = [(r.content, 1.0) for r in records]` — все memory записи получали максимальный score независимо от реальной релевантности. pgvector threshold 0.7 пропускал семантически близкие но контекстуально нерелевантные записи из старых сессий.
+
+**Инсайт 2: similarity не доходил до RetrievedDocument**
+
+`MemoryRecord` не содержал поле `similarity`. Score терялся на шаге `similarity_search() → MemoryRecord`. После фикса: `MemoryRecord.similarity` заполняется из `row.get("similarity", 1.0)` RPC ответа.
+
+**Инсайт 3: TruthMode — confidence model, не бинарная верификация**
+
+`truth_check(answer, retrieval_context) -> float` как отдельный verification step нереализуем без компромисса:
+- Полный LLM-judge: семантически правильно, но x2 latency и x2 cost на каждый STRICT запрос — неприемлемо для Telegram-бота
+- Cross-encoder как judge: не по назначению (он ранжирует релевантность, не верифицирует факты)
+
+Правильная архитектурная позиция: truth — это не модуль, это **confidence function over the pipeline**. То что реализовано (retrieval scoring + threshold gating + STRICT gate) — это production-grade implicit truth proxy, 70-80% решения для Telegram-scale системы.
+
+**Что реально отсутствует** (следующий уровень, не сейчас):
+- contradiction detection
+- memory-vs-context separation  
+- time-awareness
 
 ---
 
-## ЗАКРЫТЫЕ ЗАДАЧИ СЕССИИ 2 (май 2026)
+## ЗАКРЫТЫЕ ЗАДАЧИ СЕССИИ 3 (май 2026)
 
-### ✅ 18.1 — _GROUP_SYNTHESIS_SYSTEM_TEMPLATE: запреты → target pattern
+### ✅ 20.1 — Memory contamination: нерелевантный контекст из старых сессий
 
-**Симптом:** `"наименее интересно для анализа"`, `"вероятно связано с биологией"`, нумерация
-**Корень:** шаблон содержал `ABSOLUTE RULES: Do NOT merge...` — запреты без target pattern
-**Решение:**
+**Симптом:** бот отвечал «Из контекста можно сделать вывод...» и описывал содержимое старых разговоров (аниме, «Госпожа Кагуя») вместо ответа на новый вопрос. При очищенном чате и новом вопросе retrieval доставал старые memory записи с высоким embedding score.
+
+**Корень:** три связанных проблемы:
+1. `MemoryRecord` не содержал поле `similarity` — score терялся, все записи получали `1.0`
+2. `retrieved_context` собирался по наличию документов без проверки score
+3. Команды `/clear` не существовало — пользователь не мог сбросить ни историю, ни память
+
+**Решение — три файла:**
+
+`memory/supabase_store.py`: добавлено поле `similarity: float = 1.0` в `MemoryRecord`, заполняется из `row.get("similarity", 1.0)` в `similarity_search()`
+
+`retrieval/retrieval_engine.py`: `(r.content, 1.0)` → `(r.content, r.similarity)` — реальный score идёт в cross-encoder и далее в `RetrievedDocument.score`
+
+`transport/telegram/update_handler.py`: фильтр перед сборкой контекста:
 ```python
-_GROUP_SYNTHESIS_SYSTEM_TEMPLATE = (
-    "Describe each image independently. "
-    "Each description should be a short, self-contained paragraph focused only on what is directly visible. "
-    "Response length: {verbosity_rule}. "
-    "Use direct, concrete language without generic introductory phrases. "
-    "Avoid meta-commentary, evaluation, or speculation. "
-    "Do not infer relationships or intent unless clearly visible in the image. "
-    "Do not speculate about why the images were sent together. "
-    "Use natural paragraph separation instead of rigid formatting."
-)
+_MIN_RETRIEVAL_SCORE = 0.75  # выше pgvector threshold 0.7
+_relevant_docs = [d for d in retrieval_result.documents if d.content and d.score >= _MIN_RETRIEVAL_SCORE]
+if _relevant_docs:
+    retrieved_context = "\n\n".join(d.content for d in _relevant_docs)
 ```
-Убран `image_count` из `.format()` (больше не нужен).
-Убраны `Part N:` лейблы из `combined` (провоцировали нумерацию в ответе).
-**Файл:** `vision_handler.py`
+Если после фильтра контекст пустой → STRICT gate в orchestrator вернёт `no_grounded_data` вместо галлюцинации.
+
+**Файлы:** `memory/supabase_store.py`, `retrieval/retrieval_engine.py`, `transport/telegram/update_handler.py`
 **Статус:** ✅ закрыт
 
 ---
 
-### ✅ 18.2 — _vision_image_context не передавался в pipeline
+### ✅ 20.2 — Команды /clear и /reset_memory отсутствовали
 
-**Симптом:** при album + caption бот строил нарратив по фото вместо ответа на вопрос (пример: история про отношения с девушкой из набора несвязанных фото)
-**Корень:** переменная `_vision_image_context` устанавливалась в строке 346 `update_handler.py` но нигде не использовалась — молча терялась. Pipeline получал descriptions как `user_message` и основная модель строила нарратив.
-**Решение:** перед сборкой `OrchestratorRequest` инжектировать `_vision_image_context` в `retrieved_context`:
-```python
-_vic = locals().get("_vision_image_context")
-if _vic:
-    retrieved_context = (
-        f"[Фото]\n{_vic}\n\n{retrieved_context}"
-        if retrieved_context
-        else f"[Фото]\n{_vic}"
-    )
-```
-Теперь: caption = вопрос пользователя в `user_message`, описания фото = контекст в `retrieved_context`.
-**Файл:** `update_handler.py`
+**Симптом:** пользователь очищал чат в Telegram UI, но `conversation_history` и `memory` в Supabase не трогались. Бот «помнил» всё из прошлых сессий.
+
+**Корень:** обработчиков `/clear` и `/reset_memory` не было ни в `webhook.py`, ни в `update_handler.py`. `ConversationHistory.clear()` и `SupabaseStore.delete_by_user()` существовали, но нигде не вызывались.
+
+**Решение — две команды с разной семантикой (архитектурно правильная модель):**
+
+**Mode A — `/clear` (Session Reset):**
+- Очищает `conversation_history` (Supabase)
+- НЕ трогает долгосрочную память (`SupabaseStore`) — пользователь хочет новый диалог, но не терять персонализацию
+- Кеш не трогается — он инфраструктура, не пользовательская идентичность
+- Безопасная, частая операция
+
+**Mode B — `/reset_memory confirm` (Full Memory Wipe):**
+- Очищает `conversation_history` + `SupabaseStore.delete_by_user()` (долгосрочная память)
+- Очищает `QueryCache` (единственный user-scoped кеш, keyed by `sha256(user_id:query)`)
+- `EmbeddingCache` и `RerankCache` НЕ трогаются — они глобальная инфраструктура без user_id в ключах; их очистка = деградация latency без пользы
+- Двухшаговое подтверждение: первый вызов → предупреждение, `/reset_memory confirm` → выполнение
+- Irreversible, логируется
+
+**Почему две команды, не одна:** разный intent = разная команда (architecture §2.3, No Hidden Authority). Одна команда с «режимами» — скрытый authority.
+
+**Добавлено в `query_cache.py`:** метод `delete_by_user(user_id)` через `SCAN` (не `KEYS` — non-blocking для production Redis). Чистит все `qcache:*` ключи — обратить хеш невозможно, но TTL 10 минут делает collateral минимальным.
+
+**Добавлено в `i18n/strings.py`:** три новых ключа на 12 языках:
+- `session_cleared` — подтверждение /clear с подсказкой про /reset_memory
+- `memory_reset_confirm` — предупреждение перед полным сбросом
+- `memory_reset_done` — подтверждение полного сброса
+
+**Обновлён `help_display`** для en и ru: добавлены упоминания `/clear` и `/reset_memory`.
+
+**Файлы:** `transport/telegram/webhook.py`, `retrieval/cache/query_cache.py`, `i18n/strings.py`
 **Статус:** ✅ закрыт
 
 ---
 
-### ✅ 18.3 — _GROUP_EXTRACTION_SYSTEM: нумерация "Первое/Второе изображение"
+### ✅ 8.1 — Мёртвый DENY-check в update_handler (сессия 2, верифицировано сессия 3)
 
-**Симптом:** бот нумерует описания фото `"Первое изображение представляет собой..."` при обычном альбоме без caption
-**Корень:** `_GROUP_EXTRACTION_SYSTEM` заканчивался `"Separate image descriptions with a blank line."` — без запрета на ordinal labels. Модель выбирала нумерацию как safest структуру для multiple objects.
-**Почему не лечилось 2 недели:** чинили `_GROUP_SYNTHESIS_SYSTEM_TEMPLATE`, который при обычном кейсе (≤4 фото без uncertainty) не вызывается никогда. Execution path шёл через экстрактор напрямую к пользователю.
-**Решение:**
-```python
-# в _GROUP_EXTRACTION_SYSTEM заменить финальную строку:
-"Start each image description directly with its content. "
-"Do not begin with ordinal labels like 'First image', 'Second image', 'Image N', "
-"'Первое изображение', 'Второе изображение', or any similar numbering. "
-"Separate image descriptions with a blank line."
-```
-**Файл:** `vision_handler.py`
-**Статус:** ✅ закрыт, задеплоено
-
----
-
-### ✅ 18.4 — Лимит изображений: нет ограничения на входе
-
-**Симптом:** при 7+ фото модель (llama-4-scout) начинает терять контекст, attention размазывается, часть фото игнорируется, качество описания деградирует. Бот пытается обработать любое количество.
-**Корень:** в `handle_vision_group` не было проверки количества file_ids. Лимит 6 — не магическое число, это эмпирический предел где модель ещё держит контекст (норма 4–8 для мультимодальных моделей).
-**Решение:** guardrail на входе в `handle_vision_group`:
-```python
-_MAX_GROUP_IMAGES = 6
-if len(file_ids) > _MAX_GROUP_IMAGES:
-    return VisionResult(
-        text=t("too_many_images", lang),
-        needs_pipeline=False,
-        failed=False,  # не ошибка системы, guardrail
-    )
-```
-Добавлена строка `too_many_images` в `i18n/strings.py` на всех языках бота (28 языков).
-**Правильно:** это не костыль, это ограничение входа вместо лечения выхода. production-grade fail-safe.
-**Не делать:** тихий обрез `images[:6]` без уведомления — пользователь не понимает что часть проигнорирована.
-**Файлы:** `vision_handler.py`, `i18n/strings.py`
+**Суть:** `safety_gate.py` всегда возвращает `GateVerdict.PASS`, три ветки в `update_handler.py` проверяли `gate.verdict == GateVerdict.DENY` — мёртвый код. Заменены комментарием.
 **Статус:** ✅ закрыт
 
 ---
 
 ## ОТКРЫТЫЕ ЗАДАЧИ
 
-### 🔴 19.x — Global formatting contract (новая, выявлена май 2026)
+### 🟡 17.2 — TruthMode: частично реализовано через confidence-based retrieval gating
 
-**Суть:** паттерн нумерации и шаблонных открытий ("На изображении видно...", "Данное изображение демонстрирует...") потенциально кросс-слойный. Фикс extraction решает симптом, но тот же паттерн может всплыть:
-- в synthesis при получении нумерованных descriptions
-- в core/LLM если image_descriptions уходят в user_message
-- в meta/formatting если есть response templates
+**Исходная проблема:** TruthMode (STRICT/HYBRID) — инструкция в промпт, не enforcement layer. `truth_check(answer, retrieval_context) -> float` не существует ни в одном файле.
 
-**Правильное решение (2 уровня):**
+**Что реализовано в сессии 3 (implicit truth proxy):**
+- `MemoryRecord.similarity` — реальный pgvector score вместо хардкода 1.0
+- Score propagation через весь retrieval pipeline до `RetrievedDocument.score`
+- Score filter `≥ 0.75` в `update_handler` перед сборкой контекста
+- Pre-execution STRICT gate в orchestrator (существовал, теперь получает качественный контекст)
 
-Уровень 1 — уже сделан (18.3): локальный фикс `_GROUP_EXTRACTION_SYSTEM`
+Это production pattern (RAG safety gating): `if retrieval weak → no grounding → no strict answer`.
 
-Уровень 2 — нужно сделать: global formatting constraint в core
-```
-Do not introduce structure not present in input.
-Do not enumerate unless explicitly required by user.
-```
-или normalize_output post-processing в meta слое:
-```python
-def normalize_output(text: str) -> str:
-    text = remove_ordinals(text)
-    text = remove_numbering(text)
-    return text
-```
+**Что НЕ реализовано (следующий уровень):**
+- Post-generation factual verification
+- Contradiction detection (ответ противоречит контексту)
+- Memory-vs-context separation (старая память vs свежий retrieval)
+- Time-awareness (устаревшие факты в памяти)
 
-**Важно:** НЕ добавлять в cognition/intent/reasoning — там модель должна свободно думать. Только в LLM/response layer.
+**Архитектурная позиция зафиксирована:** `truth_check` как отдельный verification step нереализуем без компромисса при текущих constraints (Telegram, latency, cost). Full LLM-judge = x2 latency + x2 cost. Cross-encoder как judge = не по назначению. Правильный вывод: truth — confidence function over pipeline, не отдельный модуль.
 
-**Приоритет:** средний. Сначала убедиться что 18.3 держит в продакшне, потом если паттерн всплывёт снова — делать уровень 2.
-**Статус:** 🔴 спроектировано, не реализовано
+**Статус:** 🟡 частично реализовано. Следующий уровень — contradiction detection и memory-vs-context separation — после стабилизации текущих изменений.
 
 ---
 
 ### 🟡 13.3 — CoT артефакты (остаточные случаи)
 
-**Симптом:** `Constraints:`, `Candidates:`, `Verification table` в ответе.
-**Причина:** `_strip_cot_artifacts()` не покрывает путь vision → MATH/ANALYSIS classification.
+**Симптом:** `Constraints:`, `Candidates:`, `Проверка каждого constraints:`, `NO ERRORS FOUND`, `Verification table` в ответе пользователю. Наблюдалось при вопросе «Кто такой Бан из 7 смертных грехов?» в загрязнённой сессии.
+
+**Связь с retrieval:** нерелевантный контекст из памяти провоцировал модель на избыточное reasoning → CoT вылезал наружу. После фикса retrieval (20.1) этот триггер устранён. Но механизм stripping должен ловить артефакты независимо от причины.
+
+**Верифицировано кодом:** `_strip_cot_artifacts()` в `response_synthesizer.py` реализован. Покрывает Mode A (loop detection) и Mode B (header stripping). Путь vision + не-MATH intent + CoT не покрыт отдельными тестами.
+
 **Файлы:** `cognition/response_synthesizer.py`, `transport/telegram/vision_handler.py`
+**Статус:** 🟡 частично. Мониторить после деплоя 20.1 — вероятно основной триггер устранён.
 
 ---
 
 ### 🟡 13.4 — Classifier теряет контекст на follow-up
 
-**Симптом:** `"Вот, нашла"` → CONVERSATION вместо правильного intent.
-**Причина:** `_llm_pre_classify` получает только `text[:500]` без истории.
-**Частично закрыт:** history context добавлен для коротких сообщений (≤8 слов).
-**Осталось:** asyncio stress tests.
+**Симптом:** короткое сообщение `«Вот, нашла»` → CONVERSATION вместо правильного intent.
+**Частично закрыт:** history context добавлен для сообщений ≤ 8 слов (последние 4 хода, макс 150 символов на ход).
+**Осталось:** asyncio stress tests — без них нет уверенности при concurrent запросах.
 **Файл:** `cognition/intent_engine.py` → `_llm_pre_classify`
+**Статус:** 🟡 частично закрыт
 
 ---
 
-### 🟡 17.2 — TruthMode как flag, не verification layer
+### 🔴 19.x — Global formatting contract
 
-**Симптом:** TruthMode меняет стиль промпта, но не проверяет факты.
-**Правильное решение:** `truth_check(answer, retrieval_context) -> float` в `execution_policy_kernel.py`. Retrieval = кандидаты, LLM = генератор, truth_check = судья.
-**Не делать:** не создавать новые модули — это замена файлов, не решение.
-**Статус:** спроектировано, реализация после стабилизации vision.
+**Суть:** паттерн нумерации и шаблонных открытий потенциально кросс-слойный. Фикс 18.3 закрыл extraction. Уровень 2 — global formatting rule — нужен только если паттерн всплывёт снова.
+
+**Правило:** реализовывать только по факту повторного появления, не превентивно.
+
+**Статус:** 🔴 спроектировано, не реализовано. Низкий приоритет пока 18.3 держит.
 
 ---
 
 ### 🟢 13.7 — Грузинский i18n fallback
 
-**Симптом:** вопрос на грузинском → `"уточните вопрос"` вместо `"технический сбой"`.
+**Симптом:** вопрос на грузинском → `«уточните вопрос»` вместо `«технический сбой»`.
 **Файл:** `i18n/strings.py`, ключ `search_unavailable`, lang `ka`.
+**Статус:** 🟢 быстрое закрытие, одна строка
 
 ---
 
 ## ГОЛОСОВЫЕ СООБЩЕНИЯ — СТАТУС (май 2026)
 
-Голосовой pipeline работает стабильно. Ответы "не идеально, но не сырые" — production-ready.
-
-**Лимит:** 5 минут. После этого задержка может вырасти до десятков минут. Реализовано в ASR.
-
-**Почему голос стабильнее изображений:**
-- вход → один поток (audio → text) → обычный LLM pipeline
-- нет batching, нет branching, нет composition
-- меньше мест где может сломаться поведение
-- нет `_GROUP_EXTRACTION_SYSTEM`, нет синтезатора
-
-Вывод: система голоса линейная → поведение предсказуемое. Vision система ветвистая → поведение нестабильное. Это не баг, это архитектурная разница.
+Голосовой pipeline работает стабильно. Production-ready.
+Лимит: 5 минут. Голос линейный → поведение предсказуемое. Vision ветвистая → нестабильная. Это архитектурная разница, не баг.
 
 ---
 
@@ -291,26 +272,48 @@ def normalize_output(text: str) -> str:
 
 | # | Закрыт | Суть | Ключевое решение |
 |---|--------|------|-----------------|
-| 13.1 | май 2026 | tool intents → "сервис недоступен" | compound = синтезатор, не агент; tool_choice убран |
+| 13.1 | май 2026 | tool intents → «сервис недоступен» | compound = синтезатор, не агент; tool_choice убран |
 | 13.5 | май 2026 | описательный запрос → поиск по сырому тексту | `_understand_query()` в `classify()` — KNOWN_ENTITY vs DESCRIPTIVE |
 | 13.6 | май 2026 | бот отвечал на каждое фото альбома отдельно | Redis-backed `MediaGroupAggregator`, debounce, Lua atomicity |
 | 13.6.1 | май 2026 | lock bug, смешение партий, lang хардкод | `_LUA_FLUSH` атомарный DEL, `MediaGroupItem.lang`, `input_type` в OrchestratorRequest |
 | 17.1 | май 2026 | CoT infinite loop | `reasoning_engine.py`: QUESTION → mode=DIRECT |
-| 17.3 | май 2026 | шаблонные ответы, "Изображения представляют собой" | history-aware variation в `prompt_engine`, `detect_repetitive_opening` в `analysis`, расширены patterns в `correction` |
+| 17.3 | май 2026 | шаблонные ответы, «Изображения представляют собой» | history-aware variation в `prompt_engine`, `detect_repetitive_opening` в `analysis`, расширены patterns в `correction` |
 | 18.1 | май 2026 | synthesis шаблон: запреты вместо target pattern | target pattern в `_GROUP_SYNTHESIS_SYSTEM_TEMPLATE`, убраны `Part N:` лейблы |
 | 18.2 | май 2026 | caption+фото → нарратив вместо ответа на вопрос | `_vision_image_context` → `retrieved_context` в `update_handler.py` |
-| 18.3 | май 2026 | нумерация "Первое/Второе изображение" | constraint в `_GROUP_EXTRACTION_SYSTEM` — запрет ordinal labels |
+| 18.3 | май 2026 | нумерация «Первое/Второе изображение» | constraint в `_GROUP_EXTRACTION_SYSTEM` — запрет ordinal labels |
 | 18.4 | май 2026 | нет лимита на количество фото → деградация | `_MAX_GROUP_IMAGES=6` guardrail + `too_many_images` i18n |
+| 20.1 | май 2026 | memory contamination → «Из контекста можно сделать вывод» | similarity score propagation + score filter 0.75 в update_handler |
+| 20.2 | май 2026 | /clear и /reset_memory отсутствовали | две команды с разной семантикой (Mode A / Mode B), двухшаговое подтверждение для Mode B |
+| 8.1 | май 2026 | мёртвые DENY-check в update_handler | ветки удалены, заменены комментарием |
 
 ---
 
 ## CI (planned)
+
 coverage floor 75%, asyncio stress tests (13.4), integration tests compound pipeline, retrieval quality regression, mypy.
 
 ---
 
-## СЛЕДУЮЩИЙ ШАГ
+## СЛЕДУЮЩИЙ ШАГ (сессия 4)
 
-1. Задеплоить все файлы из сессии 2: `vision_handler.py`, `update_handler.py`, `strings.py`
-2. Протестировать: альбом 1 фото / 3 фото / 6 фото / 7 фото (должен вернуть too_many_images) — без caption и с caption
-3. Если нумерация всплывёт снова → смотреть в каком именно слое (логи after_extraction / after_synthesis) → тогда делать 19.x уровень 2
+**Деплой сессии 3 — файлы для замены:**
+1. `memory/supabase_store.py`
+2. `retrieval/retrieval_engine.py`
+3. `retrieval/cache/query_cache.py`
+4. `transport/telegram/update_handler.py`
+5. `transport/telegram/webhook.py`
+6. `i18n/strings.py`
+
+**Тестирование после деплоя:**
+1. Новый вопрос в старом чате → не должно быть «Из контекста можно сделать вывод»
+2. `/clear` → подтверждение, следующий вопрос без старой истории, память сохранена
+3. `/reset_memory` → предупреждение, `/reset_memory confirm` → удаление, следующий вопрос без старой памяти
+4. `/reset_memory` без confirm → только предупреждение, ничего не удаляется
+5. Вопрос на грузинском → правильный fallback (13.7 — быстро закрыть)
+6. CoT артефакты — мониторить, вероятно исчезнут после устранения retrieval триггера
+
+**После стабилизации:**
+- contradiction detection (17.2 следующий уровень)
+- memory-vs-context separation (17.2 следующий уровень)
+- asyncio stress tests (13.4)
+- CI coverage floor 75%
