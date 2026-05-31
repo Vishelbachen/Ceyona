@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 
 # ─── ROLE ─────────────────────────────────────────────────────────────────────
 # Deterministic structural cleanup step in the synthesizer pipeline (step 5).
@@ -8,6 +9,7 @@ import re
 #
 # What this module does:
 #   ✓ Fix unclosed Markdown markers (odd ``` or ** counts)
+#   ✓ Remove exact repeated blocks created by looping generations
 #   ✓ Normalise whitespace (trailing spaces, excessive blank lines)
 #
 # What this module does NOT do:
@@ -30,12 +32,16 @@ import re
 # ─── MARKDOWN FIXERS ──────────────────────────────────────────────────────────
 
 _RE_TRIPLE_BACKTICK = re.compile(r"```")
-_RE_BOLD_MARKER     = re.compile(r"\*\*")
+_RE_BOLD_MARKER = re.compile(r"\*\*")
+
+# ─── REPETITION CLEANUP ──────────────────────────────────────────────────────
+
+_RE_BLANK_SPLIT = re.compile(r"(?:\r?\n){2,}")
 
 # ─── WHITESPACE ───────────────────────────────────────────────────────────────
 
 _RE_EXCESSIVE_BLANKS = re.compile(r"\n{4,}")
-_RE_TRAILING_SPACE   = re.compile(r"[ \t]+$", re.MULTILINE)
+_RE_TRAILING_SPACE = re.compile(r"[ \t]+$", re.MULTILINE)
 
 
 # ─── INTERNAL HELPERS ─────────────────────────────────────────────────────────
@@ -59,6 +65,42 @@ def _fix_markdown(text: str) -> str:
     return text
 
 
+def _dedupe_consecutive_paragraphs(text: str) -> str:
+    """Collapse exact paragraph repeats produced by looped generations."""
+    parts = _RE_BLANK_SPLIT.split(text.strip())
+    if len(parts) < 2:
+        return text
+
+    deduped: list[str] = []
+    prev: str | None = None
+    for part in parts:
+        chunk = part.strip()
+        if not chunk:
+            continue
+        if prev is not None and chunk == prev:
+            continue
+        deduped.append(chunk)
+        prev = chunk
+    return "\n\n".join(deduped)
+
+
+def _dedupe_consecutive_lines(text: str) -> str:
+    """Drop immediately repeated lines while keeping the first occurrence."""
+    lines = text.splitlines()
+    if len(lines) < 2:
+        return text
+
+    cleaned: list[str] = []
+    prev_key: str | None = None
+    for line in lines:
+        key = line.strip()
+        if key and key == prev_key:
+            continue
+        cleaned.append(line)
+        prev_key = key if key else None
+    return "\n".join(cleaned)
+
+
 def _normalise_whitespace(text: str) -> str:
     """Collapse 4+ consecutive blank lines to 2, strip trailing spaces per line."""
     text = _RE_TRAILING_SPACE.sub("", text)
@@ -68,7 +110,7 @@ def _normalise_whitespace(text: str) -> str:
 
 # ─── PUBLIC API ───────────────────────────────────────────────────────────────
 
-def apply(text: str) -> str:
+def apply(text: str, history: Sequence[dict] | None = None) -> str:
     """
     Apply lightweight structural correction.
 
@@ -77,7 +119,11 @@ def apply(text: str) -> str:
 
     Pipeline:
       1. Fix unclosed markdown markers
-      2. Normalise whitespace
+      2. Remove exact repeated blocks
+      3. Normalise whitespace
+
+    The history argument is accepted for future repetition-aware cleanup; the
+    current implementation stays purely structural and does not rewrite intent.
 
     Returns corrected text. If result would be empty, returns original.
     """
@@ -85,6 +131,8 @@ def apply(text: str) -> str:
         return text
 
     result = _fix_markdown(text)
+    result = _dedupe_consecutive_lines(result)
+    result = _dedupe_consecutive_paragraphs(result)
     result = _normalise_whitespace(result)
 
     # Safety: never return empty
