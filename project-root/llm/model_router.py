@@ -3,15 +3,15 @@ from __future__ import annotations
 from contracts.shared_types import Tier
 from core.kernel.policy_registry import RUNTIME
 
-# ─── MODEL REGISTRY ───────────────────────────────────────────────────────────
+# ─── MODEL REGISTRY ───────────────────────────────────────────────────────
 # Source of truth for all model assignments per tier.
 # Matches SSoT v6.3 exactly.
 
 # Primary model per tier — used by default in all agent calls
 _PRIMARY: dict[Tier, str] = {
-    Tier.FAST:    "llama-3.1-8b-instant",
+    Tier.FAST: "llama-3.1-8b-instant",
     Tier.GENERAL: "llama-3.3-70b-versatile",
-    Tier.HEAVY:   "openai/gpt-oss-120b",
+    Tier.HEAVY: "openai/gpt-oss-120b",
 }
 
 # All models available per tier (primary first)
@@ -46,7 +46,7 @@ _MAX_TOKENS: dict[Tier, int] = {
 
 # Special-purpose model assignments (not tiers — utility roles)
 # heavy_input_shaper uses llama-3.1-8b-instant NOT as Fast Tier
-SHAPER_MODEL    = "llama-3.1-8b-instant"
+SHAPER_MODEL = "llama-3.1-8b-instant"
 
 # Agent Layer (models.md §AGENT LAYER) — tool-use execution fabric.
 # These are NOT tier models — they have tool selection authority.
@@ -66,29 +66,29 @@ CONSENSUS_MODEL = "openai/gpt-oss-120b"
 
 # Multilingual normalization
 MULTILINGUAL_ARABIC_MODEL = "allam-2-7b"
-MULTILINGUAL_OTHER_MODEL  = "llama-3.3-70b-versatile"
+MULTILINGUAL_OTHER_MODEL = "llama-3.3-70b-versatile"
 
 # Long-context specialist (Heavy Tier secondary)
 LONG_CONTEXT_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
 
 # Safety Gate models (Safety Layer — input firewall, NOT safety_agent)
-SAFETY_PASS1_MODEL   = "meta-llama/llama-prompt-guard-2-22m"   # fast rejection filter
-SAFETY_PASS2_MODELS  = [
+SAFETY_PASS1_MODEL = "meta-llama/llama-prompt-guard-2-22m"   # fast rejection filter
+SAFETY_PASS2_MODELS = [
     "meta-llama/llama-prompt-guard-2-86m",  # deep classification
     "openai/gpt-oss-safeguard-20b",          # final enforcement
 ]
 
 # Speech models
-WHISPER_PRIMARY  = "whisper-large-v3"
-WHISPER_FAST     = "whisper-large-v3-turbo"
-ORPHEUS_ENGLISH  = "canopylabs/orpheus-v1-english"
-ORPHEUS_ARABIC   = "canopylabs/orpheus-arabic-saudi"
+WHISPER_PRIMARY = "whisper-large-v3"
+WHISPER_FAST = "whisper-large-v3-turbo"
+ORPHEUS_ENGLISH = "canopylabs/orpheus-v1-english"
+ORPHEUS_ARABIC = "canopylabs/orpheus-arabic-saudi"
 
 # qwen must always have thinking disabled
 QWEN_THINKING_DISABLED_MODELS: frozenset[str] = frozenset({"qwen/qwen3-32b"})
 
 
-# ─── PUBLIC API ───────────────────────────────────────────────────────────────
+# ─── PUBLIC API ───────────────────────────────────────────────────────────
 
 def route_model(tier: Tier) -> str:
     """Return the primary model for the given tier."""
@@ -108,9 +108,37 @@ def get_tier_models(tier: Tier) -> list[str]:
     return list(_TIER_MODELS[tier])
 
 
+def get_primary_model(tier: Tier) -> str:
+    """Alias for route_model; kept for readable call sites."""
+    return route_model(tier)
+
+
 def requires_thinking_disabled(model: str) -> bool:
     """
     Return True if the model must have thinking mode explicitly disabled.
     Applies to qwen/qwen3-32b — thinking: False must be enforced at call site.
     """
     return model in QWEN_THINKING_DISABLED_MODELS
+
+
+__all__ = [
+    "SHAPER_MODEL",
+    "FAST_AGENT_MODEL",
+    "DEEP_AGENT_MODEL",
+    "CONSENSUS_MODEL",
+    "MULTILINGUAL_ARABIC_MODEL",
+    "MULTILINGUAL_OTHER_MODEL",
+    "LONG_CONTEXT_MODEL",
+    "SAFETY_PASS1_MODEL",
+    "SAFETY_PASS2_MODELS",
+    "WHISPER_PRIMARY",
+    "WHISPER_FAST",
+    "ORPHEUS_ENGLISH",
+    "ORPHEUS_ARABIC",
+    "QWEN_THINKING_DISABLED_MODELS",
+    "route_model",
+    "get_primary_model",
+    "route_max_tokens",
+    "get_tier_models",
+    "requires_thinking_disabled",
+]
