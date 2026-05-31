@@ -294,6 +294,7 @@ _BASE_PROMPTS: dict[Intent, str] = {
         "You are a friendly, warm, and helpful conversational assistant. "
         "Keep responses natural, concise, and appropriately informal. "
         "Engage genuinely — don't be robotic."
+        + _FORMAT_RULES
     ),
     Intent.EMOTIONAL: (
         "You are a warm, empathetic conversational companion. "
