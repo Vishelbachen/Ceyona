@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 from contracts.shared_types import Tier
@@ -6,29 +8,29 @@ from contracts.shared_types import Tier
 @dataclass(frozen=True)
 class TierConfig:
     """Runtime API limits per tier — matches model_router._MAX_TOKENS."""
-    max_input_tokens:  int    # context window safety limit
-    max_output_tokens: int    # hard API limit passed to Groq
-    timeout_seconds:   float  # per-request timeout
+    max_input_tokens: int    # context window safety limit
+    max_output_tokens: int   # hard API limit passed to Groq
+    timeout_seconds: float   # per-request timeout
 
 
 @dataclass(frozen=True)
 class EPKConfig:
     """EPK thresholds — MUST match execution_policy_kernel.py exactly."""
-    deny_threshold:    float  # balance ≤ 0 or cost > balance → DENY
-    heavy_threshold:   float  # cost > this → HEAVY_REQUIRED
-    degrade_threshold: float  # cost > this → DEGRADED_MODE (synced with decision_matrix._GENERAL_CEILING)
-    fast_ceiling:      float  # below this → FAST tier (synced with decision_matrix._FAST_CEILING)
+    deny_threshold: float    # balance ≤ 0 or cost > balance → DENY
+    heavy_threshold: float   # cost > this → HEAVY_REQUIRED
+    degrade_threshold: float # cost > this → DEGRADED_MODE (synced with decision_matrix._GENERAL_CEILING)
+    fast_ceiling: float      # below this → FAST tier (synced with decision_matrix._FAST_CEILING)
 
 
 @dataclass(frozen=True)
 class RuntimePolicy:
-    epk:          EPKConfig
-    tier_configs: dict[str, TierConfig]
-    rate_limit_rpm: int       # requests per minute per user
+    epk: EPKConfig
+    tier_configs: dict[Tier, TierConfig]
+    rate_limit_rpm: int        # requests per minute per user
     default_balance_usd: float  # free trial balance
 
 
-# ─── ACTIVE RUNTIME POLICY ────────────────────────────────────────────────────
+# ─── ACTIVE RUNTIME POLICY ────────────────────────────────────────────────
 # All values synchronized with:
 #   economic.md v5.0 (EPK thresholds, balance)
 #   model_router.py (max_output_tokens, timeouts)
@@ -61,3 +63,35 @@ RUNTIME = RuntimePolicy(
     rate_limit_rpm=30,
     default_balance_usd=0.10,  # matches access_controller._DEFAULT_BALANCE_USD
 )
+
+
+def get_tier_config(tier: Tier) -> TierConfig:
+    """Return the runtime policy block for the requested tier."""
+    return RUNTIME.tier_configs[tier]
+
+
+def validate_runtime_policy() -> None:
+    """Fail fast if the runtime policy drifts from the declared tiers."""
+    required_tiers = {Tier.FAST, Tier.GENERAL, Tier.HEAVY}
+    missing = required_tiers.difference(RUNTIME.tier_configs)
+    if missing:
+        missing_names = ", ".join(sorted(t.value for t in missing))
+        raise ValueError(f"Missing tier configuration(s): {missing_names}")
+
+    for tier, cfg in RUNTIME.tier_configs.items():
+        if cfg.max_input_tokens <= 0:
+            raise ValueError(f"{tier.value} max_input_tokens must be positive")
+        if cfg.max_output_tokens <= 0:
+            raise ValueError(f"{tier.value} max_output_tokens must be positive")
+        if cfg.timeout_seconds <= 0:
+            raise ValueError(f"{tier.value} timeout_seconds must be positive")
+
+
+__all__ = [
+    "TierConfig",
+    "EPKConfig",
+    "RuntimePolicy",
+    "RUNTIME",
+    "get_tier_config",
+    "validate_runtime_policy",
+]
