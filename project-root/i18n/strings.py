@@ -352,7 +352,9 @@ _STRINGS: dict[str, dict[str, str]] = {
             "• Ask me anything\n"
             "• Request code, analysis, or creative writing\n"
             "• Ask for weather or web searches\n"
-            "• Check your balance with /balance\n\n"
+            "• Check your balance with /balance\n"
+            "• Clear conversation with /clear\n"
+            "• Forget everything with /reset_memory\n\n"
             "I reply in your language automatically."
         ),
         "ru": (
@@ -361,7 +363,9 @@ _STRINGS: dict[str, dict[str, str]] = {
             "• Задать любой вопрос\n"
             "• Попросить код, анализ или текст\n"
             "• Узнать погоду или сделать поиск\n"
-            "• Проверить баланс через /balance\n\n"
+            "• Проверить баланс через /balance\n"
+            "• Очистить диалог через /clear\n"
+            "• Удалить всю память через /reset_memory\n\n"
             "Я отвечаю на вашем языке автоматически."
         ),
         "de": (
@@ -454,6 +458,53 @@ _STRINGS: dict[str, dict[str, str]] = {
             "• ბალანსი შეამოწმო /balance-ით\n\n"
             "ავტომატურად ვპასუხობ შენს ენაზე."
         ),
+    },
+
+    # ── /clear — session reset (conversation history only) ───────────────────
+    "session_cleared": {
+        "en": "🧹 Conversation cleared. Memory is intact — use /reset_memory to forget everything.",
+        "ru": "🧹 История диалога очищена. Память сохранена — используйте /reset_memory, чтобы забыть всё.",
+        "de": "🧹 Gespräch gelöscht. Erinnerungen bleiben — /reset_memory löscht alles.",
+        "fr": "🧹 Conversation effacée. La mémoire est intacte — /reset_memory pour tout oublier.",
+        "es": "🧹 Conversación borrada. La memoria está intacta — usa /reset_memory para olvidar todo.",
+        "pt": "🧹 Conversa apagada. A memória está intacta — usa /reset_memory para esquecer tudo.",
+        "it": "🧹 Conversazione cancellata. La memoria è intatta — usa /reset_memory per dimenticare tutto.",
+        "tr": "🧹 Sohbet temizlendi. Hafıza korundu — her şeyi unutmak için /reset_memory kullan.",
+        "ar": "🧹 تم مسح المحادثة. الذاكرة سليمة — استخدم /reset_memory لنسيان كل شيء.",
+        "zh": "🧹 对话已清除。记忆完好——使用 /reset_memory 可忘记一切。",
+        "uk": "🧹 Історію діалогу очищено. Пам'ять збережена — використай /reset_memory, щоб забути все.",
+        "ka": "🧹 საუბარი გასუფთავდა. მეხსიერება შენახულია — გამოიყენე /reset_memory ყველაფრის დასავიწყებლად.",
+    },
+
+    # ── /reset_memory — full user memory wipe (irreversible) ─────────────────
+    "memory_reset_confirm": {
+        "en": "⚠️ This will permanently delete your memory and conversation history. Send /reset_memory confirm to proceed.",
+        "ru": "⚠️ Это навсегда удалит вашу память и историю диалогов. Отправьте /reset_memory confirm для подтверждения.",
+        "de": "⚠️ Dadurch werden deine Erinnerungen und der Gesprächsverlauf dauerhaft gelöscht. Sende /reset_memory confirm zum Bestätigen.",
+        "fr": "⚠️ Cela supprimera définitivement ta mémoire et l'historique. Envoie /reset_memory confirm pour continuer.",
+        "es": "⚠️ Esto eliminará permanentemente tu memoria e historial. Envía /reset_memory confirm para continuar.",
+        "pt": "⚠️ Isto eliminará permanentemente a tua memória e histórico. Envia /reset_memory confirm para continuar.",
+        "it": "⚠️ Questo eliminerà definitivamente la tua memoria e la cronologia. Invia /reset_memory confirm per procedere.",
+        "tr": "⚠️ Bu, hafızanı ve sohbet geçmişini kalıcı olarak siler. Onaylamak için /reset_memory confirm gönder.",
+        "ar": "⚠️ سيؤدي هذا إلى حذف ذاكرتك وسجل المحادثة نهائياً. أرسل /reset_memory confirm للمتابعة.",
+        "zh": "⚠️ 这将永久删除您的记忆和对话历史。发送 /reset_memory confirm 以确认。",
+        "uk": "⚠️ Це назавжди видалить вашу пам'ять та історію діалогів. Надішліть /reset_memory confirm для підтвердження.",
+        "ka": "⚠️ ეს სამუდამოდ წაშლის შენს მეხსიერებას და საუბრის ისტორიას. გამოგზავნე /reset_memory confirm დასადასტურებლად.",
+    },
+
+    "memory_reset_done": {
+        "en": "🗑️ Memory and conversation history permanently deleted.",
+        "ru": "🗑️ Память и история диалогов удалены навсегда.",
+        "de": "🗑️ Erinnerungen und Gesprächsverlauf dauerhaft gelöscht.",
+        "fr": "🗑️ Mémoire et historique supprimés définitivement.",
+        "es": "🗑️ Memoria e historial eliminados permanentemente.",
+        "pt": "🗑️ Memória e histórico eliminados permanentemente.",
+        "it": "🗑️ Memoria e cronologia eliminate definitivamente.",
+        "tr": "🗑️ Hafıza ve sohbet geçmişi kalıcı olarak silindi.",
+        "ar": "🗑️ تم حذف الذاكرة وسجل المحادثة نهائياً.",
+        "zh": "🗑️ 记忆和对话历史已永久删除。",
+        "uk": "🗑️ Пам'ять та історія діалогів видалені назавжди.",
+        "ka": "🗑️ მეხსიერება და საუბრის ისტორია სამუდამოდ წაიშალა.",
     },
 
     # ── balance display ───────────────────────────────────────────────────────
