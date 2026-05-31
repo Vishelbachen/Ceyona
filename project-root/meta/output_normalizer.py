@@ -487,50 +487,48 @@ def _collapse_whitespace(text: str) -> str:
     return text.strip()
 
 
-# ─── VISION OPENING CLEANUP ───────────────────────────────────────────────────
-# These are surface-only prefixes that appear when the vision model narrates
-# the image instead of directly describing its content. Applied only for vision
-# outputs, so ordinary text responses keep their wording unchanged.
+# ─── VISION META OPENERS ─────────────────────────────────────────────────────
+# When the response originates from vision, the model sometimes starts with a
+# meta sentence ("I see that...", "Изображение показывает...") instead of
+# answering the user. These are presentation artifacts, not meaning.
+#
+# This cleaner removes only the leading meta opening; it never rewrites the
+# substantive answer that follows.
+_VISION_META_PREFIXES: list[re.Pattern] = [
+    re.compile(r"^\s*(?:Я\s+)?вижу,?\s+что\s+", re.IGNORECASE),
+    re.compile(r"^\s*На\s+изображении\s+", re.IGNORECASE),
+    re.compile(r"^\s*Изображение\s+(?:показывает|представляет\s+собой)\s+", re.IGNORECASE),
+    re.compile(r"^\s*(?:I\s+)?see\s+that\s+", re.IGNORECASE),
+    re.compile(r"^\s*The\s+(?:image|photo|picture)\s+(?:shows|depicts|contains)\s+", re.IGNORECASE),
+    re.compile(r"^\s*This\s+(?:image|photo|picture)\s+(?:shows|depicts|contains)\s+", re.IGNORECASE),
+]
 
-_VISION_OPENING_PATTERNS: tuple[re.Pattern, ...] = (
-    # English
-    re.compile(r"^\s*(?:the|this)\s+(?:image|photo|picture)\s+(?:shows|depicts|contains|features|includes)\b[\s,:\-–—]*", re.IGNORECASE),
-    re.compile(r"^\s*in\s+the\s+(?:image|photo|picture)\b[\s,:\-–—]*", re.IGNORECASE),
-    re.compile(r"^\s*on\s+the\s+(?:image|photo|picture)\b[\s,:\-–—]*", re.IGNORECASE),
-    # Russian
-    re.compile(r"^\s*изображение\s+представляет\s+собой\b[\s,:\-–—]*", re.IGNORECASE),
-    re.compile(r"^\s*(?:на\s+)?(?:изображении|фото|фотографии)\s+(?:видно|показано|изображено)\b[\s,:\-–—]*", re.IGNORECASE),
-    re.compile(r"^\s*(?:это|данное)\s+изображение\b[\s,:\-–—]*", re.IGNORECASE),
-)
-
-
-def _strip_vision_opening(text: str) -> str:
-    """Remove meta-openings from vision outputs without changing meaning."""
-    original = text
-    stripped = text.lstrip()
-
-    for pattern in _VISION_OPENING_PATTERNS:
-        stripped = pattern.sub("", stripped, count=1)
-
-    # Remove leftover leading punctuation/whitespace introduced by stripping.
-    stripped = re.sub(r"^[\s,;:—–\-]+", "", stripped)
-
-    # Re-capitalise the first alphabetic character when the sentence opener was removed.
-    if stripped and stripped[0].islower():
-        stripped = stripped[0].upper() + stripped[1:]
-
-    return stripped if stripped.strip() else original
+def _strip_vision_meta_opening(text: str) -> str:
+    if not text:
+        return text
+    result = text
+    for pattern in _VISION_META_PREFIXES:
+        if pattern.search(result):
+            idx = result.find(".")
+            if idx != -1 and idx < 220:
+                result = result[idx + 1 :].lstrip()
+            else:
+                result = pattern.sub("", result, count=1).lstrip()
+            break
+    return result
 
 
 # ─── PUBLIC API ───────────────────────────────────────────────────────────────
 
-def apply(text: str, lang: str = "en", *, from_vision: bool = False) -> str:
+def apply(text: str, lang: str = "en", from_vision: bool = False) -> str:
     """
     Apply language output normalization.
 
     Called by response_synthesizer at step 6 (after correction, before finalize).
     Must never raise — caller keeps original on any exception.
     Must never change meaning — only clean surface artifacts.
+    When from_vision=True, it also strips leading meta-openers that often appear
+    in image descriptions.
 
     Pipeline:
       1. Strip source attribution tags  (источник 3, source 2)
@@ -546,8 +544,10 @@ def apply(text: str, lang: str = "en", *, from_vision: bool = False) -> str:
     result = _strip_source_tags(text)
     result = _strip_garbled_urls(result)
     result = _apply_leak_map(result, lang)
+
     if from_vision:
-        result = _strip_vision_opening(result)
+        result = _strip_vision_meta_opening(result)
+
     result = _collapse_whitespace(result)
 
     return result if result.strip() else text
