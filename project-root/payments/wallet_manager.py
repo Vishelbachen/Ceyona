@@ -15,8 +15,9 @@ class WalletManager:
     Monitors TON wallet for incoming transactions.
     Verifies, deduplicates, and credits user balances.
 
-    Transaction comment format: user_id (e.g. "123456789")
-    User sends TON with their Telegram user_id as comment/memo.
+    Transaction comment format: "{user_id}_{random}" e.g. "123456789_a3f9"
+    Legacy plain integer also accepted for backward compatibility.
+    The random suffix prevents memo guessing attacks.
     """
 
     def __init__(self, supabase: Client) -> None:
@@ -58,11 +59,16 @@ class WalletManager:
     def _parse_user_id(self, comment: str) -> int | None:
         """
         Extract user_id from transaction comment.
-        Expected format: plain integer string e.g. "123456789"
+        Supported formats:
+          "123456789"           — legacy plain integer
+          "123456789_abc123"    — current format: user_id + random suffix
+        The suffix prevents an attacker who knows someone's Telegram ID
+        from crediting that account by guessing the memo.
         """
         try:
-            return int(comment.strip())
-        except (ValueError, AttributeError):
+            part = comment.strip().split("_")[0]
+            return int(part)
+        except (ValueError, AttributeError, IndexError):
             return None
 
     async def process_incoming(self) -> int:
