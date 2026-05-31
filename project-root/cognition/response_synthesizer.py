@@ -238,7 +238,7 @@ def _apply_correction(text: str, history: list[dict] | None = None) -> str:
         return text
 
 
-def _apply_normalizer(text: str, lang: str) -> str:
+def _apply_normalizer(text: str, lang: str, from_vision: bool = False) -> str:
     """
     Step 6: output_normalizer — strip retrieval contamination artifacts.
     Removes:  source attribution tags, garbled URLs, English leak terms.
@@ -246,7 +246,7 @@ def _apply_normalizer(text: str, lang: str) -> str:
     """
     try:
         from meta.output_normalizer import apply as _norm
-        result = _norm(text, lang, from_vision=inp.from_vision)
+        result = _norm(text, lang, from_vision=from_vision)
         return result if result and result.strip() else text
     except Exception:
         return text
@@ -398,7 +398,7 @@ def synthesize(inp: SynthesisInput) -> SynthesisResult:
     text = _structure(text, inp.intent)
     text = _format(text)
     text = _apply_correction(text, inp.conversation_history)
-    text = _apply_normalizer(text, lang)
+    text = _apply_normalizer(text, lang, from_vision=inp.from_vision)
     text, truncated = _finalize(text, lang)
 
     return SynthesisResult(text=text, truncated=truncated)
