@@ -524,9 +524,25 @@ async def handle_message(
             ))
 
             if retrieval_result.documents:
-                retrieved_context = "\n\n".join(
-                    d.content for d in retrieval_result.documents if d.content
-                )
+                # Score threshold: only include documents with sufficient relevance.
+                # 0.75 is above pgvector similarity_search threshold (0.7) —
+                # documents that passed pgvector but scored low on cross-encoder
+                # reranking are excluded. This prevents nrerlevant memory records
+                # (old conversations, wrong topics) from contaminating context.
+                # Authority: update_handler owns context assembly (architecture §4).
+                # This is not policy — it is data quality filtering before context build.
+                _MIN_RETRIEVAL_SCORE = 0.75
+                _relevant_docs = [
+                    d for d in retrieval_result.documents
+                    if d.content and d.score >= _MIN_RETRIEVAL_SCORE
+                ]
+                if _relevant_docs:
+                    retrieved_context = "\n\n".join(d.content for d in _relevant_docs)
+                logger.info("Retrieval score filter applied", extra={
+                    "total_docs":    len(retrieval_result.documents),
+                    "relevant_docs": len(_relevant_docs),
+                    "threshold":     _MIN_RETRIEVAL_SCORE,
+                })
                 # Use token counts from retrieval_engine (real estimation, fixed §5.2).
                 # Do not recompute here — retrieval_engine owns this calculation.
                 embedding_tokens = retrieval_result.embedding_tokens
