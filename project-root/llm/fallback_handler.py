@@ -13,13 +13,14 @@ from llm.model_router import (
 logger = logging.getLogger(__name__)
 
 _FALLBACK_CASCADE: dict[Tier, Tier | None] = {
-    Tier.HEAVY:   Tier.GENERAL,
+    Tier.HEAVY: Tier.GENERAL,
     Tier.GENERAL: Tier.FAST,
-    Tier.FAST:    None,
+    Tier.FAST: None,
 }
 
-# When a 413 (Payload Too Large) is hit, truncate the retrieved_context portion
-# of the messages by this fraction and retry once before giving up on the model.
+# When a 413 (Payload Too Large) is hit, keep the tail of the user content —
+# that is where the actual question usually lives once retrieved_context has
+# been prepended by llm.prompt_engine.build_messages().
 _CONTEXT_TRUNCATE_RATIO = 0.5
 
 
@@ -29,32 +30,55 @@ def _is_413(exc: Exception) -> bool:
     return "413" in msg or "payload too large" in msg or "request too large" in msg
 
 
+def _clone_messages(messages: list[dict]) -> list[dict]:
+    """Return a shallow copy so retries never mutate the caller's payload."""
+    return [dict(message) for message in messages]
+
+
 def _truncate_messages(messages: list[dict]) -> list[dict] | None:
     """
-    Shorten the longest non-system message by _CONTEXT_TRUNCATE_RATIO.
-    Targets the assistant's retrieved_context injection (always the longest user turn).
-    Returns None if there is nothing left to truncate.
+    Shorten the longest user message while preserving the actual question.
+
+    The prompt builder injects retrieved context before the user question,
+    so truncating from the front would usually delete the question and keep
+    the grounding data. This helper keeps the tail instead.
     """
-    # Find the longest user message (most likely to carry bloated context)
     longest_idx = -1
     longest_len = 0
-    for i, m in enumerate(messages):
-        if m.get("role") == "user" and len(m.get("content", "")) > longest_len:
-            longest_len = len(m["content"])
+    for i, message in enumerate(messages):
+        if message.get("role") != "user":
+            continue
+        content = str(message.get("content", ""))
+        if len(content) > longest_len:
+            longest_len = len(content)
             longest_idx = i
 
     if longest_idx == -1 or longest_len < 200:
-        return None  # nothing meaningful to truncate
+        return None
 
-    truncated = list(messages)
-    content = truncated[longest_idx]["content"]
-    keep = int(len(content) * _CONTEXT_TRUNCATE_RATIO)
-    truncated[longest_idx] = dict(truncated[longest_idx])
-    truncated[longest_idx]["content"] = content[:keep] + "\n[context truncated]"
-    logger.warning("Payload truncated to avoid 413", extra={
-        "original_chars": longest_len,
-        "kept_chars":     keep,
-    })
+    truncated = _clone_messages(messages)
+    content = str(truncated[longest_idx].get("content", ""))
+
+    # Preserve the tail of the message: for prompt-engine payloads that
+    # means keeping the actual question and dropping the oversized context.
+    if "\n\n" in content:
+        tail = content.rsplit("\n\n", 1)[-1].strip()
+        if tail:
+            truncated[longest_idx]["content"] = "[context truncated]\n\n" + tail
+        else:
+            keep = max(120, int(len(content) * _CONTEXT_TRUNCATE_RATIO))
+            truncated[longest_idx]["content"] = "[context truncated]\n" + content[-keep:].lstrip()
+    else:
+        keep = max(120, int(len(content) * _CONTEXT_TRUNCATE_RATIO))
+        truncated[longest_idx]["content"] = "[context truncated]\n" + content[-keep:].lstrip()
+
+    logger.warning(
+        "Payload truncated to avoid 413",
+        extra={
+            "original_chars": longest_len,
+            "kept_chars": len(str(truncated[longest_idx]["content"])),
+        },
+    )
     return truncated
 
 
@@ -80,7 +104,7 @@ async def complete_with_fallback(
         Callers MUST use response.actual_tier for billing (not the requested tier).
     """
     current_tier: Tier | None = tier
-    current_messages = messages
+    current_messages = _clone_messages(messages)
 
     while current_tier is not None:
         models = get_tier_models(current_tier)
@@ -94,11 +118,11 @@ async def complete_with_fallback(
             for m in current_messages
         )
         logger.info("LLM dispatch", extra={
-            "tier":        current_tier,
-            "messages":    len(current_messages),
+            "tier": current_tier,
+            "messages": len(current_messages),
             "total_chars": _total_chars,
             "has_context": _has_context,
-            "roles":       [m.get("role") for m in current_messages],
+            "roles": [m.get("role") for m in current_messages],
         })
 
         for model in models:
@@ -118,8 +142,8 @@ async def complete_with_fallback(
                     if current_tier != tier:
                         logger.warning("Cascade used lower tier for billing", extra={
                             "requested_tier": tier,
-                            "actual_tier":    current_tier,
-                            "model":          model,
+                            "actual_tier": current_tier,
+                            "model": model,
                         })
                     from dataclasses import replace
                     return replace(response, actual_tier=current_tier)
@@ -146,10 +170,10 @@ async def complete_with_fallback(
                                     "tier": current_tier, "model": model, "error": str(exc2),
                                 })
                     logger.warning("LLM call failed", extra={
-                        "tier":    current_tier,
-                        "model":   model,
+                        "tier": current_tier,
+                        "model": model,
                         "attempt": attempt,
-                        "error":   str(exc),
+                        "error": str(exc),
                     })
                     if attempt == max_retries:
                         break
