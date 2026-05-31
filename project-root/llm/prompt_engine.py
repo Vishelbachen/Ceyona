@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from contracts.shared_types import TruthMode
 from i18n.t import lang_instruction as _lang_instruction
-import re
 
 # ─── HISTORY FILTERING ───────────────────────────────────────────────────────
 # Keep only the conversation turns that are likely to matter for the current
