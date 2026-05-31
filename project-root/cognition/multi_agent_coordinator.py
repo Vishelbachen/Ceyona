@@ -15,7 +15,7 @@ from agents.safety_agent import SafetyInput, SafetyResult, SafetyVerdict
 from agents.safety_agent import check as safety_check
 from cognition.intent_engine import Intent
 from cognition.reasoning_engine import ReasoningMode, ReasoningStrategy
-from contracts.shared_types import Tier
+from contracts.shared_types import DomainHint, ReasoningDepth, RoutingProfile, Tier
 from i18n.t import t as _t
 
 logger = logging.getLogger(__name__)
@@ -59,14 +59,20 @@ class CoordinationResult:
 # ─── PLAN SELECTION ───────────────────────────────────────────────────────────
 
 def plan_agents(
-    intent: Intent,
+    routing: RoutingProfile,
     tier: Tier,
     strategy: ReasoningStrategy,
+    intent: Intent | None = None,
 ) -> AgentPlan:
     """
-    Select agent plan based on intent + tier + strategy.
-    Pure function. No I/O. No state. No LLM calls.
-    NO policy authority. NO routing decisions.
+    Select agent plan based on RoutingProfile + Tier + ReasoningStrategy.
+    Pure function. No I/O. No state. No LLM calls. NO policy authority.
+
+    Architecture contract (§16):
+    - routing.domain_hint drives the specialised pipeline selection.
+    - routing.reasoning_depth informs depth of execution.
+    - intent is retained as an optional observability hint only —
+      it does NOT make routing decisions here.
 
     HEAVY_REQUIRED tier:
       primary=DEEP, no consensus (mutex), no Fast validators.
@@ -75,7 +81,7 @@ def plan_agents(
     DEGRADED_MODE:
       Fast only (orchestrator routes here directly, plan is minimal).
     """
-    # HEAVY_REQUIRED — consensus is skipped (mutex with Heavy Tier)
+    # HEAVY_REQUIRED — consensus is skipped (mutex with Heavy Tier, §22)
     if tier == Tier.HEAVY:
         return AgentPlan(
             primary=AgentType.DEEP,
@@ -95,8 +101,10 @@ def plan_agents(
             temperature=strategy.temperature,
         )
 
-    # ALLOW — GENERAL tier
-    if intent == Intent.CREATIVE:
+    # ── ALLOW — GENERAL tier ──────────────────────────────────────────────────
+
+    # MEDIA domain: exploratory — creative + consensus for quality
+    if routing.domain_hint == DomainHint.MEDIA:
         return AgentPlan(
             primary=AgentType.CREATIVE,
             fallback=AgentType.FAST,
@@ -105,6 +113,7 @@ def plan_agents(
             temperature=strategy.temperature,
         )
 
+    # EXPLORATORY mode (analysis, some HEAVY.GENERAL): deep + consensus
     if strategy.mode == ReasoningMode.EXPLORATORY:
         return AgentPlan(
             primary=AgentType.DEEP,
@@ -114,7 +123,22 @@ def plan_agents(
             temperature=strategy.temperature,
         )
 
-    if intent in (Intent.CODE, Intent.MATH, Intent.ANALYSIS, Intent.QUESTION, Intent.INSTRUCTION):
+    # GEO domain: all data-driven intents — compound owns tool execution + reasoning.
+    # Architecture decision (май 2026): ALL tool intents go through compound.
+    # compound-mini (fast) for FAST tier, compound (deep) for GENERAL.
+    # Fallback: DEEP agent (llama-3.3-70b-versatile) — plain-text, always available.
+    if routing.domain_hint == DomainHint.GEO:
+        primary = AgentType.COMPOUND_FAST if tier == Tier.FAST else AgentType.COMPOUND_DEEP
+        return AgentPlan(
+            primary=primary,
+            fallback=AgentType.DEEP,
+            use_consensus=False,
+            parallel_validators=[],
+            temperature=strategy.temperature,
+        )
+
+    # MATH, CODE, GENERAL with LIGHT/HEAVY depth: single deep agent, no consensus
+    if routing.reasoning_depth in (ReasoningDepth.LIGHT, ReasoningDepth.HEAVY):
         return AgentPlan(
             primary=AgentType.DEEP,
             fallback=AgentType.FAST,
@@ -123,45 +147,17 @@ def plan_agents(
             temperature=strategy.temperature,
         )
 
-    # All data-driven intents — compound_agent owns tool execution AND reasoning.
-    # Architecture decision (май 2026): ALL tool intents go through compound, without
-    # exception.  Rationale: every external data type (search results, weather data,
-    # geocoding, routes, POI lists) requires LLM reasoning to:
-    #   - validate and interpret retrieved data (not just format it)
-    #   - handle partial results, failures, and edge cases with context
-    #   - apply nuance appropriate to the user's actual question
-    # Deterministic formatters (format_current, format_route etc.) remain inside
-    # compound_agent._execute_tool() — they produce structured text that compound
-    # then reasons over.  The tool-only bypass path is removed from orchestrator.
-    # compound-mini (fast) for FAST tier, compound (deep) for GENERAL.
-    # Fallback: DEEP agent (llama-3.3-70b-versatile) — plain-text, always available.
-    if intent in (
-        Intent.SEARCH,
-        Intent.WEATHER,
-        Intent.MAPS,
-        Intent.MAPS_POI,
-        Intent.MAPS_ROUTE,
-    ):
-        primary = AgentType.COMPOUND_FAST if tier == Tier.FAST else AgentType.COMPOUND_DEEP
-        return AgentPlan(
-            primary=primary,
-            fallback=AgentType.DEEP,   # plain-text fallback — always available
-            use_consensus=False,
-            parallel_validators=[],
-            temperature=strategy.temperature,
-        )
-
-    # EMOTIONAL — fast, warm, low temperature for natural empathetic tone
-    if intent == Intent.EMOTIONAL:
+    # NONE depth (conversation, emotional): fast agent, warm temperature
+    if routing.reasoning_depth == ReasoningDepth.NONE:
         return AgentPlan(
             primary=AgentType.FAST,
             fallback=None,
             use_consensus=False,
             parallel_validators=[],
-            temperature=0.85,
+            temperature=strategy.temperature,
         )
 
-    # default GENERAL — FAST for conversation, search results, etc.
+    # default GENERAL fallback
     return AgentPlan(
         primary=AgentType.FAST,
         fallback=None,
@@ -202,6 +198,8 @@ async def _run_agent(
         )
         return AgentResult(text="", model="", input_tokens=0, output_tokens=0, success=False, error=str(exc))
 
+
+# ─── MATH VERIFICATION (domain_hint == MATH) ──────────────────────────────────
 
 async def _verify_math_solution(
     user_message: str,
@@ -295,6 +293,7 @@ async def coordinate(
     plan: AgentPlan,
     messages: list[dict],
     user_message: str,
+    routing: RoutingProfile,
     reasoning_plan: str = "",
     temperature: float = 0.7,
     intent: Intent | None = None,
@@ -303,6 +302,11 @@ async def coordinate(
 ) -> CoordinationResult:
     """
     Execute agent plan. Return CoordinationResult to orchestrator.
+
+    Architecture contract (§16):
+    - routing.domain_hint == MATH activates the verification loop (not intent).
+    - intent is retained for EMOTIONAL graceful fallback (rule-based, no LLM).
+    - All other policy decisions come from routing, not intent.
 
     Pipeline (ALLOW path):
       1. Primary agent
@@ -317,7 +321,7 @@ async def coordinate(
 
     Pipeline (DEGRADED_MODE path):
       1. Fast agent only
-      (safety_agent skipped on DEGRADED per architecture)
+      (safety_agent skipped on DEGRADED per architecture §21)
 
     GUARANTEE: blocked=False → text is always non-empty.
                blocked=True  → orchestrator renders deny message.
@@ -343,12 +347,7 @@ async def coordinate(
         ]
 
         # safety_agent: LAST before Consensus.
-        # Candidate selection for safety check: first surviving candidate by position
-        # (primary is always first in the list — [primary_result, *validator_results]).
-        # Position-based selection is deterministic and unbiased: it does not favour
-        # longer responses, does not defer to router authority, and preserves the
-        # original plan ordering. If primary failed it is absent from candidates,
-        # so we naturally fall to the next survivor. Fix audit §4.3.
+        # Position-based selection is deterministic — primary is always first.
         if candidates:
             safety_candidate = candidates[0]
             safety: SafetyResult = safety_check(SafetyInput(
@@ -367,7 +366,6 @@ async def coordinate(
         if candidates:
             consensus: ConsensusResult = await resolve(candidates)
             if consensus.text:
-                # Sum tool_calls from all successful candidates (compound may have fired multiple)
                 _total_tool_calls = sum(getattr(r, "tool_calls", 0) for r in candidates)
                 return CoordinationResult(
                     text=consensus.text,
@@ -384,10 +382,12 @@ async def coordinate(
     if _agent_succeeded(primary_result):
 
         # ── MATH self-correction loop ─────────────────────────────────────────
-        # For constraint-satisfaction and logic puzzles: verify the solution
-        # against all stated constraints. If violations found → one correction
-        # round. Max 1 correction to avoid infinite loops.
-        if intent == Intent.MATH and user_message:
+        # Activates on domain_hint == MATH (not intent == MATH).
+        # This decouples the verification loop from the intent taxonomy:
+        # any request classified with DomainHint.MATH gets verification,
+        # regardless of what intent label was assigned.
+        # Bounded to max 1 correction pass — no infinite loops (§17, §25).
+        if routing.domain_hint == DomainHint.MATH and user_message:
             is_correct, feedback = await _verify_math_solution(
                 user_message=user_message,
                 solution=primary_result.text,
@@ -410,8 +410,8 @@ async def coordinate(
             else:
                 logger.info("MATH verifier passed")
 
-        # HEAVY path: safety_agent mandatory
-        # DEGRADED/EMOTIONAL/default-GENERAL: safety_agent skipped
+        # HEAVY path: safety_agent mandatory (§21, §22)
+        # DEGRADED/NONE-depth/default-GENERAL: safety_agent skipped
         is_heavy = (tier == Tier.HEAVY)
         if is_heavy:
             safety = safety_check(SafetyInput(
@@ -463,8 +463,10 @@ async def coordinate(
     # ── all failed ────────────────────────────────────────────────────────────
     logger.error("All agents failed — returning blocked result")
 
-    # Graceful fallback for EMOTIONAL intent: rule-based empathy response
-    # avoids showing a cold error message when the user just vented.
+    # Graceful fallback for EMOTIONAL intent: rule-based empathy response.
+    # Intent is the correct signal here — not routing — because EMOTIONAL
+    # is an affective state, not a capability requirement. The rule-based
+    # fallback avoids showing a cold error when the user just vented.
     if intent == Intent.EMOTIONAL:
         fallback_text = _t("emotional_fallback", lang)
         logger.info("EMOTIONAL graceful fallback used", extra={"lang": lang})
