@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from enum import IntEnum
 from urllib.parse import urlparse
 
+from retrieval.query_preprocessor import extract_query_profile, geo_relevance_score
+
 logger = logging.getLogger(__name__)
 
 
@@ -142,6 +144,28 @@ def _tier_to_score(tier: TrustTier) -> float:
     return tier.value / TrustTier.AUTHORITATIVE.value
 
 
+def _result_text(result: dict) -> str:
+    parts = [
+        str(result.get("title", "")),
+        str(result.get("snippet", "")),
+        str(result.get("address", "")),
+        str(result.get("location", "")),
+    ]
+    return " ".join(part for part in parts if part).strip()
+
+
+def _geo_relevance(query: str, result: dict, lang: str | None = None) -> float:
+    text = _result_text(result)
+    if not text:
+        return 0.0
+    return geo_relevance_score(query, text, lang=lang)
+
+
+def _combined_score(cred: CredibilityScore, geo_score: float) -> float:
+    # Credibility remains the primary authority; relevance is a tie-breaker.
+    return round((cred.score * 0.72) + (geo_score * 0.28), 4)
+
+
 def evaluate(url: str) -> CredibilityScore:
     """
     Оценить trustworthiness источника по URL.
@@ -194,24 +218,30 @@ def evaluate(url: str) -> CredibilityScore:
 _MIN_TIER = TrustTier.LOW
 
 
+
 def filter_results(
     results: list[dict],
     min_tier: TrustTier = _MIN_TIER,
     max_results: int = 5,
+    query: str = "",
+    lang: str | None = None,
+    geo_threshold: float = 0.56,
 ) -> list[dict]:
     """
-    Отфильтровать список результатов поиска по credibility.
-    Входной формат: [{"title": str, "link": str, "snippet": str}, ...]
-    Возвращает отфильтрованный и ограниченный список.
+    Filter search results by credibility and, when relevant, by location affinity.
 
-    Порядок сохраняется (изначальный ranking SerpAPI).
-    Credibility не перестраивает порядок — это задача reranker'а.
+    The credibility tier remains the primary gate. Query-aware location matching
+    is only applied to geo-sensitive queries (travel / hotels / navigation).
     """
-    passed: list[dict] = []
+    profile = extract_query_profile(query, lang) if query else None
+    geo_sensitive = bool(profile and profile.is_geo_query and profile.location)
+
+    scored: list[tuple[float, int, dict]] = []
     blocked_count = 0
     low_trust_count = 0
+    geo_rejected = 0
 
-    for r in results:
+    for index, r in enumerate(results):
         url = r.get("link", "")
         cred = evaluate(url)
 
@@ -229,33 +259,90 @@ def filter_results(
                 "source_credibility: below min_tier",
                 extra={
                     "domain": cred.domain,
-                    "tier":   cred.tier.name,
-                    "min":    min_tier.name,
+                    "tier": cred.tier.name,
+                    "min": min_tier.name,
                 },
             )
             continue
 
-        # Аннотировать результат credibility-метаданными для downstream
-        passed.append({
-            **r,
-            "_credibility": {
-                "domain": cred.domain,
-                "tier":   cred.tier.name,
-                "score":  round(cred.score, 3),
-                "reason": cred.reason,
+        geo_score = 0.0
+        if geo_sensitive:
+            geo_score = _geo_relevance(query, r, lang=lang)
+            if geo_score < geo_threshold:
+                geo_rejected += 1
+                logger.debug(
+                    "source_credibility: geo mismatch",
+                    extra={
+                        "domain": cred.domain,
+                        "geo_score": round(geo_score, 3),
+                        "location": profile.location if profile else "",
+                    },
+                )
+                continue
+
+        total_score = _combined_score(cred, geo_score)
+        scored.append((
+            total_score,
+            index,
+            {
+                **r,
+                "_credibility": {
+                    "domain": cred.domain,
+                    "tier": cred.tier.name,
+                    "score": round(cred.score, 3),
+                    "reason": cred.reason,
+                    "geo_score": round(geo_score, 3),
+                    "query_kind": profile.query_kind if profile else "generic",
+                },
             },
-        })
+        ))
 
-    kept = passed[:max_results]
+    if not scored and geo_sensitive:
+        # Relaxed fallback: keep the best location-aligned results even if the
+        # first pass did not reach the strict threshold. This prevents empty
+        # outputs when transliteration or provider snippets are sparse.
+        relaxed: list[tuple[float, int, dict]] = []
+        for index, r in enumerate(results):
+            url = r.get("link", "")
+            cred = evaluate(url)
+            if cred.is_blocked or cred.tier < min_tier:
+                continue
 
-    if blocked_count or low_trust_count or len(results) > len(kept):
+            geo_score = _geo_relevance(query, r, lang=lang)
+            if geo_score <= 0.0:
+                continue
+
+            total_score = _combined_score(cred, geo_score * 0.92)
+            relaxed.append((
+                total_score,
+                index,
+                {
+                    **r,
+                    "_credibility": {
+                        "domain": cred.domain,
+                        "tier": cred.tier.name,
+                        "score": round(cred.score, 3),
+                        "reason": cred.reason,
+                        "geo_score": round(geo_score, 3),
+                        "query_kind": profile.query_kind if profile else "generic",
+                        "relaxed": True,
+                    },
+                },
+            ))
+
+        scored = sorted(relaxed, key=lambda item: (-item[0], item[1]))[:max_results]
+
+    kept = [item[2] for item in sorted(scored, key=lambda item: (-item[0], item[1]))[:max_results]]
+
+    if blocked_count or low_trust_count or geo_rejected or len(results) > len(kept):
         logger.info(
             "source_credibility: filter complete",
             extra={
-                "input":       len(results),
-                "blocked":     blocked_count,
-                "low_trust":   low_trust_count,
-                "kept":        len(kept),
+                "input": len(results),
+                "blocked": blocked_count,
+                "low_trust": low_trust_count,
+                "geo_rejected": geo_rejected,
+                "kept": len(kept),
             },
         )
 
