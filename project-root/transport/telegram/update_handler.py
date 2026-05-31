@@ -4,6 +4,7 @@ import asyncio
 import logging
 import traceback
 
+from cognition.response_synthesizer import SynthesisInput, synthesize
 from contracts.shared_types import Complexity, EPKDecision, Tier
 from core.execution.orchestrator import (
     OrchestratorRequest,
@@ -11,7 +12,6 @@ from core.execution.orchestrator import (
     UsageRecord,
     run,
 )
-from cognition.response_synthesizer import SynthesisInput, synthesize
 from transport.telegram.message_router import (
     UpdateType,
     extract_media_group_id,
