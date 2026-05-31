@@ -27,7 +27,9 @@ class MemoryRecord:
     importance: float
     metadata: dict
     created_at: str
-    source_url: str | None = None  # §5.3: provenance for retrieval-originated records
+    source_url: str | None = None   # §5.3: provenance for retrieval-originated records
+    similarity: float = 1.0         # pgvector cosine similarity score from match_memory RPC
+                                    # Default 1.0 for fetch_by_user (no vector search, no score)
 
 
 class SupabaseStore:
@@ -135,6 +137,7 @@ class SupabaseStore:
                     metadata=row.get("metadata") or {},
                     created_at=row.get("created_at", ""),
                     source_url=row.get("source_url"),
+                    similarity=row.get("similarity", 1.0),  # pgvector score from match_memory RPC
                 )
                 for row in (result.data or [])
             ]
