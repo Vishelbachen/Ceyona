@@ -367,7 +367,7 @@ def synthesize(inp: SynthesisInput) -> SynthesisResult:
       2. structure    — intent-aware shaping
       3. normalize    — strip LaTeX/Markdown Telegram can't render
       4. format       — whitespace normalisation
-      5. correction   — meta/correction (preamble/sign-off stripping)
+      5. correction   — meta/correction (structural cleanup only)
       6. normalizer   — meta/output_normalizer (retrieval contamination cleanup)
       7. finalize     — truncate to Telegram limit
     """
