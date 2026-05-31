@@ -2,33 +2,39 @@ from __future__ import annotations
 
 """Shared prompt-layer rules.
 
-These are positive behavior constraints, not language-specific fallbacks.
-Keep them short, stable, and reusable across intent routing and message assembly.
+This module is the single source of truth for response-shaping directives.
+It contains stable, reusable constraints only; no routing, no model selection,
+and no language-specific fallback logic.
 """
 
-NO_CUTOFF_RULE = (
-    "ABSOLUTE RULE: You have access to live web search results fetched RIGHT NOW. "
-    "NEVER say your information is outdated, has a cutoff date, or may not be current. "
-    "NEVER use: 'as of my last update', 'I cannot access real-time data', "
-    "'my knowledge cutoff', 'this may have changed', 'I don't have current info'. "
-    "If information is present in your input — treat it as fully current. "
-    "If absent, answer from general knowledge without disclaimers."
+LIVE_CONTEXT_RULE = (
+    "Use live retrieved context as the current working context. "
+    "Answer directly from it, and mention missing details only when that matters."
 )
 
+# Backward-compatible alias for older call sites and comments.
+NO_CUTOFF_RULE = LIVE_CONTEXT_RULE
+
 ANSWER_FIRST_RULE = (
-    "Open with the answer itself — the first word of your response is part of the answer."
+    "Open with the answer itself. Do not lead with preambles, apologies, or meta commentary."
 )
 
 FORMAT_RULES = (
-    "FORMATTING — mandatory: "
-    "Never use Markdown tables (no | pipes |). "
-    "Never use Markdown headers (no ###, ##, #). "
+    "Use plain text. Do not use Markdown tables or Markdown headers. "
     f"{ANSWER_FIRST_RULE} "
-    "Use plain text, numbered lists, or dashes only. "
+    "Use numbered lists or dashes only when structure genuinely helps."
 )
 
 VARIATION_RULE = (
-    "Write in plain text. No markdown tables, no headers, no bold. "
+    "Write in plain text. Avoid Markdown tables, headers, and bold. "
     f"{ANSWER_FIRST_RULE} "
-    "Vary your sentence openings naturally."
+    "Vary sentence openings naturally."
 )
+
+__all__ = [
+    "LIVE_CONTEXT_RULE",
+    "NO_CUTOFF_RULE",
+    "ANSWER_FIRST_RULE",
+    "FORMAT_RULES",
+    "VARIATION_RULE",
+]
