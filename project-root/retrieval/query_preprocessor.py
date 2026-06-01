@@ -78,6 +78,31 @@ _SEARCH_FOCUS_MARKERS = {
     "preiswert", "günstig", "obere", "优先", "便宜", "最佳", "便捷",
 }
 
+_MAX_LOCATION_TOKENS = 8
+_LOCATION_NEGATIVE_CUES = (
+    " what ", " which ", " who ", " when ", " where ", " why ", " how ",
+    " best ", " popular ", " famous ", " recommend ", " suggestion ",
+    " можно ", " можете ", " можешь ", " какой ", " какая ", " какое ",
+    " что ", " посовет", " совет",
+)
+
+
+def _looks_like_location(candidate: str) -> bool:
+    candidate = _normalize_text(candidate)
+    if not candidate:
+        return False
+    if len(candidate.split()) > _MAX_LOCATION_TOKENS:
+        return False
+    if "?" in candidate or "!" in candidate:
+        return False
+    folded = f" {_ascii_fold(candidate)} "
+    if any(cue in folded for cue in _LOCATION_NEGATIVE_CUES):
+        return False
+    if any(ch.isdigit() for ch in candidate):
+        return False
+    return True
+
+
 _DEFAULT_LANGUAGE = "en"
 
 
@@ -114,14 +139,8 @@ def _truncate_at_boundary(text: str) -> str:
         idx = lower.find(cue)
         if idx > 0:
             cut = min(cut, idx)
+    return text[:cut].strip(" ,.;:!?\t\n\r")
 
-    candidate = text[:cut]
-    stop_chars = [",", ";", ":", "?", "!", "\n", "\r"]
-    stop_points = [candidate.find(ch) for ch in stop_chars if candidate.find(ch) > 0]
-    if stop_points:
-        candidate = candidate[:min(stop_points)]
-
-    return candidate.strip(" ,.;:!?\t\n\r")
 
 def _strip_leading_modifiers(candidate: str) -> str:
     text = _normalize_text(candidate)
@@ -135,23 +154,22 @@ def _strip_leading_modifiers(candidate: str) -> str:
     def folded_token(token: str) -> str:
         return _ascii_fold(token).replace(" ", "")
 
-    leading_modifiers_folded = {_ascii_fold(mod).replace(" ", "") for mod in _LEADING_GEO_MODIFIERS}
-
     idx = 0
     while idx < len(tokens):
         token = folded_token(tokens[idx])
-        if token in leading_modifiers_folded:
+        if token in _LEADING_GEO_MODIFIERS:
             idx += 1
             continue
         if idx + 1 < len(tokens):
             pair = f"{token} {folded_token(tokens[idx + 1])}"
-            if pair in leading_modifiers_folded:
+            if pair in _LEADING_GEO_MODIFIERS:
                 idx += 2
                 continue
         break
 
     cleaned = " ".join(tokens[idx:]).strip(" ,.;:!?\t\n\r")
     return cleaned
+
 
 def _candidate_from_cues(text: str) -> str:
     normalized = _normalize_text(text)
@@ -179,23 +197,24 @@ def _extract_location(text: str) -> str:
     if not normalized:
         return ""
 
-    primary_segment = normalized.split(",")[0].strip()
-    candidate = _candidate_from_cues(primary_segment) or _candidate_from_cues(normalized)
+    candidate = _candidate_from_cues(normalized)
 
     if not candidate and _contains_marker(normalized, _HOTEL_MARKERS | _TRAVEL_MARKERS):
         tail = _truncate_at_boundary(normalized)
-        parts = [p for p in re.split(r"[,.!?;:/\\]", tail) if p.strip()]
+        parts = [p for p in re.split(r"[,.!?;:/\]", tail) if p.strip()]
         if parts:
             candidate = parts[0].strip()
 
     candidate = _strip_leading_modifiers(candidate)
     candidate = _truncate_at_boundary(candidate)
     candidate = _normalize_text(candidate)
-    if candidate:
-        tokens = candidate.split()
-        if len(tokens) > 6:
-            candidate = " ".join(tokens[:6])
+
+    # Prefer no location over a long or interrogative fragment.
+    if candidate and not _looks_like_location(candidate):
+        return ""
+
     return candidate
+
 
 def _location_aliases(location: str) -> tuple[str, ...]:
     if not location:
@@ -258,8 +277,7 @@ def extract_query_profile(text: str, lang: str | None = None) -> QueryProfile:
     )
     keywords_ascii = tuple(token for token in normalized_folded.split(" ") if token)
     if location_folded:
-        location_tokens = {token for token in location_folded.split() if token}
-        keywords_ascii = tuple(token for token in keywords_ascii if token not in location_tokens)
+        keywords_ascii = tuple(token for token in keywords_ascii if token not in set(location_folded.split()))
 
     return QueryProfile(
         raw_text=text,
@@ -273,6 +291,7 @@ def extract_query_profile(text: str, lang: str | None = None) -> QueryProfile:
         keywords_ascii=keywords_ascii,
         is_geo_query=bool(location) or query_kind in {"hotel", "travel"},
     )
+
 
 def _best_ratio(a: str, b: str) -> float:
     if not a or not b:
