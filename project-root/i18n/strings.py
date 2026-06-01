@@ -209,6 +209,20 @@ _STRINGS: dict[str, dict[str, str]] = {
         "mn": "⚠️ Хариу ирсэнгүй. Дахин оролдоно уу.",
     },
 
+    # ── clarification / missing-details prompts ───────────────────────────────
+    "need_more_clues": {
+        "en": "I need one or two more clues to identify this reliably. Tell me a scene, character, year, place, or feature you remember.",
+        "ru": "Мне нужно ещё 1–2 зацепки, чтобы понять это надёжно. Назови сцену, персонажа, год, место или любую деталь, которую помнишь.",
+    },
+    "need_route_origin": {
+        "en": "Which airport or starting point should I use? Tell me the airport name or code, and I’ll build the route.",
+        "ru": "Из какого аэропорта или точки старта строить маршрут? Напиши название или код аэропорта, и я соберу маршрут.",
+    },
+    "need_city_or_area": {
+        "en": "Which city or area should I search in?",
+        "ru": "В каком городе или районе искать?",
+    },
+
     # ── generic deny ──────────────────────────────────────────────────────────
     "default_deny": {
         "en": "⚠️ I couldn't process that request. Please rephrase or try again.",
