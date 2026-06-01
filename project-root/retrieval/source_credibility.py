@@ -11,27 +11,6 @@ from retrieval.query_preprocessor import extract_query_profile, geo_relevance_sc
 logger = logging.getLogger(__name__)
 
 
-def _is_actionable_location(location: str) -> bool:
-    if not location:
-        return False
-    cleaned = re.sub(r"\s+", " ", location).strip()
-    if not cleaned:
-        return False
-    if len(cleaned.split()) > 8:
-        return False
-    if "?" in cleaned or "!" in cleaned:
-        return False
-    folded = f" {cleaned.casefold()} "
-    negative = (
-        " what ", " which ", " who ", " when ", " where ", " why ", " how ",
-        " best ", " popular ", " famous ", " recommend ", " suggestion ",
-        " можно ", " можете ", " можешь ", " какой ", " какая ", " какое ",
-    )
-    if any(cue in folded for cue in negative):
-        return False
-    return True
-
-
 # ─── TRUST TIERS ──────────────────────────────────────────────────────────────
 # Числовые значения используются как weights при scoring.
 # Не менять порядок без обновления _DOMAIN_TRUST и filter().
@@ -255,7 +234,7 @@ def filter_results(
     is only applied to geo-sensitive queries (travel / hotels / navigation).
     """
     profile = extract_query_profile(query, lang) if query else None
-    geo_sensitive = bool(profile and profile.is_geo_query and _is_actionable_location(profile.location))
+    geo_sensitive = bool(profile and profile.is_geo_query and profile.location)
 
     scored: list[tuple[float, int, dict]] = []
     blocked_count = 0
@@ -370,20 +349,62 @@ def filter_results(
     return kept
 
 
+def _memory_provenance_weight(source_url: str | None) -> float:
+    if not source_url:
+        return 1.0
+    cred = evaluate(source_url)
+    # Keep the effect bounded: provenance should nudge ranking, not override
+    # semantic similarity.
+    return round(0.92 + (0.08 * cred.score), 4)
+
+
 def score_documents(
     documents: list[tuple[str, float]],
 ) -> list[tuple[str, float]]:
     """
-    Применить credibility-weighting к результатам pgvector (content, score).
-    Используется в retrieval_engine после similarity_search.
+    Backwards-compatible credibility-weighting for plain tuple documents.
 
-    Документы из памяти не имеют URL — credibility не применяется,
-    возвращаются as-is. Этот метод зарезервирован для будущих случаев
-    когда memory records будут содержать source metadata.
+    When only (content, score) is available, the method is intentionally a
+    pass-through so old call sites keep working. Source-aware weighting is
+    implemented in score_memory_records(), which retrieval_engine now uses.
     """
-    # Memory records сейчас не содержат source URL — пропускаем без изменений.
-    # Когда MemoryRecord получит поле source_url, здесь добавится weighting.
     return documents
+
+
+def score_memory_records(records):
+    """
+    Apply provenance-aware weighting to MemoryRecord rows returned from Supabase.
+
+    If a record has source_url, credibility nudges the similarity score without
+    changing the underlying evidence. Records without provenance are preserved.
+    """
+    try:
+        from memory.supabase_store import MemoryRecord
+    except Exception:  # pragma: no cover - import guard
+        MemoryRecord = None  # type: ignore[assignment]
+
+    scored = []
+    for record in records or []:
+        if MemoryRecord is not None and isinstance(record, MemoryRecord):
+            weight = _memory_provenance_weight(record.source_url)
+            if record.source_url:
+                cred = evaluate(record.source_url)
+                importance_weight = min(max(float(record.importance), 0.5), 2.0)
+                weight = round(weight * (0.95 + 0.05 * importance_weight) * (0.9 + 0.1 * cred.score), 4)
+            scored.append(MemoryRecord(
+                id=record.id,
+                user_id=record.user_id,
+                content=record.content,
+                mem_type=record.mem_type,
+                importance=record.importance,
+                metadata=record.metadata,
+                created_at=record.created_at,
+                source_url=record.source_url,
+                similarity=round(float(record.similarity) * weight, 6),
+            ))
+        else:
+            scored.append(record)
+    return scored
 
 
 # ─── SINGLETON ────────────────────────────────────────────────────────────────
@@ -412,6 +433,9 @@ class SourceCredibility:
         documents: list[tuple[str, float]],
     ) -> list[tuple[str, float]]:
         return score_documents(documents)
+
+    def score_memory_records(self, records):
+        return score_memory_records(records)
 
 
 source_credibility = SourceCredibility()
