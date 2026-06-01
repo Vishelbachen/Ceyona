@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 
 from cognition.intent_engine import Intent, IntentResult, classify
@@ -22,6 +23,7 @@ from core.kernel.cost_model import actual_cost, estimate_cost, estimate_output_t
 from core.kernel.decision_matrix import select_tier
 from core.kernel.execution_policy_kernel import EPKInput, evaluate
 from llm.heavy_input_shaper import ShaperInput, shape
+from retrieval.query_preprocessor import extract_query_profile
 from llm.prompt_engine import PromptContext, build_messages
 from observability.metrics import gauge, increment
 from observability.tracing import trace
@@ -220,6 +222,30 @@ async def _run_tool(intent_result: IntentResult, lang: str) -> str | None:
             "error": str(exc),
         }, exc_info=True)
         return None
+
+
+def _needs_clarification(
+    request: OrchestratorRequest,
+    intent_result: IntentResult,
+    profile,
+    retrieved_context: str,
+    tool_output: str | None,
+) -> str:
+    """Return an i18n key when the request needs a single clarifying detail."""
+    if intent_result.intent == Intent.RECALL:
+        if not retrieved_context and not tool_output:
+            return "need_more_clues"
+        return ""
+
+    if intent_result.intent == Intent.RECOMMENDATION:
+        text = profile.normalized_text.casefold()
+        if (profile.hotel_requested or profile.travel_requested) and not profile.location:
+            return "need_city_or_area"
+        if profile.route_requested:
+            if re.search(r"\b(airport|аэропорт|aeroporto|aéroport|flugha?fen|aeropuerto)\b", text):
+                return "need_route_origin"
+
+    return ""
 
 
 async def _fetch_external_grounding(
@@ -657,6 +683,31 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
         tool_output: str | None = None
         if intent_result.requires_tools and intent_result.intent not in _AGENTIC_INTENTS:
             tool_output = await _run_tool(intent_result, lang)
+
+        # ── answerability gate ────────────────────────────────────────────────
+        profile = extract_query_profile(request.user_message, lang)
+        clarification_key = _needs_clarification(
+            request=request,
+            intent_result=intent_result,
+            profile=profile,
+            retrieved_context=_retrieved_context,
+            tool_output=tool_output,
+        )
+        if clarification_key:
+            logger.info("Answerability gate: clarification requested", extra={
+                "intent": intent_result.intent,
+                "reason": clarification_key,
+                "query_kind": profile.query_kind,
+            })
+            return _denied_result(
+                reason=clarification_key,
+                lang=lang,
+                input_tokens=request.input_tokens,
+                embedding_tokens=request.embedding_tokens,
+                rerank_tokens=request.rerank_tokens,
+                embedding_type=request.embedding_type,
+                epk_decision=EPKDecision.DENY,
+            )
 
         # ── STRICT truth gate ─────────────────────────────────────────────────
         # TruthMode.STRICT + no grounding data → deny rather than hallucinate.
