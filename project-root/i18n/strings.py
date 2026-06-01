@@ -553,8 +553,8 @@ _STRINGS: dict[str, dict[str, str]] = {
 
     # ── no grounded data (Truth Enforcement — STRICT mode) ───────────────────
     "no_grounded_data": {
-        "en": "🔍 I couldn't find up-to-date information for this request right now — the search service may be temporarily unavailable. You can try again in a moment, or check Google Maps / Google directly for the most accurate result.",
-        "ru": "🔍 Не удалось получить актуальную информацию прямо сейчас — сервис поиска временно недоступен. Попробуйте повторить чуть позже или проверьте напрямую в Google, Яндекс или 2ГИС.",
+        "en": "🔍 I couldn't verify this with live sources right now. Please try again in a moment, or I can answer from general knowledge without live data.",
+        "ru": "🔍 Не удалось проверить это по живым источникам прямо сейчас. Попробуйте повторить чуть позже, либо я отвечу по общим знаниям без live-данных.",
         "de": "🔍 Ich konnte keine zuverlässigen Informationen finden. Bitte präzisiere deine Frage.",
         "fr": "🔍 Je n'ai pas trouvé d'informations fiables. Veuillez préciser votre question.",
         "es": "🔍 No encontré información confiable para responder. Por favor aclara tu pregunta.",
