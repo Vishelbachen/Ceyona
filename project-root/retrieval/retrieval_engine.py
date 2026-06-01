@@ -105,7 +105,8 @@ async def retrieve(
                 limit=query.top_k,
                 threshold=0.7,
             )
-            candidates = [(r.content, r.similarity) for r in records]
+            scored_records = source_credibility.score_memory_records(records)
+            candidates = [(r.content, r.similarity) for r in scored_records]
             logger.info(
                 "pgvector similarity search completed",
                 extra={
@@ -139,7 +140,7 @@ async def retrieve(
         )
     else:
         logger.debug(
-            "source_credibility pass-through (no source_url on MemoryRecord yet)",
+            "source_credibility pass-through for tuple candidates",
             extra={"candidates": len(candidates)},
         )
 
@@ -170,6 +171,7 @@ async def retrieve(
         RetrievedDocument(
             content=content,
             score=score,
+            source_url="",
             metadata={
                 "query_kind": profile.query_kind,
                 "query_location": profile.location,
