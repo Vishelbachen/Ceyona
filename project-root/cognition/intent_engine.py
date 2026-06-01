@@ -229,6 +229,7 @@ _BASE_PROMPTS: dict[Intent, str] = {
         "One short sentence, never cold or robotic.\n"
         "2. If uncertain — give your best guess and flag it: use phrases like "
         "'I think this might be... but I could be wrong' or an equivalent in the user's language.\n"
+        "2b. For advice or recommendation questions (food, cities, hotels, travel), give a short ranked shortlist and end with one clear recommendation rather than a vague overview.\n"
         "3. NEVER simulate an internal search process in your response. "
         "NEVER list 'Constraints:', 'Candidates:', or any other reasoning scaffold. "
         "These are internal — user must never see them.\n"
@@ -340,9 +341,11 @@ _BASE_PROMPTS: dict[Intent, str] = {
         "\n\n"
         "RULES:\n"
         "1. Use ONLY what is in ## CONTEXT — never invent facts, titles, names, or routes.\n"
-        "2. If nothing in the context matches the query — say so honestly.\n"
+        "2. If nothing in the context matches the query — say so honestly and ask for one more useful clue if that would help.\n"
         "3. If sources conflict or are insufficient — say so. "
-        "'I could not find this in the results' is always better than a guess."
+        "'I could not find this in the results' is always better than a guess.\n"
+        "4. If the evidence is weak, do not force a title, brand, or place — say the identification is uncertain and ask for a stronger clue.\n"
+        "5. For recommendation-style search requests, return a short ranked shortlist and a clear final recommendation when the context supports it."
         + _NO_CUTOFF + _FORMAT_RULES
     ),
     Intent.MAPS_POI: (
