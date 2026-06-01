@@ -11,6 +11,27 @@ from retrieval.query_preprocessor import extract_query_profile, geo_relevance_sc
 logger = logging.getLogger(__name__)
 
 
+def _is_actionable_location(location: str) -> bool:
+    if not location:
+        return False
+    cleaned = re.sub(r"\s+", " ", location).strip()
+    if not cleaned:
+        return False
+    if len(cleaned.split()) > 8:
+        return False
+    if "?" in cleaned or "!" in cleaned:
+        return False
+    folded = f" {cleaned.casefold()} "
+    negative = (
+        " what ", " which ", " who ", " when ", " where ", " why ", " how ",
+        " best ", " popular ", " famous ", " recommend ", " suggestion ",
+        " можно ", " можете ", " можешь ", " какой ", " какая ", " какое ",
+    )
+    if any(cue in folded for cue in negative):
+        return False
+    return True
+
+
 # ─── TRUST TIERS ──────────────────────────────────────────────────────────────
 # Числовые значения используются как weights при scoring.
 # Не менять порядок без обновления _DOMAIN_TRUST и filter().
@@ -234,7 +255,7 @@ def filter_results(
     is only applied to geo-sensitive queries (travel / hotels / navigation).
     """
     profile = extract_query_profile(query, lang) if query else None
-    geo_sensitive = bool(profile and profile.is_geo_query and profile.location)
+    geo_sensitive = bool(profile and profile.is_geo_query and _is_actionable_location(profile.location))
 
     scored: list[tuple[float, int, dict]] = []
     blocked_count = 0
