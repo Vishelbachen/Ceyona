@@ -23,10 +23,10 @@ from core.kernel.cost_model import actual_cost, estimate_cost, estimate_output_t
 from core.kernel.decision_matrix import select_tier
 from core.kernel.execution_policy_kernel import EPKInput, evaluate
 from llm.heavy_input_shaper import ShaperInput, shape
-from retrieval.query_preprocessor import extract_query_profile
 from llm.prompt_engine import PromptContext, build_messages
 from observability.metrics import gauge, increment
 from observability.tracing import trace
+from retrieval.query_preprocessor import extract_query_profile
 
 logger = logging.getLogger(__name__)
 
