@@ -3,30 +3,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import unicodedata
-from dataclasses import dataclass
-from enum import Enum
 
 import httpx
 from app.settings import settings
 from retrieval.query_preprocessor import extract_query_profile, geo_relevance_score
 
 logger = logging.getLogger(__name__)
-
-
-class SearchStatus(str, Enum):
-    SUCCESS = "success"
-    EMPTY = "empty"
-    NOT_CONFIGURED = "not_configured"
-    PROVIDER_ERROR = "provider_error"
-
-
-@dataclass(frozen=True)
-class SearchOutcome:
-    results: list[dict]
-    status: SearchStatus
-    provider: str
-    error: str = ""
-
 
 # ─── PROVIDER CONFIG ──────────────────────────────────────────────────────────
 #
@@ -121,6 +103,35 @@ def _filter_results(results: list[dict], query: str = "", lang: str = "en") -> l
     return _credibility.filter_results(sanitized, max_results=5, query=query, lang=lang)
 
 
+def _result_quality(results: list[dict], query: str, lang: str, query_kind: str) -> float:
+    if not results:
+        return 0.0
+    best = 0.0
+    for r in results:
+        text = " ".join(str(r.get(k, "")) for k in ("title", "snippet", "address", "location"))
+        geo = geo_relevance_score(query, text, lang=lang)
+        keyword = 0.0
+        qf = query.casefold()
+        tf = text.casefold()
+        if qf and tf:
+            if qf in tf or tf in qf:
+                keyword = 1.0
+            else:
+                q_tokens = {tok for tok in qf.split() if len(tok) > 2}
+                t_tokens = {tok for tok in tf.split() if len(tok) > 2}
+                if q_tokens and t_tokens:
+                    keyword = len(q_tokens & t_tokens) / max(1, len(q_tokens | t_tokens))
+        score = max(geo, keyword)
+        best = max(best, score)
+    if query_kind == "discovery":
+        return round(best, 3)
+    if query_kind == "advice":
+        return round(max(best, 0.25 if results else 0.0), 3)
+    if query_kind in {"hotel", "travel"}:
+        return round(max(best, 0.35 if results else 0.0), 3)
+    return round(best, 3)
+
+
 # ─── VALIDATION ──────────────────────────────────────────────────────────────
 
 _SUSPICIOUS_PATTERNS = {"негород", "negород", "dubrava_fake"}
@@ -154,15 +165,14 @@ def _validate_results(results: list[dict], query: str = "", lang: str = "en") ->
 
 # ─── PROVIDER 1: TAVILY ───────────────────────────────────────────────────────
 
-async def _search_tavily(query: str, lang: str, num: int) -> SearchOutcome:
+async def _search_tavily(query: str, lang: str, num: int) -> list[dict] | None:
     """
     Primary provider. LLM-optimised structured results.
-    Returns SearchOutcome with explicit status so callers can distinguish
-    provider failures from empty result sets.
+    Returns None on failure or if key not configured → triggers next provider.
     """
     api_key = settings.tavily_api_key
     if not api_key:
-        return SearchOutcome([], SearchStatus.NOT_CONFIGURED, "tavily")
+        return None
 
     payload = {
         "api_key":             api_key,
@@ -192,15 +202,16 @@ async def _search_tavily(query: str, lang: str, num: int) -> SearchOutcome:
                 if r.get("title") or r.get("content")
             ]
             filtered = _filter_results(results, query=query, lang=lang)
+            quality = _result_quality(filtered, query=query, lang=lang, query_kind=extract_query_profile(query, lang).query_kind)
+            if filtered and extract_query_profile(query, lang).query_kind == "discovery" and quality < 0.42:
+                logger.info("Tavily results too weak for discovery query", extra={"quality": quality, "query": query[:50]})
+                return []
             logger.info("Tavily search completed", extra={
                 "query": query[:50], "attempt": attempt + 1,
                 "raw": len(results), "filtered": len(filtered), "lang": lang,
+                "quality": quality,
             })
-            return SearchOutcome(
-                results=filtered,
-                status=SearchStatus.SUCCESS if filtered else SearchStatus.EMPTY,
-                provider="tavily",
-            )
+            return filtered
 
         except Exception as exc:
             last_exc = exc
@@ -213,18 +224,19 @@ async def _search_tavily(query: str, lang: str, num: int) -> SearchOutcome:
     logger.error("Tavily failed — falling back to SerpAPI", extra={
         "query": query[:50], "error": str(last_exc),
     })
-    return SearchOutcome([], SearchStatus.PROVIDER_ERROR, "tavily", error=str(last_exc) if last_exc else "")
+    return None
 
 
 # ─── PROVIDER 2: SERPAPI ──────────────────────────────────────────────────────
 
-async def _search_serpapi(query: str, lang: str, num: int) -> SearchOutcome:
+async def _search_serpapi(query: str, lang: str, num: int) -> list[dict] | None:
     """
     Secondary provider. Also handles Google hotel pack extraction.
+    Returns None on failure or if key not configured → triggers SearXNG.
     """
     api_key = settings.serpapi_key
     if not api_key:
-        return SearchOutcome([], SearchStatus.NOT_CONFIGURED, "serpapi")
+        return None
 
     params = {
         "q":       query,
@@ -242,6 +254,7 @@ async def _search_serpapi(query: str, lang: str, num: int) -> SearchOutcome:
                 response.raise_for_status()
                 data = response.json()
 
+            # ── structured hotel pack (SerpAPI-specific) ──────────────────
             hotel_pack = data.get("hotels_results", {})
             hotel_properties = hotel_pack.get("properties", [])
             if hotel_properties:
@@ -266,12 +279,14 @@ async def _search_serpapi(query: str, lang: str, num: int) -> SearchOutcome:
                         "query": query[:50], "attempt": attempt + 1,
                         "hotels": len(validated), "lang": lang,
                     })
-                    return SearchOutcome(
-                        results=validated,
-                        status=SearchStatus.SUCCESS if validated else SearchStatus.EMPTY,
-                        provider="serpapi",
-                    )
+                    if validated:
+                        quality = _result_quality(validated, query=query, lang=lang, query_kind=extract_query_profile(query, lang).query_kind)
+                        if extract_query_profile(query, lang).query_kind == "discovery" and quality < 0.42:
+                            logger.info("SerpAPI hotel pack too weak for discovery query", extra={"quality": quality, "query": query[:50]})
+                            return []
+                        return validated
 
+            # ── organic results ───────────────────────────────────────────
             raw_results = data.get("organic_results", [])
             results = [
                 {
@@ -282,15 +297,16 @@ async def _search_serpapi(query: str, lang: str, num: int) -> SearchOutcome:
                 for r in raw_results
             ]
             filtered = _filter_results(results, query=query, lang=lang)
+            quality = _result_quality(filtered, query=query, lang=lang, query_kind=extract_query_profile(query, lang).query_kind)
+            if filtered and extract_query_profile(query, lang).query_kind == "discovery" and quality < 0.42:
+                logger.info("SerpAPI results too weak for discovery query", extra={"quality": quality, "query": query[:50]})
+                return []
             logger.info("SerpAPI search completed", extra={
                 "query": query[:50], "attempt": attempt + 1,
                 "raw": len(results), "filtered": len(filtered), "lang": lang,
+                "quality": quality,
             })
-            return SearchOutcome(
-                results=filtered,
-                status=SearchStatus.SUCCESS if filtered else SearchStatus.EMPTY,
-                provider="serpapi",
-            )
+            return filtered
 
         except Exception as exc:
             last_exc = exc
@@ -303,19 +319,21 @@ async def _search_serpapi(query: str, lang: str, num: int) -> SearchOutcome:
     logger.error("SerpAPI failed — falling back to SearXNG", extra={
         "query": query[:50], "error": str(last_exc),
     })
-    return SearchOutcome([], SearchStatus.PROVIDER_ERROR, "serpapi", error=str(last_exc) if last_exc else "")
+    return None
 
 
 # ─── PROVIDER 3: SEARXNG ──────────────────────────────────────────────────────
 
-async def _search_searxng(query: str, lang: str, num: int) -> SearchOutcome:
+async def _search_searxng(query: str, lang: str, num: int) -> list[dict]:
     """
     Tertiary provider. Meta-search (Google, Bing, DuckDuckGo aggregated).
-    Returns SearchOutcome with explicit status.
+    No API key — requires SEARXNG_URL (self-hosted or public instance).
+    Public instances are unstable — this is last-chance fallback only.
+    Returns [] on failure or if URL not configured.
     """
     base_url = settings.searxng_url
     if not base_url:
-        return SearchOutcome([], SearchStatus.NOT_CONFIGURED, "searxng")
+        return []
 
     params = {
         "q":       query,
@@ -344,15 +362,16 @@ async def _search_searxng(query: str, lang: str, num: int) -> SearchOutcome:
                 if r.get("title") or r.get("content")
             ]
             filtered = _filter_results(results, query=query, lang=lang)
+            quality = _result_quality(filtered, query=query, lang=lang, query_kind=extract_query_profile(query, lang).query_kind)
+            if filtered and extract_query_profile(query, lang).query_kind == "discovery" and quality < 0.42:
+                logger.info("SearXNG results too weak for discovery query", extra={"quality": quality, "query": query[:50]})
+                return []
             logger.info("SearXNG search completed", extra={
                 "query": query[:50], "attempt": attempt + 1,
                 "raw": len(results), "filtered": len(filtered), "lang": lang,
+                "quality": quality,
             })
-            return SearchOutcome(
-                results=filtered,
-                status=SearchStatus.SUCCESS if filtered else SearchStatus.EMPTY,
-                provider="searxng",
-            )
+            return filtered
 
         except Exception as exc:
             last_exc = exc
@@ -365,7 +384,7 @@ async def _search_searxng(query: str, lang: str, num: int) -> SearchOutcome:
     logger.error("SearXNG failed — all providers exhausted", extra={
         "query": query[:50], "error": str(last_exc),
     })
-    return SearchOutcome([], SearchStatus.PROVIDER_ERROR, "searxng", error=str(last_exc) if last_exc else "")
+    return []
 
 
 # ─── SERVICE ──────────────────────────────────────────────────────────────────
@@ -383,68 +402,36 @@ class SearchService:
     compound_agent calls search_service.search() — provider selection is invisible to caller.
     """
 
-    async def search_with_status(
-        self,
-        query: str,
-        lang: str = "en",
-        num: int = 10,
-    ) -> SearchOutcome:
-        """
-        Search with Tavily → SerpAPI → SearXNG fallback.
-
-        The first provider that yields data wins.
-        Provider failures are surfaced to callers via SearchStatus so the
-        orchestrator can distinguish "provider down" from "no results".
-        """
-        query_for_search = _compose_search_query(query, lang)
-
-        outcomes = [
-            await _search_tavily(query_for_search, lang, num),
-            await _search_serpapi(query_for_search, lang, num),
-            await _search_searxng(query_for_search, lang, num),
-        ]
-
-        last_error = ""
-        last_provider = "search"
-        last_empty: SearchOutcome | None = None
-
-        for outcome in outcomes:
-            last_provider = outcome.provider or last_provider
-            if outcome.status == SearchStatus.PROVIDER_ERROR:
-                last_error = outcome.error or last_error
-                continue
-            if outcome.status == SearchStatus.NOT_CONFIGURED:
-                continue
-            if outcome.status == SearchStatus.SUCCESS:
-                return outcome
-            if outcome.status == SearchStatus.EMPTY:
-                last_empty = outcome
-
-        if last_empty is not None:
-            return last_empty
-
-        if last_error:
-            return SearchOutcome(
-                results=[],
-                status=SearchStatus.PROVIDER_ERROR,
-                provider=last_provider,
-                error=last_error,
-            )
-
-        return SearchOutcome(
-            results=[],
-            status=SearchStatus.NOT_CONFIGURED,
-            provider=last_provider,
-        )
-
     async def search(
         self,
         query: str,
         lang: str = "en",
         num: int = 10,
     ) -> list[dict]:
-        outcome = await self.search_with_status(query=query, lang=lang, num=num)
-        return outcome.results
+        """
+        Search with Tavily → SerpAPI → SearXNG fallback.
+
+        Returns list of filtered result dicts:
+          [{"title": str, "link": str, "snippet": str}]
+          + hotel pack extras when SerpAPI returns structured results:
+          {"price": str, "rating": str, "address": str, "_structured": True}
+
+        Returns [] when all providers fail or are unconfigured.
+        """
+        query_for_search = _compose_search_query(query, lang)
+
+        # 1. Tavily primary
+        results = await _search_tavily(query_for_search, lang, num)
+        if results is not None:
+            return results
+
+        # 2. SerpAPI secondary
+        results = await _search_serpapi(query_for_search, lang, num)
+        if results is not None:
+            return results
+
+        # 3. SearXNG tertiary
+        return await _search_searxng(query_for_search, lang, num)
 
     def format_results(self, results: list[dict], lang: str = "en") -> str:
         """
