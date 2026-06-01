@@ -553,8 +553,8 @@ _STRINGS: dict[str, dict[str, str]] = {
 
     # ── no grounded data (Truth Enforcement — STRICT mode) ───────────────────
     "no_grounded_data": {
-        "en": "🔍 I couldn't verify this with live sources right now. Please try again in a moment, or I can answer from general knowledge without live data.",
-        "ru": "🔍 Не удалось проверить это по живым источникам прямо сейчас. Попробуйте повторить чуть позже, либо я отвечу по общим знаниям без live-данных.",
+        "en": "🔍 I couldn't ground this request reliably right now. Give me one more clue or a narrower query, and I will try again.",
+        "ru": "🔍 Не удалось надёжно подтвердить этот запрос прямо сейчас. Дайте ещё одну подсказку или уточните запрос, и я попробую снова.",
         "de": "🔍 Ich konnte keine zuverlässigen Informationen finden. Bitte präzisiere deine Frage.",
         "fr": "🔍 Je n'ai pas trouvé d'informations fiables. Veuillez préciser votre question.",
         "es": "🔍 No encontré información confiable para responder. Por favor aclara tu pregunta.",
@@ -757,6 +757,16 @@ _STRINGS: dict[str, dict[str, str]] = {
         "so": "🔍 Natiijooyin lama helin.",
     },
 
+
+    # ── search / live-data fallbacks ───────────────────────────────────────────
+    "search_need_more_clues": {
+        "en": "🔍 I couldn't identify it confidently from the clues so far. Give me one or two more details, and I'll narrow it down.",
+        "ru": "🔍 Пока не получилось уверенно определить это по имеющимся подсказкам. Дайте ещё 1–2 детали, и я сузлю поиск.",
+    },
+    "live_data_unavailable": {
+        "en": "🔍 I couldn't fetch live data right now. Give me the city, airport, or place again, and I will try with a cleaner query.",
+        "ru": "🔍 Сейчас не удалось получить живые данные. Назовите город, аэропорт или место ещё раз, и я попробую с более точным запросом.",
+    },
 
     # ── emotional fallback — last-resort when LLM is completely unavailable ────
     # NOT a conversational reply — a neutral system message.
