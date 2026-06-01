@@ -16,8 +16,6 @@ from contracts.shared_types import (
     Complexity,
     EPKDecision,
     Tier,
-    ToolExecutionResult,
-    ToolStatus,
     TruthMode,
 )
 from core.kernel.cost_model import actual_cost, estimate_cost, estimate_output_tokens
@@ -68,6 +66,8 @@ _NO_SEARCH_INTENTS = {
 
 # No-data fallback message key (goes to synthesizer)
 _NO_GROUNDED_DATA = "no_grounded_data"
+_SEARCH_NEED_MORE_CLUES = "search_need_more_clues"
+_LIVE_DATA_UNAVAILABLE = "live_data_unavailable"
 
 
 # ─── REQUEST / RESULT CONTRACTS ───────────────────────────────────────────────
@@ -199,9 +199,9 @@ def _empty_usage(
 
 # ─── TOOL RUNNER ──────────────────────────────────────────────────────────────
 
-async def _run_tool(intent_result: IntentResult, lang: str) -> ToolExecutionResult:
+async def _run_tool(intent_result: IntentResult, lang: str) -> str | None:
     if not intent_result.requires_tools or not intent_result.tool_name:
-        return ToolExecutionResult("", ToolStatus.EMPTY, source=intent_result.tool_name or "")
+        return None
     try:
         from external.web_tools import run_tool
         result = await run_tool(
@@ -211,8 +211,7 @@ async def _run_tool(intent_result: IntentResult, lang: str) -> ToolExecutionResu
         )
         logger.info("Tool executed", extra={
             "tool": intent_result.tool_name,
-            "status": result.status.value,
-            "result_len": len(result.content) if result.content else 0,
+            "result_len": len(result) if result else 0,
         })
         return result
     except Exception as exc:
@@ -220,14 +219,14 @@ async def _run_tool(intent_result: IntentResult, lang: str) -> ToolExecutionResu
             "tool": intent_result.tool_name,
             "error": str(exc),
         }, exc_info=True)
-        return ToolExecutionResult("", ToolStatus.PROVIDER_ERROR, source=intent_result.tool_name or "", error=str(exc))
+        return None
 
 
 async def _fetch_external_grounding(
     request: OrchestratorRequest,
     intent_result: IntentResult,
     lang: str,
-) -> ToolExecutionResult:
+) -> str:
     """
     Resolve external grounding context for the current request.
 
@@ -235,10 +234,10 @@ async def _fetch_external_grounding(
     use normalized tool parameters coming from intent classification.
     """
     if request.retrieved_context:
-        return ToolExecutionResult(request.retrieved_context, ToolStatus.SUCCESS, source="retrieved_context")
+        return request.retrieved_context
 
     if request.user_balance <= 0 or request.skip_web_search or not intent_result.routing.retrieval_required:
-        return ToolExecutionResult("", ToolStatus.EMPTY, source="retrieval")
+        return ""
 
     _intent_value = intent_result.intent.value
 
@@ -251,25 +250,16 @@ async def _fetch_external_grounding(
                 params=intent_result.tool_params or {"query": request.user_message, "lang": lang},
                 lang=lang,
             )
-            if tool_result.content:
+            if tool_result:
                 logger.info("Agentic retrieval: context acquired", extra={
                     "intent": _intent_value,
                     "tool": _tool_name,
-                    "status": tool_result.status.value,
-                    "chars": len(tool_result.content),
-                })
-                return tool_result
-            if tool_result.status == ToolStatus.PROVIDER_ERROR:
-                logger.warning("Agentic retrieval provider error", extra={
-                    "intent": _intent_value,
-                    "tool": _tool_name,
-                    "error": tool_result.error,
+                    "chars": len(tool_result),
                 })
                 return tool_result
             logger.warning("Agentic retrieval: empty result", extra={
                 "intent": _intent_value,
                 "tool": _tool_name,
-                "status": tool_result.status.value,
             })
         except Exception as exc:
             logger.warning("Agentic retrieval failed — continuing without", extra={
@@ -277,7 +267,7 @@ async def _fetch_external_grounding(
                 "tool": _tool_name,
                 "error": str(exc),
             })
-        return ToolExecutionResult("", ToolStatus.EMPTY, source=_tool_name)
+        return ""
 
     try:
         from external.web_tools import run_tool as _web_run_tool
@@ -286,24 +276,16 @@ async def _fetch_external_grounding(
             params={"query": request.user_message, "lang": lang},
             lang=lang,
         )
-        if web_result.content:
+        if web_result:
             logger.info("Web search: context acquired", extra={
                 "intent": _intent_value,
-                "status": web_result.status.value,
-                "chars": len(web_result.content),
-            })
-            return web_result
-        if web_result.status == ToolStatus.PROVIDER_ERROR:
-            logger.warning("Web search provider error — continuing without grounding", extra={
-                "intent": _intent_value,
-                "error": web_result.error,
+                "chars": len(web_result),
             })
             return web_result
     except Exception as exc:
         logger.warning("Web search failed — continuing without", extra={"error": str(exc)})
-        return ToolExecutionResult("", ToolStatus.PROVIDER_ERROR, source="search", error=str(exc))
 
-    return ToolExecutionResult("", ToolStatus.EMPTY, source="retrieval")
+    return ""
 
 
 # ─── PROMPT BUILDER (truth-aware) ────────────────────────────────────────────
@@ -672,46 +654,32 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
         truth_mode = resolve_truth_mode(_routing)
 
         # ── non-agentic tool execution (reserved for future intents) ─────────
-        tool_output: ToolExecutionResult = ToolExecutionResult("", ToolStatus.EMPTY, source="")
+        tool_output: str | None = None
         if intent_result.requires_tools and intent_result.intent not in _AGENTIC_INTENTS:
             tool_output = await _run_tool(intent_result, lang)
 
         # ── STRICT truth gate ─────────────────────────────────────────────────
         # TruthMode.STRICT + no grounding data → deny rather than hallucinate.
-        has_grounding = bool(_retrieved_context.content) or bool(tool_output.content)
-        provider_error = (
-            _retrieved_context.status == ToolStatus.PROVIDER_ERROR
-            or tool_output.status == ToolStatus.PROVIDER_ERROR
-        )
+        has_grounding = bool(_retrieved_context) or bool(tool_output)
         if truth_mode == TruthMode.STRICT and not has_grounding:
-            if provider_error:
-                logger.warning("Truth gate: STRICT downgraded to HYBRID after provider error", extra={
-                    "intent": intent_result.intent,
-                    "domain": _routing.domain_hint,
-                })
-                truth_mode = TruthMode.HYBRID
-            else:
-                logger.info("Truth gate: STRICT with no grounding data", extra={
-                    "intent": intent_result.intent,
-                    "domain": _routing.domain_hint,
-                })
-                return _denied_result(
-                    reason="no_grounded_data",
-                    lang=lang,
-                    input_tokens=request.input_tokens,
-                    embedding_tokens=request.embedding_tokens,
-                    rerank_tokens=request.rerank_tokens,
-                    embedding_type=request.embedding_type,
-                    epk_decision=EPKDecision.DENY,
-                )
-
-        effective_system_prompt = request.system_prompt
-        if provider_error and not has_grounding:
-            fallback_note = (
-                "Live lookup is unavailable right now. Answer cautiously from general knowledge, "
-                "do not invent live prices/availability, and clearly separate stable facts from live data."
+            logger.info("Truth gate: STRICT with no grounding data", extra={
+                "intent": intent_result.intent,
+                "domain": _routing.domain_hint,
+            })
+            deny_reason = "no_grounded_data"
+            if intent_result.intent == Intent.SEARCH:
+                deny_reason = _SEARCH_NEED_MORE_CLUES
+            elif intent_result.intent in (Intent.WEATHER, Intent.MAPS, Intent.MAPS_ROUTE, Intent.MAPS_POI):
+                deny_reason = _LIVE_DATA_UNAVAILABLE
+            return _denied_result(
+                reason=deny_reason,
+                lang=lang,
+                input_tokens=request.input_tokens,
+                embedding_tokens=request.embedding_tokens,
+                rerank_tokens=request.rerank_tokens,
+                embedding_type=request.embedding_type,
+                epk_decision=EPKDecision.DENY,
             )
-            effective_system_prompt = "\n\n".join(part for part in [effective_system_prompt, fallback_note] if part)
 
         # ── estimate ─────────────────────────────────────────────────────────
         _fast_token_threshold = 300
@@ -763,12 +731,12 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
         tier = select_tier(estimated)
 
         # ── assemble retrieved context ────────────────────────────────────────
-        retrieved_context = _retrieved_context.content or ""
-        if tool_output.content:
+        retrieved_context = _retrieved_context or ""
+        if tool_output:
             retrieved_context = (
-                f"{tool_output.content}\n\n{retrieved_context}".strip()
+                f"{tool_output}\n\n{retrieved_context}".strip()
                 if retrieved_context
-                else tool_output.content
+                else tool_output
             )
 
         # ── build messages with truth mode ────────────────────────────────────
