@@ -4,7 +4,7 @@ import json
 import logging
 from collections.abc import Mapping
 
-from contracts.shared_types import ToolExecutionResult, ToolStatus
+from i18n.t import t as _t
 
 logger = logging.getLogger(__name__)
 
@@ -24,53 +24,49 @@ def _pick(params: Mapping[str, object], *keys: str, default: str = "") -> str:
 # Imports are lazy (inside each function) so that a startup failure in one
 # external service does NOT kill the entire tool dispatcher.
 
-async def _weather(params: Mapping[str, object], lang: str = "en") -> ToolExecutionResult:
+async def _weather(params: Mapping[str, object], lang: str = "en") -> str:
     from external.weather import _extract_city, weather_service
 
     query = _pick(params, "query", "city")
     if not query:
-        return ToolExecutionResult("", ToolStatus.EMPTY, source="weather")
+        return ""
 
     city = await _extract_city(query)
     if not city:
-        return ToolExecutionResult("", ToolStatus.EMPTY, source="weather")
+        return ""
 
     data = await weather_service.get_current(city, lang=lang)
     if not data:
-        return ToolExecutionResult("", ToolStatus.EMPTY, source="weather")
+        return ""
 
-    return ToolExecutionResult(weather_service.format_current(data, lang=lang), ToolStatus.SUCCESS, source="weather")
+    return weather_service.format_current(data, lang=lang)
 
 
-async def _search(params: Mapping[str, object], lang: str = "en") -> ToolExecutionResult:
+async def _search(params: Mapping[str, object], lang: str = "en") -> str:
     # Query is already rewritten by _understand_query() in intent_engine.classify().
     # web_tools receives the final search query — no transformation needed here.
     from external.search import search_service
 
     query = _pick(params, "query")
     if not query:
-        return ToolExecutionResult("", ToolStatus.EMPTY, source="search")
+        return ""
 
-    outcome = await search_service.search_with_status(query, lang=lang)
-    if outcome.status.value == "provider_error":
-        return ToolExecutionResult("", ToolStatus.PROVIDER_ERROR, source="search", error=outcome.error)
-    if not outcome.results:
-        return ToolExecutionResult("", ToolStatus.EMPTY, source="search")
-    return ToolExecutionResult(search_service.format_results(outcome.results, lang=lang), ToolStatus.SUCCESS, source="search")
+    results = await search_service.search(query, lang=lang)
+    return search_service.format_results(results, lang=lang)
 
 
-async def _maps(params: Mapping[str, object], lang: str = "en") -> ToolExecutionResult:
+async def _maps(params: Mapping[str, object], lang: str = "en") -> str:
     from external.maps import maps_service
 
     # Pass query directly to Mapbox; it handles any language natively.
     query = _pick(params, "query", "location", "place")
     if not query:
-        return ToolExecutionResult("", ToolStatus.EMPTY, source="maps")
+        return ""
 
     feature = await maps_service.geocode(query, lang=lang)
     if not feature:
-        return ToolExecutionResult(maps_service.format_not_found(lang=lang), ToolStatus.EMPTY, source="maps")
-    return ToolExecutionResult(maps_service.format_geocode(feature, lang=lang), ToolStatus.SUCCESS, source="maps")
+        return maps_service.format_not_found(lang=lang)
+    return maps_service.format_geocode(feature, lang=lang)
 
 
 async def _extract_poi_parts_via_llm(query: str) -> tuple[str, str, bool]:
@@ -143,7 +139,7 @@ async def _extract_poi_parts_via_llm(query: str) -> tuple[str, str, bool]:
     return query, query, False
 
 
-async def _maps_poi(params: Mapping[str, object], lang: str = "en") -> ToolExecutionResult:
+async def _maps_poi(params: Mapping[str, object], lang: str = "en") -> str:
     from external.maps import maps_service
 
     query = _pick(params, "query")
@@ -161,7 +157,7 @@ async def _maps_poi(params: Mapping[str, object], lang: str = "en") -> ToolExecu
             )
             return await _search({"query": query}, lang)
     else:
-        return ToolExecutionResult("", ToolStatus.EMPTY, source="maps_poi")
+        return _t("need_city_or_area", lang)
 
     feature = await maps_service.search_poi(
         category=category or query,
@@ -169,19 +165,15 @@ async def _maps_poi(params: Mapping[str, object], lang: str = "en") -> ToolExecu
         lang=lang,
     )
     if not feature:
-        return ToolExecutionResult(
-            maps_service.format_poi_not_found(
-                category=category or query,
-                location=location or query,
-                lang=lang,
-            ),
-            ToolStatus.EMPTY,
-            source="maps_poi",
+        return maps_service.format_poi_not_found(
+            category=category or query,
+            location=location or query,
+            lang=lang,
         )
-    return ToolExecutionResult(maps_service.format_poi(feature, lang=lang), ToolStatus.SUCCESS, source="maps_poi")
+    return maps_service.format_poi(feature, lang=lang)
 
 
-async def _web_search_fallback(params: Mapping[str, object], lang: str = "en") -> ToolExecutionResult:
+async def _web_search_fallback(params: Mapping[str, object], lang: str = "en") -> str:
     return await _search(params, lang)
 
 
@@ -225,7 +217,7 @@ async def _extract_route_endpoints_via_llm(query: str) -> tuple[str, str]:
         return "", ""
 
 
-async def _maps_route(params: Mapping[str, object], lang: str = "en") -> ToolExecutionResult:
+async def _maps_route(params: Mapping[str, object], lang: str = "en") -> str:
     """
     Build a driving route between two locations using Mapbox Directions API.
     Endpoint extraction is delegated to the LLM (Groq) only when structured
@@ -241,14 +233,13 @@ async def _maps_route(params: Mapping[str, object], lang: str = "en") -> ToolExe
         origin, destination = await _extract_route_endpoints_via_llm(query)
 
     if not origin or not destination:
-        # Can't parse endpoints — fall back to web search for transport info
-        return await _search({"query": query or _pick(params, "location")}, lang)
+        return _t("need_route_origin", lang)
 
     route = await maps_service.get_route(origin=origin, destination=destination, lang=lang)
     if not route:
-        return ToolExecutionResult(maps_service.format_route_not_found(lang=lang), ToolStatus.EMPTY, source="maps_route")
+        return maps_service.format_route_not_found(lang=lang)
 
-    return ToolExecutionResult(maps_service.format_route(route, lang=lang), ToolStatus.SUCCESS, source="maps_route")
+    return maps_service.format_route(route, lang=lang)
 
 
 # ─── DISPATCHER ───────────────────────────────────────────────────────────────
@@ -264,11 +255,11 @@ _TOOL_MAP = {
 }
 
 
-async def run_tool(tool_name: str, params: dict | None, lang: str = "en") -> ToolExecutionResult:
+async def run_tool(tool_name: str, params: dict | None, lang: str = "en") -> str:
     fn = _TOOL_MAP.get(tool_name)
     if fn is None:
         logger.warning("Unknown tool", extra={"tool": tool_name})
-        return ToolExecutionResult("", ToolStatus.FAILED, source=tool_name)
+        return ""
 
     safe_params: Mapping[str, object] = params or {}
     call_lang = _pick(safe_params, "lang", default=lang)
@@ -279,7 +270,7 @@ async def run_tool(tool_name: str, params: dict | None, lang: str = "en") -> Too
     })
     result = await fn(safe_params, call_lang)
 
-    if not result.content:
-        logger.warning("Tool returned empty result", extra={"tool": tool_name, "status": result.status.value})
+    if not result:
+        logger.warning("Tool returned empty result", extra={"tool": tool_name})
 
     return result
