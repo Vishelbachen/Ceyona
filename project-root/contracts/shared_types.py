@@ -30,6 +30,22 @@ class TruthMode(str, Enum):
     GENERATIVE = "generative"  # свободная генерация (creative, conversation)
 
 
+class ToolStatus(str, Enum):
+    SUCCESS = "success"
+    EMPTY = "empty"
+    NOT_CONFIGURED = "not_configured"
+    PROVIDER_ERROR = "provider_error"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class ToolExecutionResult:
+    content: str = ""
+    status: ToolStatus = ToolStatus.SUCCESS
+    source: str = ""
+    error: str = ""
+
+
 class ReasoningDepth(str, Enum):
     """
     Capability axis: how much structured reasoning the request requires.
