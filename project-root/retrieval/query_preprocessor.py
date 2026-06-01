@@ -90,6 +90,17 @@ _ADVICE_MARKERS = {
     "was essen", "welche stadt", "was besuchen", "empfehl", "soll ich",
 }
 
+_RECALL_MARKERS = {
+    "remember", "recall", "identify", "what was", "what is the name", "title",
+    "anime", "manga", "movie", "film", "song", "album", "series", "game",
+    "help me remember", "i forgot", "trying to remember",
+    "вспомнить", "что это за", "как называлось", "название аниме", "аниме",
+    "мультфильм", "фильм", "песня", "сериал", "игра", "помоги вспомнить",
+    "me acuerdo", "recordar", "qué anime", "qué película", "qué canción",
+    "souvenir", "se souvenir", "quel anime", "quel film", "welcher film",
+    "welche serie", "welches spiel",
+}
+
 _DEFAULT_LANGUAGE = "en"
 
 
@@ -215,6 +226,8 @@ def _location_aliases(location: str) -> tuple[str, ...]:
 
 
 def _detect_query_kind(text: str) -> str:
+    if _contains_marker(text, _RECALL_MARKERS):
+        return "recall"
     if _contains_marker(text, _TRAVEL_MARKERS):
         return "travel"
     if _contains_marker(text, _HOTEL_MARKERS):
@@ -238,6 +251,11 @@ class QueryProfile:
     keywords: tuple[str, ...]
     keywords_ascii: tuple[str, ...]
     is_geo_query: bool
+    advice_requested: bool
+    travel_requested: bool
+    hotel_requested: bool
+    route_requested: bool
+    recall_requested: bool
 
 
 def normalize_query(text: str) -> str:
@@ -263,6 +281,15 @@ def extract_query_profile(text: str, lang: str | None = None) -> QueryProfile:
     if location_folded:
         keywords_ascii = tuple(token for token in keywords_ascii if token not in set(location_folded.split()))
 
+    advice_requested = query_kind == "advice"
+    hotel_requested = query_kind == "hotel"
+    travel_requested = query_kind == "travel"
+    recall_requested = query_kind == "recall"
+    route_requested = _contains_marker(normalized, _TRAVEL_MARKERS) and (
+        _contains_marker(normalized, {"route", "routes", "directions", "how to get", "how do i get", "from ", " to "})
+        or _contains_marker(normalized, {"airport", "аэропорт", "airport transfer", "transit", "transport"})
+    )
+
     return QueryProfile(
         raw_text=text,
         normalized_text=normalized,
@@ -274,6 +301,11 @@ def extract_query_profile(text: str, lang: str | None = None) -> QueryProfile:
         keywords=keywords,
         keywords_ascii=keywords_ascii,
         is_geo_query=bool(location) or query_kind in {"hotel", "travel", "advice", "discovery"},
+        advice_requested=advice_requested,
+        travel_requested=travel_requested,
+        hotel_requested=hotel_requested,
+        route_requested=route_requested,
+        recall_requested=recall_requested,
     )
 
 
