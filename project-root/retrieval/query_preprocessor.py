@@ -78,30 +78,17 @@ _SEARCH_FOCUS_MARKERS = {
     "preiswert", "günstig", "obere", "优先", "便宜", "最佳", "便捷",
 }
 
-_MAX_LOCATION_TOKENS = 8
-_LOCATION_NEGATIVE_CUES = (
-    " what ", " which ", " who ", " when ", " where ", " why ", " how ",
-    " best ", " popular ", " famous ", " recommend ", " suggestion ",
-    " можно ", " можете ", " можешь ", " какой ", " какая ", " какое ",
-    " что ", " посовет", " совет",
-)
-
-
-def _looks_like_location(candidate: str) -> bool:
-    candidate = _normalize_text(candidate)
-    if not candidate:
-        return False
-    if len(candidate.split()) > _MAX_LOCATION_TOKENS:
-        return False
-    if "?" in candidate or "!" in candidate:
-        return False
-    folded = f" {_ascii_fold(candidate)} "
-    if any(cue in folded for cue in _LOCATION_NEGATIVE_CUES):
-        return False
-    if any(ch.isdigit() for ch in candidate):
-        return False
-    return True
-
+_ADVICE_MARKERS = {
+    "recommend", "recommendation", "suggest", "advice", "best food", "best city",
+    "what to eat", "what to visit", "what should i eat", "what should i visit",
+    "where to eat", "where to go", "what is good", "what is popular",
+    "must try", "top food", "travel advice", "trip advice", "plan a trip",
+    "посовет", "что вкусного", "что попробовать", "куда поехать", "какой город лучше",
+    "что поесть", "что посетить", "лучший город", "совет", "рекомендац",
+    "me recomiendas", "qué comer", "qué ciudad", "qué visitar", "dónde ir",
+    "que manger", "quel ville", "que visiter", "ce qu'il faut manger",
+    "was essen", "welche stadt", "was besuchen", "empfehl", "soll ich",
+}
 
 _DEFAULT_LANGUAGE = "en"
 
@@ -201,18 +188,13 @@ def _extract_location(text: str) -> str:
 
     if not candidate and _contains_marker(normalized, _HOTEL_MARKERS | _TRAVEL_MARKERS):
         tail = _truncate_at_boundary(normalized)
-        parts = [p for p in re.split(r"[,.!?;:/\]", tail) if p.strip()]
+        parts = [p for p in re.split(r"[,.!?;:/\\\\]", tail) if p.strip()]
         if parts:
-            candidate = parts[0].strip()
+            candidate = parts[-1].strip()
 
     candidate = _strip_leading_modifiers(candidate)
     candidate = _truncate_at_boundary(candidate)
     candidate = _normalize_text(candidate)
-
-    # Prefer no location over a long or interrogative fragment.
-    if candidate and not _looks_like_location(candidate):
-        return ""
-
     return candidate
 
 
@@ -237,6 +219,8 @@ def _detect_query_kind(text: str) -> str:
         return "travel"
     if _contains_marker(text, _HOTEL_MARKERS):
         return "hotel"
+    if _contains_marker(text, _ADVICE_MARKERS):
+        return "advice"
     if _contains_marker(text, _SEARCH_FOCUS_MARKERS):
         return "discovery"
     return "generic"
@@ -265,7 +249,7 @@ def normalize_query(text: str) -> str:
 def extract_query_profile(text: str, lang: str | None = None) -> QueryProfile:
     normalized = normalize_query(text)
     query_kind = _detect_query_kind(normalized)
-    location = _extract_location(normalized) if query_kind in {"hotel", "travel"} else ""
+    location = _extract_location(normalized) if query_kind in {"hotel", "travel", "advice", "discovery"} else ""
     location_ascii = _ascii_fold(location) if location else ""
     aliases = _location_aliases(location)
 
@@ -289,7 +273,7 @@ def extract_query_profile(text: str, lang: str | None = None) -> QueryProfile:
         aliases=aliases,
         keywords=keywords,
         keywords_ascii=keywords_ascii,
-        is_geo_query=bool(location) or query_kind in {"hotel", "travel"},
+        is_geo_query=bool(location) or query_kind in {"hotel", "travel", "advice", "discovery"},
     )
 
 
