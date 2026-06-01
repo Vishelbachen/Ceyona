@@ -15,6 +15,7 @@ from contracts.shared_types import (
 from i18n.t import lang_instruction as _lang_directive
 from llm.prompt_policy import FORMAT_RULES as _FORMAT_RULES
 from llm.prompt_policy import NO_CUTOFF_RULE as _NO_CUTOFF
+from retrieval.query_preprocessor import extract_query_profile as _extract_query_profile
 
 if TYPE_CHECKING:
     pass
@@ -30,21 +31,23 @@ _MATCH_COUNT     = 7      # сколько ближайших примеров �
 # ─── INTENT TAXONOMY ──────────────────────────────────────────────────────────
 
 class Intent(str, Enum):
-    QUESTION     = "question"
-    CODE         = "code"
-    ANALYSIS     = "analysis"
-    CREATIVE     = "creative"
-    CONVERSATION = "conversation"
-    EMOTIONAL    = "emotional"
-    MATH         = "math"
-    INSTRUCTION  = "instruction"
-    WEATHER      = "weather"
-    SEARCH       = "search"
-    MAPS         = "maps"
-    MAPS_POI     = "maps_poi"
-    MAPS_ROUTE   = "maps_route"
-    EXAM         = "exam"
-    UNKNOWN      = "unknown"
+    QUESTION       = "question"
+    RECOMMENDATION  = "recommendation"
+    RECALL         = "recall"
+    CODE           = "code"
+    ANALYSIS       = "analysis"
+    CREATIVE       = "creative"
+    CONVERSATION   = "conversation"
+    EMOTIONAL      = "emotional"
+    MATH           = "math"
+    INSTRUCTION    = "instruction"
+    WEATHER        = "weather"
+    SEARCH         = "search"
+    MAPS           = "maps"
+    MAPS_POI       = "maps_poi"
+    MAPS_ROUTE     = "maps_route"
+    EXAM           = "exam"
+    UNKNOWN        = "unknown"
 
 # Интенты, которые требуют инструментов (tool contract — не меняется)
 _TOOL_MAP: dict[Intent, str] = {
@@ -180,6 +183,27 @@ def _resolve_routing(intent: Intent, confidence: float = 1.0) -> RoutingProfile:
             truth_mode=TruthMode.HYBRID,
         )
 
+    # ── RECOMMENDATION ───────────────────────────────────────────────────────
+    # Advice / planning / shortlist requests. Retrieval helps, but the answer
+    # must remain safe to produce even when live context is incomplete.
+    if intent == Intent.RECOMMENDATION:
+        return RoutingProfile(
+            retrieval_required=True,
+            reasoning_depth=ReasoningDepth.LIGHT,
+            domain_hint=DomainHint.GENERAL,
+            truth_mode=TruthMode.HYBRID,
+        )
+
+    # ── RECALL ───────────────────────────────────────────────────────────────
+    # Memory / title identification / "what was that anime?" style requests.
+    if intent == Intent.RECALL:
+        return RoutingProfile(
+            retrieval_required=True,
+            reasoning_depth=ReasoningDepth.LIGHT,
+            domain_hint=DomainHint.GENERAL,
+            truth_mode=TruthMode.HYBRID,
+        )
+
     # ── CREATIVE ─────────────────────────────────────────────────────────────
     if intent == Intent.CREATIVE:
         return RoutingProfile(
@@ -251,6 +275,22 @@ _BASE_PROMPTS: dict[Intent, str] = {
         "the setting/background. Be thorough and natural — like describing "
         "a photo to a friend. Don't announce that you 'cannot identify people' — "
         "just describe naturally without any identification attempt."
+        + "\n\n" + _NO_CUTOFF + _FORMAT_RULES
+    ),
+    Intent.RECOMMENDATION: (
+        "You are a practical recommendation assistant. "
+        "Give short ranked options when the user asks what to choose, where to go, "
+        "what to eat, where to stay, or how to plan something. "
+        "Do not invent live prices, availability, routes, or exact transport details. "
+        "If a key detail is missing for a live travel or hotel recommendation, ask one targeted follow-up question instead of guessing. "
+        "When the request is broad enough, answer with stable general knowledge and clearly separate that from live facts."
+        + "\n\n" + _NO_CUTOFF + _FORMAT_RULES
+    ),
+    Intent.RECALL: (
+        "You help identify a title, work, or memory from clues. "
+        "Never force a guess when the evidence is weak. "
+        "If the clues are insufficient, ask for one or two concrete details such as a scene, character, year, place, or visual feature. "
+        "Do not invent titles or pretend certainty."
         + "\n\n" + _NO_CUTOFF + _FORMAT_RULES
     ),
     Intent.INSTRUCTION: (
@@ -516,12 +556,13 @@ async def _understand_query(text: str) -> str:
 
 _LLM_PRE_CLASSIFY_PROMPT = (
     "Classify the user message into one of these categories:\n"
-    "- \"weather\"   — asking about weather conditions or forecast\n"
-    "- \"search\"    — looking for a place, route, accommodation, or explicit web search\n"
-    "- \"emotional\" — expressing emotions, frustration, or seeking emotional support\n"
-    "- \"recall\"    — trying to remember or identify a film, anime, book, song, game, "
+    "- \"weather\"        — asking about weather conditions or forecast\n"
+    "- \"search\"         — looking for a place, route, accommodation, or explicit web search\n"
+    "- \"recommendation\" — asking what to eat, where to go, where to stay, or what to choose\n"
+    "- \"recall\"         — trying to remember or identify a film, anime, book, song, game, "
     "or other media by describing it (plot, appearance, characters, scenes)\n"
-    "- \"none\"      — anything else (factual questions, code, math, instructions, analysis)\n\n"
+    "- \"emotional\"      — expressing emotions, frustration, or seeking emotional support\n"
+    "- \"none\"           — anything else (factual questions, code, math, instructions, analysis)\n\n"
     "Output ONLY the category label. No explanation.\n\n"
     "Message: {text}\n"
     "{history_block}"
@@ -545,7 +586,7 @@ async def _llm_pre_classify(text: str, history_context: str = "") -> str:
             temperature=0.0,
         )
         label = response.text.strip().lower().strip('"').strip("'")
-        if label in ("weather", "search", "emotional", "recall", "none"):
+        if label in ("weather", "search", "recommendation", "recall", "emotional", "none"):
             return label
     except Exception as exc:
         logger.warning("_llm_pre_classify failed", extra={"error": str(exc)})
@@ -582,6 +623,32 @@ async def classify(
                 for t in _recent
             )
 
+    profile = _extract_query_profile(text, lang)
+
+    # Deterministic route-first heuristics: advice / recall should not be forced
+    # into the strict live-search path.
+    if profile.recall_requested:
+        query = await _understand_query(text)
+        logger.info(
+            "classify: profile → RECALL",
+            extra={"lang": lang, "query": query[:60]},
+        )
+        return _build_result(Intent.RECALL, 0.90, lang, query)
+
+    if profile.hotel_requested or profile.advice_requested:
+        logger.info(
+            "classify: profile → RECOMMENDATION",
+            extra={"lang": lang, "query_kind": profile.query_kind},
+        )
+        return _build_result(Intent.RECOMMENDATION, 0.88, lang, text)
+
+    if profile.travel_requested and profile.route_requested and not profile.hotel_requested:
+        logger.info(
+            "classify: profile → MAPS_ROUTE",
+            extra={"lang": lang, "query_kind": profile.query_kind},
+        )
+        return _build_result(Intent.MAPS_ROUTE, 0.90, lang, text)
+
     pre_label = await _llm_pre_classify(text, history_context=_history_context)
 
     if pre_label == "weather":
@@ -596,17 +663,17 @@ async def classify(
         )
         return _build_result(Intent.SEARCH, 0.87, lang, query)
 
+    if pre_label == "recommendation":
+        logger.info("classify: LLM pre-check → RECOMMENDATION", extra={"lang": lang})
+        return _build_result(Intent.RECOMMENDATION, 0.83, lang, text)
+
     if pre_label == "recall":
-        # Media recall / descriptive identification: rewrite via _understand_query
-        # to produce a web-searchable keyword query, then route as SEARCH.
-        # This ensures retrieval fires (retrieval_required=True via GEO/SEARCH routing)
-        # and _understand_query strips conversational filler from the description.
         query = await _understand_query(text)
         logger.info(
-            "classify: LLM pre-check → SEARCH (recall)",
+            "classify: LLM pre-check → RECALL",
             extra={"lang": lang, "query": query[:60]},
         )
-        return _build_result(Intent.SEARCH, 0.83, lang, query)
+        return _build_result(Intent.RECALL, 0.83, lang, query)
 
     if pre_label == "emotional":
         logger.info("classify: LLM pre-check → EMOTIONAL", extra={"lang": lang})
