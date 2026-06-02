@@ -209,6 +209,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "mn": "⚠️ Хариу ирсэнгүй. Дахин оролдоно уу.",
     },
 
+    # ── No unsolicited code — used when code leaks into a non-code answer ──────
+    "no_unsolicited_code": {
+        "en": "I shouldn't show code here. Ask for code explicitly if you want an example.",
+        "ru": "Здесь не должен быть код. Если нужен пример, попроси код явно.",
+    },
+
     # ── clarification / missing-details prompts ───────────────────────────────
     "need_more_clues": {
         "en": "I need one or two more clues to identify this reliably. Tell me a scene, character, year, place, or feature you remember.",
