@@ -6,6 +6,7 @@ from contracts.shared_types import TruthMode
 from i18n.t import lang_instruction as _lang_instruction
 from llm.history_filter import select_relevant_history as _select_relevant_history
 from llm.prompt_policy import NO_CARRYOVER_RULE as _NO_CARRYOVER_RULE
+from llm.prompt_policy import VERIFIED_FACTS_RULE as _VERIFIED_FACTS_RULE
 from llm.prompt_policy import VARIATION_RULE as _VARIATION_RULE
 
 # ─── TRUTH ENFORCEMENT PROMPTS ───────────────────────────────────────────────
@@ -50,6 +51,9 @@ def build_messages(ctx: PromptContext) -> list[dict]:
     # ── intent-specific system prompt (second — model knows who it is first) ──
     if ctx.system_prompt:
         system_parts.append(ctx.system_prompt)
+
+    # Verified-facts guard: prefer grounded or retrieved facts over memory.
+    system_parts.append(_VERIFIED_FACTS_RULE)
 
     # ── truth enforcement (STRICT intents only) ───────────────────────────────
     # STRICT: MAPS, WEATHER, SEARCH — hallucination architecturally forbidden.
