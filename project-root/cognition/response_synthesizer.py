@@ -1,3 +1,8 @@
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+
 from cognition.intent_engine import Intent
 from contracts.shared_types import Tier
 from i18n.strings import _SILENT_KEYS, normalize_lang
