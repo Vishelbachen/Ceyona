@@ -23,10 +23,10 @@ from core.kernel.cost_model import actual_cost, estimate_cost, estimate_output_t
 from core.kernel.decision_matrix import select_tier
 from core.kernel.execution_policy_kernel import EPKInput, evaluate
 from llm.heavy_input_shaper import ShaperInput, shape
+from retrieval.query_preprocessor import extract_query_profile
 from llm.prompt_engine import PromptContext, build_messages
 from observability.metrics import gauge, increment
 from observability.tracing import trace
-from retrieval.query_preprocessor import extract_query_profile
 
 logger = logging.getLogger(__name__)
 
@@ -224,6 +224,18 @@ async def _run_tool(intent_result: IntentResult, lang: str) -> str | None:
         return None
 
 
+def _has_specific_airport_reference(text: str) -> bool:
+    """Return True when the user already named a concrete airport origin."""
+    if re.search(r"\b[A-Z]{3}\b", text):
+        return True
+
+    airport_patterns = [
+        r"\b[A-Z][\w'.-]*(?:\s+[A-Z][\w'.-]*)*\s+(?:airport|аэропорт|aeroporto|aéroport|flugha?fen|aeropuerto)\b",
+        r"\b(?:airport|аэропорт|aeroporto|aéroport|flugha?fen|aeropuerto)\s+[A-Z][\w'.-]*(?:\s+[A-Z][\w'.-]*)*\b",
+    ]
+    return any(re.search(pattern, text) for pattern in airport_patterns)
+
+
 def _needs_clarification(
     request: OrchestratorRequest,
     intent_result: IntentResult,
@@ -238,12 +250,17 @@ def _needs_clarification(
         return ""
 
     if intent_result.intent == Intent.RECOMMENDATION:
-        text = profile.normalized_text.casefold()
+        text = profile.normalized_text
+        lower = text.casefold()
+        if profile.route_requested:
+            if _has_specific_airport_reference(text):
+                return ""
+            if re.search(r"\b(airport|аэропорт|aeroporto|aéroport|flugha?fen|aeropuerto)\b", lower):
+                return "need_route_origin"
+            if re.search(r"\b(from|из|de|desde|von)\b.*\b(to|до|a|vers|nach)\b", lower):
+                return "need_route_origin"
         if (profile.hotel_requested or profile.travel_requested) and not profile.location:
             return "need_city_or_area"
-        if profile.route_requested:
-            if re.search(r"\b(airport|аэропорт|aeroporto|aéroport|flugha?fen|aeropuerto)\b", text):
-                return "need_route_origin"
 
     return ""
 
