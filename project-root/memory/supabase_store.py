@@ -16,6 +16,7 @@ class MemoryEntry:
     mem_type: str = "general"
     importance: float = 1.0
     metadata: dict | None = None
+    source_url: str | None = None
 
 
 @dataclass(frozen=True)
@@ -45,14 +46,17 @@ class SupabaseStore:
     async def insert(self, entry: MemoryEntry) -> bool:
         """Insert a new memory entry with embedding."""
         try:
-            self._db.table(_TABLE).insert({
+            payload = {
                 "user_id": entry.user_id,
                 "content": entry.content,
                 "embedding": entry.embedding,
                 "mem_type": entry.mem_type,
                 "importance": entry.importance,
                 "metadata": entry.metadata or {},
-            }).execute()
+            }
+            if entry.source_url:
+                payload["source_url"] = entry.source_url
+            self._db.table(_TABLE).insert(payload).execute()
             logger.info("Memory inserted", extra={
                 "user_id": entry.user_id,
                 "mem_type": entry.mem_type,
