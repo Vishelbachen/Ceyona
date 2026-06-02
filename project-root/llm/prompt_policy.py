@@ -13,6 +13,12 @@ NO_CUTOFF_RULE = (
     "Never imply certainty without evidence."
 )
 
+
+VERIFIED_FACTS_RULE = (
+    "FACTUALITY RULE: prefer verified or retrieved facts over memory when the user asks for current, specific, or location-dependent information. "
+    "If the answer cannot be verified, ask for one clarification or say that the evidence is insufficient."
+)
+
 NO_CARRYOVER_RULE = (
     "HISTORY RULE: use only conversation turns that are relevant to the current request. "
     "Do not carry over names, places, titles, or other facts from an unrelated previous topic just because they were recent. "
@@ -25,7 +31,7 @@ ANSWER_FIRST_RULE = (
 
 
 NO_UNSOLICITED_CODE_RULE = (
-    "CODE POLICY: do not output code, code blocks, stack traces, or scripts unless the user explicitly asks for code. "
+    "CODE POLICY: do not output code, code blocks, stack traces, scripts, or API examples unless the user explicitly asks for code. "
     "If the answer would otherwise contain code or a program listing in a non-code intent, replace it with a plain-language explanation or a short clarification instead."
 )
 
@@ -50,6 +56,7 @@ def join_rules(*rules: str) -> str:
 
 __all__ = [
     "NO_CUTOFF_RULE",
+    "VERIFIED_FACTS_RULE",
     "NO_CARRYOVER_RULE",
     "ANSWER_FIRST_RULE",
     "NO_UNSOLICITED_CODE_RULE",
