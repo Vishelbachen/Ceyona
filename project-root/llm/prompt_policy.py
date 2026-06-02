@@ -13,6 +13,12 @@ NO_CUTOFF_RULE = (
     "Never imply certainty without evidence."
 )
 
+NO_CARRYOVER_RULE = (
+    "HISTORY RULE: use only conversation turns that are relevant to the current request. "
+    "Do not carry over names, places, titles, or other facts from an unrelated previous topic just because they were recent. "
+    "If history is irrelevant or ambiguous, ignore it instead of blending topics."
+)
+
 ANSWER_FIRST_RULE = (
     "Open with the answer itself — the first word of your response is part of the answer."
 )
@@ -38,6 +44,7 @@ def join_rules(*rules: str) -> str:
 
 __all__ = [
     "NO_CUTOFF_RULE",
+    "NO_CARRYOVER_RULE",
     "ANSWER_FIRST_RULE",
     "FORMAT_RULES",
     "VARIATION_RULE",
