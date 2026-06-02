@@ -14,6 +14,7 @@ from contracts.shared_types import (
 )
 from i18n.t import lang_instruction as _lang_directive
 from llm.prompt_policy import FORMAT_RULES as _FORMAT_RULES
+from llm.prompt_policy import NO_CARRYOVER_RULE as _NO_CARRYOVER
 from llm.prompt_policy import NO_CUTOFF_RULE as _NO_CUTOFF
 from retrieval.query_preprocessor import extract_query_profile as _extract_query_profile
 
@@ -283,15 +284,17 @@ _BASE_PROMPTS: dict[Intent, str] = {
         "what to eat, where to stay, or how to plan something. "
         "Do not invent live prices, availability, routes, or exact transport details. "
         "If a key detail is missing for a live travel or hotel recommendation, ask one targeted follow-up question instead of guessing. "
+        "Never reuse a city, airport, hotel, or destination from an unrelated earlier turn just because it was recent. "
         "When the request is broad enough, answer with stable general knowledge and clearly separate that from live facts."
-        + "\n\n" + _NO_CUTOFF + _FORMAT_RULES
+        + "\n\n" + _NO_CUTOFF + _NO_CARRYOVER + _FORMAT_RULES
     ),
     Intent.RECALL: (
         "You help identify a title, work, or memory from clues. "
         "Never force a guess when the evidence is weak. "
         "If the clues are insufficient, ask for one or two concrete details such as a scene, character, year, place, or visual feature. "
-        "Do not invent titles or pretend certainty."
-        + "\n\n" + _NO_CUTOFF + _FORMAT_RULES
+        "Do not invent titles or pretend certainty. "
+        "Do not pull in unrelated earlier conversation topics."
+        + "\n\n" + _NO_CUTOFF + _NO_CARRYOVER + _FORMAT_RULES
     ),
     Intent.INSTRUCTION: (
         "You are a helpful assistant. "
