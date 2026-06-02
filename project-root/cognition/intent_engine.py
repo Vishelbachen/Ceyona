@@ -14,9 +14,9 @@ from contracts.shared_types import (
 )
 from i18n.t import lang_instruction as _lang_directive
 from llm.prompt_policy import FORMAT_RULES as _FORMAT_RULES
-from llm.prompt_policy import NO_UNSOLICITED_CODE_RULE as _NO_CODE
 from llm.prompt_policy import NO_CARRYOVER_RULE as _NO_CARRYOVER
 from llm.prompt_policy import NO_CUTOFF_RULE as _NO_CUTOFF
+from llm.prompt_policy import NO_UNSOLICITED_CODE_RULE as _NO_CODE
 from retrieval.query_preprocessor import extract_query_profile as _extract_query_profile
 
 if TYPE_CHECKING:
