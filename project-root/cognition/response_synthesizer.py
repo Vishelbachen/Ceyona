@@ -1,8 +1,3 @@
-from __future__ import annotations
-
-import logging
-from dataclasses import dataclass
-
 from cognition.intent_engine import Intent
 from contracts.shared_types import Tier
 from i18n.strings import _SILENT_KEYS, normalize_lang
@@ -68,27 +63,16 @@ def _strip_unwanted_code(text: str, intent: "Intent | None", lang: str) -> str:
     if intent in (_Intent.CODE, _Intent.MATH, _Intent.EXAM):
         return text
 
-    original = text
-    # Remove fenced code blocks first.
-    text = re.sub(r"```[\s\S]*?```", "", text)
-    # Remove obvious import/function/class lines and dense code-like lines.
-    code_like = re.compile(
-        r"^(?:\s*(?:from\s+\w+\s+import|import\s+\w+|def\s+\w+\(|class\s+\w+\(|return\s+|for\s+\w+\s+in\s+|if\s+.+:\s*$|while\s+.+:\s*$|try:\s*$|except\s+.+:\s*$|async\s+def\s+\w+\()|\s*```|\s*\w+\s*=\s*\w+\(.*\))",
-        re.IGNORECASE,
-    )
-    kept_lines = []
-    removed = False
-    for line in text.splitlines():
-        if code_like.match(line.strip()) or line.strip().startswith("    ") and any(tok in line for tok in ("=", "(", ")", ":")) and len(line.strip()) > 40:
-            removed = True
-            continue
-        kept_lines.append(line)
-    text = "\n".join(kept_lines)
-    text = re.sub(r"\n{3,}", "\n\n", text).strip()
-    if removed and len(text) < 20:
+    code_markers = [
+        re.compile(r"```"),
+        re.compile(r"^\s*(?:from\s+\w+\s+import|import\s+\w+|def\s+\w+\(|class\s+\w+\(|async\s+def\s+\w+\()", re.IGNORECASE | re.MULTILINE),
+        re.compile(r"^\s*\w+\s*=\s*\w+\(.*\)\s*$", re.IGNORECASE | re.MULTILINE),
+    ]
+    if any(pattern.search(text) for pattern in code_markers):
         from i18n.t import t as _t
-        return _t("default_deny", lang)
-    return text or original
+        return _t("no_unsolicited_code", lang)
+
+    return text
 
 
 def _convert_latex_to_plaintext(text: str) -> str:
