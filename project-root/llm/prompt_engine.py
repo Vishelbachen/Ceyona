@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from contracts.shared_types import TruthMode
 from i18n.t import lang_instruction as _lang_instruction
 from llm.history_filter import select_relevant_history as _select_relevant_history
+from llm.prompt_policy import NO_CARRYOVER_RULE as _NO_CARRYOVER_RULE
 from llm.prompt_policy import VARIATION_RULE as _VARIATION_RULE
 
 # ─── TRUTH ENFORCEMENT PROMPTS ───────────────────────────────────────────────
@@ -66,6 +67,7 @@ def build_messages(ctx: PromptContext) -> list[dict]:
     # Inserted before truth block so the model treats it as a core constraint,
     # not a low-priority hint. Anti-repetition is functional, not cosmetic.
     system_parts.insert(1, _VARIATION_RULE)
+    system_parts.insert(2, _NO_CARRYOVER_RULE)
 
     system = "\n\n".join(system_parts).strip()
     if system:
