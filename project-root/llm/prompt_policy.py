@@ -23,6 +23,12 @@ ANSWER_FIRST_RULE = (
     "Open with the answer itself — the first word of your response is part of the answer."
 )
 
+
+NO_UNSOLICITED_CODE_RULE = (
+    "CODE POLICY: do not output code, code blocks, stack traces, or scripts unless the user explicitly asks for code. "
+    "If the answer would otherwise contain code or a program listing in a non-code intent, replace it with a plain-language explanation or a short clarification instead."
+)
+
 FORMAT_RULES = (
     "FORMATTING — mandatory: "
     "Never use Markdown tables (no | pipes |). "
@@ -46,6 +52,7 @@ __all__ = [
     "NO_CUTOFF_RULE",
     "NO_CARRYOVER_RULE",
     "ANSWER_FIRST_RULE",
+    "NO_UNSOLICITED_CODE_RULE",
     "FORMAT_RULES",
     "VARIATION_RULE",
     "join_rules",
