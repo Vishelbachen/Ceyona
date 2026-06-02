@@ -22,6 +22,7 @@ _STOPWORDS = {
 }
 
 _MAX_SELECTED_TURNS = 6
+_MIN_HISTORY_OVERLAP = 0.18
 
 
 def _topic_terms(text: str) -> set[str]:
@@ -50,22 +51,25 @@ def select_relevant_history(user_message: str, history: list[dict] | None) -> li
         return None
 
     current_terms = _topic_terms(user_message)
-    short_form = len(user_message.split()) <= 8
-    keep_recent = 4 if short_form else 2
-
-    recent = history[-keep_recent:] if keep_recent > 0 else []
+    if not current_terms:
+        return None
 
     scored: list[tuple[float, int, dict]] = []
     for idx, turn in enumerate(history):
         content = str(turn.get("content") or "")
         if not content.strip():
             continue
-        if turn in recent:
-            scored.append((1.0, idx, turn))
-            continue
+
         overlap = _turn_overlap(current_terms, content)
-        if overlap >= 0.18:
-            scored.append((overlap, idx, turn))
+        if overlap < _MIN_HISTORY_OVERLAP:
+            continue
+
+        # Earlier turns should not dominate unless they clearly match the topic.
+        recency_bonus = 0.0
+        if idx >= max(0, len(history) - 2):
+            recency_bonus = 0.05
+
+        scored.append((overlap + recency_bonus, idx, turn))
 
     if not scored:
         return None
