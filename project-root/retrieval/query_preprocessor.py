@@ -285,9 +285,13 @@ def extract_query_profile(text: str, lang: str | None = None) -> QueryProfile:
     hotel_requested = query_kind == "hotel"
     travel_requested = query_kind == "travel"
     recall_requested = query_kind == "recall"
-    route_requested = _contains_marker(normalized, _TRAVEL_MARKERS) and (
-        _contains_marker(normalized, {"route", "routes", "directions", "how to get", "how do i get", "from ", " to "})
-        or _contains_marker(normalized, {"airport", "аэропорт", "airport transfer", "transit", "transport"})
+    route_requested = (
+        _contains_marker(normalized, {"route", "routes", "directions", "how to get", "how do i get"})
+        or (
+            _contains_marker(normalized, {"from ", " to "})
+            and _contains_marker(normalized, {"airport", "аэропорт", "aeroporto", "aéroport", "flughafen", "aeropuerto", "station", "вокзал", "станция", "transport", "transit"})
+        )
+        or _contains_marker(normalized, {"airport", "аэропорт", "aeroporto", "aéroport", "flughafen", "aeropuerto"})
     )
 
     return QueryProfile(
