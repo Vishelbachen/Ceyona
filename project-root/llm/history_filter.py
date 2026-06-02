@@ -25,6 +25,16 @@ _MAX_SELECTED_TURNS = 6
 _MIN_HISTORY_OVERLAP = 0.18
 
 
+_CLOSURE_MARKERS = {
+    "thanks", "thank you", "thx", "ok thanks", "okay thanks", "got it", "gotcha",
+    "i'll look it up myself", "i will look it up myself", "i'll find it myself",
+    "never mind", "never mind thanks", "that's enough", "that is enough",
+    "спасибо", "спс", "ладно спасибо", "я сам", "я сам найду", "дальше не надо",
+    "неважно", "не надо", "достаточно", "хватит", "пока всё",
+    "ok", "okay", "fine", "all good", "no thanks", "thanks anyway",
+}
+
+
 def _topic_terms(text: str) -> set[str]:
     terms: set[str] = set()
     for token in _WORD_RE.findall(text.lower()):
@@ -46,8 +56,26 @@ def _turn_overlap(current_terms: set[str], turn_text: str) -> float:
     return len(common) / max(1, min(len(current_terms), len(turn_terms)))
 
 
+def _is_closure_message(text: str) -> bool:
+    normalized = (text or "").strip().casefold()
+    if not normalized:
+        return False
+    for marker in _CLOSURE_MARKERS:
+        marker = marker.casefold()
+        if " " in marker:
+            if marker in normalized:
+                return True
+        else:
+            if re.search(rf"\b{re.escape(marker)}\b", normalized):
+                return True
+    return False
+
+
 def select_relevant_history(user_message: str, history: list[dict] | None) -> list[dict] | None:
     if not history:
+        return None
+
+    if _is_closure_message(user_message):
         return None
 
     current_terms = _topic_terms(user_message)
