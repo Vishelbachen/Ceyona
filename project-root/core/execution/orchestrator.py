@@ -23,10 +23,10 @@ from core.kernel.cost_model import actual_cost, estimate_cost, estimate_output_t
 from core.kernel.decision_matrix import select_tier
 from core.kernel.execution_policy_kernel import EPKInput, evaluate
 from llm.heavy_input_shaper import ShaperInput, shape
+from retrieval.query_preprocessor import extract_query_profile
 from llm.prompt_engine import PromptContext, build_messages
 from observability.metrics import gauge, increment
 from observability.tracing import trace
-from retrieval.query_preprocessor import extract_query_profile
 
 logger = logging.getLogger(__name__)
 
@@ -196,6 +196,41 @@ def _empty_usage(
         tier=tier,
         embedding_type=request.embedding_type,
         cost_usd=0.0,
+    )
+
+
+def _clarify_result(
+    key: str,
+    lang: str,
+    request: OrchestratorRequest,
+    tier: Tier = Tier.FAST,
+    embedding_type: str = "large",
+    epk_decision: EPKDecision = EPKDecision.DENY,
+) -> OrchestratorResult:
+    synthesis = synthesize(SynthesisInput(
+        raw_text=_t(key, lang),
+        intent=None,
+        tier=tier,
+        denied=False,
+        lang=lang,
+    ))
+    return OrchestratorResult(
+        text=synthesis.text,
+        tier=tier,
+        model="rule-based-clarification",
+        epk_decision=epk_decision,
+        usage=UsageRecord(
+            input_tokens=request.input_tokens,
+            output_tokens=0,
+            embedding_tokens=request.embedding_tokens,
+            rerank_tokens=request.rerank_tokens,
+            tier=tier,
+            embedding_type=embedding_type,
+            cost_usd=0.0,
+        ),
+        denied=False,
+        deny_reason="",
+        lang=lang,
     )
 
 
@@ -384,6 +419,24 @@ async def _run_allow(
         )
 
     if coordination.blocked:
+        if intent_result.intent == Intent.RECALL:
+            return _clarify_result(
+                "need_more_clues",
+                lang=lang,
+                request=request,
+                tier=tier,
+                embedding_type=request.embedding_type,
+                epk_decision=epk_decision,
+            )
+        if intent_result.intent == Intent.RECOMMENDATION:
+            return _clarify_result(
+                "no_grounded_data",
+                lang=lang,
+                request=request,
+                tier=tier,
+                embedding_type=request.embedding_type,
+                epk_decision=epk_decision,
+            )
         return _denied_result(
             reason=coordination.block_reason or "default_deny",
             lang=lang,
@@ -460,6 +513,24 @@ async def _run_degraded(
         )
 
     if coordination.blocked:
+        if intent_result.intent == Intent.RECALL:
+            return _clarify_result(
+                "need_more_clues",
+                lang=lang,
+                request=request,
+                tier=tier,
+                embedding_type=request.embedding_type,
+                epk_decision=epk_decision,
+            )
+        if intent_result.intent == Intent.RECOMMENDATION:
+            return _clarify_result(
+                "no_grounded_data",
+                lang=lang,
+                request=request,
+                tier=tier,
+                embedding_type=request.embedding_type,
+                epk_decision=epk_decision,
+            )
         return _denied_result(
             reason=coordination.block_reason or "default_deny",
             lang=lang,
@@ -558,6 +629,24 @@ async def _run_heavy(
     )
 
     if coordination.blocked:
+        if intent_result.intent == Intent.RECALL:
+            return _clarify_result(
+                "need_more_clues",
+                lang=lang,
+                request=request,
+                tier=tier,
+                embedding_type=request.embedding_type,
+                epk_decision=epk_decision,
+            )
+        if intent_result.intent == Intent.RECOMMENDATION:
+            return _clarify_result(
+                "no_grounded_data",
+                lang=lang,
+                request=request,
+                tier=tier,
+                embedding_type=request.embedding_type,
+                epk_decision=epk_decision,
+            )
         return _denied_result(
             reason=coordination.block_reason or "default_deny",
             lang=lang,
