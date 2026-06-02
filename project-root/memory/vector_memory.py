@@ -13,6 +13,8 @@ class VectorSearchResult:
     mem_type: str
     importance: float
     metadata: dict
+    source_url: str | None = None
+    similarity: float = 1.0
 
 
 class VectorMemory:
@@ -53,6 +55,7 @@ class VectorMemory:
                 mem_type=mem_type,
                 importance=importance,
                 metadata=metadata or {},
+                source_url=(metadata or {}).get("source_url"),
             )
             return await self._store.insert(entry)
 
@@ -95,6 +98,8 @@ class VectorMemory:
                     mem_type=r.mem_type,
                     importance=r.importance,
                     metadata=r.metadata,
+                    source_url=r.source_url,
+                    similarity=r.similarity,
                 )
                 for r in records
             ]
