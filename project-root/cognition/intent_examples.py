@@ -277,30 +277,29 @@ INTENT_EXAMPLES: dict[str, list[str]] = {
         "На каком транспорте доехать до центра из аэропорта?",
         "How to get from Heathrow airport to central London",
         "Best way from JFK to Manhattan",
-        "Public transport from airport to city centre",
-        # ── Media recall / descriptive identification ─────────────────────────
-        # Augmentation (май 2026): covers the semantic gap where QUESTION was
-        # incorrectly receiving descriptive "I'm trying to remember..." queries.
-        # These are retrieval tasks — the answer exists on the web, not in the
-        # model's parametric knowledge. They route as SEARCH so web retrieval fires.
-        "Помоги вспомнить аниме где девочка сражается с демонами",
+        "Public transport from airport to city centre",    ],
+
+
+    "recall": [
+        # ── Media / title recall ───────────────────────────────────────────────
+        "Help me remember an anime where the protagonist starts mute and wooden",
+        "I'm trying to recall an anime from 2019 about a farm and a holy child",
+        "What was that anime with an father who would sacrifice anything for prosperity and harvest?",
+        "I can't remember the title of the movie where the main character loses his memory",
+        "What is the name of the song that goes we will we will rock you?",
+        "Помоги вспомнить аниме, где главный герой в начале не умел говорить",
+        "Не помню название аниме про ферму и вечный урожай",
+        "Вспомни аниме, где отец готов пожертвовать всем ради благополучия земель",
+        "Что за фильм, где главный герой теряет память?",
+        "Напомни название песни, где есть строчка we will we will rock you",
         "Помоги найти мультфильм, который я смотрел в детстве",
-        "Вспомни название фильма где главный герой теряет память",
-        "Не помню название аниме, там был синеволосый персонаж",
-        "Help me remember a movie where the main character can see ghosts",
-        "I'm trying to recall an anime with a girl who has a magical sword",
-        "What's the name of that film where people are stuck in a time loop?",
-        "I saw an anime once about a school for assassins, what was it called?",
-        "There was a movie about a pianist who goes blind, what's the title?",
-        "Что за аниме, где у главного героя есть тетрадь смерти?",
-        "Помоги вспомнить игру где нужно строить подземелья",
-        "Что за фильм, где все живут в симуляции?",
-        "I'm looking for a book where kids go to a wizard school",
-        "What song goes 'we will we will rock you'?",
-        "Не могу вспомнить название сериала про химика который варит наркотики",
-        "Help me find the anime where the protagonist reincarnates as a slime",
-        "What's the game where you're stranded on an island and have to survive?",
-        "Вспомни аниме где главный герой получает суперсилу от призрака",
+        "Вспомни книгу про школу волшебников",
+        "Help me recall the anime with a blue-haired character and demons",
+        "What was that game about surviving on an island?",
+        "Quel est le film dont le héros perd la mémoire ?",
+        "¿Qué anime era ese sobre un protagonista sin voz al principio?",
+        "Welcher Anime war das mit dem stummen Helden am Anfang?",
+        "Вспомни сериал про химика, который варит наркотики",
     ],
 
     "maps": [
