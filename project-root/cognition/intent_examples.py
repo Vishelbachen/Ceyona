@@ -4,13 +4,12 @@ from __future__ import annotations
 # Структура: { "intent_name": ["пример 1", "пример 2", ...] }
 # Минимум 15 примеров на интент для надёжной классификации.
 #
-# Augmentation (сессия 4, май 2026):
-#   search — добавлены примеры recall / media identification / descriptive search.
-#   Это не новая категория — это заполнение семантической дыры в distribution.
-#   Раньше "помоги вспомнить аниме" падало в QUESTION (нет embedding-примеров).
-#   Теперь embedding-пространство SEARCH покрывает recall как подкласс.
-#   _llm_pre_classify перехватывает явные recall запросы через label "recall"
-#   до embedding — эти примеры усиливают embedding-слой как второй уровень защиты.
+# Augmentation (май 2026–июнь 2026):
+#   recommendation — отдельная категория для travel / food / hotel / city advice.
+#   recall — separate class for "what was that anime?" style memory lookups.
+#   search — still covers descriptive web-search recall as a backstop.
+#   This keeps advice/planning out of the generic QUESTION fallback and
+#   reduces hallucinations in broad travel or recommendation prompts.
 
 INTENT_EXAMPLES: dict[str, list[str]] = {
 
@@ -33,6 +32,34 @@ INTENT_EXAMPLES: dict[str, list[str]] = {
         "ما هي عاصمة روسيا؟",
         "كيف يعمل الذكاء الاصطناعي؟",
         "Як працює імунна система?",
+    ],
+
+    "recommendation": [
+        "What should I eat in the Netherlands?",
+        "Recommend a city to visit in Japan",
+        "Best area to stay in New York City",
+        "Where should I go for a first trip to Italy?",
+        "What are the must-try foods in Georgia?",
+        "Which hotel area is best in central London?",
+        "Suggest a 3-day itinerary for Kyoto",
+        "What is the best city to visit in the Netherlands?",
+        "Какие блюда стоит попробовать в Нидерландах?",
+        "В какой город лучше поехать в Японии?",
+        "Какой район лучше выбрать для отеля в Нью-Йорке?",
+        "Посоветуй маршрут на 3 дня в Токио",
+        "Что посмотреть в Риме за один день?",
+        "Qué comer en los Países Bajos?",
+        "Qué ciudad recomiendas visitar en Japón?",
+        "Où aller pour un premier voyage en Italie ?",
+        "Welcher Stadtteil ist in New York am besten zum Übernachten?",
+        "Dove conviene alloggiare a Londra in centro?",
+        "Günstigste und beste Gegend in Berlin für Hotels?",
+        "What is the rough budget for a trip to Tokyo?",
+        "How can I travel to Japan and what should I visit?",
+        "What should I know before a trip to the Netherlands?",
+        "Where should I stay near JFK airport?",
+        "What is the best place to visit in Amsterdam?",
+        "What food is famous in the Netherlands?",
     ],
 
     "code": [
