@@ -14,9 +14,9 @@ from contracts.shared_types import (
 )
 from i18n.t import lang_instruction as _lang_directive
 from llm.prompt_policy import FORMAT_RULES as _FORMAT_RULES
+from llm.prompt_policy import NO_UNSOLICITED_CODE_RULE as _NO_CODE
 from llm.prompt_policy import NO_CARRYOVER_RULE as _NO_CARRYOVER
 from llm.prompt_policy import NO_CUTOFF_RULE as _NO_CUTOFF
-from llm.prompt_policy import NO_UNSOLICITED_CODE_RULE as _NO_CODE
 from retrieval.query_preprocessor import extract_query_profile as _extract_query_profile
 
 if TYPE_CHECKING:
@@ -571,9 +571,10 @@ _LLM_PRE_CLASSIFY_PROMPT = (
     "Classify the user message into one of these categories:\n"
     "- \"weather\"        — asking about weather conditions or forecast\n"
     "- \"search\"         — looking for a place, route, accommodation, or explicit web search\n"
-    "- \"recommendation\" — asking what to eat, where to go, where to stay, or what to choose\n"
+    "- \"recommendation\" — asking what to eat, where to go, where to stay, what to choose, or how to plan a trip\n"
     "- \"recall\"         — trying to remember or identify a film, anime, book, song, game, "
     "or other media by describing it (plot, appearance, characters, scenes)\n"
+    "Do NOT classify broad travel / food / hotel / city advice as search unless the user explicitly asks for live current data.\n"
     "- \"emotional\"      — expressing emotions, frustration, or seeking emotional support\n"
     "- \"none\"           — anything else (factual questions, code, math, instructions, analysis)\n\n"
     "Output ONLY the category label. No explanation.\n\n"
