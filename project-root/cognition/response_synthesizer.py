@@ -59,6 +59,38 @@ def _structure(text: str, intent: "Intent | None") -> str:
     return text
 
 
+def _strip_unwanted_code(text: str, intent: "Intent | None", lang: str) -> str:
+    """Remove accidental code in non-code intents."""
+    import re
+
+    from cognition.intent_engine import Intent as _Intent
+
+    if intent in (_Intent.CODE, _Intent.MATH, _Intent.EXAM):
+        return text
+
+    original = text
+    # Remove fenced code blocks first.
+    text = re.sub(r"```[\s\S]*?```", "", text)
+    # Remove obvious import/function/class lines and dense code-like lines.
+    code_like = re.compile(
+        r"^(?:\s*(?:from\s+\w+\s+import|import\s+\w+|def\s+\w+\(|class\s+\w+\(|return\s+|for\s+\w+\s+in\s+|if\s+.+:\s*$|while\s+.+:\s*$|try:\s*$|except\s+.+:\s*$|async\s+def\s+\w+\()|\s*```|\s*\w+\s*=\s*\w+\(.*\))",
+        re.IGNORECASE,
+    )
+    kept_lines = []
+    removed = False
+    for line in text.splitlines():
+        if code_like.match(line.strip()) or line.strip().startswith("    ") and any(tok in line for tok in ("=", "(", ")", ":")) and len(line.strip()) > 40:
+            removed = True
+            continue
+        kept_lines.append(line)
+    text = "\n".join(kept_lines)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    if removed and len(text) < 20:
+        from i18n.t import t as _t
+        return _t("default_deny", lang)
+    return text or original
+
+
 def _convert_latex_to_plaintext(text: str) -> str:
     """
     Convert LaTeX math expressions to readable Unicode plaintext.
@@ -400,6 +432,7 @@ def synthesize(inp: SynthesisInput) -> SynthesisResult:
     text = _normalize_for_telegram(text)
     text = _strip_cot_artifacts(text, inp.intent, from_vision=inp.from_vision, lang=lang)   # §13.3: remove CoT scaffolding for non-MATH
     text = _structure(text, inp.intent)
+    text = _strip_unwanted_code(text, inp.intent, lang)
     text = _format(text)
     text = _apply_correction(text, inp.conversation_history)
     text = _apply_normalizer(text, lang, from_vision=inp.from_vision)
