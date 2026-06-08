@@ -16,20 +16,27 @@ jobs:
       - name: Configure OCI credentials
         env:
           OCI_PRIVATE_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_USER: ${{ secrets.OCI_USER_OCID }}
+          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_TENANCY: ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_REGION: ${{ secrets.OCI_REGION }}
         run: |
           mkdir -p ~/.oci
-          echo "$OCI_PRIVATE_KEY" > ~/.oci/oci_api_key.pem
-          chmod 600 ~/.oci/oci_api_key.pem
-          cat ~/.oci/oci_api_key.pem | head -1  # проверка что ключ записан
+          KEY_PATH="$HOME/.oci/oci_api_key.pem"
+          echo "$OCI_PRIVATE_KEY" > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
 
           cat > ~/.oci/config << EOF
           [DEFAULT]
-          user=${{ secrets.OCI_USER_OCID }}
-          fingerprint=${{ secrets.OCI_FINGERPRINT }}
-          tenancy=${{ secrets.OCI_TENANCY_OCID }}
-          region=${{ secrets.OCI_REGION }}
-          key_file=/root/.oci/oci_api_key.pem
+          user=$OCI_USER
+          fingerprint=$OCI_FINGERPRINT
+          tenancy=$OCI_TENANCY
+          region=$OCI_REGION
+          key_file=$KEY_PATH
           EOF
+
+          echo "✅ Config written, key at $KEY_PATH"
+          ls -la "$KEY_PATH"
 
       - name: Test OCI auth
         run: oci iam region list --output table
