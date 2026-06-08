@@ -27,7 +27,11 @@ jobs:
           key_file=/root/.oci/oci_api_key.pem
           EOF
 
-      - name: Setup VCN and Subnet (if not exists)
+      - name: Test OCI auth
+        run: |
+          oci iam region list --output table
+
+      - name: Setup VCN and Subnet
         id: network
         run: |
           COMPARTMENT="${{ secrets.OCI_COMPARTMENT_OCID }}"
@@ -36,38 +40,39 @@ jobs:
           VCN_ID=$(oci network vcn list \
             --compartment-id "$COMPARTMENT" \
             --query 'data[?contains("display-name", `ceyona`)].id | [0]' \
-            --raw-output 2>/dev/null || echo "")
+            --raw-output 2>&1 || true)
+          echo "VCN search result: $VCN_ID"
 
-          if [ -z "$VCN_ID" ] || [ "$VCN_ID" = "null" ]; then
+          if [ -z "$VCN_ID" ] || [ "$VCN_ID" = "null" ] || [ "$VCN_ID" = "None" ]; then
             echo "Создаём VCN..."
-            VCN_ID=$(oci network vcn create \
+            VCN_RESULT=$(oci network vcn create \
               --compartment-id "$COMPARTMENT" \
               --cidr-block "10.0.0.0/16" \
               --display-name "ceyona-vcn" \
-              --wait-for-state AVAILABLE \
-              --query 'data.id' --raw-output 2>/dev/null)
-            
-            # Internet Gateway
+              --wait-for-state AVAILABLE 2>&1)
+            echo "VCN create result: $VCN_RESULT"
+            VCN_ID=$(echo "$VCN_RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['id'])")
+
+            echo "Internet Gateway..."
             IGW_ID=$(oci network internet-gateway create \
               --compartment-id "$COMPARTMENT" \
               --vcn-id "$VCN_ID" \
               --is-enabled true \
               --display-name "ceyona-igw" \
               --wait-for-state AVAILABLE \
-              --query 'data.id' --raw-output 2>/dev/null)
+              --query 'data.id' --raw-output)
 
-            # Route table
             RT_ID=$(oci network route-table list \
               --compartment-id "$COMPARTMENT" \
               --vcn-id "$VCN_ID" \
-              --query 'data[0].id' --raw-output 2>/dev/null)
+              --query 'data[0].id' --raw-output)
 
             oci network route-table update \
               --rt-id "$RT_ID" \
               --route-rules "[{\"networkEntityId\":\"$IGW_ID\",\"destination\":\"0.0.0.0/0\",\"destinationType\":\"CIDR_BLOCK\"}]" \
-              --force 2>/dev/null
+              --force
 
-            # Subnet
+            echo "Создаём Subnet..."
             SUBNET_ID=$(oci network subnet create \
               --compartment-id "$COMPARTMENT" \
               --vcn-id "$VCN_ID" \
@@ -75,17 +80,17 @@ jobs:
               --display-name "ceyona-subnet" \
               --route-table-id "$RT_ID" \
               --wait-for-state AVAILABLE \
-              --query 'data.id' --raw-output 2>/dev/null)
+              --query 'data.id' --raw-output)
           else
             echo "VCN уже существует: $VCN_ID"
             SUBNET_ID=$(oci network subnet list \
               --compartment-id "$COMPARTMENT" \
               --vcn-id "$VCN_ID" \
-              --query 'data[0].id' --raw-output 2>/dev/null)
+              --query 'data[0].id' --raw-output)
           fi
 
           echo "subnet_id=$SUBNET_ID" >> $GITHUB_OUTPUT
-          echo "Subnet: $SUBNET_ID"
+          echo "Subnet готов: $SUBNET_ID"
 
       - name: Find Ubuntu 22.04 ARM image
         id: image
@@ -99,7 +104,7 @@ jobs:
             --sort-order DESC \
             --limit 1 \
             --query 'data[0].id' \
-            --raw-output 2>/dev/null)
+            --raw-output)
           echo "ocid=$IMAGE_OCID" >> $GITHUB_OUTPUT
           echo "Image: $IMAGE_OCID"
 
@@ -123,10 +128,10 @@ jobs:
               --display-name "ceyona-bot" \
               2>&1 || true)
 
-            if echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['id'])" 2>/dev/null; then
-              INSTANCE_ID=$(echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['id'])")
-              echo "✅ VM создаётся: $INSTANCE_ID"
+            INSTANCE_ID=$(echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['id'])" 2>/dev/null || echo "")
 
+            if [ -n "$INSTANCE_ID" ]; then
+              echo "✅ VM создаётся: $INSTANCE_ID"
               for i in $(seq 1 30); do
                 sleep 10
                 STATE=$(oci compute instance get --instance-id "$INSTANCE_ID" \
@@ -145,7 +150,7 @@ jobs:
               done
               break
             else
-              ERR=$(echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('message','unknown'))" 2>/dev/null || echo "ошибка парсинга")
+              ERR=$(echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('message',''))" 2>/dev/null || echo "$RESULT")
               echo "✗ $AD: $ERR"
             fi
           done
