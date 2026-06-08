@@ -14,10 +14,14 @@ jobs:
         run: pip install oci-cli --quiet
 
       - name: Configure OCI credentials
+        env:
+          OCI_PRIVATE_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
         run: |
           mkdir -p ~/.oci
-          printf '%s' '${{ secrets.OCI_PRIVATE_KEY }}' > ~/.oci/oci_api_key.pem
+          echo "$OCI_PRIVATE_KEY" > ~/.oci/oci_api_key.pem
           chmod 600 ~/.oci/oci_api_key.pem
+          cat ~/.oci/oci_api_key.pem | head -1  # проверка что ключ записан
+
           cat > ~/.oci/config << EOF
           [DEFAULT]
           user=${{ secrets.OCI_USER_OCID }}
@@ -28,20 +32,18 @@ jobs:
           EOF
 
       - name: Test OCI auth
-        run: |
-          oci iam region list --output table
+        run: oci iam region list --output table
 
       - name: Setup VCN and Subnet
         id: network
         run: |
           COMPARTMENT="${{ secrets.OCI_COMPARTMENT_OCID }}"
 
-          # Ищем существующий VCN
           VCN_ID=$(oci network vcn list \
             --compartment-id "$COMPARTMENT" \
             --query 'data[?contains("display-name", `ceyona`)].id | [0]' \
             --raw-output 2>&1 || true)
-          echo "VCN search result: $VCN_ID"
+          echo "VCN search: $VCN_ID"
 
           if [ -z "$VCN_ID" ] || [ "$VCN_ID" = "null" ] || [ "$VCN_ID" = "None" ]; then
             echo "Создаём VCN..."
@@ -50,10 +52,9 @@ jobs:
               --cidr-block "10.0.0.0/16" \
               --display-name "ceyona-vcn" \
               --wait-for-state AVAILABLE 2>&1)
-            echo "VCN create result: $VCN_RESULT"
+            echo "$VCN_RESULT"
             VCN_ID=$(echo "$VCN_RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['id'])")
 
-            echo "Internet Gateway..."
             IGW_ID=$(oci network internet-gateway create \
               --compartment-id "$COMPARTMENT" \
               --vcn-id "$VCN_ID" \
@@ -72,7 +73,6 @@ jobs:
               --route-rules "[{\"networkEntityId\":\"$IGW_ID\",\"destination\":\"0.0.0.0/0\",\"destinationType\":\"CIDR_BLOCK\"}]" \
               --force
 
-            echo "Создаём Subnet..."
             SUBNET_ID=$(oci network subnet create \
               --compartment-id "$COMPARTMENT" \
               --vcn-id "$VCN_ID" \
@@ -82,7 +82,7 @@ jobs:
               --wait-for-state AVAILABLE \
               --query 'data.id' --raw-output)
           else
-            echo "VCN уже существует: $VCN_ID"
+            echo "VCN существует: $VCN_ID"
             SUBNET_ID=$(oci network subnet list \
               --compartment-id "$COMPARTMENT" \
               --vcn-id "$VCN_ID" \
@@ -90,7 +90,7 @@ jobs:
           fi
 
           echo "subnet_id=$SUBNET_ID" >> $GITHUB_OUTPUT
-          echo "Subnet готов: $SUBNET_ID"
+          echo "Subnet: $SUBNET_ID"
 
       - name: Find Ubuntu 22.04 ARM image
         id: image
@@ -163,6 +163,6 @@ jobs:
       - name: Notify Telegram
         if: steps.provision.outputs.vm_created == 'true'
         run: |
-          TEXT="✅ Oracle VM создана!%0A%0A🌐 IP: ${{ steps.provision.outputs.vm_ip }}%0A📍 AD: ${{ steps.provision.outputs.vm_ad }}%0A%0AОтключи этот workflow в GitHub Actions."
+          TEXT="✅ Oracle VM создана!%0A%0A🌐 IP: ${{ steps.provision.outputs.vm_ip }}%0A📍 AD: ${{ steps.provision.outputs.vm_ad }}%0A%0AОтключи workflow в GitHub Actions."
           curl -s -X POST "https://api.telegram.org/bot${{ secrets.BOT_TOKEN }}/sendMessage" \
             -d "chat_id=${{ secrets.ADMIN_CHAT_ID }}&text=$TEXT&parse_mode=HTML"
