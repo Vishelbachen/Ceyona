@@ -472,6 +472,7 @@ class TestPromptEngine:
 
     def test_build_messages_conversation_history_injected(self):
         from llm.prompt_engine import PromptContext, build_messages
+
         # History content must share topic terms with user_message to pass
         # select_relevant_history's overlap filter (_MIN_HISTORY_OVERLAP=0.18).
         history = [
