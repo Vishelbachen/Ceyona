@@ -30,17 +30,17 @@ jobs:
         run: oci iam region list --output table
 
       - name: Check if VM already exists
-  id: check
-  run: |
-    RAW=$(oci compute instance list \
-      --compartment-id "${{ secrets.OCI_COMPARTMENT_OCID }}" \
-      --display-name "ceyona-bot" \
-      --lifecycle-state RUNNING \
-      --query 'length(data)' \
-      --raw-output 2>/dev/null || echo "0")
-    COUNT="${RAW:-0}"
-    echo "COUNT=$COUNT"
-    echo "count=$COUNT" >> $GITHUB_OUTPUT
+      id: check
+      run: |
+        RAW=$(oci compute instance list \
+          --compartment-id "${{ secrets.OCI_COMPARTMENT_OCID }}" \
+          --display-name "ceyona-bot" \
+          --lifecycle-state RUNNING \
+          --query 'length(data)' \
+          --raw-output 2>/dev/null || echo "0")
+        COUNT="${RAW:-0}"
+        echo "COUNT=$COUNT"
+        echo "count=$COUNT" >> $GITHUB_OUTPUT
 
       - name: Setup VCN and Subnet
         id: network
