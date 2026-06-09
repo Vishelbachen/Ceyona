@@ -15,7 +15,7 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const workflows = ['oci-provision-a.yml', 'oci-provision-b.yml', 'oci-provision-c.yml'];
+            const workflows = ['oci-provision-a.yml'];
             for (const wf of workflows) {
               try {
                 await github.rest.actions.enableWorkflow({
