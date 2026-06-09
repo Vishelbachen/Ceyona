@@ -889,6 +889,7 @@ class TestRetrievalEngine:
 
         fake_record = MagicMock()
         fake_record.content = "relevant document content"
+        fake_record.similarity = 0.9
 
         with (
             patch("retrieval.retrieval_engine.bge_engine") as mock_bge,
@@ -902,6 +903,10 @@ class TestRetrievalEngine:
             mock_store.similarity_search = AsyncMock(return_value=[fake_record])
             mock_store_cls.return_value = mock_store
 
+            # score_memory_records is called first on raw MemoryRecord rows;
+            # must return a list with .content and .similarity attributes.
+            mock_cred.score_memory_records = MagicMock(return_value=[fake_record])
+            # score_documents is called after conversion to (content, score) tuples.
             mock_cred.score_documents = MagicMock(
                 side_effect=lambda docs: docs  # pass-through
             )
