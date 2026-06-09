@@ -430,17 +430,22 @@ class TestPromptEngine:
         assert _TRUTH_STRICT in system_msg["content"]
 
     def test_build_messages_hybrid_truth_block(self):
+        # _TRUTH_HYBRID was deliberately removed per audit.md §session-4.
+        # HYBRID intents receive retrieved context injected into the user turn as raw text.
+        # Adding an explicit truth block caused meta-awareness loop (model narrated
+        # about the context instead of using it). HYBRID → no truth block in system prompt.
         from contracts.shared_types import TruthMode
-        from llm.prompt_engine import _TRUTH_HYBRID, PromptContext, build_messages
+        from llm.prompt_engine import _TRUTH_STRICT, PromptContext, build_messages
         ctx = PromptContext(user_message="q", truth_mode=TruthMode.HYBRID)
         msgs = build_messages(ctx)
         system_msg = next(m for m in msgs if m["role"] == "system")
-        assert _TRUTH_HYBRID in system_msg["content"]
+        assert _TRUTH_STRICT not in system_msg["content"]
 
     def test_build_messages_generative_no_truth_block(self):
+        # _TRUTH_HYBRID removed per audit.md §session-4; only STRICT still exists.
+        # GENERATIVE intents use no retrieval and no truth block at all.
         from contracts.shared_types import TruthMode
         from llm.prompt_engine import (
-            _TRUTH_HYBRID,
             _TRUTH_STRICT,
             PromptContext,
             build_messages,
@@ -450,7 +455,6 @@ class TestPromptEngine:
         system_msg = next((m for m in msgs if m["role"] == "system"), None)
         if system_msg:
             assert _TRUTH_STRICT not in system_msg["content"]
-            assert _TRUTH_HYBRID not in system_msg["content"]
 
     def test_build_messages_context_injected_into_user_turn(self):
         from llm.prompt_engine import PromptContext, build_messages
@@ -468,11 +472,13 @@ class TestPromptEngine:
 
     def test_build_messages_conversation_history_injected(self):
         from llm.prompt_engine import PromptContext, build_messages
+        # History content must share topic terms with user_message to pass
+        # select_relevant_history's overlap filter (_MIN_HISTORY_OVERLAP=0.18).
         history = [
-            {"role": "user", "content": "Previous"},
-            {"role": "assistant", "content": "Response"},
+            {"role": "user", "content": "What is Python programming?"},
+            {"role": "assistant", "content": "Python is a programming language."},
         ]
-        ctx = PromptContext(user_message="New", conversation_history=history)
+        ctx = PromptContext(user_message="Tell me about Python programming", conversation_history=history)
         msgs = build_messages(ctx)
         roles = [m["role"] for m in msgs]
         assert "user" in roles
