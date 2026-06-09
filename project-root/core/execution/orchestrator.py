@@ -28,6 +28,7 @@ from llm.prompt_engine import PromptContext, build_messages
 from observability.metrics import gauge, increment
 from observability.tracing import trace
 from retrieval.query_preprocessor import extract_query_profile
+from i18n.t import t
 
 logger = logging.getLogger(__name__)
 
