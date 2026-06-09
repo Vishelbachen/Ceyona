@@ -24,14 +24,7 @@ jobs:
           KEY_PATH="$HOME/.oci/oci_api_key.pem"
           printf '%s' "$OCI_PRIVATE_KEY" > "$KEY_PATH"
           chmod 600 "$KEY_PATH"
-          cat > ~/.oci/config << EOF
-[DEFAULT]
-user=$OCI_USER
-fingerprint=$OCI_FINGERPRINT
-tenancy=$OCI_TENANCY
-region=$OCI_REGION
-key_file=$KEY_PATH
-EOF
+          printf '[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s\n'             "$OCI_USER" "$OCI_FINGERPRINT" "$OCI_TENANCY" "$OCI_REGION" "$KEY_PATH"             > ~/.oci/config
 
       - name: Test OCI auth
         run: oci iam region list --output table
@@ -39,12 +32,7 @@ EOF
       - name: Check if VM already exists
         id: check
         run: |
-          COUNT=$(oci compute instance list \
-            --compartment-id "${{ secrets.OCI_COMPARTMENT_OCID }}" \
-            --display-name "ceyona-bot" \
-            --lifecycle-state RUNNING \
-            --query 'length(data)' \
-            --raw-output 2>/dev/null || echo "0")
+          COUNT=$(oci compute instance list             --compartment-id "${{ secrets.OCI_COMPARTMENT_OCID }}"             --display-name "ceyona-bot"             --lifecycle-state RUNNING             --query 'length(data)'             --raw-output 2>/dev/null || echo "0")
           echo "count=$COUNT" >> $GITHUB_OUTPUT
 
       - name: Setup VCN and Subnet
@@ -52,52 +40,22 @@ EOF
         if: steps.check.outputs.count == '0'
         run: |
           COMPARTMENT="${{ secrets.OCI_COMPARTMENT_OCID }}"
-          VCN_ID=$(oci network vcn list \
-            --compartment-id "$COMPARTMENT" \
-            --query 'data[?contains("display-name", `ceyona`)].id | [0]' \
-            --raw-output 2>/dev/null || echo "")
+          VCN_ID=$(oci network vcn list             --compartment-id "$COMPARTMENT"             --query 'data[?contains("display-name", `ceyona`)].id | [0]'             --raw-output 2>/dev/null || echo "")
 
           if [ -z "$VCN_ID" ] || [ "$VCN_ID" = "null" ] || [ "$VCN_ID" = "None" ]; then
             echo "Создаём VCN..."
-            VCN_ID=$(oci network vcn create \
-              --compartment-id "$COMPARTMENT" \
-              --cidr-block "10.0.0.0/16" \
-              --display-name "ceyona-vcn" \
-              --wait-for-state AVAILABLE \
-              --query 'data.id' --raw-output)
+            VCN_ID=$(oci network vcn create               --compartment-id "$COMPARTMENT"               --cidr-block "10.0.0.0/16"               --display-name "ceyona-vcn"               --wait-for-state AVAILABLE               --query 'data.id' --raw-output)
 
-            IGW_ID=$(oci network internet-gateway create \
-              --compartment-id "$COMPARTMENT" \
-              --vcn-id "$VCN_ID" \
-              --is-enabled true \
-              --display-name "ceyona-igw" \
-              --wait-for-state AVAILABLE \
-              --query 'data.id' --raw-output)
+            IGW_ID=$(oci network internet-gateway create               --compartment-id "$COMPARTMENT"               --vcn-id "$VCN_ID"               --is-enabled true               --display-name "ceyona-igw"               --wait-for-state AVAILABLE               --query 'data.id' --raw-output)
 
-            RT_ID=$(oci network route-table list \
-              --compartment-id "$COMPARTMENT" \
-              --vcn-id "$VCN_ID" \
-              --query 'data[0].id' --raw-output)
+            RT_ID=$(oci network route-table list               --compartment-id "$COMPARTMENT"               --vcn-id "$VCN_ID"               --query 'data[0].id' --raw-output)
 
-            oci network route-table update \
-              --rt-id "$RT_ID" \
-              --route-rules "[{\"networkEntityId\":\"$IGW_ID\",\"destination\":\"0.0.0.0/0\",\"destinationType\":\"CIDR_BLOCK\"}]" \
-              --force
+            oci network route-table update               --rt-id "$RT_ID"               --route-rules "[{\"networkEntityId\":\"$IGW_ID\",\"destination\":\"0.0.0.0/0\",\"destinationType\":\"CIDR_BLOCK\"}]"               --force
 
-            SUBNET_ID=$(oci network subnet create \
-              --compartment-id "$COMPARTMENT" \
-              --vcn-id "$VCN_ID" \
-              --cidr-block "10.0.0.0/24" \
-              --display-name "ceyona-subnet" \
-              --route-table-id "$RT_ID" \
-              --wait-for-state AVAILABLE \
-              --query 'data.id' --raw-output)
+            SUBNET_ID=$(oci network subnet create               --compartment-id "$COMPARTMENT"               --vcn-id "$VCN_ID"               --cidr-block "10.0.0.0/24"               --display-name "ceyona-subnet"               --route-table-id "$RT_ID"               --wait-for-state AVAILABLE               --query 'data.id' --raw-output)
           else
             echo "VCN существует: $VCN_ID"
-            SUBNET_ID=$(oci network subnet list \
-              --compartment-id "$COMPARTMENT" \
-              --vcn-id "$VCN_ID" \
-              --query 'data[0].id' --raw-output)
+            SUBNET_ID=$(oci network subnet list               --compartment-id "$COMPARTMENT"               --vcn-id "$VCN_ID"               --query 'data[0].id' --raw-output)
           fi
 
           echo "subnet_id=$SUBNET_ID" >> $GITHUB_OUTPUT
@@ -106,16 +64,7 @@ EOF
         id: image
         if: steps.check.outputs.count == '0'
         run: |
-          IMAGE_OCID=$(oci compute image list \
-            --compartment-id "${{ secrets.OCI_COMPARTMENT_OCID }}" \
-            --operating-system "Canonical Ubuntu" \
-            --operating-system-version "22.04" \
-            --shape "VM.Standard.A1.Flex" \
-            --sort-by TIMECREATED \
-            --sort-order DESC \
-            --limit 1 \
-            --query 'data[0].id' \
-            --raw-output)
+          IMAGE_OCID=$(oci compute image list             --compartment-id "${{ secrets.OCI_COMPARTMENT_OCID }}"             --operating-system "Canonical Ubuntu"             --operating-system-version "22.04"             --shape "VM.Standard.A1.Flex"             --sort-by TIMECREATED             --sort-order DESC             --limit 1             --query 'data[0].id'             --raw-output)
           echo "ocid=$IMAGE_OCID" >> $GITHUB_OUTPUT
 
       - name: Try all ADs until success
@@ -124,37 +73,23 @@ EOF
         run: |
           ADS=("KZeC:EU-FRANKFURT-1-AD-1" "KZeC:EU-FRANKFURT-1-AD-2" "KZeC:EU-FRANKFURT-1-AD-3")
           VM_CREATED=false
-          SSH_KEY="${{ secrets.OCI_SSH_PUBLIC_KEY }}"
           KEYFILE=$(mktemp)
-          echo "$SSH_KEY" > "$KEYFILE"
+          printf '%s' "${{ secrets.OCI_SSH_PUBLIC_KEY }}" > "$KEYFILE"
 
           for AD in "${ADS[@]}"; do
-            echo "→ Пробуем $AD..."
-            RESULT=$(oci compute instance launch \
-              --availability-domain "$AD" \
-              --compartment-id "${{ secrets.OCI_COMPARTMENT_OCID }}" \
-              --shape "VM.Standard.A1.Flex" \
-              --shape-config '{"ocpus":4,"memoryInGBs":24}' \
-              --image-id "${{ steps.image.outputs.ocid }}" \
-              --subnet-id "${{ steps.network.outputs.subnet_id }}" \
-              --assign-public-ip true \
-              --ssh-authorized-keys-file "$KEYFILE" \
-              --display-name "ceyona-bot" \
-              2>&1 || true)
+            echo "Пробуем $AD..."
+            RESULT=$(oci compute instance launch               --availability-domain "$AD"               --compartment-id "${{ secrets.OCI_COMPARTMENT_OCID }}"               --shape "VM.Standard.A1.Flex"               --shape-config '{"ocpus":4,"memoryInGBs":24}'               --image-id "${{ steps.image.outputs.ocid }}"               --subnet-id "${{ steps.network.outputs.subnet_id }}"               --assign-public-ip true               --ssh-authorized-keys-file "$KEYFILE"               --display-name "ceyona-bot"               2>&1 || true)
 
             INSTANCE_ID=$(echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['id'])" 2>/dev/null || echo "")
 
             if [ -n "$INSTANCE_ID" ]; then
-              echo "✅ VM создаётся: $INSTANCE_ID"
+              echo "VM создаётся: $INSTANCE_ID"
               for i in $(seq 1 30); do
                 sleep 10
-                STATE=$(oci compute instance get --instance-id "$INSTANCE_ID" \
-                  --query 'data."lifecycle-state"' --raw-output 2>/dev/null || echo "UNKNOWN")
-                echo "  Статус: $STATE ($i/30)"
+                STATE=$(oci compute instance get --instance-id "$INSTANCE_ID"                   --query 'data."lifecycle-state"' --raw-output 2>/dev/null || echo "UNKNOWN")
+                echo "Статус: $STATE ($i/30)"
                 if [ "$STATE" = "RUNNING" ]; then
-                  PUBLIC_IP=$(oci compute instance list-vnics \
-                    --instance-id "$INSTANCE_ID" \
-                    --query 'data[0]."public-ip"' --raw-output 2>/dev/null || echo "нет IP")
+                  PUBLIC_IP=$(oci compute instance list-vnics                     --instance-id "$INSTANCE_ID"                     --query 'data[0]."public-ip"' --raw-output 2>/dev/null || echo "нет IP")
                   echo "vm_created=true" >> $GITHUB_OUTPUT
                   echo "vm_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
                   echo "vm_ad=$AD" >> $GITHUB_OUTPUT
@@ -173,12 +108,11 @@ EOF
 
           if [ "$VM_CREATED" = "false" ]; then
             echo "vm_created=false" >> $GITHUB_OUTPUT
-            echo "⏳ Все AD заняты."
+            echo "Все AD заняты."
           fi
 
       - name: Notify Telegram
         if: steps.provision.outputs.vm_created == 'true'
         run: |
           TEXT="✅ Oracle VM создана!%0A%0A🌐 IP: ${{ steps.provision.outputs.vm_ip }}%0A📍 AD: ${{ steps.provision.outputs.vm_ad }}%0A%0A⚠️ Отключи все OCI workflows в GitHub Actions."
-          curl -s -X POST "https://api.telegram.org/bot${{ secrets.BOT_TOKEN }}/sendMessage" \
-            -d "chat_id=${{ secrets.ADMIN_CHAT_ID }}&text=$TEXT&parse_mode=HTML"
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.BOT_TOKEN }}/sendMessage"             -d "chat_id=${{ secrets.ADMIN_CHAT_ID }}&text=$TEXT&parse_mode=HTML"
