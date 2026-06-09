@@ -4,7 +4,6 @@ import asyncio
 import logging
 import traceback
 
-from cognition.response_synthesizer import SynthesisInput, synthesize
 from contracts.shared_types import Complexity, EPKDecision, Tier
 from core.execution.orchestrator import (
     OrchestratorRequest,
