@@ -1,108 +1,112 @@
-from __future__ import annotations
+"""HuggingFace Inference client with BGE model constants.
 
-import re
-
-"""Deterministic history filtering for prompt assembly.
-
-This keeps the prompt layer small by selecting only turns that are likely to
-matter for the current request. It is intentionally conservative and does not
-replace retrieval or memory.
+Single module-level client instance (hf_client) shared across the codebase.
+Exposes:
+  - BGE_LARGE, BGE_SMALL, BGE_RERANKER  — canonical model name constants
+  - hf_client                            — singleton with embed() and rerank()
 """
 
-_WORD_RE = re.compile(r"[\wÀ-ÖØ-öø-ÿа-яА-ЯёЁ'’\-]{3,}", re.UNICODE)
+from __future__ import annotations
 
-# Small stopword set for better topical overlap. Intentionally tiny: this is a
-# guardrail, not a language model.
-_STOPWORDS = {
-    "the", "and", "for", "with", "that", "this", "from", "about", "into", "your",
-    "you", "are", "was", "were", "have", "has", "had", "can", "could", "would",
-    "what", "when", "where", "how", "why", "which", "who", "whom", "whose",
-    "это", "этот", "эта", "эти", "что", "как", "где", "когда", "почему", "кто",
-    "какой", "какая", "какие", "какое", "про", "для", "или", "на", "из", "по",
-}
+import logging
+import os
 
-_MAX_SELECTED_TURNS = 6
-_MIN_HISTORY_OVERLAP = 0.18
+logger = logging.getLogger(__name__)
+
+# ─── Model name constants ────────────────────────────────────────────────────
+BGE_LARGE = "BAAI/bge-large-en-v1.5"
+BGE_SMALL = "BAAI/bge-small-en-v1.5"
+BGE_RERANKER = "BAAI/bge-reranker-large"
 
 
-_CLOSURE_MARKERS = {
-    "thanks", "thank you", "thx", "ok thanks", "okay thanks", "got it", "gotcha",
-    "i'll look it up myself", "i will look it up myself", "i'll find it myself",
-    "never mind", "never mind thanks", "that's enough", "that is enough",
-    "спасибо", "спс", "ладно спасибо", "я сам", "я сам найду", "дальше не надо",
-    "неважно", "не надо", "достаточно", "хватит", "пока всё",
-    "ok", "okay", "fine", "all good", "no thanks", "thanks anyway",
-}
+# ─── Client ──────────────────────────────────────────────────────────────────
+
+class _HFClient:
+    """Async HuggingFace Inference client.
+
+    Wraps huggingface_hub.AsyncInferenceClient.  The token is read once at
+    import time from the HF_TOKEN env variable; in production it is injected
+    by the app settings layer before any module-level code runs.
+    """
+
+    def __init__(self) -> None:
+        token = os.getenv("HF_TOKEN", "")
+        try:
+            from huggingface_hub import AsyncInferenceClient  # type: ignore
+            self._client = AsyncInferenceClient(token=token or None)
+        except ImportError:
+            logger.warning("huggingface_hub not installed — hf_client is a stub")
+            self._client = None
+
+    # ------------------------------------------------------------------
+    # Embeddings
+    # ------------------------------------------------------------------
+
+    async def embed(
+        self,
+        texts: list[str],
+        model: str = BGE_LARGE,
+    ) -> list[list[float]]:
+        """Return embedding vectors for *texts* using *model*.
+
+        Returns a list of float vectors in the same order as *texts*.
+        On error returns an empty list so callers can treat it as a cache miss.
+        """
+        if not texts:
+            return []
+        if self._client is None:
+            logger.error("hf_client stub: embed() called but huggingface_hub is missing")
+            return []
+        try:
+            result = await self._client.feature_extraction(texts, model=model)
+            # huggingface_hub returns a nested list or numpy array
+            if hasattr(result, "tolist"):
+                result = result.tolist()
+            # Ensure shape is list[list[float]]
+            if result and not isinstance(result[0], list):
+                result = [result]
+            return result  # type: ignore[return-value]
+        except Exception as exc:
+            logger.error("hf_client.embed failed", extra={"model": model, "error": str(exc)})
+            return []
+
+    # ------------------------------------------------------------------
+    # Reranking
+    # ------------------------------------------------------------------
+
+    async def rerank(
+        self,
+        query: str,
+        candidates: list[str],
+        model: str = BGE_RERANKER,
+    ) -> list[float]:
+        """Score *candidates* against *query* using a cross-encoder *model*.
+
+        Returns a list of float scores in the same order as *candidates*.
+        On error returns a list of zeros so the caller can fall back gracefully.
+        """
+        if not candidates:
+            return []
+        if self._client is None:
+            logger.error("hf_client stub: rerank() called but huggingface_hub is missing")
+            return [0.0] * len(candidates)
+        try:
+            pairs = [{"text": query, "text_pair": c} for c in candidates]
+            result = await self._client.text_classification(pairs, model=model)
+            # Returns list[ClassificationOutput]; extract the score of the first label.
+            scores: list[float] = []
+            for item in result:
+                if isinstance(item, list):
+                    scores.append(float(item[0].score) if item else 0.0)
+                elif hasattr(item, "score"):
+                    scores.append(float(item.score))
+                else:
+                    scores.append(0.0)
+            return scores
+        except Exception as exc:
+            logger.error("hf_client.rerank failed", extra={"model": model, "error": str(exc)})
+            return [0.0] * len(candidates)
 
 
-def _topic_terms(text: str) -> set[str]:
-    terms: set[str] = set()
-    for token in _WORD_RE.findall(text.lower()):
-        token = token.strip("'’-")
-        if token and token not in _STOPWORDS:
-            terms.add(token)
-    return terms
-
-
-def _turn_overlap(current_terms: set[str], turn_text: str) -> float:
-    if not current_terms:
-        return 0.0
-    turn_terms = _topic_terms(turn_text)
-    if not turn_terms:
-        return 0.0
-    common = current_terms & turn_terms
-    if not common:
-        return 0.0
-    return len(common) / max(1, min(len(current_terms), len(turn_terms)))
-
-
-def select_relevant_history(user_message: str, history: list[dict] | None) -> list[dict] | None:
-    if not history:
-        return None
-
-    normalized = (user_message or "").strip().casefold()
-    if normalized in _CLOSURE_MARKERS:
-        return None
-
-    current_terms = _topic_terms(user_message)
-    if not current_terms:
-        return None
-
-    scored: list[tuple[float, int, dict]] = []
-    for idx, turn in enumerate(history):
-        content = str(turn.get("content") or "")
-        if not content.strip():
-            continue
-
-        overlap = _turn_overlap(current_terms, content)
-        if overlap < _MIN_HISTORY_OVERLAP:
-            continue
-
-        # Earlier turns should not dominate unless they clearly match the topic.
-        recency_bonus = 0.0
-        if idx >= max(0, len(history) - 2):
-            recency_bonus = 0.05
-
-        scored.append((overlap + recency_bonus, idx, turn))
-
-    if not scored:
-        return None
-
-    # Deterministic ordering:
-    # 1) by original history position
-    # 2) keep only the tail of the selection so prompt size stays bounded
-    ordered = [turn for _, _, turn in sorted(scored, key=lambda item: item[1])]
-    if len(ordered) > _MAX_SELECTED_TURNS:
-        ordered = ordered[-_MAX_SELECTED_TURNS:]
-
-    # Preserve exact original order and remove duplicate role/content pairs.
-    result: list[dict] = []
-    seen: set[tuple[str, str]] = set()
-    for turn in ordered:
-        key = (str(turn.get("role", "")), str(turn.get("content", "")))
-        if key in seen:
-            continue
-        seen.add(key)
-        result.append(turn)
-
-    return result or None
+# Module-level singleton — imported as `from llm.hf_client import hf_client`
+hf_client = _HFClient()
