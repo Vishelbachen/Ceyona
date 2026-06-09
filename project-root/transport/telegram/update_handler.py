@@ -233,14 +233,7 @@ async def handle_message(
                     lang=lang,
                 )
             logger.info("Vision fast-path: direct response", extra={"user_id": user_id})
-            final_text = synthesize(SynthesisInput(
-                raw_text=vision_result.text,
-                intent=None,
-                tier=Tier.GENERAL,
-                denied=False,
-                lang=lang,
-                from_vision=True,
-            )).text
+            final_text = vision_result.text
             return OrchestratorResult(
                 text=final_text,
                 tier=Tier.GENERAL,
