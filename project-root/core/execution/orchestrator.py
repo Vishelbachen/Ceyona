@@ -208,7 +208,7 @@ def _clarify_result(
     epk_decision: EPKDecision = EPKDecision.DENY,
 ) -> OrchestratorResult:
     synthesis = synthesize(SynthesisInput(
-        raw_text=_t(key, lang),
+        raw_text=t(key, lang),
         intent=None,
         tier=tier,
         denied=False,
