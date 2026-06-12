@@ -145,6 +145,7 @@ jobs:
               --assign-public-ip true \
               --ssh-authorized-keys-file "$KEYFILE" \
               --display-name "ceyona-bot" \
+              --boot-volume-size-in-gbs 200 \
               2>&1 || true)
 
             INSTANCE_ID=$(echo "$RESULT" | python3 -c \
