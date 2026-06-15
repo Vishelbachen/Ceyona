@@ -188,12 +188,11 @@ Fallback     → AgentType.DEEP           (llama-3.3-70b-versatile — plain tex
 - FAST_AGENT_MODEL: `groq/compound-mini` — AgentType.COMPOUND_FAST
 - DEEP_AGENT_MODEL: `groq/compound` — AgentType.COMPOUND_DEEP
 
-**⚠️ БАГ 13.1 OPEN:** tool intents падают в «сервис недоступен».
-Причина НЕ в недоступности моделей — groq/compound и groq/compound-mini
-подтверждены ДОСТУПНЫМИ на аккаунте (см. §22). Диагноз уточнён в audit.md §13.1.
-Вероятные причины: SERPAPI_KEY / OPENWEATHER_API_KEY не заполнены, либо
-compound-mini требует другой параметр tool_choice, либо таймаут.
-Нужны реальные логи с fly.io: `fly logs -a имя_приложения | grep compound_agent`
+**✅ БАГ 13.1 ЗАКРЫТ (май 2026):** compound переведён в режим синтезатора.
+Groq compound не принимает кастомные tool schemas (`tools=` → HTTP 400).
+Решение: весь retrieval (search/weather/maps) выполняется orchestrator до вызова compound.
+Контекст передаётся через PromptContext → user turn. Compound синтезирует, не ищет.
+`tool_choice` убран. Подробности: audit.md §13.1 (закрытые задачи), architecture.md §40.
 **Max tool rounds:** 3 (bounded — §2.2)
 **Role:** tool selection authority, multi-step execution.
 **No policy authority.** No system governance. No Heavy Tier activation.
@@ -267,7 +266,9 @@ No policy decisions. No tier or model selection. No self-activation of Heavy Tie
 3. structure          — intent-aware shaping (identity today, reserved)
 4. format             — whitespace normalization
 5. correction         — meta/correction.py (preamble/sign-off stripping)
-6. output_normalizer  — meta/output_normalizer.py (retrieval contamination)
+6. output_normalizer  — meta/output_normalizer.py (retrieval contamination cleanup:
+                         invisible chars, source attribution tags, garbled URLs,
+                         English term leaks → native language, vision meta openers)
 7. finalize           — truncate to Telegram 4096 chars
 ```
 
@@ -315,8 +316,9 @@ meta = semantic quality (is the answer logical? complete? contradictory?).
 ### output_normalizer.py
 - Ownership: meta/ | Execution: ONLY via synthesizer step 6
 - Excluded from META side-channel DAG
-- Does: strip context self-reference phrases, inline source tags, garbled URLs,
-        English UI term leaks in non-English responses
+- Does: strip invisible chars, source attribution tags (источник N / source N),
+        garbled non-ASCII URLs, English transport/UI term leaks in non-English responses,
+        vision meta openers (when from_vision=True)
 
 ### memory_audit.py
 - Position: offline diagnostics side-channel (async, non-blocking)
