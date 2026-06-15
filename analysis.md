@@ -95,6 +95,32 @@
 
 ---
 
+### 🔴 21.1 — Email уведомления (Brevo) — opt-in
+
+**Проблема:** `event_notifier.py` реализован, `email_service.py` подключён, `BREVO_API_KEY` в секретах есть. Но email пользователя неоткуда взять — Telegram Bot API не передаёт его даже если пользователь регистрировался через email. Функция фактически мертва.
+
+**Верифицировано кодом:** `event_notifier.on_balance_exhausted()` и `on_balance_credited()` отправляют письма только если `to_email` передан. Нигде в pipeline `to_email` не заполняется — значит письма не уходят никогда.
+
+**Решение (спроектировано):**
+- пользователь вводит email вручную через `/settings` или отдельный флоу
+- новая таблица Supabase `user_notifications`:
+  ```
+  user_id
+  email
+  notify_balance_exhausted: bool  (default: false)
+  notify_balance_credited: bool   (default: false)
+  ```
+- строгий opt-in — оба флага выключены по умолчанию
+- `event_notifier.py` проверяет флаги перед отправкой
+- тексты писем переписать в голосе Сэёны (текущие шаблоны корпоративные)
+
+**Что слать:** только `balance_exhausted` (пользователь офлайн, пропустил) и опционально `balance_credited`. `safety_block` и `system_error` — только в логи / Sentry, не пользователю.
+
+**Файлы:** `notifications/email_service.py`, `notifications/event_notifier.py`
+**Приоритет:** низкий — требует UI для сбора email, нет срочности.
+
+---
+
 ## 3. НОВЫЕ ПРОБЛЕМЫ — ВЫЯВЛЕНЫ В ОБСУЖДЕНИЯХ
 
 ### 🔴 A — Нет единой точки истины для формата ответа (Final Authority Layer)
