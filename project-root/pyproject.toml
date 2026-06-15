@@ -5,7 +5,7 @@ description = "Modular AI orchestration platform (EPK-driven)"
 requires-python = ">=3.11,<3.13"
 
 dependencies = [
-    "fastapi>=0.130,<0.137",
+    "fastapi>=0.130,<0.138",
     "uvicorn[standard]>=0.43,<0.50",
 
     "groq>=1.1,<2.0",
