@@ -612,6 +612,7 @@ async def debug_telegram():
     Tries multiple HTTP client configurations to isolate network vs library issues.
     """
     import traceback
+
     import httpx
     from app.settings import settings
 
@@ -646,6 +647,7 @@ async def debug_telegram():
     # Test 4: requests (sync, in thread)
     try:
         import asyncio
+
         import requests as _requests
 
         def _sync_get():
