@@ -178,8 +178,10 @@ async def lifespan(app: FastAPI):
     init_rate_limiter(state["redis"])
 
     # ── webhook registration ──────────────────────────────
-    from transport.telegram.webhook import register_webhook
-    await register_webhook()
+    # NOTE: HF Spaces blocks outbound connections to api.telegram.org,
+    # so webhook registration happens externally (Fly relay), not here.
+    # from transport.telegram.webhook import register_webhook
+    # await register_webhook()
 
     # ── background wallet poller ──────────────────────────
     wallet_task = asyncio.create_task(
