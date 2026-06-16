@@ -1,5 +1,5 @@
 app = "ceyona-webhook"
-primary_region = "ams"
+primary_region = "fra"
 
 [build]
 
@@ -22,4 +22,4 @@ primary_region = "ams"
 
 [[vm]]
   size = "shared-cpu-1x"
-  memory = "1024"
+  memory = "1024mb"
