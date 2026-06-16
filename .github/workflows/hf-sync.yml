@@ -20,5 +20,9 @@ jobs:
         run: |
           git config user.email "action@github.com"
           git config user.name "GitHub Action"
+          cd project-root
+          git init
+          git add .
+          git commit -m "sync"
           git remote add hf https://Warren97:$HF_TOKEN@huggingface.co/spaces/Warren97/ceyona
           git push hf main --force
