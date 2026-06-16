@@ -177,13 +177,9 @@ async def lifespan(app: FastAPI):
     from security.rate_limiter import init_rate_limiter
     init_rate_limiter(state["redis"])
 
-    # ── polling transport ─────────────────────────────────
-    from transport.telegram.polling import delete_webhook, polling_loop
-    await delete_webhook()
-    polling_task = asyncio.create_task(
-        polling_loop(app.state),
-        name="telegram_polling",
-    )
+    # ── webhook registration ──────────────────────────────
+    from transport.telegram.webhook import register_webhook
+    await register_webhook()
 
     # ── background wallet poller ──────────────────────────
     wallet_task = asyncio.create_task(
@@ -194,12 +190,6 @@ async def lifespan(app: FastAPI):
     yield
 
     # ── graceful shutdown ─────────────────────────────────
-    polling_task.cancel()
-    try:
-        await polling_task
-    except asyncio.CancelledError:
-        logger.info("Polling stopped")
-
     wallet_task.cancel()
     try:
         await wallet_task
@@ -602,136 +592,5 @@ async def debug() -> dict:
         "error": err_count,
         "warning": len(results) - 1 - ok_count - err_count,
     }
-
-    return results
-
-@app.get("/debug/telegram")
-async def debug_telegram():
-    """
-    Test outbound connectivity to Telegram API from this environment.
-    Tries multiple HTTP client configurations to isolate network vs library issues.
-    """
-    import traceback
-
-    import httpx
-    from app.settings import settings
-
-    results = {}
-    url = f"https://api.telegram.org/bot{settings.bot_token}/getMe"
-
-    # Test 1: httpx with HTTP/2 disabled (new client each time)
-    try:
-        async with httpx.AsyncClient(http2=False, timeout=10.0) as client:
-            r = await client.get(url)
-            results["httpx_no_http2"] = {"status": "ok", "response": r.json()}
-    except Exception as exc:
-        results["httpx_no_http2"] = {"status": "error", "type": type(exc).__name__, "error": str(exc), "trace": traceback.format_exc(limit=5)}
-
-    # Test 2: httpx default (HTTP/2 enabled)
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            r = await client.get(url)
-            results["httpx_default"] = {"status": "ok", "response": r.json()}
-    except Exception as exc:
-        results["httpx_default"] = {"status": "error", "type": type(exc).__name__, "error": str(exc), "trace": traceback.format_exc(limit=5)}
-
-    # Test 3: httpx with explicit IPv4 (no IPv6)
-    try:
-        transport = httpx.AsyncHTTPTransport(retries=0)
-        async with httpx.AsyncClient(transport=transport, http2=False, timeout=10.0) as client:
-            r = await client.get(url)
-            results["httpx_ipv4_transport"] = {"status": "ok", "response": r.json()}
-    except Exception as exc:
-        results["httpx_ipv4_transport"] = {"status": "error", "type": type(exc).__name__, "error": str(exc), "trace": traceback.format_exc(limit=5)}
-
-    # Test 4: urllib (stdlib, no extra deps)
-    try:
-        import urllib.request
-
-        def _urllib_get():
-            with urllib.request.urlopen(url, timeout=10) as r:
-                import json
-                return json.loads(r.read())
-
-        resp = await asyncio.to_thread(_urllib_get)
-        results["urllib_stdlib"] = {"status": "ok", "response": resp}
-    except Exception as exc:
-        results["urllib_stdlib"] = {"status": "error", "type": type(exc).__name__, "error": str(exc), "trace": traceback.format_exc(limit=5)}
-
-    return results
-
-@app.get("/debug/network")
-async def debug_network():
-    """
-    Deep network diagnostics:
-    1. DNS resolution for api.telegram.org (what IP does HF see?)
-    2. Raw TCP+TLS via openssl s_client (subprocess)
-    3. httpx with hardcoded Telegram IP (bypass DNS entirely)
-    4. httpx via Telegram secondary IP
-    """
-    import asyncio
-    import socket
-    import subprocess
-    import traceback
-
-    import httpx
-
-    results = {}
-
-    # 1. DNS resolution
-    try:
-        def _resolve():
-            return socket.getaddrinfo("api.telegram.org", 443, proto=socket.IPPROTO_TCP)
-        info = await asyncio.to_thread(_resolve)
-        ips = list({entry[4][0] for entry in info})
-        results["dns"] = {"status": "ok", "ips": ips}
-    except Exception as exc:
-        results["dns"] = {"status": "error", "error": str(exc)}
-
-    # 2. openssl s_client (raw TLS handshake)
-    try:
-        def _openssl():
-            proc = subprocess.run(
-                ["openssl", "s_client", "-connect", "api.telegram.org:443",
-                 "-servername", "api.telegram.org"],
-                input=b"",
-                capture_output=True,
-                timeout=12,
-            )
-            out = proc.stdout.decode(errors="replace")
-            err = proc.stderr.decode(errors="replace")
-            lines = (out + err).splitlines()
-            key = [l for l in lines if any(k in l for k in [
-                "CONNECTED", "Verify", "subject", "issuer",
-                "SSL handshake", "errno", "Connection refused",
-                "timeout", "Timeout", "error", "Error",
-            ])]
-            return {"returncode": proc.returncode, "key_lines": key[:20]}
-        result = await asyncio.to_thread(_openssl)
-        results["openssl"] = {"status": "ok" if result["returncode"] == 0 else "error", **result}
-    except Exception as exc:
-        results["openssl"] = {"status": "error", "error": str(exc), "trace": traceback.format_exc(limit=3)}
-
-    # 3. httpx hardcoded IP 149.154.167.220 (bypass DNS)
-    try:
-        async with httpx.AsyncClient(timeout=10.0, verify=False) as client:
-            r = await client.get(
-                "https://149.154.167.220/botNOTOKEN/getMe",
-                headers={"Host": "api.telegram.org"},
-            )
-            results["hardcoded_ip_220"] = {"status": "ok", "http_status": r.status_code}
-    except Exception as exc:
-        results["hardcoded_ip_220"] = {"status": "error", "type": type(exc).__name__, "error": str(exc)}
-
-    # 4. httpx alt IP 149.154.167.91
-    try:
-        async with httpx.AsyncClient(timeout=10.0, verify=False) as client:
-            r = await client.get(
-                "https://149.154.167.91/botNOTOKEN/getMe",
-                headers={"Host": "api.telegram.org"},
-            )
-            results["hardcoded_ip_91"] = {"status": "ok", "http_status": r.status_code}
-    except Exception as exc:
-        results["hardcoded_ip_91"] = {"status": "error", "type": type(exc).__name__, "error": str(exc)}
 
     return results
