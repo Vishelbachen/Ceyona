@@ -552,4 +552,55 @@ async def debug() -> dict:
             results["weather"] = _ok(f"London: {temp}°C, {desc} in {time.monotonic()-t0:.2f}s")
         else:
             results["weather"] = {"status": "error", "error": "get_current returned None"}
-    except Exception
+    except Exception as exc:
+        results["weather"] = _err(exc)
+
+    # ── maps geocode ──────────────────────────────────────────────────────────
+    try:
+        t0 = time.monotonic()
+        feature = await maps_service.geocode(query="Red Square, Moscow", lang="en")
+        if feature:
+            coords = feature.get("geometry", {}).get("coordinates", "?")
+            results["maps_geocode"] = _ok(f"coords={coords} in {time.monotonic()-t0:.2f}s")
+        else:
+            results["maps_geocode"] = {"status": "error", "error": "geocode returned None"}
+    except Exception as exc:
+        results["maps_geocode"] = _err(exc)
+
+    # ── maps route ────────────────────────────────────────────────────────────
+    try:
+        t0 = time.monotonic()
+        route = await maps_service.get_route(
+            origin="Moscow, Russia",
+            destination="Saint Petersburg, Russia",
+            lang="en",
+        )
+        if route:
+            results["maps_route"] = _ok(f"route ok in {time.monotonic()-t0:.2f}s")
+        else:
+            results["maps_route"] = {"status": "error", "error": "get_route returned None"}
+    except Exception as exc:
+        results["maps_route"] = _err(exc)
+
+    # ── HuggingFace embedding ─────────────────────────────────────────────────
+    try:
+        from llm.hf_client import BGE_LARGE, hf_client
+        t0 = time.monotonic()
+        vecs = await hf_client.embed(["test embedding ping"], model=BGE_LARGE)
+        if vecs and vecs[0]:
+            results["embedding"] = _ok(f"dim={len(vecs[0])} in {time.monotonic()-t0:.2f}s")
+        else:
+            results["embedding"] = {"status": "error", "error": "embed returned empty vector"}
+    except Exception as exc:
+        results["embedding"] = _err(exc)
+
+    # ── summary ───────────────────────────────────────────────────────────────
+    ok_count  = sum(1 for v in results.values() if v.get("status") == "ok")
+    err_count = sum(1 for v in results.values() if v.get("status") == "error")
+    results["_summary"] = {
+        "ok": ok_count,
+        "error": err_count,
+        "warning": len(results) - 1 - ok_count - err_count,
+    }
+
+    return results
