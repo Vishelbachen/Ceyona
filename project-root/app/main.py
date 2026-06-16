@@ -545,6 +545,18 @@ async def debug() -> dict:
     except Exception as exc:
         results["weather"] = _err(exc)
 
+    # ── maps geocode ──────────────────────────────────────────────────────────
+    try:
+        t0 = time.monotonic()
+        feature = await maps_service.geocode(query="Red Square, Moscow", lang="en")
+        if feature:
+            coords = feature.get("geometry", {}).get("coordinates", "?")
+            results["maps_geocode"] = _ok(f"coords={coords} in {time.monotonic()-t0:.2f}s")
+        else:
+            results["maps_geocode"] = {"status": "error", "error": "geocode returned None"}
+    except Exception as exc:
+        results["maps_geocode"] = _err(exc)
+
     # ── maps route ────────────────────────────────────────────────────────────
     try:
         t0 = time.monotonic()
