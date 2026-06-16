@@ -21,8 +21,9 @@ jobs:
           git config --global user.email "action@github.com"
           git config --global user.name "GitHub Action"
           cd project-root
+          echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) ${{ github.sha }}" > .rebuild-trigger
           git init
           git add .
-          git commit -m "sync"
+          git commit -m "sync: ${{ github.sha }}"
           git remote add hf https://Warren97:$HF_TOKEN@huggingface.co/spaces/Warren97/ceyona
           git push hf master:main --force
