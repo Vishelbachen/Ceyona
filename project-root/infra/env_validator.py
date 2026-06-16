@@ -9,13 +9,13 @@ _REQUIRED = [
     "bot_token",
     "jwt_secret",
     "encryption_key",
+    "webhook_url",
     "groq_api_key",
     "hf_token",
     "supabase_url",
     "supabase_service_role_key",
     "redis_url",
     "mapbox_token",  # required: geocoding, maps
-    # webhook_url: not required in polling mode
     # Search providers: at least one of tavily_api_key / serpapi_key should be set,
     # but neither is hard-required — missing both degrades search gracefully.
 ]
