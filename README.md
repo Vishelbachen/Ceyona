@@ -1,5 +1,14 @@
 Ceyona AI
 
+---
+title: Ceyona
+emoji: 🤖
+colorFrom: blue
+colorTo: purple
+sdk: docker
+pinned: false
+---
+
 Ceyona is an experimental AI backend focused on controllable reasoning, model routing, and long-term memory.
 
 The project is built as a modular system rather than a thin wrapper over LLM APIs.
