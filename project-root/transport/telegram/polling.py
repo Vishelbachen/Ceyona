@@ -20,9 +20,9 @@ from app.settings import settings
 logger = logging.getLogger(__name__)
 
 _TELEGRAM_API = f"https://api.telegram.org/bot{settings.bot_token}"
-_POLL_TIMEOUT = 25      # seconds — Telegram long-poll window
+_POLL_TIMEOUT = 10      # seconds — Telegram long-poll window
 _ERROR_SLEEP  = 5       # seconds — back-off on errors
-_HTTP_TIMEOUT = 35      # httpx timeout — must be > _POLL_TIMEOUT
+_HTTP_TIMEOUT = 20      # httpx timeout — must be > _POLL_TIMEOUT
 
 
 async def delete_webhook() -> None:
