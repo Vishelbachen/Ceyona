@@ -1,5 +1,3 @@
-Ceyona AI
-
 ---
 title: Ceyona
 emoji: 🤖
@@ -25,7 +23,7 @@ Ceyona approaches this differently:
 - routes requests dynamically across models
 - introduces a reasoning layer as a first-class component
 
-The goal is to move from “prompt-in → text-out” toward a structured AI system.
+The goal is to move from "prompt-in → text-out" toward a structured AI system.
 
 ---
 
@@ -78,63 +76,6 @@ Dependencies flow inward only.
 
 ---
 
-Request Flow
-
-A typical request goes through:
-
-request
-→ intent_classifier
-→ task_classifier
-→ reasoning_engine
-→ model_decision
-→ llm provider
-→ response_formatter
-
-Each step is isolated and replaceable.
-
----
-
-Setup
-
-git clone <repo>
-cd ceyona
-
-pip install -r requirements.txt
-cp .env.example .env
-
-Run:
-
-python main.py
-
----
-
-Configuration
-
-All secrets are loaded via ".env".
-
-Required:
-
-- LLM provider keys
-- Supabase credentials
-
-Never commit ".env" or service keys.
-
----
-
-Project Status
-
-The system is in active development.
-
-Current focus:
-
-- stabilizing reasoning pipeline
-- improving model routing accuracy
-- integrating verification layer
-
----
-
 License
 
-Proprietary.
-
-All rights reserved.
+Proprietary. All rights reserved.
