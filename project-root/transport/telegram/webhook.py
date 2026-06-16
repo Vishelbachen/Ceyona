@@ -261,39 +261,43 @@ async def telegram_webhook(
         logger.error("Failed to parse update JSON", extra={"error": str(exc)})
         return {"ok": True}
 
-    update_type = classify_update(update)
+    await _process_update(update, request.app.state)
+    return {"ok": True}
 
+
+async def _process_update(update: dict, app_state) -> None:
+    """
+    Process a single Telegram update dict.
+    Used by both webhook handler and polling loop — single source of truth.
+    """
+    from i18n.t import get_system_message
+
+    update_type = classify_update(update)
     if update_type == UpdateType.UNKNOWN:
-        return {"ok": True}
+        return
 
     auth = verify_update(update)
     if not auth.allowed:
         logger.warning("Rejected update", extra={"reason": auth.reason})
-        return {"ok": True}
+        return
 
     chat_id = _get_chat_id(update)
     user_id = auth.user_id
     lang = _detect_lang(update)
-    supabase = request.app.state.supabase
-    hf_client = request.app.state.hf_client
+    supabase = app_state.supabase
+    hf_client = app_state.hf_client
 
-    # Fix §10.4: generate request_id for full pipeline log correlation.
-    # Format: "{update_id}:{user_id}" — unique per Telegram update.
     _update_id = str(update.get("update_id", ""))
     request_id = f"{_update_id}:{user_id}" if _update_id else str(user_id)
     logger.info("Incoming message", extra={"request_id": request_id, "user_id": user_id, "lang": lang})
 
-    # ── rate limiting ─────────────────────────────────────────────────────────
-    from i18n.t import get_system_message
     from security.rate_limiter import get_rate_limiter
-
     limiter = get_rate_limiter()
     if limiter and not await limiter.is_allowed(user_id):
         if chat_id:
             await _send_message(chat_id, get_system_message("rate_limited", lang))
-        return {"ok": True}
+        return
 
-    # ── balance ───────────────────────────────────────────────────────────────
     user_balance = 0.0
     try:
         from payments.access_controller import AccessController
@@ -303,63 +307,43 @@ async def telegram_webhook(
     except Exception as exc:
         logger.error("Balance fetch failed", extra={"error": str(exc)})
 
-    # ── bot commands — handled BEFORE Safety Gate ────────────────────────────
-    # /balance, /start, /help etc. are system commands, not user content.
-    # They must never be routed through the Safety Gate.
     if update_type in (UpdateType.MESSAGE, UpdateType.EDITED_MESSAGE) and chat_id:
         raw_text = extract_text(update).strip()
         if raw_text.startswith("/balance"):
             bal_text = f"💰 Balance: ${user_balance:.4f}"
             await _send_message_with_topup(chat_id, bal_text, lang)
-            return {"ok": True}
+            return
         if raw_text.startswith("/start"):
             await _send_message(chat_id, get_system_message("help_display", lang))
-            return {"ok": True}
+            return
         if raw_text.startswith("/help"):
             await _send_message(chat_id, get_system_message("help_display", lang))
-            return {"ok": True}
-
-        # ── /clear — Mode A: session reset (conversation history only) ────────
-        # Clears conversation_history from Supabase.
-        # Long-term memory (SupabaseStore) is intentionally preserved —
-        # the user wants a fresh dialogue, not to lose personalisation.
-        # Cache is not touched: it is infrastructure, not user identity.
+            return
         if raw_text.startswith("/clear"):
             if supabase is not None:
                 from memory.conversation_history import ConversationHistory
                 history_store = ConversationHistory(supabase)
                 await history_store.clear(user_id)
             await _send_message(chat_id, get_system_message("session_cleared", lang))
-            return {"ok": True}
-
-        # ── /reset_memory — Mode B: full memory wipe (irreversible) ──────────
-        # Two-step confirmation: first call shows warning, second with "confirm"
-        # executes the wipe. Both conversation_history and long-term memory
-        # (SupabaseStore) are deleted. QueryCache is also cleared — it is the
-        # only user-scoped cache (keyed by user_id hash).
-        # EmbeddingCache and RerankCache are NOT touched: they are global
-        # infrastructure caches with no user identity, not memory layers.
+            return
         if raw_text.startswith("/reset_memory"):
             confirmed = "confirm" in raw_text
             if not confirmed:
                 await _send_message(chat_id, get_system_message("memory_reset_confirm", lang))
-                return {"ok": True}
-            # Confirmed — execute full wipe
+                return
             if supabase is not None:
                 from memory.conversation_history import ConversationHistory
                 from memory.supabase_store import SupabaseStore
                 await ConversationHistory(supabase).clear(user_id)
                 await SupabaseStore(supabase).delete_by_user(str(user_id))
-            # QueryCache: clear user-scoped retrieval cache from Redis
-            if request.app.state.redis is not None:
+            if app_state.redis is not None:
                 from retrieval.cache.query_cache import QueryCache
-                qcache = QueryCache(request.app.state.redis)
+                qcache = QueryCache(app_state.redis)
                 await qcache.delete_by_user(str(user_id))
             logger.info("Full memory reset executed", extra={"user_id": user_id})
             await _send_message(chat_id, get_system_message("memory_reset_done", lang))
-            return {"ok": True}
+            return
 
-    # ── message handling ──────────────────────────────────────────────────────
     if update_type in (UpdateType.MESSAGE, UpdateType.EDITED_MESSAGE):
         import time as _time
         _req_start = _time.perf_counter()
@@ -373,32 +357,26 @@ async def telegram_webhook(
                     user_balance=user_balance,
                     lang=lang,
                     supabase=supabase,
-                    redis=request.app.state.redis,
+                    redis=app_state.redis,
                     hf_client=hf_client,
                     request_id=request_id,
-                    app_state=request.app.state,
+                    app_state=app_state,
                 )
         except Exception as exc:
             logger.error("handle_message crashed", extra={"error": str(exc)})
             increment("webhook.errors")
             if chat_id:
-                await _send_message(
-                    chat_id,
-                    get_system_message("no_response", lang),
-                )
-            return {"ok": True}
+                await _send_message(chat_id, get_system_message("no_response", lang))
+            return
         finally:
             gauge("webhook.last_latency_ms", round((_time.perf_counter() - _req_start) * 1000, 2))
 
-        # ── billing ───────────────────────────────────────────────────────────
         if not result.denied and result.usage.cost_usd > 0:
             try:
                 from payments.access_controller import AccessController
                 from payments.usage_meter import UsageEntry, UsageMeter
-
                 ac = AccessController(supabase)
                 await ac.deduct(user_id, result.usage.cost_usd)
-
                 meter = UsageMeter(supabase)
                 billed = meter.compute_billed(result.usage.cost_usd)
                 await meter.record(UsageEntry(
@@ -421,7 +399,6 @@ async def telegram_webhook(
             except Exception as exc:
                 logger.error("Billing failed", extra={"error": str(exc)})
 
-        # Track denied/allowed outcomes
         if result.denied:
             increment(f"webhook.denied.{result.deny_reason or 'unknown'}")
         else:
@@ -436,7 +413,6 @@ async def telegram_webhook(
         })
 
         if chat_id:
-            # Low balance warning — show topup button when balance drops below $0.10
             try:
                 from payments.access_controller import AccessController
                 ac2 = AccessController(supabase)
@@ -446,41 +422,31 @@ async def telegram_webhook(
                     low_balance_text = _t("low_balance_warning", lang)
                     await _send_message_with_topup(chat_id, low_balance_text, lang)
             except Exception:
-                pass  # non-critical, never block response
+                pass
 
-            # TTS audio: send voice message if audio was synthesized, text as fallback
             tts_bytes = getattr(result, "tts_audio_bytes", b"")
             if tts_bytes:
                 sent_audio = await _send_voice(chat_id, tts_bytes)
                 if not sent_audio:
-                    # sendVoice failed — fall back to text silently
                     logger.warning("sendVoice failed — falling back to text", extra={"chat_id": chat_id})
                     await _send_message(chat_id, result.text)
             elif result.deny_reason == "insufficient_balance":
-                # Always show topup button on balance denial — user needs a clear action path.
                 await _send_message_with_topup(chat_id, result.text, lang)
             else:
                 await _send_message(chat_id, result.text)
 
     elif update_type == UpdateType.CALLBACK_QUERY:
         ctx = parse_callback(update, user_id)
-
         if ctx.action == CallbackAction.BALANCE:
             bal_text = f"💰 Balance: ${user_balance:.2f}"
             await _answer_callback(ctx.callback_query_id, bal_text)
         elif ctx.action == CallbackAction.TOPUP:
-            # Acknowledge the button press immediately (removes spinner)
             await _answer_callback(ctx.callback_query_id)
-            # Send TON wallet address as a message the user can act on
             import secrets
-
             from app.settings import settings as _s
             wallet = _s.ton_wallet
             if wallet:
-                # Generate a random suffix to prevent memo-guessing attacks:
-                # attacker knowing someone's Telegram ID cannot credit their account
-                # by sending TON with just the ID as memo.
-                _memo_suffix = secrets.token_hex(4)  # e.g. "a3f9c2b1"
+                _memo_suffix = secrets.token_hex(4)
                 _memo = f"{user_id}_{_memo_suffix}"
                 topup_text = (
                     f"💳 *Top up your balance*\n\n"
@@ -496,19 +462,11 @@ async def telegram_webhook(
             if chat_id:
                 await _send_message(chat_id, topup_text)
         elif ctx.action == CallbackAction.HELP:
-            await _answer_callback(
-                ctx.callback_query_id,
-                get_system_message("help_display", lang),
-            )
+            await _answer_callback(ctx.callback_query_id, get_system_message("help_display", lang))
         elif ctx.action == CallbackAction.CANCEL:
-            await _answer_callback(
-                ctx.callback_query_id,
-                get_system_message("cancelled", lang),
-            )
+            await _answer_callback(ctx.callback_query_id, get_system_message("cancelled", lang))
         else:
             await _answer_callback(ctx.callback_query_id)
-
-    return {"ok": True}
 
 
 async def register_webhook() -> bool:
