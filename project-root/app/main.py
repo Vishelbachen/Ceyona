@@ -644,18 +644,18 @@ async def debug_telegram():
     except Exception as exc:
         results["httpx_ipv4_transport"] = {"status": "error", "type": type(exc).__name__, "error": str(exc), "trace": traceback.format_exc(limit=5)}
 
-    # Test 4: requests (sync, in thread)
+    # Test 4: urllib (stdlib, no extra deps)
     try:
-        import asyncio
+        import urllib.request
 
-        import requests as _requests
+        def _urllib_get():
+            with urllib.request.urlopen(url, timeout=10) as r:
+                import json
+                return json.loads(r.read())
 
-        def _sync_get():
-            return _requests.get(url, timeout=10).json()
-
-        resp = await asyncio.to_thread(_sync_get)
-        results["requests_sync"] = {"status": "ok", "response": resp}
+        resp = await asyncio.to_thread(_urllib_get)
+        results["urllib_stdlib"] = {"status": "ok", "response": resp}
     except Exception as exc:
-        results["requests_sync"] = {"status": "error", "type": type(exc).__name__, "error": str(exc), "trace": traceback.format_exc(limit=5)}
+        results["urllib_stdlib"] = {"status": "error", "type": type(exc).__name__, "error": str(exc), "trace": traceback.format_exc(limit=5)}
 
     return results
