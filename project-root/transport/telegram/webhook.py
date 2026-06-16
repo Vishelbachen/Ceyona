@@ -443,6 +443,7 @@ async def _process_update(update: dict, app_state) -> None:
         elif ctx.action == CallbackAction.TOPUP:
             await _answer_callback(ctx.callback_query_id)
             import secrets
+
             from app.settings import settings as _s
             wallet = _s.ton_wallet
             if wallet:
