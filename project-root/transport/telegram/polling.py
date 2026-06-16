@@ -92,5 +92,5 @@ async def polling_loop(app_state) -> None:
                 logger.info("Polling loop cancelled")
                 return
             except Exception as exc:
-                logger.error("Polling loop error", extra={"error": str(exc)})
+                logger.error("Polling loop error", extra={"error": str(exc), "type": type(exc).__name__}, exc_info=True)
                 await asyncio.sleep(_ERROR_SLEEP)
