@@ -604,3 +604,56 @@ async def debug() -> dict:
     }
 
     return results
+
+@app.get("/debug/telegram")
+async def debug_telegram():
+    """
+    Test outbound connectivity to Telegram API from this environment.
+    Tries multiple HTTP client configurations to isolate network vs library issues.
+    """
+    import traceback
+    import httpx
+    from app.settings import settings
+
+    results = {}
+    url = f"https://api.telegram.org/bot{settings.bot_token}/getMe"
+
+    # Test 1: httpx with HTTP/2 disabled (new client each time)
+    try:
+        async with httpx.AsyncClient(http2=False, timeout=10.0) as client:
+            r = await client.get(url)
+            results["httpx_no_http2"] = {"status": "ok", "response": r.json()}
+    except Exception as exc:
+        results["httpx_no_http2"] = {"status": "error", "type": type(exc).__name__, "error": str(exc), "trace": traceback.format_exc(limit=5)}
+
+    # Test 2: httpx default (HTTP/2 enabled)
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(url)
+            results["httpx_default"] = {"status": "ok", "response": r.json()}
+    except Exception as exc:
+        results["httpx_default"] = {"status": "error", "type": type(exc).__name__, "error": str(exc), "trace": traceback.format_exc(limit=5)}
+
+    # Test 3: httpx with explicit IPv4 (no IPv6)
+    try:
+        transport = httpx.AsyncHTTPTransport(retries=0)
+        async with httpx.AsyncClient(transport=transport, http2=False, timeout=10.0) as client:
+            r = await client.get(url)
+            results["httpx_ipv4_transport"] = {"status": "ok", "response": r.json()}
+    except Exception as exc:
+        results["httpx_ipv4_transport"] = {"status": "error", "type": type(exc).__name__, "error": str(exc), "trace": traceback.format_exc(limit=5)}
+
+    # Test 4: requests (sync, in thread)
+    try:
+        import asyncio
+        import requests as _requests
+
+        def _sync_get():
+            return _requests.get(url, timeout=10).json()
+
+        resp = await asyncio.to_thread(_sync_get)
+        results["requests_sync"] = {"status": "ok", "response": resp}
+    except Exception as exc:
+        results["requests_sync"] = {"status": "error", "type": type(exc).__name__, "error": str(exc), "trace": traceback.format_exc(limit=5)}
+
+    return results
