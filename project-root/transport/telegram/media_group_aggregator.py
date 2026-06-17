@@ -266,6 +266,7 @@ class MediaGroupAggregator:
             logger.error(
                 "MediaGroupAggregator keyspace listener crashed",
                 extra={"error": str(exc)},
+                exc_info=True,
             )
         finally:
             await pubsub.close()
