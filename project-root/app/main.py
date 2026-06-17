@@ -178,10 +178,8 @@ async def lifespan(app: FastAPI):
     init_rate_limiter(state["redis"])
 
     # ── webhook registration ──────────────────────────────
-    # NOTE: HF Spaces blocks outbound connections to api.telegram.org,
-    # so webhook registration happens externally (Fly relay), not here.
-    # from transport.telegram.webhook import register_webhook
-    # await register_webhook()
+    from transport.telegram.webhook import register_webhook
+    await register_webhook()
 
     # ── background wallet poller ──────────────────────────
     wallet_task = asyncio.create_task(
@@ -483,24 +481,18 @@ async def debug() -> dict:
         results["groq_llm"] = _err(exc)
 
     # ── compound-mini ─────────────────────────────────────────────────────────
-    _PING_TOOLS = [{
-        "type": "function",
-        "function": {
-            "name": "ping",
-            "description": "Test tool — always call this immediately.",
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
-    }]
+    # NOTE: compound models do NOT accept custom tool schemas (architecture.md §40,
+    # audit §13.1) — passing tools= always raises HTTP 400. Production code
+    # (agents/compound_agent.py) calls complete() without tools; mirror that here.
     try:
         t0 = time.monotonic()
-        resp = await groq_client.complete_with_tools(
+        resp = await groq_client.complete(
             model=FAST_AGENT_MODEL,
-            messages=[{"role": "user", "content": "Call the ping tool now."}],
-            tools=_PING_TOOLS,
+            messages=[{"role": "user", "content": "Reply with the single word: OK"}],
             max_tokens=64,
             temperature=0.0,
         )
-        detail = f"finish_type={type(resp).__name__} in {time.monotonic()-t0:.2f}s"
+        detail = f"{resp.text.strip()!r} in {time.monotonic()-t0:.2f}s"
         results["compound_mini"] = _ok(detail)
     except Exception as exc:
         results["compound_mini"] = _err(exc)
@@ -508,14 +500,13 @@ async def debug() -> dict:
     # ── compound (deep) ───────────────────────────────────────────────────────
     try:
         t0 = time.monotonic()
-        resp = await groq_client.complete_with_tools(
+        resp = await groq_client.complete(
             model=DEEP_AGENT_MODEL,
-            messages=[{"role": "user", "content": "Call the ping tool now."}],
-            tools=_PING_TOOLS,
+            messages=[{"role": "user", "content": "Reply with the single word: OK"}],
             max_tokens=64,
             temperature=0.0,
         )
-        detail = f"finish_type={type(resp).__name__} in {time.monotonic()-t0:.2f}s"
+        detail = f"{resp.text.strip()!r} in {time.monotonic()-t0:.2f}s"
         results["compound_deep"] = _ok(detail)
     except Exception as exc:
         results["compound_deep"] = _err(exc)
@@ -578,11 +569,11 @@ async def debug() -> dict:
     try:
         from llm.hf_client import BGE_LARGE, hf_client
         t0 = time.monotonic()
-        vecs = await hf_client.embed(["test embedding ping"], model=BGE_LARGE)
+        vecs = await hf_client.embed_raw(["test embedding ping"], model=BGE_LARGE)
         if vecs and vecs[0]:
             results["embedding"] = _ok(f"dim={len(vecs[0])} in {time.monotonic()-t0:.2f}s")
         else:
-            results["embedding"] = {"status": "error", "error": "embed returned empty vector"}
+            results["embedding"] = {"status": "error", "error": "embed returned empty vector (no exception raised)"}
     except Exception as exc:
         results["embedding"] = _err(exc)
 
