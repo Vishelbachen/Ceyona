@@ -33,7 +33,7 @@ class _HFClient:
         token = os.getenv("HF_TOKEN", "")
         try:
             from huggingface_hub import AsyncInferenceClient  # type: ignore
-            self._client = AsyncInferenceClient(token=token or None)
+            self._client = AsyncInferenceClient(token=token or None, provider="hf-inference")
         except ImportError:
             logger.warning("huggingface_hub not installed — hf_client is a stub")
             self._client = None
@@ -69,6 +69,25 @@ class _HFClient:
         except Exception as exc:
             logger.error("hf_client.embed failed", extra={"model": model, "error": str(exc)})
             return []
+
+    async def embed_raw(
+        self,
+        texts: list[str],
+        model: str = BGE_LARGE,
+    ) -> list[list[float]]:
+        """Like embed(), but re-raises on failure instead of swallowing the
+        exception. Intended for diagnostics (/debug) where the real error
+        message matters more than graceful degradation."""
+        if not texts:
+            return []
+        if self._client is None:
+            raise RuntimeError("huggingface_hub not installed — hf_client is a stub")
+        result = await self._client.feature_extraction(texts, model=model)
+        if hasattr(result, "tolist"):
+            result = result.tolist()
+        if result and not isinstance(result[0], list):
+            result = [result]
+        return result  # type: ignore[return-value]
 
     # ------------------------------------------------------------------
     # Reranking
