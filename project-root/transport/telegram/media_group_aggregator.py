@@ -171,7 +171,7 @@ class MediaGroupAggregator:
             )
 
         self._listener_task = asyncio.create_task(
-            self._keyspace_listener(), name="media_group_keyspace_listener"
+            self._keyspace_listener_supervisor(), name="media_group_keyspace_listener"
         )
         logger.info("MediaGroupAggregator started")
 
@@ -225,6 +225,28 @@ class MediaGroupAggregator:
 
     # ── internals ─────────────────────────────────────────────────────────────
 
+    async def _keyspace_listener_supervisor(self) -> None:
+        """
+        Restart _keyspace_listener on failure instead of letting one
+        transient Redis hiccup permanently disable media-group flushing.
+        Backs off briefly between restarts to avoid a hot-crash loop.
+        """
+        backoff = 1.0
+        while True:
+            try:
+                await self._keyspace_listener()
+                return  # clean exit (cancellation) — don't restart
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:
+                logger.error(
+                    "MediaGroupAggregator keyspace listener crashed — restarting",
+                    extra={"error": str(exc)},
+                    exc_info=True,
+                )
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 30.0)
+
     async def _keyspace_listener(self) -> None:
         """
         Subscribe to Redis keyspace expiry events.
@@ -261,13 +283,7 @@ class MediaGroupAggregator:
                     name=f"media_group_flush_{group_id}",
                 )
         except asyncio.CancelledError:
-            pass
-        except Exception as exc:
-            logger.error(
-                "MediaGroupAggregator keyspace listener crashed",
-                extra={"error": str(exc)},
-                exc_info=True,
-            )
+            raise
         finally:
             await pubsub.close()
 
