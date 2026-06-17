@@ -13,10 +13,20 @@ async def bootstrap() -> dict:
     from supabase import create_client
 
     # ─── Redis ──────────────────────────────────────────
+    # socket_timeout=None: pubsub.listen() blocks indefinitely waiting for
+    # the next keyspace event — that's normal idle, not a hang. The default
+    # ~10s socket_timeout was killing MediaGroupAggregator's listener on any
+    # quiet period (redis.exceptions.TimeoutError: Timeout reading from ...).
+    # health_check_interval keeps the connection alive across Upstash's
+    # managed-proxy idle disconnects.
     redis = redis_from_url(
         settings.redis_url,
         encoding="utf-8",
         decode_responses=True,
+        socket_timeout=None,
+        socket_connect_timeout=10,
+        socket_keepalive=True,
+        health_check_interval=30,
     )
 
     # ─── Supabase ───────────────────────────────────────
