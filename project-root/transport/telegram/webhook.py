@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-_TELEGRAM_API = f"https://api.telegram.org/bot{settings.bot_token}"
+_TELEGRAM_API = "https://ceyona-webhook.fly.dev/tg/bot" + settings.bot_token
 
 _WEBHOOK_SECRET = re.sub(r"[^A-Za-z0-9_\-]", "_", settings.bot_token)[:256]
 
