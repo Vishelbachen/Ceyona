@@ -1,4 +1,6 @@
+import json
 import logging
+import os
 import sys
 
 # Standard attributes every LogRecord carries. Anything NOT in this set was
@@ -21,28 +23,66 @@ _RESERVED_RECORD_ATTRS = {
 }
 
 
+def _extras_of(record: logging.LogRecord) -> dict:
+    return {
+        k: v
+        for k, v in record.__dict__.items()
+        if k not in _RESERVED_RECORD_ATTRS and not k.startswith("_")
+    }
+
+
 class ExtraFormatter(logging.Formatter):
     """Standard formatter, plus any `extra={...}` fields rendered as
-    `key=value` suffixes so they actually show up in stdout/Space logs."""
+    `key=value` suffixes so they actually show up in stdout/Space logs.
+
+    Default format. Optimised for a human scrolling live container logs
+    (HF Spaces / Fly.io viewers) on a phone — short, no quoting overhead,
+    easy to scan line by line."""
 
     def format(self, record: logging.LogRecord) -> str:
         base = super().format(record)
-        extras = {
-            k: v
-            for k, v in record.__dict__.items()
-            if k not in _RESERVED_RECORD_ATTRS and not k.startswith("_")
-        }
+        extras = _extras_of(record)
         if not extras:
             return base
         rendered = " ".join(f"{k}={v!r}" for k, v in sorted(extras.items()))
         return f"{base} | {rendered}"
 
 
+class JsonFormatter(logging.Formatter):
+    """One JSON object per line. Not the default — turn it on with
+    LOG_FORMAT=json once there's an actual consumer for it (a log
+    aggregator like Loki/Datadog/CloudWatch, or even local `jq` filtering).
+    Until then, ExtraFormatter is more readable for manual log-tailing.
+
+    Deliberately stdlib-only (no structlog / python-json-logger): those were
+    declared in pyproject.toml but never imported anywhere, and external
+    JSON-logging packages have historically broken their import path across
+    major versions (e.g. python-json-logger 2.x → 3.x). A ~15-line formatter
+    we own outright has no such risk and needs no new dependency."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload = {
+            "timestamp": self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z"),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        payload.update(_extras_of(record))
+        if record.exc_info:
+            payload["exc_info"] = self.formatException(record.exc_info)
+        return json.dumps(payload, default=str, ensure_ascii=False)
+
+
 def setup_logging(level: str = "INFO") -> None:
+    log_format = os.getenv("LOG_FORMAT", "text").strip().lower()
+    formatter: logging.Formatter
+    if log_format == "json":
+        formatter = JsonFormatter()
+    else:
+        formatter = ExtraFormatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+
     handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(
-        ExtraFormatter("%(asctime)s %(levelname)s %(name)s %(message)s")
-    )
+    handler.setFormatter(formatter)
 
     root = logging.getLogger()
     root.setLevel(getattr(logging, level.upper(), logging.INFO))
