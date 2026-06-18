@@ -3,6 +3,8 @@ name: Sync to HF Space
 on:
   push:
     branches: [main]
+    paths:
+      - 'project-root/**'
   workflow_dispatch:
 
 jobs:
