@@ -10,6 +10,16 @@ dependencies = [
 
     "groq>=1.1,<2.0",
     "huggingface-hub>=0.20,<2.0",
+    # huggingface_hub's InferenceClient.feature_extraction() converts its
+    # response to a numpy array internally, but huggingface_hub itself only
+    # declares numpy under its own testing/all/dev extras — NOT the base
+    # install. Without it, embed() doesn't raise ImportError; it returns a
+    # caught exception with the message "Please install numpy to use deal
+    # with embeddings", which prior to the logger.py fix was being silently
+    # swallowed by `except Exception: return []`. This was the actual root
+    # cause of every "embed failed" / empty-embedding / degraded-memory
+    # symptom seen in production — not a model-deployment issue.
+    "numpy>=1.26,<3.0",
 
     "supabase>=2.8,<3.0",
     "httpx[http2]>=0.28,<0.30",
