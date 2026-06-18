@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     bot_token: str = Field(..., description="Telegram bot token")
     jwt_secret: str = Field(..., description="JWT signing secret")
     encryption_key: str = Field(..., description="Fernet encryption key")
-    webhook_url: str = Field(..., description="Public webhook URL")
+    webhook_url: str = Field("", description="Public webhook URL")
     allowed_origins: str = Field("*", description="Comma-separated allowed origins")
 
     # ─── LLM PROVIDERS ──────────────────────────────────
