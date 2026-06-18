@@ -4,8 +4,10 @@
 use_default_settings: true
 
 server:
-  # Must match SEARXNG_BASE_URL in fly.toml
-  base_url: https://ceyona-searxng.fly.dev
+  # Должен совпадать с реальным URL HF Space (проверь после создания —
+  # обычно https://<username>-<spacename>.hf.space, например
+  # https://warren97-ceyona-searxng.hf.space)
+  base_url: https://warren97-ceyona-searxng.hf.space
   secret_key: "0ab86474a17bb813284045bf635dc1147cf3dc4cf932a32bbb23c5e0159ff974"
   limiter: false        # отключаем — у нас только один клиент (Ceyona)
   image_proxy: false
