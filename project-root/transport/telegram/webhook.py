@@ -251,9 +251,9 @@ async def telegram_webhook(
     request: Request,
     x_telegram_bot_api_secret_token: str | None = Header(default=None),
 ) -> dict:
-    if x_telegram_bot_api_secret_token:
-        if not verify_webhook_secret(x_telegram_bot_api_secret_token, _WEBHOOK_SECRET):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
+    if not x_telegram_bot_api_secret_token or \
+       not verify_webhook_secret(x_telegram_bot_api_secret_token, _WEBHOOK_SECRET):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN)
 
     try:
         update: dict = await request.json()
