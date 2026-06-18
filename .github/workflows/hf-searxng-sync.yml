@@ -1,0 +1,29 @@
+name: Sync SearXNG to HF Space
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'searxng/**'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Push to HuggingFace Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          git config --global user.email "action@github.com"
+          git config --global user.name "GitHub Action"
+          cd searxng
+          git init
+          git add .
+          git commit -m "sync: ${{ github.sha }}"
+          git remote add hf https://Warren97:$HF_TOKEN@huggingface.co/spaces/Warren97/ceyona-searxng
+          git push hf master:main --force
