@@ -140,12 +140,30 @@ class MediaGroupAggregator:
 
     def __init__(
         self,
-        redis,                          # redis.asyncio.Redis
+        redis,                          # redis.asyncio.Redis — regular commands (add/flush)
         on_group_ready: CallbackType,
         debounce_ttl: int = _DEBOUNCE_TTL_SECONDS,
         max_group_size: int = _MAX_GROUP_SIZE,
+        redis_pubsub=None,              # redis.asyncio.Redis — keyspace listener only.
+                                         # Should be a client with socket_timeout=None
+                                         # (pubsub.listen() blocks indefinitely between
+                                         # events, which is normal idle, not a hang).
+                                         # Falls back to `redis` if not given — that
+                                         # client must then ALSO have socket_timeout=None,
+                                         # which is correct for the ephemeral fallback
+                                         # path in update_handler.py but would be wrong
+                                         # for a client also used for regular GET/SETEX.
     ) -> None:
         self._redis = redis
+        if redis_pubsub is None:
+            logger.warning(
+                "MediaGroupAggregator: no redis_pubsub given — reusing main "
+                "redis client for the keyspace listener too. Fine for the "
+                "ephemeral fallback path; if this is the app-level instance, "
+                "bootstrap.py should be passing a dedicated socket_timeout=None client."
+            )
+            redis_pubsub = redis
+        self._redis_pubsub = redis_pubsub
         self._on_group_ready = on_group_ready
         self._debounce_ttl = debounce_ttl
         self._max_group_size = max_group_size
@@ -254,7 +272,7 @@ class MediaGroupAggregator:
 
         Pattern: __keyevent@*__:expired  for keys matching media_group:*:ttl
         """
-        pubsub = self._redis.pubsub()
+        pubsub = self._redis_pubsub.pubsub()
         # Subscribe to all DB keyevent channels for expired events.
         await pubsub.psubscribe("__keyevent@*__:expired")
         logger.debug("MediaGroupAggregator: subscribed to keyspace expiry events")
