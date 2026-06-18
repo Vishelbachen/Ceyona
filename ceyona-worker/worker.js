@@ -50,6 +50,7 @@ async function handleWebhook(request, env) {
 
   const headers = { "Content-Type": "application/json" };
   if (secret) headers["X-Telegram-Bot-Api-Secret-Token"] = secret;
+  if (env.HF_TOKEN) headers["Authorization"] = `Bearer ${env.HF_TOKEN}`;
 
   try {
     const resp = await fetch(hfUrl, {
