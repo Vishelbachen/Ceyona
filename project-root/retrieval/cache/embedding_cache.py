@@ -20,7 +20,8 @@ class EmbeddingCache:
         try:
             raw = await self._redis.get(self._key(text, model))
             return json.loads(raw) if raw else None
-        except Exception:
+        except Exception as exc:
+            logger.warning("EmbeddingCache.get failed", extra={"error": str(exc)})
             return None
 
     async def set(self, text: str, model: str, vector: list[float]) -> None:
