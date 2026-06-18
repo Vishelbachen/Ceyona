@@ -15,7 +15,7 @@ server:
 search:
   safe_search: 0
   autocomplete: ""
-  default_lang: ""      # пустой = определяется из запроса
+  default_lang: "en"
   languages:
     - all
 
