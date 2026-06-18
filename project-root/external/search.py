@@ -346,8 +346,10 @@ async def _search_searxng(query: str, lang: str, num: int) -> list[dict]:
     for attempt in range(1 + _RETRIES):
         try:
             url = base_url.rstrip("/") + "/search"
+            _hf_token = getattr(settings, "hf_token", "")
+            _headers = {"Authorization": f"Bearer {_hf_token}"} if _hf_token else {}
             async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-                response = await client.get(url, params=params)
+                response = await client.get(url, params=params, headers=_headers)
                 response.raise_for_status()
                 data = response.json()
 
