@@ -1,0 +1,6 @@
+name = "ceyona-webhook"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+[vars]
+FORWARD_TIMEOUT = "20000"
