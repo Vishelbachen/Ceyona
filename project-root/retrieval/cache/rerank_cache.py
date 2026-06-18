@@ -23,7 +23,8 @@ class RerankCache:
                 return None
             data = json.loads(raw)
             return [(d["content"], d["score"]) for d in data]
-        except Exception:
+        except Exception as exc:
+            logger.warning("RerankCache.get failed", extra={"error": str(exc)})
             return None
 
     async def set(self, query: str, candidates: list[str], results: list[tuple[str, float]]) -> None:
