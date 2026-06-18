@@ -69,7 +69,7 @@ async function handleWebhook(request, env) {
 
 async function handleTelegramProxy(request, env, path, url) {
   // /tg/bot<token>/sendMessage → https://api.telegram.org/bot<token>/sendMessage
-  const tgPath = path.slice(4); // убираем /tg
+  const tgPath = path.slice(3); // убираем /tg, оставляя ведущий слэш
   let targetUrl = `${TELEGRAM_API_BASE}${tgPath}`;
   if (url.search) targetUrl += url.search;
 
