@@ -20,7 +20,8 @@ class QueryCache:
         try:
             raw = await self._redis.get(self._key(query, user_id))
             return json.loads(raw) if raw else None
-        except Exception:
+        except Exception as exc:
+            logger.warning("QueryCache.get failed", extra={"error": str(exc)})
             return None
 
     async def set(self, query: str, user_id: str, results: list[dict]) -> None:
