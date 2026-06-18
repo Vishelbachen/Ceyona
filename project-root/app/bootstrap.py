@@ -13,13 +13,34 @@ async def bootstrap() -> dict:
     from supabase import create_client
 
     # ─── Redis ──────────────────────────────────────────
-    # socket_timeout=None: pubsub.listen() blocks indefinitely waiting for
-    # the next keyspace event — that's normal idle, not a hang. The default
-    # ~10s socket_timeout was killing MediaGroupAggregator's listener on any
-    # quiet period (redis.exceptions.TimeoutError: Timeout reading from ...).
-    # health_check_interval keeps the connection alive across Upstash's
-    # managed-proxy idle disconnects.
+    # TWO separate clients, not one shared connection:
+    #
+    # `redis` — used for every regular command (GET/SETEX/pipeline/zrevrange/
+    # Lua scripts): EventStore, rate_limiter, EmbeddingCache/QueryCache/
+    # RerankCache, MediaGroupAggregator's add()/flush(). Has a finite
+    # socket_timeout so a hung/managed-proxy connection (Upstash) fails fast
+    # instead of hanging the whole webhook request forever.
+    #
+    # `redis_pubsub` — used ONLY by MediaGroupAggregator's keyspace listener
+    # (pubsub.listen()). It legitimately blocks indefinitely waiting for the
+    # next event, which is normal idle, not a hang — hence socket_timeout=None.
+    #
+    # Previously both roles shared ONE client with socket_timeout=None. That
+    # was set to fix the listener (redis.exceptions.TimeoutError: Timeout
+    # reading from ...), but it silently disabled the timeout on every OTHER
+    # operation too — including EventStore/rate_limiter/caches. A stalled
+    # Upstash connection on any of those would hang the request indefinitely
+    # rather than timing out after 10s as intended.
     redis = redis_from_url(
+        settings.redis_url,
+        encoding="utf-8",
+        decode_responses=True,
+        socket_timeout=10,
+        socket_connect_timeout=10,
+        socket_keepalive=True,
+        health_check_interval=30,
+    )
+    redis_pubsub = redis_from_url(
         settings.redis_url,
         encoding="utf-8",
         decode_responses=True,
@@ -64,12 +85,13 @@ async def bootstrap() -> dict:
             extra={"group_id": group_id, "count": len(items)},
         )
 
-    media_group_aggregator = MediaGroupAggregator(redis, _media_group_noop)
+    media_group_aggregator = MediaGroupAggregator(redis, _media_group_noop, redis_pubsub=redis_pubsub)
     await media_group_aggregator.start()
     logger.info("MediaGroupAggregator started")
 
     return {
         "redis": redis,
+        "redis_pubsub": redis_pubsub,
         "supabase": supabase,
         "settings": settings,
         "event_store": store,
@@ -84,3 +106,6 @@ async def shutdown(state: dict) -> None:
     redis = state.get("redis")
     if redis:
         await redis.aclose()
+    redis_pubsub = state.get("redis_pubsub")
+    if redis_pubsub:
+        await redis_pubsub.aclose()
