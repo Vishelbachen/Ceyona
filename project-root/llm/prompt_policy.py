@@ -43,6 +43,31 @@ FORMAT_RULES = (
     "Use plain text, numbered lists, or dashes only. "
 )
 
+# ─── CONTINUITY RULE ─────────────────────────────────────────────────────────
+# persona.md §10: when open topics are detected in recent history,
+# pass this rule to the system prompt so the LLM can acknowledge unresolved
+# threads naturally — without being forced to do so.
+#
+# This rule is CONDITIONAL: only injected when PromptContext.open_topics
+# is non-empty. The coordinator is responsible for setting open_topics via
+# history_filter.extract_open_topics().
+#
+# Boundary: one acknowledgment, then follow the user's lead.
+# Ceyona does not persist if the user ignores the callback.
+
+def make_continuity_rule(open_topics: list[str]) -> str:
+    """
+    Build CONTINUITY_RULE string for the given open topics.
+    Only called when open_topics is non-empty.
+    """
+    topics_text = "; ".join(open_topics[:3])  # cap at 3 to stay concise
+    return (
+        f"CONTINUITY RULE: the recent conversation contains unresolved topic(s): [{topics_text}]. "
+        "If it is natural in context, you may briefly acknowledge the open thread — "
+        "one sentence, not forced. Do not ask more than one question at a time. "
+        "If the user has moved on, follow their lead without commenting on the shift."
+    )
+
 VARIATION_RULE = (
     "Write in plain text. No markdown tables, no headers, no bold. "
     f"{ANSWER_FIRST_RULE} "
@@ -138,6 +163,7 @@ __all__ = [
     "NO_UNSOLICITED_CODE_RULE",
     "FORMAT_RULES",
     "VARIATION_RULE",
+    "make_continuity_rule",
     "join_rules",
     "PERSONA_RULE",
     "PERSONA_RULE_FAST",
