@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from contracts.shared_types import TruthMode
 from i18n.t import lang_instruction as _lang_instruction
@@ -11,7 +11,6 @@ from llm.prompt_policy import PERSONA_RULE_GENERAL as _PERSONA_RULE_GENERAL
 from llm.prompt_policy import PERSONA_RULE_HEAVY as _PERSONA_RULE_HEAVY
 from llm.prompt_policy import VARIATION_RULE as _VARIATION_RULE
 from llm.prompt_policy import VERIFIED_FACTS_RULE as _VERIFIED_FACTS_RULE
-from llm.prompt_policy import make_continuity_rule as _make_continuity_rule
 
 # ─── TRUTH ENFORCEMENT PROMPTS ───────────────────────────────────────────────
 # STRICT: for intents where only retrieved data is valid (maps, poi, routes).
