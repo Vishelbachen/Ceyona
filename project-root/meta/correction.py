@@ -34,6 +34,21 @@ from collections.abc import Sequence
 _RE_TRIPLE_BACKTICK = re.compile(r"```")
 _RE_BOLD_MARKER = re.compile(r"\*\*")
 
+# ─── PIPE TABLE STRIPPER ─────────────────────────────────────────────────────
+# FORMAT_RULES prohibits Markdown tables, but compound (synthesizer) occasionally
+# outputs them anyway. Strip pipe-table rows deterministically here so the
+# prompt instruction has a hard backstop.
+#
+# Two patterns removed:
+#   • Data/header rows: lines that start and end with | (e.g. "| col | col |")
+#   • Separator rows:   lines of dashes/pipes (e.g. "|---|---|")
+#
+# Rows are removed entirely — the surrounding text (if any) is kept.
+# This is structural cleanup, not translation; meaning is never changed.
+
+_RE_PIPE_TABLE_ROW = re.compile(r"^\|.+\|$", re.MULTILINE)
+_RE_PIPE_SEPARATOR_ROW = re.compile(r"^\|[-+: |]+\|$", re.MULTILINE)
+
 # ─── REPETITION CLEANUP ──────────────────────────────────────────────────────
 
 _RE_BLANK_SPLIT = re.compile(r"(?:\r?\n){2,}")
@@ -45,6 +60,19 @@ _RE_TRAILING_SPACE = re.compile(r"[ \t]+$", re.MULTILINE)
 
 
 # ─── INTERNAL HELPERS ─────────────────────────────────────────────────────────
+
+def _strip_pipe_tables(text: str) -> str:
+    """
+    Remove Markdown pipe-table rows from text.
+
+    Removes both data rows (| col | col |) and separator rows (|---|---|).
+    Collapses any resulting excessive blank lines.
+    Called before whitespace normalisation so _normalise_whitespace cleans up.
+    """
+    result = _RE_PIPE_TABLE_ROW.sub("", text)
+    result = _RE_PIPE_SEPARATOR_ROW.sub("", result)
+    return result
+
 
 def _fix_markdown(text: str) -> str:
     """
@@ -130,7 +158,8 @@ def apply(text: str, history: Sequence[dict] | None = None) -> str:
     if not text or not text.strip():
         return text
 
-    result = _fix_markdown(text)
+    result = _strip_pipe_tables(text)
+    result = _fix_markdown(result)
     result = _dedupe_consecutive_lines(result)
     result = _dedupe_consecutive_paragraphs(result)
     result = _normalise_whitespace(result)
