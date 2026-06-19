@@ -8,6 +8,9 @@ from llm.history_filter import select_relevant_history as _select_relevant_histo
 from llm.prompt_policy import NO_CARRYOVER_RULE as _NO_CARRYOVER_RULE
 from llm.prompt_policy import VARIATION_RULE as _VARIATION_RULE
 from llm.prompt_policy import VERIFIED_FACTS_RULE as _VERIFIED_FACTS_RULE
+from llm.prompt_policy import PERSONA_RULE_FAST as _PERSONA_RULE_FAST
+from llm.prompt_policy import PERSONA_RULE_GENERAL as _PERSONA_RULE_GENERAL
+from llm.prompt_policy import PERSONA_RULE_HEAVY as _PERSONA_RULE_HEAVY
 
 # ─── TRUTH ENFORCEMENT PROMPTS ───────────────────────────────────────────────
 # STRICT: for intents where only retrieved data is valid (maps, poi, routes).
@@ -38,12 +41,20 @@ class PromptContext:
     conversation_history: list[dict] | None = None
     truth_mode: TruthMode = TruthMode.HYBRID
     lang: str = "en"
+    tier: str = "general"  # "fast" | "general" | "heavy"
 
 
 def build_messages(ctx: PromptContext) -> list[dict]:
     messages: list[dict] = []
 
     system_parts: list[str] = []
+
+    # ── persona (always first — model sees character before constraints) ──────
+    _persona = {
+        "fast":    _PERSONA_RULE_FAST,
+        "heavy":   _PERSONA_RULE_HEAVY,
+    }.get(ctx.tier, _PERSONA_RULE_GENERAL)
+    system_parts.append(_persona)
 
     # ── language instruction (always first) ───────────────────────────────────
     system_parts.append(_lang_instruction(ctx.lang))
