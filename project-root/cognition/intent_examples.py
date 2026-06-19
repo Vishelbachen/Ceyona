@@ -32,6 +32,20 @@ INTENT_EXAMPLES: dict[str, list[str]] = {
         "ما هي عاصمة روسيا؟",
         "كيف يعمل الذكاء الاصطناعي؟",
         "Як працює імунна система?",
+        # Explanatory queries — conceptual "explain from scratch" requests.
+        # These must anchor to QUESTION (ReasoningDepth.LIGHT → GENERAL tier),
+        # not EXAM or MATH, which share similar surface vocabulary but differ
+        # in intent: exam = structured task with correct answer, explanation = open concept.
+        "Explain neural networks from scratch",
+        "Explain how the internet works in simple terms",
+        "What is machine learning? Explain it simply",
+        "How does a neural network actually work?",
+        "Explain quantum computing like I'm a beginner",
+        "What is blockchain and how does it work?",
+        "Объясни нейросети с нуля",
+        "Объясни простыми словами что такое квантовые вычисления",
+        "Что такое машинное обучение, объясни понятно",
+        "Как работает блокчейн на самом деле?",
     ],
 
     "recommendation": [
