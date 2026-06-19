@@ -11,6 +11,7 @@ from llm.prompt_policy import PERSONA_RULE_GENERAL as _PERSONA_RULE_GENERAL
 from llm.prompt_policy import PERSONA_RULE_HEAVY as _PERSONA_RULE_HEAVY
 from llm.prompt_policy import VARIATION_RULE as _VARIATION_RULE
 from llm.prompt_policy import VERIFIED_FACTS_RULE as _VERIFIED_FACTS_RULE
+from llm.prompt_policy import make_continuity_rule as _make_continuity_rule
 
 # ─── TRUTH ENFORCEMENT PROMPTS ───────────────────────────────────────────────
 # STRICT: for intents where only retrieved data is valid (maps, poi, routes).
@@ -42,6 +43,7 @@ class PromptContext:
     truth_mode: TruthMode = TruthMode.HYBRID
     lang: str = "en"
     tier: str = "general"  # "fast" | "general" | "heavy"
+    open_topics: list[str] | None = None  # from history_filter.extract_open_topics()
 
 
 def build_messages(ctx: PromptContext) -> list[dict]:
@@ -77,6 +79,15 @@ def build_messages(ctx: PromptContext) -> list[dict]:
     if ctx.truth_mode == TruthMode.STRICT:
         system_parts.append(_TRUTH_STRICT)
     # HYBRID and GENERATIVE → no injection
+
+    # ── continuity rule (conditional — only when open topics exist) ──────────
+    # persona.md §10: when history_filter.extract_open_topics() returns a non-empty
+    # list, the coordinator sets PromptContext.open_topics. build_messages then
+    # injects CONTINUITY_RULE so the LLM — which already has full conversation
+    # context — can decide whether to acknowledge the open thread.
+    # The LLM makes the decision; this rule is just the signal.
+    if ctx.open_topics:
+        system_parts.append(_make_continuity_rule(ctx.open_topics))
 
     # ── formatting + diversity rules ─────────────────────────────────────────
     # Inserted before truth block so the model treats it as a core constraint,
