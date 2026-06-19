@@ -67,8 +67,15 @@ _INVISIBLE_CHARS = re.compile(r"[‌‍﻿­]")
 # Only applied when target lang matches — never globally.
 # Scope: common transport/UI terms that leak from English retrieval snippets.
 #
+# ARCHITECTURE NOTE (§20): This is an EDGE-CASE FALLBACK, not the primary
+# solution for language contamination. The primary solution is
+# source_credibility._MIN_TIER = MEDIUM, which prevents LOW-tier English
+# aggregators from reaching the LLM in the first place.
+# _LEAK_MAPS handles residual leaks from MEDIUM+ sources (e.g. Wikipedia EN)
+# and from cases where the LLM absorbs English from multilingual snippets.
+#
 # Rules for adding entries:
-#   1. The English term must be a known retrieval artifact (seen in production)
+#   1. The English term must be a confirmed retrieval artifact (seen in Sentry)
 #   2. The substitution must be semantically equivalent, not approximate
 #   3. Never add terms that could appear in code, URLs, or proper nouns
 #
