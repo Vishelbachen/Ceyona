@@ -4,13 +4,7 @@ import logging
 import re
 from dataclasses import dataclass
 
-from cognition.intent_engine import (
-    Intent,
-    IntentResult,
-    _resolve_routing,
-    build_system_prompt,
-    classify,
-)
+from cognition.intent_engine import Intent, IntentResult, classify, _resolve_routing, build_system_prompt
 from cognition.multi_agent_coordinator import (
     CoordinationResult,
     coordinate,
@@ -861,6 +855,51 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             tier=_estimate_tier,
             embedding_type=request.embedding_type,
         )
+
+        # ── EPK ──────────────────────────────────────────────────────────────
+        epk_out = evaluate(EPKInput(
+            estimated_cost=estimated,
+            user_balance=request.user_balance,
+        ))
+
+        logger.info("EPK", extra={
+            "request_id":     _rid,
+            "decision":       epk_out.decision,
+            "estimated_cost": f"{estimated:.6f}",
+        })
+        increment(f"epk.decision.{epk_out.decision.value.lower()}")
+        gauge("epk.last_estimated_cost", estimated)
+
+        if epk_out.decision == EPKDecision.DENY:
+            return _denied_result(
+                reason="insufficient_balance",
+                lang=lang,
+                input_tokens=request.input_tokens,
+                embedding_tokens=request.embedding_tokens,
+                rerank_tokens=request.rerank_tokens,
+                embedding_type=request.embedding_type,
+                epk_decision=EPKDecision.DENY,
+            )
+
+        # ── tier ─────────────────────────────────────────────────────────────
+        tier = select_tier(estimated)
+
+        # ── assemble retrieved context ────────────────────────────────────────
+        retrieved_context = _retrieved_context or ""
+        if tool_output:
+            retrieved_context = (
+                f"{tool_output}\n\n{retrieved_context}".strip()
+                if retrieved_context
+                else tool_output
+            )
+
+        # ── build messages with truth mode ────────────────────────────────────
+        messages = _build_messages(request, intent_result, retrieved_context, truth_mode, tier)
+
+        logger.info("Truth mode", extra={
+            "mode": truth_mode,
+            "has_context": bool(retrieved_context),
+        })
 
         # ── EPK ──────────────────────────────────────────────────────────────
         epk_out = evaluate(EPKInput(
