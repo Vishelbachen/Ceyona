@@ -180,6 +180,8 @@ jobs:
           python -c "import core.execution.orchestrator"
           python -c "import retrieval.retrieval_engine"
           python -c "import context.assembler"
+          python -c "import memory.supabase_store"
+          python -c "import external.search"
           python -c "import core.kernel.execution_policy_kernel"
           python -c "import core.kernel.cost_model"
           python -c "import meta.analysis"
@@ -224,7 +226,7 @@ jobs:
         run: pip install pip-audit bandit
 
       - name: CVE scan (pip-audit)
-        run: pip-audit || true
+        run: pip-audit
 
       - name: Static security analysis (bandit)
         run: |
