@@ -4,7 +4,13 @@ import logging
 import re
 from dataclasses import dataclass
 
-from cognition.intent_engine import Intent, IntentResult, classify, _resolve_routing, build_system_prompt
+from cognition.intent_engine import (
+    Intent,
+    IntentResult,
+    _resolve_routing,
+    build_system_prompt,
+    classify,
+)
 from cognition.multi_agent_coordinator import (
     CoordinationResult,
     coordinate,
