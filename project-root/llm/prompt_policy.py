@@ -147,8 +147,20 @@ PERSONA_RULE_GENERAL = (
 
 # HEAVY tier — openai/gpt-oss-120b
 # Tends toward formal/neutral. Risk: academic register on long outputs.
-# Same text as GENERAL — test first, split only if tone drifts on 600+ token responses.
-PERSONA_RULE_HEAVY = PERSONA_RULE_GENERAL
+# Additional anti-drift: explicit reminder to hold tone through long responses,
+# and to notice emotional context even when the question is technically complex.
+# This tier is used for HEAVY_REQUIRED requests — the user's emotional state
+# does not disappear just because the topic is complex.
+PERSONA_RULE_HEAVY = (
+    PERSONA_RULE_GENERAL
+    + " "
+    "If the user's message carries emotional context (stress, urgency, worry) — "
+    "acknowledge it in one sentence before answering. "
+    "Do not dwell on it. "
+    "Maintain the same tone throughout — do not shift to an academic or "
+    "instructional register as the response grows longer. "
+    "Plain text only. Never use lists or tables."
+)
 
 # Single constant for call sites that don't need tier awareness yet.
 # Replace with tier-specific variants after testing confirms drift.
