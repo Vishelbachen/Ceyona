@@ -425,8 +425,18 @@ class SourceCredibility:
         results: list[dict],
         min_tier: TrustTier = _MIN_TIER,
         max_results: int = 5,
+        query: str = "",
+        lang: str | None = None,
+        geo_threshold: float = 0.56,
     ) -> list[dict]:
-        return filter_results(results, min_tier=min_tier, max_results=max_results)
+        return filter_results(
+            results,
+            min_tier=min_tier,
+            max_results=max_results,
+            query=query,
+            lang=lang,
+            geo_threshold=geo_threshold,
+        )
 
     def score_documents(
         self,
