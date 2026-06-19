@@ -13,7 +13,6 @@ updates:
     labels:
       - "dependencies"
       - "python"
-    # Group all non-breaking updates into one PR per week
     groups:
       python-minor-patch:
         patterns:
@@ -21,7 +20,6 @@ updates:
         update-types:
           - "minor"
           - "patch"
-    # Don't auto-merge major version bumps — review manually
     ignore:
       - dependency-name: "pydantic"
         update-types: ["version-update:semver-major"]
@@ -41,30 +39,3 @@ updates:
     labels:
       - "dependencies"
       - "github-actions"
-
-  # ── ceyona-webhook (separate Fly.io relay, own requirements.txt) ──
-  # Previously untracked: this service drifted to fastapi==0.115.6 /
-  # uvicorn==0.34.0 while project-root moved on to fastapi>=0.130 /
-  # uvicorn>=0.43, because dependabot had no entry pointing here.
-  - package-ecosystem: "pip"
-    directory: "/ceyona-webhook"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "09:00"
-      timezone: "Europe/Moscow"
-    open-pull-requests-limit: 5
-    labels:
-      - "dependencies"
-      - "python"
-      - "ceyona-webhook"
-    groups:
-      python-minor-patch:
-        patterns:
-          - "*"
-        update-types:
-          - "minor"
-          - "patch"
-    ignore:
-      - dependency-name: "fastapi"
-        update-types: ["version-update:semver-major"]
