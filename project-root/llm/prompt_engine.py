@@ -6,11 +6,11 @@ from contracts.shared_types import TruthMode
 from i18n.t import lang_instruction as _lang_instruction
 from llm.history_filter import select_relevant_history as _select_relevant_history
 from llm.prompt_policy import NO_CARRYOVER_RULE as _NO_CARRYOVER_RULE
-from llm.prompt_policy import VARIATION_RULE as _VARIATION_RULE
-from llm.prompt_policy import VERIFIED_FACTS_RULE as _VERIFIED_FACTS_RULE
 from llm.prompt_policy import PERSONA_RULE_FAST as _PERSONA_RULE_FAST
 from llm.prompt_policy import PERSONA_RULE_GENERAL as _PERSONA_RULE_GENERAL
 from llm.prompt_policy import PERSONA_RULE_HEAVY as _PERSONA_RULE_HEAVY
+from llm.prompt_policy import VARIATION_RULE as _VARIATION_RULE
+from llm.prompt_policy import VERIFIED_FACTS_RULE as _VERIFIED_FACTS_RULE
 
 # ─── TRUTH ENFORCEMENT PROMPTS ───────────────────────────────────────────────
 # STRICT: for intents where only retrieved data is valid (maps, poi, routes).
