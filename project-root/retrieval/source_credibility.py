@@ -214,8 +214,20 @@ def evaluate(url: str) -> CredibilityScore:
 # Используется в retrieval_engine и search.py
 
 # Минимальный tier для попадания в контекст LLM.
-# VERY_LOW и ниже → отфильтровываются.
-_MIN_TIER = TrustTier.LOW
+#
+# Architecture decision (§20): source_credibility is the PRIMARY gate for
+# retrieval contamination — including language leaks. Raising to MEDIUM means
+# LOW-tier aggregators (tripadvisor, flamp, zoon) no longer reach the LLM.
+# This eliminates most English-term contamination at the source.
+#
+# output_normalizer._LEAK_MAPS remains as an edge-case fallback for leaks
+# that still occur from MEDIUM+ sources (e.g. Wikipedia English snippets).
+# It is NOT the primary solution. Primary solution is here.
+#
+# Tradeoff: fewer results for some queries. Acceptable — quality > quantity.
+# Queries that genuinely need LOW-tier sources (rare) can override min_tier
+# at the call site via filter_results(min_tier=TrustTier.LOW).
+_MIN_TIER = TrustTier.MEDIUM
 
 
 
