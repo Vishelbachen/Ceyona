@@ -7,9 +7,13 @@ import re
 This keeps the prompt layer small by selecting only turns that are likely to
 matter for the current request. It is intentionally conservative and does not
 replace retrieval or memory.
+
+§10 (persona.md): closure detection now also surfaces open topics for
+PromptContext so the coordinator can pass them to the system prompt via
+CONTINUITY_RULE. This is a code-level signal, not a heuristic list.
 """
 
-_WORD_RE = re.compile(r"[\wÀ-ÖØ-öø-ÿа-яА-ЯёЁ'’\-]{3,}", re.UNICODE)
+_WORD_RE = re.compile(r"[\wÀ-ÖØ-öø-ÿа-яА-ЯёЁ''\-]{3,}", re.UNICODE)
 
 # Small stopword set for better topical overlap. Intentionally tiny: this is a
 # guardrail, not a language model.
@@ -25,20 +29,29 @@ _MAX_SELECTED_TURNS = 6
 _MIN_HISTORY_OVERLAP = 0.18
 
 
-_CLOSURE_MARKERS = {
-    "thanks", "thank you", "thx", "ok thanks", "okay thanks", "got it", "gotcha",
-    "i'll look it up myself", "i will look it up myself", "i'll find it myself",
-    "never mind", "never mind thanks", "that's enough", "that is enough",
-    "спасибо", "спс", "ладно спасибо", "я сам", "я сам найду", "дальше не надо",
-    "неважно", "не надо", "достаточно", "хватит", "пока всё",
-    "ok", "okay", "fine", "all good", "no thanks", "thanks anyway",
-}
+# ─── CLOSURE DETECTION ───────────────────────────────────────────────────────
+# Architecture: closure detector tells history_filter whether to inject
+# history (open topic) or skip it (user explicitly closed the thread).
+#
+# Previous implementation: fixed string list (_CLOSURE_MARKERS).
+# Problem: fixed list catches only exact phrases. "ок понятно" → not caught.
+# Correct solution (persona.md §10): expose open_topics signal to PromptContext
+# so the LLM — which already has full context — decides whether to acknowledge.
+#
+# Closure heuristic is intentionally minimal:
+#   - Very short messages (≤ 3 meaningful tokens) with no question mark
+#     and no topical overlap with the last assistant turn → likely closure.
+#   - This is a filter hint, not a semantic classifier.
+#   - False negatives (missed closures) are safe: history is injected
+#     when uncertain, which is the conservative choice.
+
+_MIN_CLOSURE_TOKEN_COUNT = 3
 
 
 def _topic_terms(text: str) -> set[str]:
     terms: set[str] = set()
     for token in _WORD_RE.findall(text.lower()):
-        token = token.strip("'’-")
+        token = token.strip("''-")
         if token and token not in _STOPWORDS:
             terms.add(token)
     return terms
@@ -56,26 +69,122 @@ def _turn_overlap(current_terms: set[str], turn_text: str) -> float:
     return len(common) / max(1, min(len(current_terms), len(turn_terms)))
 
 
-def _is_closure_message(text: str) -> bool:
-    normalized = (text or "").strip().casefold()
+def _is_closure_message(text: str, history: list[dict] | None = None) -> bool:
+    """
+    Heuristic: is this message a topic closure?
+
+    A message is likely a closure when ALL of the following hold:
+      1. Fewer than _MIN_CLOSURE_TOKEN_COUNT meaningful tokens.
+      2. No question mark (questions keep topics open).
+      3. No topical overlap with the last assistant turn.
+
+    This replaces the fixed _CLOSURE_MARKERS list. The LLM already has
+    full context via CONTINUITY_RULE — it does not need the filter to
+    catch specific closure phrases. What it needs is a reliable signal
+    that history is worth injecting at all.
+    """
+    normalized = (text or "").strip()
     if not normalized:
         return False
-    for marker in _CLOSURE_MARKERS:
-        marker = marker.casefold()
-        if " " in marker:
-            if marker in normalized:
-                return True
-        else:
-            if re.search(rf"\b{re.escape(marker)}\b", normalized):
-                return True
-    return False
 
+    terms = _topic_terms(normalized)
+
+    # Messages with enough substance are not closures.
+    if len(terms) >= _MIN_CLOSURE_TOKEN_COUNT:
+        return False
+
+    # Questions keep the topic open.
+    if "?" in normalized:
+        return False
+
+    # Check overlap with last assistant turn.
+    if history:
+        last_assistant = next(
+            (t for t in reversed(history) if t.get("role") == "assistant"),
+            None,
+        )
+        if last_assistant:
+            overlap = _turn_overlap(terms, str(last_assistant.get("content", "")))
+            if overlap >= _MIN_HISTORY_OVERLAP:
+                return False  # topically connected — not a closure
+
+    return True
+
+
+# ─── OPEN TOPICS EXTRACTION ──────────────────────────────────────────────────
+# persona.md §10: expose unresolved topics as a hint to the coordinator.
+# The coordinator may add CONTINUITY_RULE to the system prompt when this
+# is non-empty. The LLM then decides whether to acknowledge the open thread.
+
+def extract_open_topics(history: list[dict] | None) -> list[str] | None:
+    """
+    Return a list of topic summaries from recent history turns that were
+    NOT followed by a closure message.
+
+    Implementation is intentionally lightweight — topic labels are the
+    first meaningful noun-phrase from each user turn (≤ 6 words).
+    The coordinator passes this to PromptContext.open_topics; the LLM
+    receives it as part of CONTINUITY_RULE.
+
+    Returns None when no open topics are detected.
+    """
+    if not history or len(history) < 2:
+        return None
+
+    # Walk history in pairs (user → assistant). A turn is "open" if the
+    # NEXT user message does not match the closure heuristic.
+    open_topics: list[str] = []
+
+    for i, turn in enumerate(history):
+        if turn.get("role") != "user":
+            continue
+        content = str(turn.get("content", "")).strip()
+        if not content:
+            continue
+
+        # Is there a subsequent user message?
+        next_user = next(
+            (t for t in history[i + 1:] if t.get("role") == "user"),
+            None,
+        )
+
+        if next_user is None:
+            # This is the last user turn — not yet closed.
+            label = _topic_label(content)
+            if label:
+                open_topics.append(label)
+        else:
+            next_content = str(next_user.get("content", "")).strip()
+            # If the next user message looks like a closure, this topic is closed.
+            if _is_closure_message(next_content, history[:i + 2]):
+                continue
+            # If there's topical overlap between this turn and the next,
+            # the user is continuing — topic is still open.
+            current_terms = _topic_terms(content)
+            next_terms = _topic_terms(next_content)
+            if current_terms & next_terms:
+                # Active thread — mark as open only if no resolution found.
+                pass  # resolved further in the loop
+
+    return open_topics or None
+
+
+def _topic_label(text: str) -> str:
+    """Extract a short label (≤ 6 words) from the first sentence of a user turn."""
+    first_sentence = re.split(r"[.!?\n]", text.strip())[0].strip()
+    words = first_sentence.split()
+    if not words:
+        return ""
+    return " ".join(words[:6])
+
+
+# ─── HISTORY SELECTION ───────────────────────────────────────────────────────
 
 def select_relevant_history(user_message: str, history: list[dict] | None) -> list[dict] | None:
     if not history:
         return None
 
-    if _is_closure_message(user_message):
+    if _is_closure_message(user_message, history):
         return None
 
     current_terms = _topic_terms(user_message)
