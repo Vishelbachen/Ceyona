@@ -440,4 +440,106 @@ Polish, Arabic, Hebrew, Hindi, and other inflected languages.
 
 In `PERSONA_RULE` (to be written):
 ```
-Ты — Сэёна (Ceyona). Отвечаешь от женского лица: используй женски
+Ты — Сэёна (Ceyona). Отвечаешь от женского лица: используй женские окончания глаголов
+и прилагательных («я сделала», «я была», «мне интересно» и т.д.).
+```
+
+English equivalent for the prompt (for non-Russian system prompts):
+```
+You are Ceyona (Сэёна). You are female. Use feminine forms in all languages where
+grammatical gender applies — Russian, Ukrainian, Arabic, Polish, Hebrew, Hindi, etc.
+Never use masculine verb endings or adjectives to refer to yourself.
+```
+
+**Risk — FAST tier gender drift:**
+`llama-3.1-8b-instant` can lose gender agreement mid-response on longer outputs.
+Add to test protocol (§6): specifically check that feminine forms hold through
+the entire response, not just the opening sentence.
+
+**`output_normalizer.py` extension (future):**
+For Russian specifically, a regex pass for common masculine self-reference patterns
+(`я сказал`, `я был`, `я подумал`) → flag for correction. Low priority —
+prompt-level instruction handles 95% of cases. Add only if testing shows persistent drift.
+
+---
+
+## 10. UNCLOSED TOPIC AWARENESS
+
+**The problem:** user switches topic mid-conversation without closing the previous one.
+Bot follows the switch without question. If the user never said "drop it",
+the topic is still open — but the bot acts as if it's gone.
+
+**Why this matters for character:**
+A bot that notices "we hadn't finished that" feels like it's paying attention.
+This is a core quality of the Japanese-inspired character — attention to detail,
+care for what was actually said, not just what's in front of it now.
+
+**What exists already:**
+`history_filter.py` has a closure detector — it identifies phrases that explicitly
+close a topic ("спасибо", "понял", "окей", "got it", "never mind"). If no closure
+phrase was detected, the topic is technically still open.
+
+**What needs to be added:**
+The closure signal is currently used only for history selection (inject or skip).
+It needs to also surface as a hint in the prompt context — something like:
+
+```python
+# In PromptContext or OrchestratorRequest
+open_topics: list[str] | None = None  # topics from recent history with no closure detected
+```
+
+Then in the system prompt (as a rule, not persona):
+```
+CONTINUITY RULE: if recent conversation contains an unresolved topic
+and the user has switched away without closing it, you may — when natural —
+acknowledge the open thread. Do not force it. Do not ask more than one
+question at a time.
+```
+
+This is a **code change**, not just a prompt change. Tracked here as a design decision.
+
+**Boundary:** Ceyona returns to open topics once, gently. She does not persist
+if the user ignores the callback. One acknowledgment, then follow the user's lead.
+
+---
+
+## 11. EXTENDED MEMORY — PAID TIER
+
+**Two memory levels, one paid feature:**
+
+### Level 1 — Extended conversation buffer
+- Default: 40 turns fetched, token-budget trimmed to ~12-15 pairs (§35 architecture)
+- Extended (paid): fetch limit raised to 150-200 turns, budget raised accordingly
+- Cost: Supabase storage only — cheap. Token cost per request rises slightly.
+- What it gives: longer within-session and cross-session conversation continuity
+
+### Level 2 — Active vector memory (semantic, cross-session)
+- `VectorMemory` already exists and works (architecture.md §37)
+- Default behavior: memories written, but retrieval threshold is conservative
+- Extended (paid): lower retrieval threshold, higher recall limit, longer retention
+- What it gives: Ceyona remembers who this person is across sessions —
+  interests, communication style, topics that matter to them, things left unfinished
+
+**Combined as one paid tier:**
+Both levels activate together. The user gets deeper conversation context
+AND persistent identity memory. Technically:
+- `FAST_HISTORY_BUDGET` / `GENERAL_HISTORY_BUDGET` raised for paid users
+- `_MAX_HISTORY_FETCH` raised for paid users
+- `VectorMemory.recall()` called with lower threshold + higher limit for paid users
+- EPK and economic.md already support per-user tier differentiation
+
+**What this enables for character:**
+Ceyona can say "last time you mentioned you were figuring out X — did that work out?"
+Not from conversation_history (which expires), but from VectorMemory (which persists).
+This is the most natural expression of the attentive, detail-noticing character.
+
+**Economic model:**
+Incremental Supabase storage cost is negligible.
+Token cost per request rises ~15-25% for users with long history.
+Pricing: fold into a single "extended memory" subscription tier.
+Exact pricing → economic.md when ready to implement.
+
+**Implementation order:**
+1. Extended buffer first (trivial — two constant changes + EPK user-tier check)
+2. Active vector memory second (requires retrieval pipeline changes)
+3. Unclosed topic awareness (§10) works better with extended memory — implement after level 1
