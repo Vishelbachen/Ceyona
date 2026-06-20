@@ -1,5 +1,5 @@
 # CEYONA — ECONOMIC MODEL
-Version: 5.2 — Anti-Drift Edition
+Version: 5.3 — Safety Gate Billing Clarification
 Status: Active Source of Truth
 Supersedes: economic.md (all previous versions)
 
@@ -420,25 +420,31 @@ When balance reaches $0.00 → EPK returns DENY → user sees balance_exhausted 
 
 ## 10. EXECUTION FLOW (BILLING PERSPECTIVE)
 
+> **Note:** this section describes when costs are **recorded**, not physical execution order.
+> Physical execution order: architecture.md §4 (canonical lifecycle).
+> Key distinction: Safety Gate executes **before** EPK and may short-circuit the request.
+> Billing: if the request reaches confirmation, Safety Gate usage is accounted in the billing phase.
+
 ```
 1.  input received
-2.  embedding (retrieval)       → bill: embedding_tokens [HuggingFace]
-3.  reranker                    → bill: rerank_tokens [HuggingFace]
-4.  estimate_cost()             → EPK input (no billing yet)
-5.  EPK: DENY / ALLOW / DEGRADED_MODE / HEAVY_REQUIRED
-6.  [DENY → exit, no LLM billing]
-6b. [VERBATIM → exit, no LLM billing, tool cost only — §47]
-7.  Safety Gate calls           → bill: safety tokens [Groq]
-8.  select_tier() [ALLOW only]
-9.  LLM execution               → bill: input_tokens + output_tokens [Groq]
-10. [Compound tool calls]       → bill: tool_calls count [Groq]
-11. [Speech if is_voice_input]  → bill: audio_seconds / tts_characters [Groq]
-12. usage_meter records all fields
-13. actual_cost() computed
-14. user_charge = actual_cost * MARGIN
-15. access_controller.deduct(user_id, user_charge)
-16. usage_log written to Supabase
-17. response delivered
+2.  [Safety Gate Pass 1 + Pass 2 execute here — before EPK, see architecture.md §4]
+3.  embedding (retrieval)       → bill: embedding_tokens [HuggingFace]
+4.  reranker                    → bill: rerank_tokens [HuggingFace]
+5.  estimate_cost()             → EPK input (no billing yet)
+6.  EPK: DENY / ALLOW / DEGRADED_MODE / HEAVY_REQUIRED
+7.  [DENY → exit, no LLM billing; Safety Gate cost not recorded on DENY]
+7b. [VERBATIM → exit, no LLM billing, tool cost only — §47]
+8.  Safety Gate usage           → bill: safety tokens [Groq]  ← recorded post-confirmation
+9.  select_tier() [ALLOW only]
+10. LLM execution               → bill: input_tokens + output_tokens [Groq]
+11. [Compound tool calls]       → bill: tool_calls count [Groq]
+12. [Speech if is_voice_input]  → bill: audio_seconds / tts_characters [Groq]
+13. usage_meter records all fields
+14. actual_cost() computed
+15. user_charge = actual_cost * MARGIN
+16. access_controller.deduct(user_id, user_charge)
+17. usage_log written to Supabase
+18. response delivered
 ```
 
 ---
@@ -452,7 +458,7 @@ This document is synchronized with:
 - FAST fallback: gemma2-9b-it REMOVED (deprecated Aug 2025) ✓
 - GENERAL primary: llama-3.3-70b-versatile ✓
 - HEAVY primary: openai/gpt-oss-120b ✓
-- meta-llama/llama-4-scout-17b-16e-instruct → HEAVY secondary → priced at $0.11/$0.34 ✓
+- meta-llama/llama-4-scout-17b-16e-instruct → Vision + Long-Context (models.md §26), priced at $0.11/$0.34 ✓
 - canopylabs/orpheus-v1-english → $22.00/1M chars ✓
 - canopylabs/orpheus-arabic-saudi → $40.00/1M chars ✓
 - BAAI/bge-* → HuggingFace (NOT Groq) ✓
