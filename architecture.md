@@ -650,29 +650,19 @@ source_credibility MUST NOT:
 
 ## 21. SAFETY ACTIVATION
 
+Two safety systems serve distinct, non-overlapping roles:
+
 **Safety Layer (input observability — NON-BLOCKING):**
-- meta-llama/llama-prompt-guard-2-22m (Pass 1, before Feature Extraction)
-- meta-llama/llama-prompt-guard-2-86m + openai/gpt-oss-safeguard-20b (Pass 2, after Feature Extraction)
-- both passes are non-blocking: log suspicious signals only, never DENY
-- rationale: prompt-guard models produce unacceptable false-positive rates on Russian,
-  Arabic, and short casual messages (e.g. "дешёвые отели в Воронеже", "В смысле?",
-  "Ты шутишь?") — blocking at this layer causes full outage for legitimate users
-- model unavailability → pass-through (observability degraded, execution continues)
+Pre-EPK signal logging only. Both passes always return PASS.
+Rationale: unacceptable false-positive rates on Russian, Arabic, and short casual messages
+would cause full outage for legitimate users. Model unavailability → pass-through.
 
 **safety_agent (post-reasoning semantic validation — SOLE BLOCKING AUTHORITY):**
-- runs inside coordinator, after primary reasoning
-- is the only layer that can block execution on safety grounds
-- activation rules:
-  - ALLOW + use_consensus=True → runs before consensus
-  - ALLOW + DEEP primary + no consensus → runs
-  - HEAVY_REQUIRED → mandatory
-  - DEGRADED_MODE → skipped
-  - EMOTIONAL → skipped
-  - default GENERAL (FAST primary, no fallback) → skipped
+Runs inside coordinator after primary reasoning. Only layer that can block on safety grounds.
 
-These two systems serve distinct roles and do NOT duplicate each other:
-- Safety Layer → input signal logging (observability only)
-- safety_agent → post-reasoning blocking authority (enforcement)
+These are NOT duplicates: Safety Layer observes input, safety_agent enforces output.
+
+→ Model assignments, activation rules per EPK path: `models.md §1, §7`
 
 ---
 
@@ -754,7 +744,62 @@ This document specifies rules — `audit.md` tracks what has been done and what 
 **Open bugs (май 2026):** см. audit.md §13.
 Критические: 13.1 (tool intents → сервис недоступен).
 
+
 ---
+
+## 28. SEARCH PROVIDER POLICY
+
+`external/search.py` implements a three-tier fallback chain: Tavily (primary) → SerpAPI (secondary) → SearXNG (tertiary). First success wins. Provider selection is internal — callers see only `search_service.search()`.
+
+`source_credibility` (§20) filters ALL provider results uniformly before LLM exposure.
+
+Provider MAY supply search results as grounding data.
+Provider MUST NOT alter orchestration, redefine TruthMode, or mutate EPK.
+
+→ Provider details, keys, rate limits, configuration: `models.md §23`
+
+---
+
+## 29. HEALTHCHECK POLICY
+
+`infra/healthcheck.py` is the sole implementation of `/health`. Deployment target: Oracle Cloud (OCI).
+
+**Canonical rules:**
+- Redis check + Supabase check run **concurrently** via `asyncio.gather` — total latency = max, not sum
+- Each check wrapped with `asyncio.wait_for` (3s deadline)
+- Supabase check MUST use `asyncio.to_thread` — supabase-py is synchronous; direct call blocks the event loop
+- Table queried: `user_balances` (production table, always exists — MUST NOT query test-only tables)
+
+healthcheck MUST NOT: influence EPK, alter routing, affect execution policy.
+
+---
+
+## 30. ANTI-DRIFT PRINCIPLES
+
+Architecture MUST scale through:
+- explicit contracts, bounded execution, centralized governance
+- deterministic orchestration, synchronized policy layers
+
+Architecture MUST NOT scale through:
+- emergent behavior, hidden coupling, implicit orchestration
+- undocumented authority, runtime improvisation
+
+---
+
+## 31. FINAL SYSTEM PRINCIPLE
+
+Ceyona is a governed orchestration system.
+It is NOT a collection of autonomous AI behaviors.
+
+The system succeeds only if:
+- authority remains explicit
+- execution remains deterministic
+- policy remains synchronized
+- runtime remains subordinate to architecture
+- retrieval remains grounded
+- orchestration remains bounded
+
+Architecture governs the system. Runtime executes the system.
 
 ---
 
@@ -1102,93 +1147,6 @@ Telegram Update (photo with media_group_id)
 
 ---
 
-## 28. SEARCH PROVIDER POLICY
-
-`external/search.py` implements a three-tier fallback chain for web search:
-
-```
-1. Tavily   (primary)   — LLM-optimised structured results, 1000 req/mo free
-                          API key: TAVILY_API_KEY
-2. SerpAPI  (secondary) — reliable reserve, hotel pack support, 250 req/mo free
-                          API key: SERPAPI_KEY
-3. SearXNG  (tertiary)  — meta-search (Google/Bing/DDG aggregated), no rate limit
-                          self-hosted via docker-compose.yml, URL: SEARXNG_URL
-```
-
-**Fallback rule:** each provider tried in order. First success wins.
-Provider silently skipped if its key/URL is not configured in settings.
-Caller (compound_agent) sees only `search_service.search()` — provider selection is internal.
-
-**source_credibility** filters ALL provider results uniformly before LLM exposure (§20).
-
-**Configuration authority:**
-- `app/settings.py` declares `tavily_api_key`, `serpapi_key`, `searxng_url`
-- `docker-compose.yml` runs SearXNG as a sidecar service on `ai-network`
-- `SEARXNG_SECRET_KEY` MUST be set — without it SearXNG JSON API is unstable
-
-**Provider MAY:** supply search results as grounding data.
-**Provider MUST NOT:** alter orchestration, redefine TruthMode, mutate EPK.
-
----
-
-## 29. HEALTHCHECK POLICY
-
-`infra/healthcheck.py` is the sole implementation of `/health`.
-
-**Note:** originally documented against Fly.io (5s timeout). Current deployment target is Oracle Cloud (OCI). Healthcheck budget constraints remain valid — concurrent checks within 3s each.
-
-**Canonical implementation:**
-```python
-_REDIS_TIMEOUT    = 3.0   # asyncio.wait_for deadline
-_SUPABASE_TIMEOUT = 3.0   # asyncio.wait_for deadline
-
-# Checks run concurrently — total latency = max(redis, supabase), not sum
-redis_ok, sb_ok = await asyncio.gather(
-    check_redis(redis),      # asyncio.wait_for(redis.ping(), 3.0)
-    check_supabase(supabase) # asyncio.wait_for(to_thread(query), 3.0)
-)
-```
-
-**Supabase check MUST use `asyncio.to_thread`** — supabase-py client is synchronous.
-Direct sync call in async context blocks the FastAPI event loop.
-**Supabase check MUST use `asyncio.wait_for`** — to_thread alone has no deadline.
-
-**Table queried:** `user_balances` (production table, always exists).
-MUST NOT query non-existent or test-only tables.
-
-healthcheck MUST NOT: influence EPK, alter routing, affect execution policy.
-
----
-
-## 30. ANTI-DRIFT PRINCIPLES
-
-Architecture MUST scale through:
-- explicit contracts, bounded execution, centralized governance
-- deterministic orchestration, synchronized policy layers
-
-Architecture MUST NOT scale through:
-- emergent behavior, hidden coupling, implicit orchestration
-- undocumented authority, runtime improvisation
-
----
-
-## 31. FINAL SYSTEM PRINCIPLE
-
-Ceyona is a governed orchestration system.
-It is NOT a collection of autonomous AI behaviors.
-
-The system succeeds only if:
-- authority remains explicit
-- execution remains deterministic
-- policy remains synchronized
-- runtime remains subordinate to architecture
-- retrieval remains grounded
-- orchestration remains bounded
-
-Architecture governs the system. Runtime executes the system.
-
-healthcheck MUST NOT: influence EPK, alter routing, affect execution policy.
----
 
 ## 44. MULTI-INTENT DECOMPOSITION
 
@@ -1264,15 +1222,10 @@ Tier определяет экономический класс. Модель в
 
 ### 45.2 Intent → Model mapping (GENERAL tier)
 
-| Intent group | Preferred model | Обоснование |
-|---|---|---|
-| CONVERSATION, EMOTIONAL, CREATIVE | llama-3.3-70b-versatile | экспрессивность, живой тон |
-| QUESTION, INSTRUCTION, ANALYSIS | llama-3.3-70b-versatile | reasoning, объяснения |
-| CODE, MATH, EXAM | qwen/qwen3-32b | structured output, instruction following |
-| SEARCH, RECOMMENDATION | llama-3.3-70b-versatile | synthesis, summarization |
-| WEATHER, MAPS, MAPS_POI, MAPS_ROUTE | verbatim (no LLM) | structured data, минует модель |
+→ Canonical mapping table: `models.md §3`
 
-Mapping документируется здесь. Реализуется в `_resolve_routing()` через `preferred_model`.
+Mapping реализуется в `_resolve_routing()` через `preferred_model`.
+`models.md §3` — единственный source of truth для intent→model соответствия.
 
 ### 45.3 Правило выбора модели
 
@@ -1312,21 +1265,12 @@ PERSONA_PATCH_{MODEL} — компенсация известных слабос
 `PERSONA_PATCH` применяется только к моделям с задокументированными отклонениями.
 Молчание = нет патча = использовать только базу.
 
-### 46.2 Документация отклонений (май–июнь 2026)
+### 46.2 Документация отклонений
 
-**llama-3.3-70b-versatile:**
-- На длинных объяснительных ответах добавляет резюмирующий абзац (нарушение P3)
-- На эмоционально окрашенных запросах реагирует непрошеными советами (нарушение P2, P6)
-- Под давлением длинного системного промпта (>25 предложений) деградирует instruction following
+→ Задокументированные отклонения каждой модели: `models.md` (per-model sections)
 
-**llama-3.1-8b-instant:**
-- Короткие ответы, низкая экспрессивность — подходит для FAST tier задач
-- На сложных объяснениях упрощает сверх нормы
-
-**qwen/qwen3-32b:**
-- Сильный instruction following, хорошая структура
-- Требует `thinking: False` (обязательно, иначе HTTP 400)
-- Менее экспрессивен в conversational контексте
+Патч вводится ТОЛЬКО при наличии задокументированного воспроизводимого отклонения в models.md.
+Без записи в models.md — патч не добавляется.
 
 ### 46.3 Ownership
 
