@@ -297,6 +297,10 @@ DENY → HEAVY_REQUIRED → DEGRADED_MODE → ALLOW
 
 EPK does NOT select tier. Tier selection happens in decision_matrix.py, AFTER EPK returns ALLOW.
 
+**Multi-intent requests (architecture.md §44.5):** EPK receives summed estimated_cost
+of all sub-intents. Atomicity: if sum exceeds threshold → DENY applies to entire request.
+Partial execution (some sub-intents ALLOW, others DENY) is forbidden.
+
 **What these thresholds mean in practice (at GENERAL primary rates):**
 - A 500-token input + 600-token output at GENERAL = ~$0.00077 → ALLOW
 - A 2000-token input + 2000-token output at GENERAL = ~$0.00276 → ALLOW
@@ -423,6 +427,7 @@ When balance reaches $0.00 → EPK returns DENY → user sees balance_exhausted 
 4.  estimate_cost()             → EPK input (no billing yet)
 5.  EPK: DENY / ALLOW / DEGRADED_MODE / HEAVY_REQUIRED
 6.  [DENY → exit, no LLM billing]
+6b. [VERBATIM → exit, no LLM billing, tool cost only — §47]
 7.  Safety Gate calls           → bill: safety tokens [Groq]
 8.  select_tier() [ALLOW only]
 9.  LLM execution               → bill: input_tokens + output_tokens [Groq]
@@ -473,7 +478,7 @@ This document is synchronized with:
 
 ## 12. OPEN ITEMS (FUTURE)
 
-- [ ] Per-route billing: log actual model name per request → update actual_cost() to use per-model rates
+- [ ] Per-route billing: preferred_model now logged per-request (models.md §25.3) → update actual_cost() to use per-model rates when ready
 - [ ] Compound/compound-mini token pricing not publicly listed — monitor Groq changelog
 - [ ] allam-2-7b pricing not listed — treated as FAST equivalent until confirmed
 - [ ] HF Inference Endpoints pricing if serverless quota exceeded
