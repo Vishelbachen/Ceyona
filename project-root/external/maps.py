@@ -419,10 +419,10 @@ class MapsService:
                         "access_token": self._token,
                         "limit": 1,
                         "language": _mb_lang(lang),
+                        # No country bias for route geocoding — origin and destination
+                        # are often in different countries (e.g. Nagoya → Tokyo when
+                        # UI lang is Russian). Bias would restrict to wrong country.
                     }
-                    country = _country_bias(lang)
-                    if country:
-                        _params["country"] = country
                     r = await client.get(
                         f"{_BASE_URL}/{place}.json",
                         params=_params,
