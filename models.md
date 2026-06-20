@@ -113,6 +113,18 @@ openai/gpt-oss-20b      → constraint-aware general inference
 **Critical:** FAST / GENERAL / HEAVY are tiers of model capability within the LLM layer.
 They are NOT cognitive layers. They are NOT logic layers.
 
+**Model specialization within GENERAL tier (architecture.md §45):**
+Intent-based preferred_model hint is set in RoutingProfile by _resolve_routing().
+model_router uses hint to select within _TIER_MODELS[GENERAL]. Primary is fallback.
+
+| Intent group | Preferred model | Reason |
+|---|---|---|
+| CONVERSATION, EMOTIONAL, CREATIVE | llama-3.3-70b-versatile | expressiveness, tone |
+| QUESTION, INSTRUCTION, ANALYSIS | llama-3.3-70b-versatile | reasoning, explanation |
+| CODE, MATH, EXAM | qwen/qwen3-32b | structured output, instruction following |
+| SEARCH, RECOMMENDATION | llama-3.3-70b-versatile | synthesis, summarization |
+| WEATHER, MAPS, MAPS_POI, MAPS_ROUTE | verbatim (no LLM) | structured data — bypasses model |
+
 **qwen/qwen3-32b:** thinking mode MUST be explicitly disabled at every call site: `"thinking": False`
 
 ---
@@ -560,3 +572,27 @@ Provider costs are operational (external), not billed to user balance.
 ## 24. HEALTHCHECK
 
 → architecture.md §29 (canonical rules). Not a model, tier, or agent.
+
+---
+
+## 25. MULTI-INTENT AND VERBATIM RETURN (architecture.md §44, §47)
+
+### 25.1 Multi-intent model assignment
+
+When classify() returns list[IntentResult] (§44), each sub-intent receives its own
+preferred_model via _resolve_routing(). model_router resolves each independently.
+Tool-intents (WEATHER, MAPS, MAPS_ROUTE, MAPS_POI) bypass model selection entirely —
+they use verbatim return (§47).
+
+### 25.2 Verbatim return — no model billing
+
+Verbatim return path (§47): tool output returned directly, no LLM call.
+Billing: 0 LLM input tokens, 0 LLM output tokens.
+Only tool execution cost applies (external provider, not Groq-billed).
+EPK estimated_output = 0 when all intents are tool-only.
+
+### 25.3 Per-model billing readiness
+
+preferred_model is now resolved per-request (§45).
+usage_meter MUST log resolved_model alongside tier for each request.
+This enables per-model actual_cost() billing when economic.md §12 open item is implemented.
