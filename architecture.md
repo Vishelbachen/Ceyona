@@ -251,9 +251,10 @@ User Input
 → Web Search  [pre-EPK, balance-gated — skipped for zero-balance users]
 → EPK Policy Resolution  [SOLE policy authority — inside orchestrator]
 → analysis.py (pre-reasoning hints) [IMPLEMENTED ✅ — see §27]
-→ Intent Classification
+→ Intent Classification  [возвращает list[IntentResult] — см. §44]
+→ Multi-Intent Decomposition  [tool-intents параллельно, non-tool последовательно]
 → Execution Plan (via multi_agent_coordinator)
-→ Model Resolution (via model_router)
+→ Model Resolution (via model_router + preferred_model hint — см. §45)
 → Economic Validation (via cost_model → EPK)
 → Retrieval / Runtime Invocation
 → Verification Stage (safety_agent)
@@ -380,7 +381,11 @@ EPK.evaluate(cost, balance)    → ALLOW | DENY | DEGRADED | HEAVY_REQUIRED
     ↓
 decision_matrix.select_tier()  → Tier (on ALLOW path only)
     ↓
-model_router.route_model(tier) → model name string
+_resolve_routing() → RoutingProfile.preferred_model hint  [§45]
+    ↓
+model_router.route_model(tier, preferred_model) → model name string
+    ↓
+prompt_engine: apply PERSONA_PATCH_{model} if exists  [§46]
     ↓
 agents → groq_client           → API call with model + max_tokens
 ```
@@ -1183,3 +1188,192 @@ The system succeeds only if:
 Architecture governs the system. Runtime executes the system.
 
 healthcheck MUST NOT: influence EPK, alter routing, affect execution policy.
+---
+
+## 44. MULTI-INTENT DECOMPOSITION
+
+### 44.1 Принцип
+
+Один пользовательский запрос может содержать несколько независимых интентов.
+Система ДОЛЖНА обрабатывать их параллельно, а не выбирать один и игнорировать остальные.
+
+Примеры:
+- "какая погода в Токио и построй маршрут из Нагоя" → WEATHER + MAPS_ROUTE
+- "найди отели в Барселоне и какая там погода?" → SEARCH + WEATHER
+- "переведи текст и объясни что такое TCP" → TRANSLATION + QUESTION
+
+### 44.2 Контракт classify()
+
+`intent_engine.classify()` возвращает `list[IntentResult]` — приоритизированный список.
+
+Порядок списка:
+1. Первый элемент — primary intent (наивысший confidence)
+2. Остальные — secondary intents в порядке убывания confidence
+3. Минимум один элемент всегда (никогда не пустой список)
+
+`IntentResult` расширяется полем `is_primary: bool`.
+
+### 44.3 Ownership декомпозиции
+
+`intent_engine` — единственный authority декомпозиции.
+Orchestrator НЕ декомпозирует — он получает готовый список и исполняет.
+`multi_agent_coordinator` НЕ декомпозирует — он координирует агентов внутри одного intent.
+
+### 44.4 Execution модель
+
+Tool-intents (WEATHER, MAPS, MAPS_ROUTE, MAPS_POI, SEARCH) исполняются параллельно
+через `asyncio.gather` в orchestrator.
+
+Non-tool intents (QUESTION, CONVERSATION, ANALYSIS и др.) исполняются последовательно —
+они требуют LLM и параллельный вызов нарушает экономическую модель.
+
+Если список содержит mix tool + non-tool:
+1. Все tool-intents — параллельно
+2. Non-tool intent — последовательно, получает tool-результаты как grounding context
+
+### 44.5 EPK при multi-intent
+
+EPK получает суммарный estimated_cost всех sub-intents.
+Если суммарный cost превышает порог → DENY применяется ко всему запросу.
+Частичное исполнение (одни intents ALLOW, другие DENY) — запрещено.
+Принцип: атомарность запроса.
+
+### 44.6 TruthMode при multi-intent
+
+Каждый sub-intent имеет свой TruthMode из `resolve_truth_mode()`.
+Финальная синтез-модель получает все tool-результаты с их TruthMode-метками.
+Строжайший TruthMode из присутствующих применяется к финальному ответу.
+
+### 44.7 Verbatim return при multi-intent
+
+Если список содержит ТОЛЬКО tool-intents — все результаты возвращаются verbatim,
+без LLM-синтеза. Форматирование: результаты разделяются пустой строкой.
+
+Если список содержит non-tool intent — LLM синтезирует финальный ответ,
+получая tool-результаты как grounding context.
+
+---
+
+## 45. MODEL SPECIALIZATION WITHIN TIER
+
+### 45.1 Принцип
+
+Tier определяет экономический класс. Модель внутри tier определяется задачей.
+`model_router` остаётся единственным model selection authority (§8).
+`RoutingProfile` расширяется полем `preferred_model: str | None` — hint, не директива.
+
+### 45.2 Intent → Model mapping (GENERAL tier)
+
+| Intent group | Preferred model | Обоснование |
+|---|---|---|
+| CONVERSATION, EMOTIONAL, CREATIVE | llama-3.3-70b-versatile | экспрессивность, живой тон |
+| QUESTION, INSTRUCTION, ANALYSIS | llama-3.3-70b-versatile | reasoning, объяснения |
+| CODE, MATH, EXAM | qwen/qwen3-32b | structured output, instruction following |
+| SEARCH, RECOMMENDATION | llama-3.3-70b-versatile | synthesis, summarization |
+| WEATHER, MAPS, MAPS_POI, MAPS_ROUTE | verbatim (no LLM) | structured data, минует модель |
+
+Mapping документируется здесь. Реализуется в `_resolve_routing()` через `preferred_model`.
+
+### 45.3 Правило выбора модели
+
+`model_router.route_model(tier, preferred_model=None)`:
+- Если `preferred_model` задан и доступен в `_TIER_MODELS[tier]` → использовать его
+- Иначе → fallback на primary модель tier
+- model_router НИКОГДА не получает preferred_model извне orchestrator
+
+### 45.4 FAST tier
+
+FAST tier содержит одну модель — specialization неприменима.
+Все FAST intents используют `llama-3.1-8b-instant`.
+
+### 45.5 HEAVY tier
+
+HEAVY tier: `gpt-oss-120b` — primary для всех deep reasoning задач.
+`llama-4-scout-17b` — только для long-context (>32K токенов input).
+Specialization внутри HEAVY определяется длиной контекста, не intent.
+
+---
+
+## 46. PERSONA PER MODEL
+
+### 46.1 Принцип
+
+Persona — это характер и правила поведения бота. Они инвариантны.
+Но разные модели имеют разные структурные привычки — их нужно компенсировать точечно.
+
+Архитектура: база + компенсирующий слой.
+
+```
+PERSONA_BASE          — инвариант: характер, P1–P6, tone rules
+    +
+PERSONA_PATCH_{MODEL} — компенсация известных слабостей конкретной модели
+```
+
+`PERSONA_PATCH` применяется только к моделям с задокументированными отклонениями.
+Молчание = нет патча = использовать только базу.
+
+### 46.2 Документация отклонений (май–июнь 2026)
+
+**llama-3.3-70b-versatile:**
+- На длинных объяснительных ответах добавляет резюмирующий абзац (нарушение P3)
+- На эмоционально окрашенных запросах реагирует непрошеными советами (нарушение P2, P6)
+- Под давлением длинного системного промпта (>25 предложений) деградирует instruction following
+
+**llama-3.1-8b-instant:**
+- Короткие ответы, низкая экспрессивность — подходит для FAST tier задач
+- На сложных объяснениях упрощает сверх нормы
+
+**qwen/qwen3-32b:**
+- Сильный instruction following, хорошая структура
+- Требует `thinking: False` (обязательно, иначе HTTP 400)
+- Менее экспрессивен в conversational контексте
+
+### 46.3 Ownership
+
+`prompt_policy.py` — хранит `PERSONA_BASE` и `PERSONA_PATCH_{MODEL}` как константы.
+`prompt_engine.py` — применяет патч при сборке промпта на основе `resolved_model`.
+`model_router` предоставляет `resolved_model` до сборки промпта.
+
+### 46.4 Правило патча
+
+Патч — минимальная компенсация, не переписывание персоны.
+Максимум 2–3 предложения на патч.
+Патч тестируется изолированно на конкретном паттерне нарушения.
+Патч не вводится без задокументированного воспроизводимого нарушения.
+
+---
+
+## 47. VERBATIM RETURN POLICY
+
+### 47.1 Определение
+
+Verbatim return — путь исполнения при котором tool output возвращается пользователю
+напрямую, минуя LLM-синтез.
+
+### 47.2 Применимость
+
+Verbatim return применяется когда:
+1. Все интенты запроса — tool-intents (WEATHER, MAPS, MAPS_ROUTE, MAPS_POI)
+2. Tool вернул непустой результат
+3. Нет non-tool intent требующего синтеза
+
+### 47.3 Исключения
+
+Verbatim return НЕ применяется:
+- SEARCH — результаты требуют синтеза и ранжирования LLM
+- WEATHER + аналитический вопрос ("ожидается ли ухудшение?") — требует интерпретации
+  Детектируется через `routing.reasoning_depth != ReasoningDepth.NONE` в IntentResult
+- Любой mix с non-tool intent
+
+### 47.4 Ownership
+
+Verbatim return реализуется в orchestrator.
+orchestrator проверяет условия §47.2 после получения tool результата.
+META pipeline (correction, output_normalizer) при verbatim return — пропускается.
+synthesizer при verbatim return — не вызывается.
+
+### 47.5 Экономика
+
+Verbatim return: cost = 0 LLM tokens.
+EPK оценивает стоимость до исполнения — если verbatim path ожидаем,
+estimated_output = 0 для tool-only запросов.
