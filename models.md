@@ -1,12 +1,13 @@
 # CEYONA — MODEL REGISTRY
-Version: 7.3 — Anti-Drift Edition
+Version: 8.0 — Per-Model Edition
 Status: Active Source of Truth
-Supersedes: models1.md, models2.md (all previous versions)
+Supersedes: models1.md, models2.md, v7.x (all previous versions)
 
 This document defines ONLY:
 - approved models and their roles
 - tier assignments and eligibility
 - activation rules and constraints
+- per-model behavioral characteristics (§27) — basis for persona design and prompt sizing
 - execution DAG
 
 This document MUST NOT define: orchestration, execution policy, pricing, billing.
@@ -135,15 +136,18 @@ model_router uses hint to select within _TIER_MODELS[GENERAL]. Primary is fallba
 *Prices: economic.md §1.1*
 
 ```
-openai/gpt-oss-120b                           → PRIMARY: deep multi-step reasoning
-                                                SECONDARY: Consensus arbiter (mutex — see §8)
-meta-llama/llama-4-scout-17b-16e-instruct     → long-context transformation (512K context)
+openai/gpt-oss-120b  → PRIMARY: deep multi-step reasoning
+                       SECONDARY: Consensus arbiter (mutex — see §8)
 ```
 
 **Activation:** EPK = HEAVY_REQUIRED ONLY.
 **Self-activation:** forbidden. Orchestrator executes the signal, does NOT generate it.
 
 **Output rule:** Heavy Tier output → directly to Response Synthesizer. Consensus SKIP (mutex).
+
+**Note on llama-4-scout-17b:** this model is NOT part of the HEAVY tier EPK path.
+It serves two separate, explicitly bounded roles — see §12 (Vision) and §26 (Long-Context).
+It is invoked directly, outside the EPK→decision_matrix→HEAVY flow.
 
 **Hard invariants:**
 - each subsystem = isolated capability domain
@@ -172,42 +176,45 @@ meta-llama/llama-4-scout-17b-16e-instruct     → long-context transformation (5
 
 ---
 
-## 6. AGENT LAYER (tool-use execution fabric)
+## 6. AGENT LAYER (context-synthesis fabric)
 
-**Provider: Groq (compound models wired ✅)**
+**Provider: Groq**
 *Prices: economic.md §1.3*
 
 ```
-groq/compound      → IMPLEMENTED ✅ as AgentType.COMPOUND_DEEP
-                     agents/compound_agent.run_deep()
-                     Tier.GENERAL path — multi-step tool use
-
-groq/compound-mini → IMPLEMENTED ✅ as AgentType.COMPOUND_FAST
-                     agents/compound_agent.run_fast()
-                     Tier.FAST path — single-step tool use
+groq/compound      → SYNTHESIZER on Tier.GENERAL path  (agents/compound_agent.run_deep())
+groq/compound-mini → SYNTHESIZER on Tier.FAST path     (agents/compound_agent.run_fast())
 ```
 
-**Agent dispatch for tool intents (SEARCH, WEATHER, MAPS, MAPS_POI, MAPS_ROUTE):**
+**Role:** receive fully assembled context (retrieval already done by orchestrator) and synthesize response. NOT autonomous agents — they do NOT call tools, do NOT self-search, do NOT own policy.
+
+**Why synthesizer, not agent (architecture.md §40):**
+Groq compound models do not accept custom tool schemas (`tools=` → HTTP 400, verified May 2026).
+All retrieval (Tavily/SerpAPI/SearXNG/weather/maps) is performed by orchestrator BEFORE compound is called.
+Context injected via `PromptContext → build_messages()`. Compound synthesizes — does not search.
+
+**Invocation path:**
 ```
-Tier.FAST    → AgentType.COMPOUND_FAST  (groq/compound-mini)
-Tier.GENERAL → AgentType.COMPOUND_DEEP  (groq/compound)
-Fallback     → AgentType.DEEP           (llama-3.3-70b-versatile — plain text synthesis)
+orchestrator → retrieval complete → PromptContext assembled
+    → multi_agent_coordinator → compound_agent.run_{fast|deep}()
+    → groq_client (no tools= parameter)
+    → AgentResult → coordinator → orchestrator
 ```
 
-**Supported tools:** web_search, get_weather, geocode, get_route
+**Dispatch by tier:**
+```
+Tier.FAST    → groq/compound-mini  (AgentType.COMPOUND_FAST)
+Tier.GENERAL → groq/compound       (AgentType.COMPOUND_DEEP)
+Fallback     → llama-3.3-70b-versatile (AgentType.DEEP — plain synthesis, no compound)
+```
 
-**Agent models (май 2026):**
-- FAST_AGENT_MODEL: `groq/compound-mini` — AgentType.COMPOUND_FAST
-- DEEP_AGENT_MODEL: `groq/compound` — AgentType.COMPOUND_DEEP
+**`max_tokens`:** always from `route_max_tokens(tier)` via model_router — never hardcoded.
 
-**✅ БАГ 13.1 ЗАКРЫТ (май 2026):** compound переведён в режим синтезатора.
-Groq compound не принимает кастомные tool schemas (`tools=` → HTTP 400).
-Решение: весь retrieval (search/weather/maps) выполняется orchestrator до вызова compound.
-Контекст передаётся через PromptContext → user turn. Compound синтезирует, не ищет.
-`tool_choice` убран. Подробности: audit.md §13.1 (закрытые задачи), architecture.md §40.
-**Max tool rounds:** 3 (bounded — §2.2)
-**Role:** tool selection authority, multi-step execution.
-**No policy authority.** No system governance. No Heavy Tier activation.
+**Constraints:**
+- No tool schemas, no tool loop, no tool execution
+- No policy authority, no model selection, no routing decisions
+- No self-escalation, no self-search
+- On failure: `AgentResult(success=False)` — coordinator handles fallback
 
 ---
 
@@ -350,12 +357,10 @@ whisper-large-v3-turbo                        → FAST SPEECH-TO-TEXT (ASR)
 canopylabs/orpheus-v1-english                 → ENGLISH SPEECH SYNTHESIS (TTS)
 canopylabs/orpheus-arabic-saudi               → ARABIC SPEECH SYNTHESIS (TTS)
 allam-2-7b                                    → MULTILINGUAL NLP (Arabic anchor, also in FAST tier)
-meta-llama/llama-4-scout-17b-16e-instruct     → IMAGE EXTRACTION (vision_handler.py — OUTSIDE EPK DAG)
 ```
 
-**Speech activation:** is_voice_input = true ONLY.
-**Vision (meta-llama/llama-4-scout-17b-16e-instruct):** specialized extraction role, NOT Heavy Tier,
-OUTSIDE EPK DAG by design, routes via groq_client, result feeds back via update_handler forced_intent.
+**Speech activation:** `is_voice_input = True` ONLY.
+→ Full ASR/TTS lifecycle: architecture.md §32, §33.
 
 ---
 
@@ -528,7 +533,7 @@ Cross-reference with model assignments above to verify no gaps.
 | qwen/qwen3-32b | GENERAL tier | §3 |
 | openai/gpt-oss-20b | GENERAL tier | §3 |
 | openai/gpt-oss-120b | HEAVY tier primary + Consensus | §4, §8 |
-| meta-llama/llama-4-scout-17b-16e-instruct | HEAVY tier secondary + Vision | §4, §12 |
+| meta-llama/llama-4-scout-17b-16e-instruct | Vision extraction + Long-context (§26) | §26 |
 | groq/compound | Agent Layer (compound_agent deep) | §6 |
 | groq/compound-mini | Agent Layer (compound_agent fast) | §6 |
 | meta-llama/llama-prompt-guard-2-22m | Safety Gate Pass 1 | §1 |
@@ -596,3 +601,259 @@ EPK estimated_output = 0 when all intents are tool-only.
 preferred_model is now resolved per-request (§45).
 usage_meter MUST log resolved_model alongside tier for each request.
 This enables per-model actual_cost() billing when economic.md §12 open item is implemented.
+
+## 26. LLAMA-4-SCOUT — DUAL ROLE REGISTRY
+
+`meta-llama/llama-4-scout-17b-16e-instruct` holds **two explicitly bounded roles**.
+These are separate invocation paths with separate prompts and separate constraints.
+The model is NOT part of the HEAVY tier EPK path (see §4).
+
+### 26.1 Role A — Vision Extraction (OUTSIDE EPK DAG)
+
+**Module:** `external/vision_handler.py`
+**Activation:** image input detected by `update_handler` (forced_intent path)
+**Position:** parallel ingress — runs independently of the main pipeline
+
+```
+Telegram photo → update_handler → vision_handler → llama-4-scout (direct groq_client call)
+    → structured extraction result → update_handler forced_intent → normal pipeline
+```
+
+**`max_tokens`:** from `policy_registry.RUNTIME.tier_configs[Tier.FAST].max_output_tokens`
+(extraction is bounded, low-complexity — FAST tier limit applies, architecture.md §15)
+
+**Prompt scope:** image extraction only — structured signals, no reasoning, no synthesis.
+
+**Constraints:**
+- MUST NOT be given reasoning or synthesis instructions
+- MUST NOT influence EPK, routing, or TruthMode
+- Never raises — returns structured result or empty on failure
+
+### 26.2 Role B — Long-Context Transformation (EPK-gated, explicit activation)
+
+**Module:** invoked by orchestrator when `complexity == CRITICAL` AND `context_length > 32K tokens`
+**Activation:** explicit orchestrator decision — NOT EPK HEAVY_REQUIRED signal
+**Position:** pre-synthesis transformation step on long-context requests
+
+**Prompt scope:** long-context compression and transformation only — not general reasoning.
+
+**Constraints:**
+- MUST NOT be substituted for gpt-oss-120b on reasoning tasks
+- MUST NOT self-activate
+- Role B invocation MUST be logged separately from Role A invocations
+
+### 26.3 Instruction-following capacity note
+
+llama-4-scout-17b holds **two prompts with different scopes**.
+Before assigning additional responsibilities: measure comfortable instruction-following
+capacity (not maximum — comfortable, where behavior is stable).
+Rule: if either role's prompt approaches that limit, the roles must be split to separate models.
+One model, two prompts — acceptable. One model, two prompts + shared prompt bank — not acceptable.
+
+---
+
+## 27. PER-MODEL CHARACTERISTICS
+
+This section is the canonical source for:
+- known behavioral tendencies of each model
+- instruction-following limits (comfortable, not maximum)
+- persona patch triggers (architecture.md §46)
+- prompt design constraints per model
+
+**Rule:** a PERSONA_PATCH (architecture.md §46) is added ONLY when a deviation is documented here
+with a reproducible pattern. No entry here = no patch.
+
+**Rule:** prompt length for any model MUST stay within its documented comfortable range.
+A prompt that fits technically (no truncation) but exceeds comfortable capacity will produce
+degraded instruction following — the model silently deprioritizes later rules.
+
+---
+
+### 27.1 llama-3.1-8b-instant (FAST tier primary)
+
+**Nature:** fast, shallow, low-latency. Built for structural signal compression, not expression.
+
+**Comfortable prompt capacity:** ~8–10 sentences in system prompt before instruction following degrades.
+Beyond that: later rules are silently dropped, earlier rules dominate.
+
+**Known behavioral tendencies:**
+- Flat, terse default tone — minimal spontaneous warmth
+- Holds simple, single-property tone instructions reliably
+- Multi-property tone (warm + concise + direct simultaneously) degrades quickly
+- On complex explanations: simplifies beyond the acceptable floor
+- Gender agreement (Russian/Arabic) can drift mid-response on outputs > 3 sentences
+
+**Persona implications:**
+- Persona prompt: maximum 1–2 sentences. Warmth through brevity and directness, not elaboration.
+- Do not instruct it to vary sentence openings — it will attempt to comply and produce awkward results.
+- Gender agreement MUST be the first rule in system prompt (highest priority position).
+
+**What it does well:** quick factual replies, short conversational responses, input shaping (heavy_input_shaper role), route/POI extraction (web_tools.py).
+
+---
+
+### 27.2 llama-3.3-70b-versatile (GENERAL tier primary)
+
+**Nature:** expressive, reasoning-capable, spontaneously varies structure. The most "human-feeling" model in the registry.
+
+**Comfortable prompt capacity:** ~20–25 sentences. Beyond that: instruction following on later rules degrades noticeably. Primary risk is persona rules being overridden by the model's own stylistic habits.
+
+**Known behavioral tendencies:**
+- On long explanatory responses: appends unsolicited summarizing paragraph (P3 violation)
+- On emotionally-toned requests: adds unprompted advice or empathy scripts (P2, P6 violation)
+- Under long system prompt pressure (>25 sentences): deprioritizes later-positioned rules
+- In non-English responses: can echo English phrasing patterns mid-sentence (output_normalizer mitigates)
+- Spontaneously varies sentence structure — positive for tone, negative if it produces run-on warmth markers
+
+**Persona implications:**
+- Persona prompt: up to 5–6 sentences viable. Can hold multi-property tone.
+- Must explicitly prohibit summarizing paragraph at response end.
+- Must explicitly prohibit unsolicited advice on emotional queries.
+- Persona rules should be front-loaded (first in system prompt), not buried after long rule lists.
+
+**What it does well:** reasoning, explanation, creative tasks, multilingual synthesis, conversational depth, recommendation synthesis.
+
+---
+
+### 27.3 qwen/qwen3-32b (GENERAL tier — CODE/MATH/EXAM)
+
+**Nature:** structurally precise, strong instruction following, less expressive in conversational register.
+
+**Comfortable prompt capacity:** ~25–30 sentences. Strong instruction following across the range — one of the most reliable models for rule adherence.
+
+**Known behavioral tendencies:**
+- Default register: formal/neutral. Does not spontaneously add warmth.
+- Tends toward structured, enumerated output — needs explicit suppression of lists/headers for conversational tasks.
+- Thinking mode (`thinking: True`) MUST be disabled at every call site — `"thinking": False` is mandatory, otherwise HTTP 400.
+- Less natural on open-ended conversational prompts; best on tasks with clear structure.
+
+**Persona implications:**
+- Persona here competes with model's structural bias. Keep persona minimal for CODE/MATH/EXAM tasks.
+- For any conversational fallback on this model: add explicit anti-enumeration rule.
+- Warmth is not natural to this model — do not force it. Precision and directness are its native register; that is the persona for this role.
+
+**What it does well:** code generation, mathematical reasoning, structured output, exam-style Q&A, instruction-following on complex rule sets.
+
+---
+
+### 27.4 openai/gpt-oss-20b (GENERAL tier — constraint-aware inference)
+
+**Nature:** balanced between expressiveness and structure. Reliable on constraint-following. Less well-characterized than 70b versatile — fewer production observations as of June 2026.
+
+**Comfortable prompt capacity:** ~20 sentences (estimate — validate in production).
+
+**Known behavioral tendencies:**
+- More conservative in tone than llama-3.3-70b — less prone to warmth inflation
+- Constraint-aware: holds negative rules ("do not do X") more reliably than models that need positive framing
+- Less expressive on creative/conversational tasks
+
+**Persona implications:**
+- Suited for tasks requiring strict constraint adherence with moderate expression.
+- Persona prompt: same structure as llama-3.3-70b-versatile but shorter — 3–4 sentences.
+
+**What it does well:** constraint-aware general inference, tasks requiring reliable rule adherence without the expressiveness overhead of 70b.
+
+---
+
+### 27.5 openai/gpt-oss-120b (HEAVY tier primary + Consensus arbiter)
+
+**Nature:** most capable reasoning model in registry. Formal/neutral by default. Used for deep multi-step reasoning and as consensus arbiter.
+
+**Comfortable prompt capacity:** ~40+ sentences. Handles large context well, but tone can shift mid-response on very long outputs as persona is deprioritized relative to reasoning.
+
+**Known behavioral tendencies:**
+- Default register: academic/formal — without persona instruction, produces corporate-neutral output
+- On very long outputs (600+ tokens): persona may fade in later paragraphs
+- As consensus arbiter: operates with arbitration-scoped prompt, NOT the full persona prompt
+- MoE architecture: cheaper on output than GENERAL primary despite higher capability
+
+**Persona implications:**
+- Same persona text as llama-3.3-70b-versatile base, but test specifically on long outputs.
+- If tone shift occurs mid-response on long outputs: add persona reinforcement mid-prompt (after reasoning rules, before output rules).
+- Consensus arbiter role uses minimal prompt — arbitration context only, no full persona.
+
+**What it does well:** deep multi-step reasoning, complex analysis, long-context synthesis, arbitration between agent outputs.
+
+---
+
+### 27.6 groq/compound + groq/compound-mini (Agent Layer — synthesizers)
+
+**Nature:** optimized for tool-use synthesis. Structured, list-leaning output. Less natural in conversational tone. Used exclusively as synthesizers receiving pre-assembled context (§6).
+
+**Comfortable prompt capacity:** moderate. Persona competes with tool-result formatting habits.
+
+**Known behavioral tendencies:**
+- Strong bias toward bullet lists and structured enumeration — needs explicit suppression
+- Less natural warmth in conversational register than llama-3.3-70b
+- `output_normalizer.py` and `correction.py` clean its output post-synthesis
+- compound-mini (FAST path): shorter outputs, adequate for single-result synthesis
+- compound (GENERAL path): longer, structured synthesis across multiple retrieved sources
+
+**Persona implications:**
+- Persona here is minimal — FORMAT_RULES do the heavy lifting (suppress lists, suppress headers).
+- Persona patch: add explicit anti-enumeration rule if production logs show persistent bullet leakage.
+- Do not attempt conversational warmth on synthesis tasks — it will be outcompeted by structural defaults.
+
+**What it does well:** synthesizing multiple retrieved results into coherent response, structured summarization, search/weather/maps result assembly.
+
+---
+
+### 27.7 meta-llama/llama-4-scout-17b-16e-instruct (Vision + Long-Context — see §26)
+
+**Nature:** multimodal-capable, long-context window (512K). Two bounded roles — NOT a general-purpose reasoning model in this system.
+
+**Comfortable prompt capacity per role:**
+- Vision extraction prompt (Role A): simple, bounded — well within capacity
+- Long-context transformation prompt (Role B): moderate — validate against context size in production
+
+**Known behavioral tendencies:**
+- Vision role: reliable structured extraction on clear images; degrades on ambiguous/low-quality input
+- Long-context role: performance at extreme context lengths (>200K tokens) needs production validation
+- If given open-ended reasoning instructions: tends toward verbose output — keep prompts task-scoped
+
+**Persona implications:**
+- Role A (vision): no persona. Extraction prompt only — structured output, no conversational register.
+- Role B (long-context): minimal task framing. No persona injection.
+- If a third role is considered: measure remaining comfortable capacity first (§26.3 rule).
+
+---
+
+### 27.8 Safety Layer models (non-generating — no persona)
+
+`llama-prompt-guard-2-22m`, `llama-prompt-guard-2-86m`, `openai/gpt-oss-safeguard-20b`
+
+**Role:** classification/scoring only. No generation, no synthesis, no persona.
+These models do not produce user-visible output. Persona design does not apply.
+Known false-positive rates on Russian/Arabic/short casual messages are the reason
+the Safety Layer is non-blocking (§1 rationale).
+
+---
+
+### 27.9 allam-2-7b (Arabic NLP anchor)
+
+**Nature:** Arabic-specialized. Used for normalization, not generation. One call, three contexts.
+
+**Comfortable prompt capacity:** narrow — normalization task is simple and bounded.
+
+**Known behavioral tendencies:**
+- Arabic normalization: reliable within scope
+- Outside Arabic script: not used — llama-3.3-70b handles other non-Latin scripts
+- On empty or malformed input: returns empty string → multilingual_preprocessor reverts to original
+
+**Persona implications:**
+- No persona. Normalization task only — output is processed text, not user-visible response.
+
+---
+
+### 27.10 Speech models (Whisper ASR + Orpheus TTS — no persona)
+
+**whisper-large-v3 / whisper-large-v3-turbo:** transcription only. No persona applies.
+**canopylabs/orpheus-v1-english:** TTS synthesis. Voice persona is implicit in voice ID selection
+(diana/autumn/hannah/austin/daniel/troy) — voice choice is a persona decision, not a prompt decision.
+**canopylabs/orpheus-arabic-saudi:** TTS Arabic. Same — voice ID (noura/fahad/sultan/lulwa/aisha)
+is the persona carrier, not the prompt.
+
+**Vocal directions** (`[cheerful]`, `[whisper]`): English model only. NOT supported by Arabic model.
+Voice ID selection is owned by prompt_policy.py — treated as a persona constant, not a runtime decision.
+
+---
