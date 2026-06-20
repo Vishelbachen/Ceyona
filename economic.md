@@ -1,5 +1,5 @@
 # CEYONA — ECONOMIC MODEL
-Version: 5.3 — Safety Gate Billing Clarification
+Version: 5.4 — Deprecation Update + qwen3.6-27b Addition
 Status: Active Source of Truth
 Supersedes: economic.md (all previous versions)
 
@@ -23,28 +23,45 @@ All rates in USD per 1M tokens. Verified from groq.com/pricing, May 2026.
 
 ### 1.1 LLM Tiers
 
+⚠️ **DEPRECATION NOTICE (актуальность подтверждена 5 раз, последнее — June 20, 2026):**
+4 модели выводятся из Groq. Они присутствуют в API сейчас, но будут удалены:
+- `qwen/qwen3-32b` → deprecated Jul 17, 2026 (27 дней)
+- `meta-llama/llama-4-scout-17b-16e-instruct` → deprecated Jul 17, 2026 (27 дней)
+- `llama-3.1-8b-instant` → deprecated Aug 16, 2026
+- `llama-3.3-70b-versatile` → deprecated Aug 16, 2026
+
+Замена для VISION и LONG_CONTEXT ролей: `qwen/qwen3.6-27b` (добавлен в Groq Apr 2026).
+Приоритет тестирования: models_passport.md Часть 4.
+
 ```
 FAST tier
-  llama-3.1-8b-instant          → input: $0.05   output: $0.08   (840 TPS)
+  llama-3.1-8b-instant          → input: $0.05   output: $0.08   (840 TPS)  ⚠️ deprecated Aug 16, 2026
   [fallback removed: gemma2-9b-it deprecated by Groq, Aug 2025]
+  [кандидат замены: openai/gpt-oss-20b — см. models_passport.md]
 
 GENERAL tier
-  llama-3.3-70b-versatile       → input: $0.59   output: $0.79   (394 TPS)
-  qwen/qwen3-32b                → input: $0.29   output: $0.59   (662 TPS)
+  llama-3.3-70b-versatile       → input: $0.59   output: $0.79   (394 TPS)  ⚠️ deprecated Aug 16, 2026
+  qwen/qwen3-32b                → input: $0.29   output: $0.59   (662 TPS)  ⚠️ deprecated Jul 17, 2026
   openai/gpt-oss-20b            → input: $0.075  output: $0.30   (1000 TPS)
 
 HEAVY tier
   openai/gpt-oss-120b                           → input: $0.15   output: $0.60   (500 TPS)
-  meta-llama/llama-4-scout-17b-16e-instruct     → input: $0.11   output: $0.34   (594 TPS)
+  meta-llama/llama-4-scout-17b-16e-instruct     → input: $0.11   output: $0.34   (594 TPS)  ⚠️ deprecated Jul 17, 2026
+
+VISION / LONG_CONTEXT кандидат (замена llama-4-scout + резерв GENERAL)
+  qwen/qwen3.6-27b              → цена на Groq не опубликована официально (Preview, Jun 2026)
+                                   В passport указано $0.60/$3.00 — это цена Qwen API, НЕ Groq.
+                                   Использовать FAST tier ($0.05/$0.08) как placeholder до официального
+                                   подтверждения от Groq. Мониторить groq.com/pricing.
 ```
 
 **MODEL_RATES in cost_model.py** uses the PRIMARY model of each tier for pre-execution estimation:
 
 ```python
 MODEL_RATES = {
-    Tier.FAST:    {"input": 0.05,  "output": 0.08},   # llama-3.1-8b-instant
-    Tier.GENERAL: {"input": 0.59,  "output": 0.79},   # llama-3.3-70b-versatile (primary)
-    Tier.HEAVY:   {"input": 0.15,  "output": 0.60},   # openai/gpt-oss-120b (primary)
+    Tier.FAST:    {"input": 0.05,  "output": 0.08},   # llama-3.1-8b-instant ⚠️ deprecated Aug 16 → обновить при смене primary
+    Tier.GENERAL: {"input": 0.59,  "output": 0.79},   # llama-3.3-70b-versatile ⚠️ deprecated Aug 16 → обновить при смене primary
+    Tier.HEAVY:   {"input": 0.15,  "output": 0.60},   # openai/gpt-oss-120b (primary, stable)
 }
 ```
 
@@ -60,6 +77,11 @@ will be updated to use per-model rates — no EPK changes required.
 
 Note on HEAVY: gpt-oss-120b at $0.15/$0.60 is cheaper than GENERAL llama-3.3-70b on output
 due to MoE architecture. This is correct and expected — HEAVY = more capable, not always more expensive.
+
+**⚠️ ACTION REQUIRED при смене primary моделей:**
+MODEL_RATES ДОЛЖЕН быть обновлён одновременно со сменой primary в model_router.py.
+Если новый primary дороже текущего — обязательное обновление во избежание недооценки EPK.
+Если дешевле — оценка станет избыточно консервативной (допустимо, но нежелательно).
 
 ### 1.2 Safety Layer (Groq-hosted)
 
@@ -454,11 +476,13 @@ When balance reaches $0.00 → EPK returns DENY → user sees balance_exhausted 
 This document is synchronized with:
 
 **models.md** — model names, tier assignments, fallback order:
-- FAST primary: llama-3.1-8b-instant ✓
+- FAST primary: llama-3.1-8b-instant ✓ ⚠️ deprecated Aug 16, 2026
 - FAST fallback: gemma2-9b-it REMOVED (deprecated Aug 2025) ✓
-- GENERAL primary: llama-3.3-70b-versatile ✓
+- GENERAL primary: llama-3.3-70b-versatile ✓ ⚠️ deprecated Aug 16, 2026
+- GENERAL: qwen/qwen3-32b ✓ ⚠️ deprecated Jul 17, 2026
 - HEAVY primary: openai/gpt-oss-120b ✓
-- meta-llama/llama-4-scout-17b-16e-instruct → Vision + Long-Context (models.md §26), priced at $0.11/$0.34 ✓
+- meta-llama/llama-4-scout-17b-16e-instruct → Vision + Long-Context (models.md §26), priced at $0.11/$0.34 ✓ ⚠️ deprecated Jul 17, 2026
+- qwen/qwen3.6-27b → VISION/LONG_CONTEXT кандидат; цена на Groq не опубликована (мониторить groq.com/pricing) ⚠️ OPEN ITEM
 - canopylabs/orpheus-v1-english → $22.00/1M chars ✓
 - canopylabs/orpheus-arabic-saudi → $40.00/1M chars ✓
 - BAAI/bge-* → HuggingFace (NOT Groq) ✓
@@ -484,6 +508,9 @@ This document is synchronized with:
 
 ## 12. OPEN ITEMS (FUTURE)
 
+- [ ] **ПРИОРИТЕТ — Jul 17, 2026:** заменить qwen/qwen3-32b и llama-4-scout в model_router.py до deprecation. Обновить MODEL_RATES если новый GENERAL primary дороже $0.59/$0.79.
+- [ ] **ПРИОРИТЕТ — Aug 16, 2026:** заменить llama-3.1-8b-instant и llama-3.3-70b-versatile. Обновить MODEL_RATES.
+- [ ] **qwen/qwen3.6-27b Groq pricing:** не опубликована официально (Jun 2026). Мониторить groq.com/pricing. После публикации — добавить в §1.1 и обновить passport. Текущий placeholder: FAST tier ($0.05/$0.08).
 - [ ] Per-route billing: preferred_model now logged per-request (models.md §25.3) → update actual_cost() to use per-model rates when ready
 - [ ] Compound/compound-mini token pricing not publicly listed — monitor Groq changelog
 - [ ] allam-2-7b pricing not listed — treated as FAST equivalent until confirmed
