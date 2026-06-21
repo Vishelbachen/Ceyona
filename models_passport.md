@@ -1,5 +1,5 @@
 # CEYONA — MODEL ENGINEERING PASSPORT
-Version: 9.1 — Deprecation Status Update
+Version: 10.0 — Certification Architecture
 Status: Living validation document
 Supersedes: models.md §27 (per-model behavioral characteristics)
 
@@ -416,9 +416,137 @@ Supersedes: models.md §27 (per-model behavioral characteristics)
 
 ## ЧАСТЬ 3 — ПЛАН ТЕСТОВ
 
-Тесты запускаются на каждом кандидате в роль.
-Pass/Fail фиксируется в этом документе после прогона.
-Назначение в роль — только после прохождения всех тестов роли.
+### 3.0 Методология
+
+#### Три независимых набора
+
+Смешивать нельзя — каждый отвечает на свой вопрос.
+
+```
+Model Certification (raw)
+  Вопрос:  Пригодна ли модель для этой роли?
+  Что:     Прямой вызов Groq API. Без normalizer, correction, formatter.
+  Когда:   При оценке нового кандидата или после триггера инвалидации.
+
+System Regression (pipeline)
+  Вопрос:  Работает ли система после изменения?
+  Что:     Полный pipeline: normalizer, correction, formatter, tool calling.
+  Когда:   Перед каждым релизом.
+
+Regression Delta (diff)
+  Вопрос:  Что именно изменилось относительно предыдущей certified модели?
+  Что:     Те же raw-кейсы что в Certification — на старой и новой модели
+           параллельно. Сравнение числовых профилей.
+  Когда:   При смене модели в model_router.py.
+```
+
+**Почему нельзя смешивать:**
+`output_normalizer.py` скрывает реальные дефекты модели — language leak,
+source tag artifacts, vision meta-openers. Выбор модели по pipeline-результатам
+означает выбор пары «модель + компенсатор». При изменении normalizer
+паспорт теряет достоверность без повторного прогона.
+
+#### Какие тесты в каком наборе
+
+```
+Model Certification (raw):
+  IS-01..05, PR-01..04, HAL-F, HAL-C, DET-01..03
+  JR-01, LW-01, LT-01..04, VQ-01..03, LC-01..02, ML-01..02
+
+System Regression (pipeline):
+  LT-05   — end-to-end с поиском (pipeline overhead обязателен)
+  ER-01..02 — fallback и rate limit (тестируют систему, не модель)
+  CS-01..02 — compound работает только внутри pipeline
+
+Regression Delta (diff) — минимальный набор для быстрого сравнения:
+  IS-01..02, PR-01..02, HAL-F, DET-01..02, JR-01, LT-04
+```
+
+#### Инвалидация паспорта роли
+
+Срок не используется. Только события:
+
+```
+Триггеры (паспорт → STALE):
+  - смена модели в _PRIMARY или _TIER_MODELS (model_router.py)
+  - изменение PERSONA_RULE_* или любого правила (prompt_policy.py)
+  - изменение output_normalizer.py
+  - изменение correction.py
+  - изменение логики tool calling или agent layer
+  - изменение build_messages() в prompt_engine.py
+  - обновление Groq SDK если меняет параметры вызова
+
+Не являются триггерами:
+  - изменение retrieval / reranker
+  - изменение transport layer
+  - изменение billing / cost_model
+  - истечение времени при отсутствии изменений выше
+```
+
+#### Порядок разработки (не менять)
+
+```
+1. Зафиксировать контракты ролей        ✓ DONE (Часть 1)
+2. Пронумеровать все правила            ✓ DONE (§3.1 ниже)
+3. Определить критерии Pass/Fail        ✓ DONE (тесты §3.2+)
+4. Разметить raw vs pipeline            ✓ DONE (выше)
+5. Написать test fixtures               ← NEXT (после фиксации критериев)
+6. Запустить Model Certification        ← после fixtures
+7. Заполнить паспорта ролей             ← после прогона (Часть 4)
+```
+
+Test fixtures пишутся после того как зафиксированы критерии — никогда
+наоборот. Если сначала запросы, потом критерии под них — это проверка
+ожиданий разработчика, а не поведения модели.
+
+---
+
+### 3.1 Правила — нумерованный реестр
+
+Каждое правило имеет ID. Тесты ссылаются на ID.
+Нарушение в паспорте роли фиксируется по ID: «нарушение P-06 в запросе 14».
+
+```
+Источник: prompt_policy.py + PERSONA_RULE_GENERAL / FAST / HEAVY
+
+ГРУППА P — Persona (из PERSONA_RULE_*)
+  P-01  Gender agreement: женский род во всех грамматических формах
+  P-02  Formal register: Вы в RU, formal в других языках
+         (исключение: пользователь первым переходит на ты)
+  P-03  No enthusiasm markers: никаких «Конечно!», «Отлично!», «С удовольствием!»
+  P-04  Answer-first: первое слово ответа — часть ответа, не вступление
+  P-05  No unsolicited expansion: отвечать ровно на вопрос, не расширять
+  P-06  No naming emotions: не называть эмоциональное состояние пользователя
+  P-07  No unsolicited advice: не добавлять советы, предупреждения, выводы
+  P-08  One question out: если задаёт вопрос — только один за раз
+  P-09  One-sentence refusal: отказ — одно предложение, без объяснений и извинений
+  P-10  Tone follows topic: тон меняется под тему, характер — нет
+  P-11  No helpdesk register: не звучать как служба поддержки
+
+ГРУППА F — Formatting (из FORMAT_RULES + VARIATION_RULE)
+  F-01  No markdown tables
+  F-02  No markdown headers
+  F-03  No bold
+  F-04  Plain text, numbered lists или dashes
+  F-05  Vary sentence openings
+
+ГРУППА H — History (из NO_CARRYOVER_RULE)
+  H-01  No topic carryover: не переносить факты из несвязанной темы
+  H-02  Ignore irrelevant history: нерелевантная история игнорируется,
+         не смешивается с текущей темой
+
+ГРУППА G — Grounding (из VERIFIED_FACTS_RULE + NO_CUTOFF_RULE)
+  G-01  Prefer retrieved facts над памятью модели при наличии контекста
+  G-02  No invented freshness: не придумывать актуальность, цены, доступность
+  G-03  Admit uncertainty: если факт не подтверждён — сказать прямо
+
+ИТОГО: 21 правило
+
+Применимость по тирам:
+  FAST:   P-01, P-02, P-03, P-04, P-09, F-01..05
+  GENERAL: все (P-01..11, F-01..05, H-01..02, G-01..03)
+  HEAVY:  все + H-03 (acknowledge emotional context в одном предложении перед ответом)
+```
 
 ---
 
@@ -437,14 +565,15 @@ Fail: хотя бы одно нарушение из перечисленных
 
 **IS-02 — Длинный промпт, условная логика**
 ```
+Набор:  Model Certification (raw)
 Промпт: PERSONA_RULE_GENERAL + все правила (~800 tokens)
 Задача: 20 запросов включая эмоциональные, технические,
         многовопросные, поисковые
-Pass: нарушений ≤ 2 из 240 (20 запросов × 12 правил),
+Правила: P-01..11, F-01..05, H-01..02, G-01..03 (21 правило)
+Pass: нарушений ≤ 2 из 420 (20 запросов × 21 правило),
       ни одно правило не нарушено повторно
-      (особенно: не называть эмоции, не добавлять советы,
-       один вопрос исходящий, answer-first)
 Fail: > 2 нарушений, или одно правило нарушено ≥ 2 раз
+Фиксация: ID нарушенного правила + номер запроса
 Кандидаты: все претенденты на GENERAL
 ```
 
@@ -833,25 +962,240 @@ Fail: переход на "ты", копирование фамильярног�
 
 ---
 
-## ЧАСТЬ 4 — МАТРИЦА НАЗНАЧЕНИЙ
+## ЧАСТЬ 4 — ПАСПОРТА РОЛЕЙ
 
-*Заполняется после прохождения тестов.*
+Паспорт роли — первичный документ. Сертифицируется не модель,
+а пригодность конкретной модели для конкретной роли.
+Одна модель может пройти VISION и не пройти GENERAL — это нормально.
 
-| Роль | Primary | Fallback | Статус |
+Статусы: `VALID` / `STALE` / `UNCERTIFIED`
+`STALE` выставляется вручную при срабатывании триггера из §3.0.
+
+---
+
+### ROLE: FAST
+
+```
+Status: UNCERTIFIED
+Certified model: —
+Certification date: —
+
+Components snapshot (заполнить при сертификации):
+  prompt_policy.py:       commit —
+  output_normalizer.py:   version —
+  model_router.py:        commit —
+  Groq SDK:               version —
+
+Test results (Model Certification / raw):
+  IS-01  Persona / short prompt:      —/10    —%
+  PR-01  Gender agreement:            —/20    —%
+  PR-03  Long output:                 —/10    —%    (note: —)
+  PR-04  Familiarity:                 —/10    —%
+  DET-03 Persona determinism:         —/20    —%
+  LT-01  TTFT median:                 —ms           (pass < 400ms)
+  LT-01  TTFT P95:                    —ms
+  LT-02  Generation / 100tok:         —ms
+  LT-03  End-to-end median:           —ms           (pass < 2000ms)
+  LT-03  End-to-end P95:              —ms
+
+Rules violated: —
+Candidates evaluated:
+  —: —
+
+Certified: NO
+```
+
+---
+
+### ROLE: GENERAL
+
+```
+Status: UNCERTIFIED
+Certified model: —
+Certification date: —
+
+Components snapshot:
+  prompt_policy.py:       commit —
+  output_normalizer.py:   version —
+  model_router.py:        commit —
+  correction.py:          commit —
+  Groq SDK:               version —
+
+Test results (Model Certification / raw):
+  IS-01  Persona / short prompt:      —/10    —%
+  IS-02  Rules / long prompt:         —/420   —%    (violations: —)
+  IS-03  Rules + history:             —/10    —%
+  IS-04  Rules + tool calls:          —/5     —%
+  IS-05  Worst case context:          —/5     —%
+  PR-01  Gender agreement:            —/20    —%
+  PR-02  Tone under pressure:         —/10    —%
+  PR-03  Long output:                 —/10    —%    (note: —)
+  PR-04  Familiarity:                 —/10    —%
+  HAL-F  Factual invention:           —/10          (invented facts: —)
+  HAL-C  Context distortion type A:   —/10
+  HAL-C  Context distortion type B:   —/10          (any B = fail)
+  DET-01 JSON structure:              —/20    —%    (drift at iter: —)
+  DET-02 Rule compliance:             —/20    —%
+  DET-03 Persona:                     —/20    —%
+  JR-01  JSON reliability:            —/20    —%
+  ML-02  Multilingual dialogue:       —/20    —%
+  LW-01  Language switching:          —/10    —%
+  LT-04  TTFT median:                 —ms           (pass < 800ms)
+  LT-04  TTFT P95:                    —ms
+
+Rules violated (ID + запрос): —
+
+Candidates evaluated:
+  —: —
+
+Certified: NO
+```
+
+---
+
+### ROLE: HEAVY
+
+```
+Status: UNCERTIFIED
+Certified model: openai/gpt-oss-120b (текущее, подтверждается тестами)
+Certification date: —
+
+Components snapshot:
+  prompt_policy.py:       commit —
+  model_router.py:        commit —
+  Groq SDK:               version —
+
+Test results (Model Certification / raw):
+  IS-05  Worst case context:          —/5     —%
+  PR-03  Long output:                 —/10    —%    (note: —)
+  HAL-F  Factual invention:           —/10
+  HAL-C  Context distortion type B:   —/10
+  DET-02 Rule compliance:             —/20    —%
+
+Rules violated: —
+Certified: NO
+```
+
+---
+
+### ROLE: VISION
+
+```
+Status: UNCERTIFIED
+⚠️ Дедлайн: Jul 17, 2026 (llama-4-scout уходит)
+Certified model: —
+Certification date: —
+
+Components snapshot:
+  model_router.py:        commit —
+  Groq SDK:               version —
+
+Test results (Model Certification / raw):
+  VQ-01  Базовое извлечение:
+    screenshot text:      —/2..3  —%
+    map/diagram:          —/2..3  —%
+    live photo:           —/2..3  —%
+    document:             —/2..3  —%
+    QR/barcode:           —/2..3  —%
+    total:                —/10    —%
+  VQ-02  JSON output:               —/10    —%
+  VQ-03  Low quality images:        —/5     —%    (hallucinations: —)
+
+Candidates evaluated:
+  qwen/qwen3.6-27b: —
+
+Certified: NO
+```
+
+---
+
+### ROLE: LONG_CONTEXT
+
+```
+Status: UNCERTIFIED
+⚠️ Дедлайн: Jul 17, 2026 (llama-4-scout уходит)
+Certified model: —
+Certification date: —
+
+Components snapshot:
+  model_router.py:        commit —
+  Groq SDK:               version —
+
+Test results (Model Certification / raw):
+  LC-01  40K document:              —        (hallucinations: —)
+  LC-02  100K document:             —%       (vs LC-01 baseline)
+
+Candidates evaluated:
+  qwen/qwen3.6-27b: —
+
+Certified: NO
+```
+
+---
+
+### ROLE: MULTILINGUAL
+
+```
+Status: UNCERTIFIED
+Certified model: —
+Certification date: —
+
+Components snapshot:
+  model_router.py:        commit —
+  Groq SDK:               version —
+
+Test results (Model Certification / raw):
+  ML-01  Non-latin languages:
+    RU:   —/10   DE:   —/10   JA:   —/10
+    UK:   —/10   KO:   —/10   ZH:   —/10
+    PL:   —/10
+    total: —/70  —%
+
+Candidates evaluated: —
+Certified: NO
+```
+
+---
+
+### ROLE: COMPOUND (FAST_AGENT + DEEP_AGENT)
+
+```
+Status: UNCERTIFIED
+Certified models: groq/compound (DEEP_AGENT), groq/compound-mini (FAST_AGENT)
+Certification date: —
+
+Components snapshot:
+  output_normalizer.py:   version —
+  correction.py:          commit —
+  model_router.py:        commit —
+
+Test results (System Regression / pipeline):
+  CS-01  Anti-enumeration:          —/10    —%    (bullet occurrences: —)
+  CS-02  Language purity:           —/10    —%
+  DET-01 JSON structure:            —/20    —%
+
+Certified: NO
+```
+
+---
+
+### Таблица статусов
+
+| Роль | Модель | Статус | Дата |
 |---|---|---|---|
-| FAST | ? | ? | ⏳ ожидает IS-01, PR-01, PR-04, LT-01..03, DET-03 |
-| GENERAL | ? | ? | ⏳ ожидает IS-02..05, PR-01..04, ML-02, JR-01, LT-04..05, HAL-F, HAL-C, LW-01, DET-01..03 |
-| HEAVY | openai/gpt-oss-120b | ? | ⏳ ожидает IS-05, PR-03, HAL-F, HAL-C |
-| VISION | ? | ? | ⏳ ожидает VQ-01..03 — приоритет (Jul 17) |
-| LONG_CONTEXT | ? | ? | ⏳ ожидает LC-01..02 — приоритет (Jul 17) |
-| MULTILINGUAL | ? | ? | ⏳ ожидает ML-01 |
-| COMPOUND | groq/compound | groq/compound-mini | ⏳ ожидает CS-01..02, DET-01 |
+| FAST | — | UNCERTIFIED | — |
+| GENERAL | — | UNCERTIFIED | — |
+| HEAVY | openai/gpt-oss-120b | UNCERTIFIED | — |
+| VISION | — | UNCERTIFIED | — |
+| LONG_CONTEXT | — | UNCERTIFIED | — |
+| MULTILINGUAL | — | UNCERTIFIED | — |
+| COMPOUND | groq/compound + mini | UNCERTIFIED | — |
 
-**Приоритет тестирования:**
-1. VISION и LONG_CONTEXT — дедлайн Jul 17, 2026 (27 дней)
+**Приоритет первой сертификации:**
+1. VISION + LONG_CONTEXT — дедлайн Jul 17, 2026
 2. FAST — дедлайн Aug 16, 2026
-3. GENERAL — дедлайн Aug 16, 2026, самый критичный контракт
-4. COMPOUND и ER — после назначения primary/fallback пар
+3. GENERAL — дедлайн Aug 16, 2026 (самый критичный контракт)
+4. HEAVY, COMPOUND, MULTILINGUAL — после основных ролей
 
 ---
 
@@ -886,5 +1230,6 @@ Fail: переход на "ты", копирование фамильярног�
 
 ---
 
-*Документ обновляется после каждого прогона тестов.*
-*Назначение модели = запись в model_router.py + запись результата теста здесь.*
+*Паспорт обновляется после каждого прогона тестов.*
+*Назначение модели = запись в model_router.py + статус VALID в паспорте роли.*
+*Смена компонента из триггер-листа §3.0 = статус STALE + повторная сертификация.*
