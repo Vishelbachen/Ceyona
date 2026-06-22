@@ -451,7 +451,7 @@ async def debug() -> dict:
       - maps/geocode   : Mapbox geocode for "Red Square, Moscow"
       - maps/route     : Mapbox route from Moscow to Saint Petersburg
       - embedding      : HuggingFace BGE-large embed of a short string
-      - groq/llm       : plain complete() with llama-3.1-8b-instant
+      - groq/llm       : plain complete() with openai/gpt-oss-20b
     """
     import time
     import traceback
@@ -480,7 +480,7 @@ async def debug() -> dict:
     try:
         t0 = time.monotonic()
         resp = await groq_client.complete(
-            model="llama-3.1-8b-instant",
+            model="openai/gpt-oss-20b",
             messages=[{"role": "user", "content": "Reply with the single word: OK"}],
             max_tokens=10,
             temperature=0.0,
