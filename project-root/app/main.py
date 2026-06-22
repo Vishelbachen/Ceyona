@@ -481,6 +481,7 @@ async def debug() -> dict:
         t0 = time.monotonic()
         resp = await groq_client.complete(
             model="openai/gpt-oss-20b",
+            reasoning_effort="low",
             messages=[{"role": "user", "content": "Reply with the single word: OK"}],
             max_tokens=10,
             temperature=0.0,
