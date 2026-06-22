@@ -600,7 +600,7 @@ async def _run_heavy(
     tier = Tier.HEAVY
     strategy = select_strategy(intent_result.routing, tier)
 
-    shaper_result = shape(ShaperInput(
+    shaper_result = await shape(ShaperInput(
         text=request.user_message,
         token_count=request.input_tokens,
         has_code_block=request.has_code_block,
