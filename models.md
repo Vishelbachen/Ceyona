@@ -546,7 +546,6 @@ Failure of one does NOT block the other.
 ---
 
 ## 22. AVAILABLE GROQ MODELS (June 2026)
-## 22. AVAILABLE GROQ MODELS (June 2026)
 
 Complete list of models available on Groq API as of June 2026 (count: 17).
 ⚠️ Four models below marked DEPRECATED — do not assign to new roles.
