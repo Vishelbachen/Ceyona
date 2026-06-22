@@ -1,7 +1,21 @@
 # CEYONA — MODEL REGISTRY
-Version: 8.0 — Per-Model Edition
+Version: 9.0 — Post-Deprecation Migration Edition
 Status: Active Source of Truth
-Supersedes: models1.md, models2.md, v7.x (all previous versions)
+Supersedes: v8.0 and all previous versions
+
+## DEPRECATION NOTICE (June 17, 2026 — Groq announcement)
+
+Four models deprecated and REMOVED from active assignments:
+
+| Model | Deadline | Replaced by | Role |
+|---|---|---|---|
+| `qwen/qwen3-32b` | Jul 17, 2026 | `openai/gpt-oss-120b` | GENERAL structured → HEAVY |
+| `meta-llama/llama-4-scout-17b-16e-instruct` | Jul 17, 2026 | `qwen/qwen3.6-27b` | VISION + LONG_CONTEXT |
+| `llama-3.1-8b-instant` | Aug 16, 2026 | `openai/gpt-oss-20b` | FAST |
+| `llama-3.3-70b-versatile` | Aug 16, 2026 | `qwen/qwen3.6-27b` | GENERAL + MULTILINGUAL |
+
+All four models preserved in §28 (DEPRECATED REGISTRY) for historical reference only.
+Do NOT assign deprecated models to any new role.
 
 This document defines ONLY:
 - approved models and their roles
@@ -76,14 +90,22 @@ degrades, execution continues. No DENY on model unavailability.
 *Prices: economic.md §1.1*
 
 ```
-llama-3.1-8b-instant  → PRIMARY: structural signal compression, shallow inference
-allam-2-7b            → MULTILINGUAL: Arabic normalization (one call, three contexts)
+openai/gpt-oss-20b  → PRIMARY: fast inference, shallow reasoning, DEGRADED_MODE fallback
+allam-2-7b          → MULTILINGUAL: Arabic normalization (one call, three contexts)
 ```
 
-> **Note:** gemma2-9b-it removed — deprecated by Groq, August 2025. No active fallback for FAST tier TPM overflow.
+**Migration note:** `llama-3.1-8b-instant` deprecated Aug 16, 2026 → replaced by `openai/gpt-oss-20b`.
 
 **Activation:** ALLOW or DEGRADED_MODE signals from EPK.
 **Skip on:** HEAVY_REQUIRED, DENY.
+
+**gpt-oss-20b characteristics (FAST role):**
+- MoE, 21B total / 3.6B active per forward pass
+- ~967 TPS on Groq, TTFT 0.83s
+- reasoning_effort="low" REQUIRED at all FAST call sites
+- Tool use ✅, JSON ✅, structured output ✅
+- Multilingual: strong RU/AR, weak CJK (<45% on Chinese) — acceptable for Ceyona audience
+- Prompt capacity: ~20 sentences before instruction degradation
 
 **allam-2-7b contexts (NOT three instances):**
 1. Fast Tier preprocessing
@@ -91,8 +113,8 @@ allam-2-7b            → MULTILINGUAL: Arabic normalization (one call, three co
 3. Multilingual normalization (Arabic routing)
 One model, one call per request where needed.
 
-**llama-3.1-8b-instant note:**
-When EPK = HEAVY_REQUIRED, llama-3.1-8b-instant is used ONLY in heavy_input_shaper.py
+**gpt-oss-20b as SHAPER_MODEL:**
+When EPK = HEAVY_REQUIRED, gpt-oss-20b is used ONLY in heavy_input_shaper.py
 and web_tools.py (route/POI extraction). It is NOT acting as Fast Tier in those contexts.
 
 ---
@@ -103,16 +125,33 @@ and web_tools.py (route/POI extraction). It is NOT acting as Fast Tier in those 
 *Prices: economic.md §1.1*
 
 ```
-llama-3.3-70b-versatile → PRIMARY: reasoning core + creative engine + non-Arabic normalization
-qwen/qwen3-32b          → structured logic / formatting engine
-openai/gpt-oss-20b      → constraint-aware general inference
+qwen/qwen3.6-27b      → PRIMARY: universal reasoning, multilingual, vision-capable
+openai/gpt-oss-120b   → FALLBACK: if qwen3.6-27b unavailable
 ```
+
+**Migration note:** `llama-3.3-70b-versatile` and `qwen/qwen3-32b` deprecated → replaced by `qwen/qwen3.6-27b`.
 
 **Activation:** ALLOW signal from EPK only.
 **Skip on:** HEAVY_REQUIRED, DEGRADED_MODE, DENY.
 
-**Critical:** FAST / GENERAL / HEAVY are tiers of model capability within the LLM layer.
-They are NOT cognitive layers. They are NOT logic layers.
+**qwen/qwen3.6-27b characteristics (GENERAL role):**
+- Dense, 27B parameters (all active per forward pass)
+- IFEval score 95.0 — best instruction-following in class
+- 201 languages — covers RU, AR, EN and all other Ceyona user languages
+- Native context 262K tokens (Groq limit: 131K)
+- Vision: image + text input ✅
+- Tool use ✅, JSON ✅, structured output ✅
+- Persona drift: 11% at turn 7 (best measured in class)
+- Prompt capacity: ~30 sentences comfortable
+
+**CRITICAL — thinking mode:**
+`reasoning_effort="none"` MUST be passed at every call site.
+Default thinking mode produces CoT output in responses — unacceptable for production.
+Non-thinking params: `temperature=0.7, top_p=0.80, top_k=20, presence_penalty=1.5`
+
+**CRITICAL — vision hallucination:**
+qwen3.6-27b hallucinates image content without warning when image is not accessible.
+VQ-03 test (low-quality images) is mandatory before VISION role certification.
 
 **Model specialization within GENERAL tier (architecture.md §45):**
 Intent-based preferred_model hint is set in RoutingProfile by _resolve_routing().
@@ -120,13 +159,11 @@ model_router uses hint to select within _TIER_MODELS[GENERAL]. Primary is fallba
 
 | Intent group | Preferred model | Reason |
 |---|---|---|
-| CONVERSATION, EMOTIONAL, CREATIVE | llama-3.3-70b-versatile | expressiveness, tone |
-| QUESTION, INSTRUCTION, ANALYSIS | llama-3.3-70b-versatile | reasoning, explanation |
-| CODE, MATH, EXAM | qwen/qwen3-32b | structured output, instruction following |
-| SEARCH, RECOMMENDATION | llama-3.3-70b-versatile | synthesis, summarization |
+| CONVERSATION, EMOTIONAL, CREATIVE | qwen/qwen3.6-27b | multilingual expressiveness, tone |
+| QUESTION, INSTRUCTION, ANALYSIS | qwen/qwen3.6-27b | reasoning, explanation |
+| CODE, MATH, EXAM | qwen/qwen3.6-27b | SWE-bench 77.2%, structured output |
+| SEARCH, RECOMMENDATION | qwen/qwen3.6-27b | synthesis, multilingual grounding |
 | WEATHER, MAPS, MAPS_POI, MAPS_ROUTE | verbatim (no LLM) | structured data — bypasses model |
-
-**qwen/qwen3-32b:** thinking mode MUST be explicitly disabled at every call site: `"thinking": False`
 
 ---
 
@@ -140,14 +177,21 @@ openai/gpt-oss-120b  → PRIMARY: deep multi-step reasoning
                        SECONDARY: Consensus arbiter (mutex — see §8)
 ```
 
+**Migration note:** `qwen/qwen3-32b` removed from GENERAL and fully retired. `llama-4-scout` removed from HEAVY secondary — replaced by `qwen/qwen3.6-27b` in LONG_CONTEXT role.
+
 **Activation:** EPK = HEAVY_REQUIRED ONLY.
 **Self-activation:** forbidden. Orchestrator executes the signal, does NOT generate it.
 
-**Output rule:** Heavy Tier output → directly to Response Synthesizer. Consensus SKIP (mutex).
+**gpt-oss-120b characteristics (HEAVY role):**
+- MoE, 120B total / 5.1B active per forward pass
+- TTFT 0.71s — best on Groq despite size
+- Latency grows from 0.8s → 2.9s over 10 turns (attention scaling) — acceptable for HEAVY
+- reasoning_effort="high" for deep reasoning tasks
+- 81+ languages — sufficient for Ceyona (weaker than qwen3.6 on multilingual)
+- Prompt capacity: 40+ sentences comfortable
+- Harmony format: System → Developer → User → Assistant hierarchy
 
-**Note on llama-4-scout-17b:** this model is NOT part of the HEAVY tier EPK path.
-It serves two separate, explicitly bounded roles — see §12 (Vision) and §26 (Long-Context).
-It is invoked directly, outside the EPK→decision_matrix→HEAVY flow.
+**Output rule:** Heavy Tier output → directly to Response Synthesizer. Consensus SKIP (mutex).
 
 **Hard invariants:**
 - each subsystem = isolated capability domain
@@ -159,10 +203,12 @@ It is invoked directly, outside the EPK→decision_matrix→HEAVY flow.
 
 ## 5. HEAVY INPUT SHAPER (self-gated utility — NOT a tier)
 
-**Provider: Groq (uses llama-3.1-8b-instant)**
+**Provider: Groq (uses openai/gpt-oss-20b)**
 `llm/heavy_input_shaper.py`
 
 **Role:** prepare input for Heavy Tier execution.
+
+**Migration note:** `llama-3.1-8b-instant` → `openai/gpt-oss-20b`. Use `reasoning_effort="low"`.
 
 **Activation:**
 - ONLY when EPK = HEAVY_REQUIRED
@@ -170,7 +216,7 @@ It is invoked directly, outside the EPK→decision_matrix→HEAVY flow.
 - Internal gating: shaping needed → execute | not needed → NO-OP (return input as-is)
 - SKIP on ALLOW, DEGRADED_MODE, DENY
 
-**Model used:** llama-3.1-8b-instant — NOT as Fast Tier
+**Model used:** openai/gpt-oss-20b — NOT as Fast Tier
 
 **Constraints:** NO reasoning, NO final output generation.
 
@@ -205,7 +251,7 @@ orchestrator → retrieval complete → PromptContext assembled
 ```
 Tier.FAST    → groq/compound-mini  (AgentType.COMPOUND_FAST)
 Tier.GENERAL → groq/compound       (AgentType.COMPOUND_DEEP)
-Fallback     → llama-3.3-70b-versatile (AgentType.DEEP — plain synthesis, no compound)
+Fallback     → qwen/qwen3.6-27b (AgentType.DEEP — plain synthesis, no compound)
 ```
 
 **`max_tokens`:** always from `route_max_tokens(tier)` via model_router — never hardcoded.
@@ -499,55 +545,68 @@ Failure of one does NOT block the other.
 
 ---
 
-## 22. AVAILABLE GROQ MODELS (May 2026)
+## 22. AVAILABLE GROQ MODELS (June 2026)
 
-Complete list of models available on Groq API as of May 2026.
-Cross-reference with model assignments above to verify no gaps.
+Complete list of models available on Groq API as of June 2026 (count: 17).
+⚠️ Four models below marked DEPRECATED — do not assign to new roles.
 
 ```json
 [
-  "whisper-large-v3",
-  "meta-llama/llama-4-scout-17b-16e-instruct",
   "allam-2-7b",
-  "llama-3.3-70b-versatile",
-  "groq/compound-mini",
-  "openai/gpt-oss-safeguard-20b",
-  "meta-llama/llama-prompt-guard-2-22m",
-  "meta-llama/llama-prompt-guard-2-86m",
+  "canopylabs/orpheus-arabic-saudi",
   "canopylabs/orpheus-v1-english",
   "groq/compound",
-  "whisper-large-v3-turbo",
-  "qwen/qwen3-32b",
-  "canopylabs/orpheus-arabic-saudi",
-  "openai/gpt-oss-20b",
+  "groq/compound-mini",
+  "llama-3.1-8b-instant",          // ⚠️ DEPRECATED — Aug 16, 2026
+  "llama-3.3-70b-versatile",        // ⚠️ DEPRECATED — Aug 16, 2026
+  "meta-llama/llama-4-scout-17b-16e-instruct", // ⚠️ DEPRECATED — Jul 17, 2026
+  "meta-llama/llama-prompt-guard-2-22m",
+  "meta-llama/llama-prompt-guard-2-86m",
   "openai/gpt-oss-120b",
-  "llama-3.1-8b-instant"
+  "openai/gpt-oss-20b",
+  "openai/gpt-oss-safeguard-20b",
+  "qwen/qwen3-32b",                 // ⚠️ DEPRECATED — Jul 17, 2026
+  "qwen/qwen3.6-27b",
+  "whisper-large-v3",
+  "whisper-large-v3-turbo"
 ]
 ```
 
-**Assignment coverage:**
+**Active assignment coverage (June 2026):**
 | Model | Role | Section |
 |---|---|---|
-| llama-3.1-8b-instant | FAST tier primary | §2 |
-| llama-3.3-70b-versatile | GENERAL tier primary | §3 |
-| qwen/qwen3-32b | GENERAL tier | §3 |
-| openai/gpt-oss-20b | GENERAL tier | §3 |
+| openai/gpt-oss-20b | FAST tier primary | §2 |
+| qwen/qwen3.6-27b | GENERAL + VISION + LONG_CONTEXT + MULTILINGUAL | §3, §26 |
 | openai/gpt-oss-120b | HEAVY tier primary + Consensus | §4, §8 |
-| meta-llama/llama-4-scout-17b-16e-instruct | Vision extraction + Long-context (§26) | §26 |
-| groq/compound | Agent Layer (compound_agent deep) | §6 |
-| groq/compound-mini | Agent Layer (compound_agent fast) | §6 |
+| groq/compound | Agent Layer DEEP | §6 |
+| groq/compound-mini | Agent Layer FAST | §6 |
 | meta-llama/llama-prompt-guard-2-22m | Safety Gate Pass 1 | §1 |
 | meta-llama/llama-prompt-guard-2-86m | Safety Gate Pass 2 | §1 |
-| openai/gpt-oss-safeguard-20b | Safety Gate Pass 2 | §1 |
+| openai/gpt-oss-safeguard-20b | Safety Gate observability | §1 |
 | whisper-large-v3 | ASR primary | §12 |
-| whisper-large-v3-turbo | ASR fast | §12 |
+| whisper-large-v3-turbo | ASR fallback | §12 |
 | canopylabs/orpheus-v1-english | TTS English | §12 |
 | canopylabs/orpheus-arabic-saudi | TTS Arabic | §12 |
-| allam-2-7b | Multilingual + FAST tier | §2, §12 |
+| allam-2-7b | Arabic NLP anchor | §12 |
 
 ---
 
-## 23. SEARCH PROVIDERS (external — NOT Groq models)
+## 23. MULTILINGUAL NORMALIZATION
+
+`llm/multilingual_preprocessor.py`
+
+```
+allam-2-7b        → Arabic normalization (anchor — no replacement available)
+qwen/qwen3.6-27b  → all other non-Latin languages (201 languages)
+```
+
+**Migration note:** `llama-3.3-70b-versatile` → `qwen/qwen3.6-27b` for non-Arabic multilingual.
+Use `reasoning_effort="none"` for normalization calls (not a reasoning task).
+
+**Decision tree (unchanged from architecture.md §34):**
+- Latin-dominant (>90%) → passthrough, no LLM call
+- Arabic script (>15%) → allam-2-7b
+- Other non-Latin → qwen/qwen3.6-27b
 
 Search providers are external services used by `external/search.py`.
 They are NOT Groq models. They are NOT registered in the Groq available_models list.
@@ -667,193 +726,297 @@ with a reproducible pattern. No entry here = no patch.
 A prompt that fits technically (no truncation) but exceeds comfortable capacity will produce
 degraded instruction following — the model silently deprioritizes later rules.
 
+**Source legend:**
+- ✅ DOC — официальная документация Groq / OpenAI / Qwen / Meta
+- ✅ BENCH — независимые публичные бенчмарки
+- ✅ PROD — production опыт Ceyona
+- ⚠️ EST — оценка, требует подтверждения в production
+
 ---
 
-### 27.1 llama-3.1-8b-instant (FAST tier primary)
+### 27.1 openai/gpt-oss-20b (FAST tier primary)
 
-**Nature:** fast, shallow, low-latency. Built for structural signal compression, not expression.
+**Nature:** MoE 21B total / 3.6B active. Highest output speed on Groq (~967 t/s). Optimized
+for low-latency agentic workflows. English/STEM focus.
 
-**Comfortable prompt capacity:** ~8–10 sentences in system prompt before instruction following degrades.
-Beyond that: later rules are silently dropped, earlier rules dominate.
+**Comfortable prompt capacity:** ~20 sentences (~212 tokens for FAST persona — well within range). ⚠️ EST
+Beyond that: constraint adherence degrades, conciseness rules may be deprioritized.
 
 **Known behavioral tendencies:**
-- Flat, terse default tone — minimal spontaneous warmth
-- Holds simple, single-property tone instructions reliably
-- Multi-property tone (warm + concise + direct simultaneously) degrades quickly
-- On complex explanations: simplifies beyond the acceptable floor
-- Gender agreement (Russian/Arabic) can drift mid-response on outputs > 3 sentences
+- Conservative, neutral tone by default — does not spontaneously add warmth ✅ DOC
+- Holds negative rules ("do not do X") more reliably than positive framing ✅ DOC
+- Below 45% accuracy on CJK (Chinese/Japanese/Korean) — STEM/English training bias ✅ BENCH
+- RU/AR: sufficient for FAST role (short responses, tool calls) — not used for MULTILINGUAL ✅ EST
+- `reasoning_effort="low"` MUST be set at every FAST call site — reduces latency and cost ✅ DOC
+- Tool use and JSON structured output: reliable ✅ DOC
 
 **Persona implications:**
-- Persona prompt: maximum 1–2 sentences. Warmth through brevity and directness, not elaboration.
-- Do not instruct it to vary sentence openings — it will attempt to comply and produce awkward results.
-- Gender agreement MUST be the first rule in system prompt (highest priority position).
+- FAST persona: 1–2 sentences maximum. Brevity is the persona.
+- Do not expect warmth — precision and directness are its native register.
+- Gender agreement (RU): place as first rule in system prompt.
 
-**What it does well:** quick factual replies, short conversational responses, input shaping (heavy_input_shaper role), route/POI extraction (web_tools.py).
+**What it does well:** fast factual replies, short conversational responses, tool calling,
+JSON generation, heavy_input_shaper utility (SHAPER_MODEL role).
+
+**API note:** use `reasoning_effort="low"` for all FAST calls. Supports low/medium/high.
 
 ---
 
-### 27.2 llama-3.3-70b-versatile (GENERAL tier primary)
+### 27.2 qwen/qwen3.6-27b (GENERAL + VISION + LONG_CONTEXT + MULTILINGUAL)
 
-**Nature:** expressive, reasoning-capable, spontaneously varies structure. The most "human-feeling" model in the registry.
+**Nature:** Dense 27B parameters (all active per pass). Hybrid Gated DeltaNet + Gated Attention
+architecture. Natively multimodal (text + image). 262K token context window. 201 languages.
 
-**Comfortable prompt capacity:** ~20–25 sentences. Beyond that: instruction following on later rules degrades noticeably. Primary risk is persona rules being overridden by the model's own stylistic habits.
+**Comfortable prompt capacity:** ~30 sentences for GENERAL (~800 token system prompt). ✅ BENCH
+IFEval score 95.0 — best instruction-following in its class. ✅ BENCH
+Persona drift: 11% at turn 7 (vs 34% for competing models). ✅ BENCH
 
 **Known behavioral tendencies:**
-- On long explanatory responses: appends unsolicited summarizing paragraph (P3 violation)
-- On emotionally-toned requests: adds unprompted advice or empathy scripts (P2, P6 violation)
-- Under long system prompt pressure (>25 sentences): deprioritizes later-positioned rules
-- In non-English responses: can echo English phrasing patterns mid-sentence (output_normalizer mitigates)
-- Spontaneously varies sentence structure — positive for tone, negative if it produces run-on warmth markers
+- Strong instruction-following on long prompts — rules maintained through turn 7 ✅ BENCH
+- Thinking mode: MUST be disabled at EVERY call site — `reasoning_effort="none"` ✅ DOC
+  (if not disabled: model enters chain-of-thought mode → latency spike + token waste)
+- Non-thinking recommended params: `temperature=0.7, top_p=0.80, top_k=20, presence_penalty=1.5` ✅ DOC
+- Vision hallucination: confidently describes image content when image is not accessible,
+  NO warning or error emitted — documented failure mode ✅ BENCH
+- Bullet/enumeration bias on structured tasks — needs explicit suppression for conversational output ⚠️ EST
+- 201 languages: RU/AR/EN natively strong; replaces llama-3.3-70b-versatile for non-Arabic multilingual ✅ DOC
 
 **Persona implications:**
-- Persona prompt: up to 5–6 sentences viable. Can hold multi-property tone.
-- Must explicitly prohibit summarizing paragraph at response end.
-- Must explicitly prohibit unsolicited advice on emotional queries.
-- Persona rules should be front-loaded (first in system prompt), not buried after long rule lists.
+- GENERAL persona: up to 6–8 sentences viable given IFEval 95.0 capacity.
+- Must explicitly prohibit unsolicited advice on emotional queries (same risk as llama-3.3-70b).
+- Anti-enumeration rule required for conversational intents.
+- Persona rules front-loaded in system prompt.
 
-**What it does well:** reasoning, explanation, creative tasks, multilingual synthesis, conversational depth, recommendation synthesis.
+**VISION role constraints:**
+- No persona. Extraction prompt only — structured JSON output, no conversational register.
+- VQ-03 test (low-quality images) MANDATORY before certification — hallucination without warning.
+
+**LONG_CONTEXT role constraints:**
+- 262K native context — replaces llama-4-scout (deprecated Jul 17, 2026).
+- Minimal task framing prompt. No persona injection.
+- LC-02 test (100K document) required for certification.
+
+**MULTILINGUAL role:**
+- Replaces llama-3.3-70b-versatile for all non-Arabic non-Latin normalization.
+- Same model invoked with a minimal normalization prompt — not the full GENERAL persona.
+
+**What it does well:** reasoning, multilingual synthesis, conversational depth, vision extraction,
+long-context transformation, code generation (SWE-bench 77.2%), structured output.
 
 ---
 
-### 27.3 qwen/qwen3-32b (GENERAL tier — CODE/MATH/EXAM)
+### 27.3 openai/gpt-oss-120b (HEAVY tier primary + Consensus arbiter)
 
-**Nature:** structurally precise, strong instruction following, less expressive in conversational register.
+**Nature:** MoE 120B total / 5.1B active. Highest reasoning capability in registry.
+Near-parity with o4-mini on reasoning benchmarks. TTFT 0.71s — lowest on Groq despite size.
 
-**Comfortable prompt capacity:** ~25–30 sentences. Strong instruction following across the range — one of the most reliable models for rule adherence.
+**Comfortable prompt capacity:** ~40+ sentences. Handles large context reliably. ✅ DOC
+Latency grows from 0.8s to 2.9s over 10 conversational turns (attention scaling). ✅ BENCH
+For HEAVY role this is acceptable — deep reasoning tasks expect latency.
 
 **Known behavioral tendencies:**
-- Default register: formal/neutral. Does not spontaneously add warmth.
-- Tends toward structured, enumerated output — needs explicit suppression of lists/headers for conversational tasks.
-- Thinking mode (`thinking: True`) MUST be disabled at every call site — `"thinking": False` is mandatory, otherwise HTTP 400.
-- Less natural on open-ended conversational prompts; best on tasks with clear structure.
+- Default register: academic/formal — produces corporate-neutral output without persona ✅ DOC
+- On very long outputs (600+ tokens): persona may fade in later paragraphs ⚠️ EST
+- Multilingual: 81+ languages — weaker than qwen3.6-27b on multilingual tasks ✅ BENCH
+- Creative writing polish: below frontier proprietary models ✅ BENCH
+- `reasoning_effort` (low/medium/high): use "high" for HEAVY, "medium" for Consensus ✅ DOC
+- Harmony role hierarchy: System → Developer → User → Assistant — use at every call site ✅ DOC
+- MoE architecture: cheaper on output tokens than apparent size suggests ✅ DOC
 
 **Persona implications:**
-- Persona here competes with model's structural bias. Keep persona minimal for CODE/MATH/EXAM tasks.
-- For any conversational fallback on this model: add explicit anti-enumeration rule.
-- Warmth is not natural to this model — do not force it. Precision and directness are its native register; that is the persona for this role.
+- HEAVY persona: same base as GENERAL but test on long outputs specifically.
+- If tone drift on long outputs: add persona reinforcement mid-prompt.
+- Consensus arbiter: minimal arbitration prompt only — no full persona.
 
-**What it does well:** code generation, mathematical reasoning, structured output, exam-style Q&A, instruction-following on complex rule sets.
+**What it does well:** deep multi-step reasoning, complex analysis, long-context synthesis,
+consensus arbitration between agent outputs, math (AIME 98.7%), code (SWE-bench ~76%).
 
 ---
 
-### 27.4 openai/gpt-oss-20b (GENERAL tier — constraint-aware inference)
+### 27.4 groq/compound + groq/compound-mini (Agent Layer — synthesizers)
 
-**Nature:** balanced between expressiveness and structure. Reliable on constraint-following. Less well-characterized than 70b versatile — fewer production observations as of June 2026.
+**Nature:** Groq compound AI systems — models + built-in tools (web search, code execution).
+Used in Ceyona as pure synthesizers (no tool schemas passed — HTTP 400 on custom tools). ✅ PROD
 
-**Comfortable prompt capacity:** ~20 sentences (estimate — validate in production).
+**Comfortable prompt capacity:** 128K input context. ✅ DOC
+compound: up to 10 built-in tool calls per request. ✅ DOC
+compound-mini: 1 built-in tool call, 3x lower latency than compound. ✅ DOC
 
 **Known behavioral tendencies:**
-- More conservative in tone than llama-3.3-70b — less prone to warmth inflation
-- Constraint-aware: holds negative rules ("do not do X") more reliably than models that need positive framing
-- Less expressive on creative/conversational tasks
+- Strong bias toward bullet lists and structured enumeration — needs explicit FORMAT_RULES suppression ✅ PROD
+- Less natural warmth in conversational register ✅ PROD
+- Internally uses gpt-oss-120b, llama-4-scout, llama-3.3-70b — behavior reflects these models ✅ DOC
+- Custom tool schemas (`tools=` parameter) → HTTP 400 — confirmed May 2026 ✅ PROD
+- `output_normalizer.py` and `correction.py` clean output post-synthesis ✅ PROD
+- Max output: 8K tokens (synthesis limit) ✅ DOC
 
 **Persona implications:**
-- Suited for tasks requiring strict constraint adherence with moderate expression.
-- Persona prompt: same structure as llama-3.3-70b-versatile but shorter — 3–4 sentences.
+- FORMAT_RULES do the heavy lifting: suppress bullets, suppress headers.
+- Do not attempt conversational warmth — outcompeted by structural defaults.
+- Persona patch: add anti-enumeration rule if production logs show persistent bullet leakage.
 
-**What it does well:** constraint-aware general inference, tasks requiring reliable rule adherence without the expressiveness overhead of 70b.
+**What it does well:** synthesizing retrieved context, structured summarization,
+search/weather/maps result assembly (compound-mini for single-source, compound for multi-source).
 
 ---
 
-### 27.5 openai/gpt-oss-120b (HEAVY tier primary + Consensus arbiter)
+### 27.5 Safety Layer models (non-generating — no persona)
 
-**Nature:** most capable reasoning model in registry. Formal/neutral by default. Used for deep multi-step reasoning and as consensus arbiter.
+#### llama-prompt-guard-2-22m (Safety Pass 1)
 
-**Comfortable prompt capacity:** ~40+ sentences. Handles large context well, but tone can shift mid-response on very long outputs as persona is deprioritized relative to reasoning.
+**Nature:** DeBERTa-xsmall base (22M params). No multilingual pretraining. ✅ DOC
+Context window: 512 tokens. ✅ DOC
+Speed: lowest latency in safety stack — designed for fast pre-filter.
+
+**Known limitations:**
+- No multilingual pretraining → significant false positive rate on RU/AR/short casual messages ✅ DOC
+- This is the architectural reason for NON-BLOCKING policy (§1 rationale)
+- English-only attack detection: reliable ✅ DOC
+- Non-English attacks: use llama-prompt-guard-2-86m for multilingual coverage ✅ DOC
+
+#### llama-prompt-guard-2-86m (Safety Pass 2)
+
+**Nature:** mDeBERTa-base (86M params). Multilingual pretraining — detects EN and non-EN attacks. ✅ DOC
+Context window: 512 tokens. ✅ DOC
+
+**Known limitations:**
+- Better than 22m on non-Latin scripts, but still produces false positives on casual messages ⚠️ EST
+- NON-BLOCKING remains correct for both passes ✅ PROD
+- Detects: prompt injection, jailbreak attempts — NOT harmful instructions that aren't jailbreaks ✅ DOC
+
+#### openai/gpt-oss-safeguard-20b (Safety Pass 2 — observability)
+
+**Nature:** GPT-OSS fine-tuned for safety classification. Bring-your-own-policy reasoning model. ✅ DOC
+Replaced llama-guard-4-12b in February 2026. ✅ DOC
+Supports reasoning_effort: low (simple classification), high (nuanced decisions). ✅ DOC
+
+**Policy prompt structure (optimal):**
+```
+# Policy Name
+## INSTRUCTIONS  — what to do and how to respond
+## DEFINITIONS   — key terms and context
+## CRITERIA      — what violates / what is safe
+## EXAMPLES      — 4–6 labeled examples
+Content: {{USER_INPUT}}
+Answer (JSON only):
+```
+Optimal policy length: 400–600 tokens. ✅ DOC
+
+**Role in Ceyona:** non-blocking observability. Reads Ceyona's safety policy and logs reasoning.
+NON-BLOCKING rule applies identically to safeguard-20b and prompt-guard models.
+
+---
+
+### 27.6 allam-2-7b (Arabic NLP anchor)
+
+**Nature:** Bilingual Arabic-English. Trained from scratch: 4T English tokens → 1.2T mixed AR/EN. ✅ DOC
+This two-step approach prevents catastrophic forgetting — retains English while building Arabic. ✅ DOC
+
+**Comfortable prompt capacity:** narrow — normalization task is simple and bounded. ✅ PROD
 
 **Known behavioral tendencies:**
-- Default register: academic/formal — without persona instruction, produces corporate-neutral output
-- On very long outputs (600+ tokens): persona may fade in later paragraphs
-- As consensus arbiter: operates with arbitration-scoped prompt, NOT the full persona prompt
-- MoE architecture: cheaper on output than GENERAL primary despite higher capability
+- Arabic normalization: reliable within scope ✅ PROD
+- Saudi-Alignment Benchmark: 81.8% — second only to GPT-4 (83.3%), above Llama-3.3-70B (81.6%) ✅ BENCH
+- Domain knowledge (Arabic): strongest ALLaM-7B score category ✅ BENCH
+- Outside Arabic script: not used — qwen3.6-27b handles other non-Latin scripts ✅ PROD
+- On empty or malformed input: returns empty string → multilingual_preprocessor reverts to original ✅ PROD
+- Works without predefined system prompt — optimized for custom prompts ✅ DOC
 
-**Persona implications:**
-- Same persona text as llama-3.3-70b-versatile base, but test specifically on long outputs.
-- If tone shift occurs mid-response on long outputs: add persona reinforcement mid-prompt (after reasoning rules, before output rules).
-- Consensus arbiter role uses minimal prompt — arbitration context only, no full persona.
+**Persona implications:** No persona. Normalization task only — output is processed text, not user-visible.
 
-**What it does well:** deep multi-step reasoning, complex analysis, long-context synthesis, arbitration between agent outputs.
-
----
-
-### 27.6 groq/compound + groq/compound-mini (Agent Layer — synthesizers)
-
-**Nature:** optimized for tool-use synthesis. Structured, list-leaning output. Less natural in conversational tone. Used exclusively as synthesizers receiving pre-assembled context (§6).
-
-**Comfortable prompt capacity:** moderate. Persona competes with tool-result formatting habits.
-
-**Known behavioral tendencies:**
-- Strong bias toward bullet lists and structured enumeration — needs explicit suppression
-- Less natural warmth in conversational register than llama-3.3-70b
-- `output_normalizer.py` and `correction.py` clean its output post-synthesis
-- compound-mini (FAST path): shorter outputs, adequate for single-result synthesis
-- compound (GENERAL path): longer, structured synthesis across multiple retrieved sources
-
-**Persona implications:**
-- Persona here is minimal — FORMAT_RULES do the heavy lifting (suppress lists, suppress headers).
-- Persona patch: add explicit anti-enumeration rule if production logs show persistent bullet leakage.
-- Do not attempt conversational warmth on synthesis tasks — it will be outcompeted by structural defaults.
-
-**What it does well:** synthesizing multiple retrieved results into coherent response, structured summarization, search/weather/maps result assembly.
+**What it does well:** Arabic text normalization, Arabic-English bilingual tasks, cultural alignment.
 
 ---
 
-### 27.7 meta-llama/llama-4-scout-17b-16e-instruct (Vision + Long-Context — see §26)
+### 27.7 Speech models (Whisper ASR + Orpheus TTS — no persona)
 
-**Nature:** multimodal-capable, long-context window (512K). Two bounded roles — NOT a general-purpose reasoning model in this system.
+#### whisper-large-v3 (ASR primary)
 
-**Comfortable prompt capacity per role:**
-- Vision extraction prompt (Role A): simple, bounded — well within capacity
-- Long-context transformation prompt (Role B): moderate — validate against context size in production
+**Nature:** 1.55B parameters. 99 languages. Full 32-layer encoder + decoder. ✅ DOC
 
-**Known behavioral tendencies:**
-- Vision role: reliable structured extraction on clear images; degrades on ambiguous/low-quality input
-- Long-context role: performance at extreme context lengths (>200K tokens) needs production validation
-- If given open-ended reasoning instructions: tends toward verbose output — keep prompts task-scoped
+**Accuracy:** WER 2.7% on clean audio, 8–12% in real-world conditions. ✅ BENCH
 
-**Persona implications:**
-- Role A (vision): no persona. Extraction prompt only — structured output, no conversational register.
-- Role B (long-context): minimal task framing. No persona injection.
-- If a third role is considered: measure remaining comfortable capacity first (§26.3 rule).
+**Known failure modes (3 documented):**
+1. **Hallucination on silence:** during long pauses, invents plausible-sounding text. ✅ BENCH
+   Mitigation: VAD (Voice Activity Detection) preprocessing to skip silence.
+2. **Noisy audio:** WER degrades +5–15% in noisy environments. ✅ BENCH
+3. **Technical vocabulary:** no custom vocab support — domain-specific terms degrade accuracy. ✅ BENCH
+
+**Role in Ceyona:** primary ASR. `is_voice_input=True` only. Never raises — returns
+`TranscriptResult(success=False)` on all errors.
+
+#### whisper-large-v3-turbo (ASR fallback)
+
+**Nature:** 809M parameters. Decoder pruned from 32 → 4 layers. Encoder identical to v3. ✅ DOC
+Speed: ~6x faster than large-v3. WER within 1–2% of v3 on standard audio. ✅ BENCH
+
+**Known limitations vs v3:**
+- Higher hallucination rate on very short or noisy recordings — shallow decoder ✅ BENCH
+- Does NOT support translation task (excluded from turbo training) ✅ DOC
+
+**Role in Ceyona:** fast fallback. NOT primary — v3 is primary for accuracy.
+
+#### canopylabs/orpheus-v1-english (TTS English)
+
+**Nature:** LLM-based TTS (Llama architecture). ~200ms streaming latency. ✅ DOC
+Updated April 2026 — reduced hallucinations, better handling of numbers and symbols. ✅ DOC
+
+**Voices:** diana (default), autumn, hannah, austin, daniel, troy. ✅ DOC
+**Vocal directions:** `[cheerful]`, `[whisper]` and others — English model only. ✅ DOC
+**Max input:** 5000 characters per call. ✅ PROD
+
+**TTS hallucination modes:** word repetition, word skipping — surface artifacts, not semantic.
+Mitigation: `correction.py` and `output_normalizer.py` clean text before TTS receives it.
+
+#### canopylabs/orpheus-arabic-saudi (TTS Arabic)
+
+**Nature:** Same Orpheus architecture, Saudi Arabic specialized. ✅ DOC
+Updated April 2026 — new voices Abdullah (male professional) and Aisha (female professional). ✅ DOC
+
+**Voices:** noura, fahad, sultan, lulwa, aisha, abdullah. ✅ DOC
+**Vocal directions:** NOT supported — Arabic model does not accept `[cheerful]` etc. ✅ DOC
+**Max input:** 5000 characters per call. ✅ PROD
+
+Voice ID selection owned by `prompt_policy.py` — treated as persona constant.
+
+---
+
+### 27.8 HF Embedding models (no persona — not Groq)
+
+#### BAAI/bge-large-en-v1.5 (PRIMARY EMBEDDING)
+
+**Provider:** HuggingFace Serverless. Separate billing from Groq (HF_TOKEN). ✅ DOC
+**Role:** generate dense retrieval vectors. Higher quality, higher latency than bge-small.
+**Constraints:** ONLY generates vectors. No ranking, no synthesis, no routing authority. ✅ DOC
+
+#### BAAI/bge-small-en-v1.5 (FAST EMBEDDING FALLBACK)
+
+**Provider:** HuggingFace Serverless.
+**Role:** fast embedding when bge-large quota exhausted or latency critical.
+Quality: slight degradation on short queries vs bge-large. For most production queries — adequate.
+
+#### BAAI/bge-reranker-large (CROSS-ENCODER RERANKING)
+
+**Provider:** HuggingFace Serverless.
+**Role:** reorder retrieval candidates. Cross-encoder architecture — scores pairs, not individual vectors.
+**Constraints:** NEVER generates embeddings. NEVER influences EPK, routing, or tier selection. ✅ DOC
+HF quota exhaustion: degrades retrieval quality, does NOT cause LLM failure. ✅ DOC
 
 ---
 
-### 27.8 Safety Layer models (non-generating — no persona)
+## 28. DEPRECATED MODEL REGISTRY
 
-`llama-prompt-guard-2-22m`, `llama-prompt-guard-2-86m`, `openai/gpt-oss-safeguard-20b`
+Models removed from active assignments June 2026. Preserved for historical reference only.
+Do NOT assign to any role. Data retained as baseline for regression delta testing.
 
-**Role:** classification/scoring only. No generation, no synthesis, no persona.
-These models do not produce user-visible output. Persona design does not apply.
-Known false-positive rates on Russian/Arabic/short casual messages are the reason
-the Safety Layer is non-blocking (§1 rationale).
+| Model | Deprecated | Was role | Replaced by |
+|---|---|---|---|
+| llama-3.1-8b-instant | Aug 16, 2026 | FAST primary | openai/gpt-oss-20b |
+| llama-3.3-70b-versatile | Aug 16, 2026 | GENERAL primary | qwen/qwen3.6-27b |
+| llama-4-scout-17b-16e-instruct | Jul 17, 2026 | VISION + LONG_CONTEXT | qwen/qwen3.6-27b |
+| qwen/qwen3-32b | Jul 17, 2026 | GENERAL CODE/MATH | openai/gpt-oss-120b |
 
----
+**Baseline data retained in models_passport.md** for Regression Delta testing (§3.0).
 
-### 27.9 allam-2-7b (Arabic NLP anchor)
 
-**Nature:** Arabic-specialized. Used for normalization, not generation. One call, three contexts.
-
-**Comfortable prompt capacity:** narrow — normalization task is simple and bounded.
-
-**Known behavioral tendencies:**
-- Arabic normalization: reliable within scope
-- Outside Arabic script: not used — llama-3.3-70b handles other non-Latin scripts
-- On empty or malformed input: returns empty string → multilingual_preprocessor reverts to original
-
-**Persona implications:**
-- No persona. Normalization task only — output is processed text, not user-visible response.
-
----
-
-### 27.10 Speech models (Whisper ASR + Orpheus TTS — no persona)
-
-**whisper-large-v3 / whisper-large-v3-turbo:** transcription only. No persona applies.
-**canopylabs/orpheus-v1-english:** TTS synthesis. Voice persona is implicit in voice ID selection
-(diana/autumn/hannah/austin/daniel/troy) — voice choice is a persona decision, not a prompt decision.
-**canopylabs/orpheus-arabic-saudi:** TTS Arabic. Same — voice ID (noura/fahad/sultan/lulwa/aisha)
-is the persona carrier, not the prompt.
-
-**Vocal directions** (`[cheerful]`, `[whisper]`): English model only. NOT supported by Arabic model.
-Voice ID selection is owned by prompt_policy.py — treated as a persona constant, not a runtime decision.
-
----
+*Deprecated content removed — see §28 for historical record.*
