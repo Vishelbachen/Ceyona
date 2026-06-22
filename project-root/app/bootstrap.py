@@ -10,7 +10,7 @@ async def bootstrap() -> dict:
     from events.event_dispatcher import setup_dispatcher
     from events.event_store import EventStore
     from redis.asyncio import from_url as redis_from_url
-    from supabase import create_client, ClientOptions
+    from supabase import ClientOptions, create_client
 
     # ─── Redis ──────────────────────────────────────────
     # TWO separate clients, not one shared connection:
