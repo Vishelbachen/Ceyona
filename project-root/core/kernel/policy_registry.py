@@ -39,9 +39,16 @@ class RuntimePolicy:
 RUNTIME = RuntimePolicy(
     epk=EPKConfig(
         deny_threshold=0.0001,   # effectively zero — synced with EPK._DENY_THRESHOLD
-        heavy_threshold=0.008,   # synced with EPK._HEAVY_THRESHOLD
-        degrade_threshold=0.003, # synced with EPK._DEGRADE_THRESHOLD and decision_matrix._GENERAL_CEILING
-        fast_ceiling=0.0005,     # synced with decision_matrix._FAST_CEILING
+        heavy_threshold=0.010,   # raised from 0.008: HEAVY request (3000in/7500out at $0.15/$0.60) = $0.005
+                                  # headroom for large HEAVY requests before DENY kicks in
+        degrade_threshold=0.006, # raised from 0.003: calibrated to qwen3.6-27b $3.00/output
+                                  # normal GENERAL request (800in/900out) = (800×0.60+900×3.00)/1M = $0.003 → ALLOW
+                                  # large GENERAL request (1500in/1500out) = (1500×0.60+1500×3.00)/1M = $0.005 → ALLOW
+                                  # oversized request (2000in/2000out) = $0.007 → DEGRADED_MODE (correct)
+        fast_ceiling=0.001,      # raised from 0.0005: FAST now $0.30/output (gpt-oss-20b)
+                                  # short FAST request (500in/300out at $0.075/$0.30) = $0.000128 → FAST
+                                  # medium FAST request (2000in/600out) = $0.000330 → FAST
+                                  # at old $0.0005 ceiling, gpt-oss-20b requests were leaking to GENERAL
     ),
     tier_configs={
         Tier.FAST: TierConfig(
@@ -50,7 +57,7 @@ RUNTIME = RuntimePolicy(
             timeout_seconds=15.0,
         ),
         Tier.GENERAL: TierConfig(
-            max_input_tokens=32_768,  # conservative window limit
+            max_input_tokens=32_768,  # conservative window limit (qwen3.6-27b Groq limit: 131K)
             max_output_tokens=3_072,  # matches model_router._MAX_TOKENS[Tier.GENERAL]
             timeout_seconds=45.0,
         ),
