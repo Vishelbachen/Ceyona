@@ -33,11 +33,30 @@ async def _send_message(chat_id: int, text: str) -> None:
     if not text:
         return
     async with httpx.AsyncClient() as client:
-        await client.post(
-            f"{_TELEGRAM_API}/sendMessage",
-            json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
-            timeout=10.0,
-        )
+        try:
+            response = await client.post(
+                f"{_TELEGRAM_API}/sendMessage",
+                json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
+                timeout=10.0,
+            )
+            if response.status_code != 200:
+                logger.error(
+                    "sendMessage failed — retrying without Markdown",
+                    extra={"chat_id": chat_id, "status": response.status_code, "body": response.text[:200]},
+                )
+                # Retry without parse_mode — Markdown parse errors cause silent 400s
+                response2 = await client.post(
+                    f"{_TELEGRAM_API}/sendMessage",
+                    json={"chat_id": chat_id, "text": text},
+                    timeout=10.0,
+                )
+                if response2.status_code != 200:
+                    logger.error(
+                        "sendMessage retry also failed",
+                        extra={"chat_id": chat_id, "status": response2.status_code, "body": response2.text[:200]},
+                    )
+        except Exception as exc:
+            logger.error("sendMessage exception", extra={"chat_id": chat_id, "error": str(exc)})
 
 
 async def _send_message_with_topup(chat_id: int, text: str, lang: str = "en") -> None:
