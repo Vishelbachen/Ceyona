@@ -5,30 +5,34 @@ from core.kernel.policy_registry import RUNTIME
 
 # ─── MODEL REGISTRY ───────────────────────────────────────────────────────
 # Source of truth for all model assignments per tier.
-# Matches SSoT v6.3 exactly.
+# Matches models.md v9.0 (Post-Deprecation Migration Edition).
+#
+# Deprecated models removed (Groq announcement Jun 17, 2026):
+#   llama-3.1-8b-instant          → deprecated Aug 16, 2026
+#   llama-3.3-70b-versatile       → deprecated Aug 16, 2026
+#   qwen/qwen3-32b                → deprecated Jul 17, 2026
+#   llama-4-scout-17b-16e-instruct → deprecated Jul 17, 2026
 
 # Primary model per tier — used by default in all agent calls
 _PRIMARY: dict[Tier, str] = {
-    Tier.FAST: "llama-3.1-8b-instant",
-    Tier.GENERAL: "llama-3.3-70b-versatile",
-    Tier.HEAVY: "openai/gpt-oss-120b",
+    Tier.FAST:    "openai/gpt-oss-20b",
+    Tier.GENERAL: "qwen/qwen3.6-27b",
+    Tier.HEAVY:   "openai/gpt-oss-120b",
 }
 
 # All models available per tier (primary first)
 _TIER_MODELS: dict[Tier, list[str]] = {
     Tier.FAST: [
-        "llama-3.1-8b-instant",   # primary: lowest latency, 840 TPS
-        # gemma2-9b-it removed — deprecated by Groq, August 2025
-        # replacement: llama-3.1-8b-instant itself handles overflow via retry
+        "openai/gpt-oss-20b",   # primary: ~1000 TPS, MoE 21B/3.6B active, reasoning_effort="low"
     ],
     Tier.GENERAL: [
-        "llama-3.3-70b-versatile",   # primary: reasoning + creative
-        "qwen/qwen3-32b",            # structured logic / formatting (thinking: False enforced)
-        "openai/gpt-oss-20b",        # constraint-aware general inference
+        "qwen/qwen3.6-27b",        # primary: IFEval 95.0, 201 langs, vision, 262K ctx
+                                    # CRITICAL: reasoning_effort="none" mandatory at every call site
+                                    # params: temperature=0.7, top_p=0.80, top_k=20, presence_penalty=1.5
+        "openai/gpt-oss-120b",     # fallback: if qwen3.6-27b unavailable (models.md §3)
     ],
     Tier.HEAVY: [
-        "openai/gpt-oss-120b",               # primary: deep multi-step reasoning + consensus arbiter
-        "meta-llama/llama-4-scout-17b-16e-instruct",  # long-context transformation (512K)
+        "openai/gpt-oss-120b",  # primary: deep multi-step reasoning + consensus arbiter
     ],
 }
 
@@ -45,8 +49,9 @@ _MAX_TOKENS: dict[Tier, int] = {
 }
 
 # Special-purpose model assignments (not tiers — utility roles)
-# heavy_input_shaper uses llama-3.1-8b-instant NOT as Fast Tier
-SHAPER_MODEL = "llama-3.1-8b-instant"
+# heavy_input_shaper uses gpt-oss-20b NOT as Fast Tier — utility role only
+# reasoning_effort="low" mandatory here too (models.md §5)
+SHAPER_MODEL = "openai/gpt-oss-20b"
 
 # Agent Layer (models.md §AGENT LAYER) — tool-use execution fabric.
 # These are NOT tier models — they have tool selection authority.
@@ -66,10 +71,11 @@ CONSENSUS_MODEL = "openai/gpt-oss-120b"
 
 # Multilingual normalization
 MULTILINGUAL_ARABIC_MODEL = "allam-2-7b"
-MULTILINGUAL_OTHER_MODEL = "llama-3.3-70b-versatile"
+MULTILINGUAL_OTHER_MODEL = "qwen/qwen3.6-27b"  # 201 languages, replaces llama-3.3-70b-versatile
 
-# Long-context specialist (Heavy Tier secondary)
-LONG_CONTEXT_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+# Long-context specialist — qwen3.6-27b has 262K native ctx (Groq limit: 131K)
+# Replaces llama-4-scout-17b-16e-instruct (deprecated Jul 17, 2026)
+LONG_CONTEXT_MODEL = "qwen/qwen3.6-27b"
 
 # Safety Gate models (Safety Layer — input firewall, NOT safety_agent)
 SAFETY_PASS1_MODEL = "meta-llama/llama-prompt-guard-2-22m"   # fast rejection filter
@@ -84,8 +90,13 @@ WHISPER_FAST = "whisper-large-v3-turbo"
 ORPHEUS_ENGLISH = "canopylabs/orpheus-v1-english"
 ORPHEUS_ARABIC = "canopylabs/orpheus-arabic-saudi"
 
-# qwen must always have thinking disabled
-QWEN_THINKING_DISABLED_MODELS: frozenset[str] = frozenset({"qwen/qwen3-32b"})
+# qwen models with thinking mode — MUST have thinking disabled at every call site
+# qwen3-32b: deprecated Jul 17, kept here until removal in case of emergency fallback
+# qwen3.6-27b: new GENERAL primary — reasoning_effort="none" is the Groq API equivalent
+QWEN_THINKING_DISABLED_MODELS: frozenset[str] = frozenset({
+    "qwen/qwen3-32b",     # deprecated Jul 17, 2026
+    "qwen/qwen3.6-27b",   # GENERAL primary — thinking: False mandatory (models.md §3)
+})
 
 
 # ─── PUBLIC API ───────────────────────────────────────────────────────────
