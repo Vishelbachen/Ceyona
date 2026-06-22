@@ -980,6 +980,12 @@ Status: UNCERTIFIED
 Certified model: —
 Certification date: —
 
+Candidate: openai/gpt-oss-20b
+  Source: Groq official deprecation notice (Jun 2026)
+  Reason: ~967 t/s output speed, TTFT 0.83s — fastest on Groq. Replaces llama-3.1-8b-instant.
+  Known constraints: reasoning_effort="low" mandatory. Weak on CJK (not relevant for RU/AR).
+  API note: MoE 21B total / 3.6B active. Reliable tool use and JSON output.
+
 Components snapshot (заполнить при сертификации):
   prompt_policy.py:       commit —
   output_normalizer.py:   version —
@@ -999,9 +1005,6 @@ Test results (Model Certification / raw):
   LT-03  End-to-end P95:              —ms
 
 Rules violated: —
-Candidates evaluated:
-  —: —
-
 Certified: NO
 ```
 
@@ -1046,7 +1049,17 @@ Test results (Model Certification / raw):
 Rules violated (ID + запрос): —
 
 Candidates evaluated:
-  —: —
+  qwen/qwen3.6-27b:
+    Source: Groq migration guide + IFEval benchmark (Jun 2026)
+    Reason: IFEval 95.0 (best in class), persona drift 11% at turn 7, 201 languages, 262K context.
+    Replaces: llama-3.3-70b-versatile (Aug 16) + qwen3-32b (Jul 17)
+    Constraint: reasoning_effort="none" mandatory at every call site.
+    Params: temperature=0.7, top_p=0.80, top_k=20, presence_penalty=1.5
+    Known risk: bullet/enumeration bias — anti-enumeration rule required in persona.
+  openai/gpt-oss-120b:
+    Source: Groq deprecation notice
+    Reason: Groq-recommended alternative. Near-parity o4-mini reasoning. Strong on EN/STEM.
+    Trade-off: weaker multilingual vs qwen3.6-27b. No vision.
 
 Certified: NO
 ```
@@ -1151,7 +1164,13 @@ Test results (Model Certification / raw):
     PL:   —/10
     total: —/70  —%
 
-Candidates evaluated: —
+Candidates evaluated:
+  qwen/qwen3.6-27b:
+    Source: Official Qwen documentation (Jun 2026)
+    Reason: 201 languages natively. RU/AR/EN strongest. Same model as GENERAL — minimal extra cost.
+    Constraint: reasoning_effort="none" mandatory. Separate minimal normalization prompt (not GENERAL persona).
+    Prior model: llama-3.3-70b-versatile (deprecated Aug 16, 2026)
+
 Certified: NO
 ```
 
@@ -1183,12 +1202,12 @@ Certified: NO
 
 | Роль | Модель | Статус | Дата |
 |---|---|---|---|
-| FAST | — | UNCERTIFIED | — |
-| GENERAL | — | UNCERTIFIED | — |
+| FAST | openai/gpt-oss-20b | UNCERTIFIED | — |
+| GENERAL | qwen/qwen3.6-27b | UNCERTIFIED | — |
 | HEAVY | openai/gpt-oss-120b | UNCERTIFIED | — |
-| VISION | — | UNCERTIFIED | — |
-| LONG_CONTEXT | — | UNCERTIFIED | — |
-| MULTILINGUAL | — | UNCERTIFIED | — |
+| VISION | qwen/qwen3.6-27b | UNCERTIFIED | — |
+| LONG_CONTEXT | qwen/qwen3.6-27b | UNCERTIFIED | — |
+| MULTILINGUAL | qwen/qwen3.6-27b | UNCERTIFIED | — |
 | COMPOUND | groq/compound + mini | UNCERTIFIED | — |
 
 **Приоритет первой сертификации:**
@@ -1232,4 +1251,4 @@ Certified: NO
 
 *Паспорт обновляется после каждого прогона тестов.*
 *Назначение модели = запись в model_router.py + статус VALID в паспорте роли.*
-*Смена компонента из триггер-листа §3.0 = статус STALE + повторная сертификация.*
+*Смена компонента из триггер-листа §3.0 = статус STALE + повторная сертификация.* 
