@@ -9,8 +9,8 @@ from core.kernel.policy_registry import RUNTIME
 # Both values are auto-synced here — no manual synchronization needed.
 #
 # Synchronization contract (economic.md §6):
-#   _FAST_CEILING    == RUNTIME.epk.fast_ceiling      (0.0005)
-#   _GENERAL_CEILING == RUNTIME.epk.degrade_threshold (0.003)
+#   _FAST_CEILING    == RUNTIME.epk.fast_ceiling      (0.001)
+#   _GENERAL_CEILING == RUNTIME.epk.degrade_threshold (0.006)
 
 _FAST_CEILING: float = RUNTIME.epk.fast_ceiling
 _GENERAL_CEILING: float = RUNTIME.epk.degrade_threshold
