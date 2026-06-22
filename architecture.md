@@ -244,7 +244,7 @@ Canonical execution lifecycle:
 User Input
 → Safety Gate Pass 1  [llama-prompt-guard-2-22m — observability only, non-blocking]
 → Feature Extraction  [_classify_complexity: complexity, input_tokens estimation]
-→ Multilingual Normalization  [allam-2-7b → Arabic | llama-3.3-70b → other non-Latin]
+→ Multilingual Normalization  [allam-2-7b → Arabic | qwen/qwen3.6-27b → other non-Latin]
 → Safety Gate Pass 2  [gpt-oss-safeguard-20b — observability only, non-blocking]
 → Conversation History Load
 → Memory + Embedding Retrieval + Reranker
@@ -689,7 +689,7 @@ Language selection MUST NOT emerge randomly from reasoning stages.
 
 Multilingual normalization (before EPK, no policy influence):
 - allam-2-7b → Arabic (one model, one call, three contexts: preprocessing / TTS / routing)
-- llama-3.3-70b-versatile → all other languages
+- qwen/qwen3.6-27b → all other languages (replaces llama-3.3-70b-versatile, deprecated Aug 16 2026)
 
 ---
 
@@ -884,7 +884,7 @@ Arabic script (>15% Arabic Unicode chars)
     → allam-2-7b normalization
 
 Other non-Latin (Cyrillic, CJK, Hangul, Devanagari, Georgian, Hebrew, Thai, Greek)
-    → llama-3.3-70b-versatile normalization
+    → qwen/qwen3.6-27b normalization
 ```
 
 **Script detection:** samples first 240 characters only. Unicode ranges checked per script family.
@@ -1237,12 +1237,12 @@ Mapping реализуется в `_resolve_routing()` через `preferred_mod
 ### 45.4 FAST tier
 
 FAST tier содержит одну модель — specialization неприменима.
-Все FAST intents используют `llama-3.1-8b-instant`.
+Все FAST intents используют `openai/gpt-oss-20b`. (replaces llama-3.1-8b-instant, deprecated Aug 16 2026)
 
 ### 45.5 HEAVY tier
 
 HEAVY tier: `gpt-oss-120b` — primary для всех deep reasoning задач.
-`llama-4-scout-17b` — только для long-context (>32K токенов input).
+`qwen/qwen3.6-27b` — только для long-context (>32K токенов input). (replaces llama-4-scout, deprecated Jul 17 2026)
 Specialization внутри HEAVY определяется длиной контекста, не intent.
 
 ---
