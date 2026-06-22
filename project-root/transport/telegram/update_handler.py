@@ -24,7 +24,7 @@ from transport.telegram.message_router import (
 
 logger = logging.getLogger(__name__)
 
-_VISION_MODEL      = "meta-llama/llama-4-scout-17b-16e-instruct"
+_VISION_MODEL      = "qwen/qwen3.6-27b"
 
 def _estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
