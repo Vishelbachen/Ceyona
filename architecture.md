@@ -854,11 +854,11 @@ Orpheus returns WAV. Telegram `sendVoice` requires OGG Opus. Conversion: WAV →
 
 **Voice IDs (verified May 2026 — "default" returns HTTP 400):**
 - English: `diana` (default), `autumn`, `hannah`, `austin`, `daniel`, `troy`
-- Arabic: `noura` (default), `fahad`, `sultan`, `lulwa`, `aisha`
+- Arabic: `noura` (default), `fahad`, `sultan`, `lulwa`, `aisha`, `abdullah` ⚠️ CORRECTION (Jun 22, 2026): abdullah added — new voice from April 2026 update per Groq docs
 
 **Vocal directions** (`[cheerful]`, `[whisper]`): supported by English model only. NOT supported by Arabic model.
 
-**Billing:** `tts_characters` in `UsageEntry` — per character, not per token. `char_count` is length of text passed to Orpheus (truncated to 5000 chars max per call).
+**Billing:** `tts_characters` in `UsageEntry` — per character, not per token. `char_count` is length of text passed to Orpheus per chunk (200 chars max per call — text MUST be chunked). ⚠️ CORRECTION (Jun 22, 2026): previous value was 5000 chars — incorrect per Groq model card.
 
 **Arabic normalization:** allam-2-7b is called by `multilingual_preprocessor` before the pipeline reaches TTS. TTS receives already-normalized Arabic text and does not call allam itself.
 
