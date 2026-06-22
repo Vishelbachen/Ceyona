@@ -541,6 +541,7 @@ async def _understand_query(text: str) -> str:
         prompt = _QUERY_UNDERSTANDING_PROMPT.format(text=text)
         response = await groq_client.complete(
             model="openai/gpt-oss-20b",
+            reasoning_effort="low",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=30,
             temperature=0.0,
@@ -597,6 +598,7 @@ async def _llm_pre_classify(text: str, history_context: str = "") -> str:
         prompt = _LLM_PRE_CLASSIFY_PROMPT.format(text=text[:500], history_block=history_block)
         response = await groq_client.complete(
             model="openai/gpt-oss-20b",
+            reasoning_effort="low",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=5,
             temperature=0.0,
