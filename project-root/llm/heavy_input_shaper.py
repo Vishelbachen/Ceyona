@@ -11,8 +11,9 @@ _TOKEN_THRESHOLD = 2048   # above this → compression candidate
 _CHUNK_SIZE = 1800        # max tokens per chunk after split
 _SUMMARY_THRESHOLD = 4096 # above this → summarization preferred over chunking
 
-# llama-3.1-8b-instant is used here NOT as Fast Tier — it is a utility model
-_SHAPER_MODEL = "llama-3.1-8b-instant"
+# gpt-oss-20b is used here NOT as Fast Tier — it is a utility model
+# reasoning_effort="low" mandatory (models.md §5)
+_SHAPER_MODEL = "openai/gpt-oss-20b"
 
 # ─── CONTRACTS ────────────────────────────────────────────────────────────────
 
