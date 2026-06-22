@@ -126,7 +126,7 @@ def plan_agents(
     # GEO domain: all data-driven intents — compound owns tool execution + reasoning.
     # Architecture decision (май 2026): ALL tool intents go through compound.
     # compound-mini (fast) for FAST tier, compound (deep) for GENERAL.
-    # Fallback: DEEP agent (llama-3.3-70b-versatile) — plain-text, always available.
+    # Fallback: DEEP agent (openai/gpt-oss-120b) — plain-text, always available.
     if routing.domain_hint == DomainHint.GEO:
         primary = AgentType.COMPOUND_FAST if tier == Tier.FAST else AgentType.COMPOUND_DEEP
         return AgentPlan(
