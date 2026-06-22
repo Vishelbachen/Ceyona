@@ -12,9 +12,9 @@ from core.kernel.policy_registry import RUNTIME
 
 logger = logging.getLogger(__name__)
 
-# llama-4-scout: LONG-CONTEXT TRANSFORMATION ENGINE (Heavy Tier, models.md)
+# qwen3.6-27b: vision model (models.md §26.1)
 # Role here: image content extraction only — NOT solving, NOT answering.
-_VISION_MODEL   = "meta-llama/llama-4-scout-17b-16e-instruct"
+_VISION_MODEL   = "qwen/qwen3.6-27b"
 _GROQ_ENDPOINT  = "https://api.groq.com/openai/v1/chat/completions"
 _TIMEOUT        = 30.0
 
@@ -313,6 +313,7 @@ async def handle_vision(
         "model": _VISION_MODEL,
         "max_tokens": _extraction_max_tokens,  # §15: reads from policy_registry; adaptive by image complexity
         "temperature": 0.1,      # low: extraction must be faithful, not creative
+        "reasoning_effort": "none",  # mandatory per models.md §26.1
         "messages": [
             {"role": "system", "content": _EXTRACTION_SYSTEM},
             {"role": "user",   "content": user_content},
@@ -524,6 +525,7 @@ async def _call_groq_vision(
         "model": _VISION_MODEL,
         "max_tokens": _max_tokens,
         "temperature": 0.1,
+        "reasoning_effort": "none",  # mandatory per models.md §26.1
         "messages": [
             {"role": "system", "content": _GROUP_EXTRACTION_SYSTEM},
             {"role": "user",   "content": user_content},
