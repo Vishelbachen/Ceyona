@@ -1,3 +1,4 @@
+import re
 from __future__ import annotations
 
 import asyncio
@@ -75,6 +76,10 @@ def _needs_normalization(text: str) -> bool:
 
 def _clean_normalized_text(text: str) -> str:
     cleaned = text.strip()
+
+    # Strip <think>...</think> blocks that qwen may emit even with reasoning_effort="none"
+    cleaned = re.sub(r"<think>.*?</think>", "", cleaned, flags=re.DOTALL).strip()
+
     if len(cleaned) >= 2:
         fence_pairs = (("```", "```"), ("~~~", "~~~"))
         for open_fence, close_fence in fence_pairs:
@@ -166,6 +171,10 @@ async def preprocess(inp: PreprocessorInput) -> PreprocessorResult:
     system = _ARABIC_SYSTEM if is_arabic else _OTHER_SYSTEM
 
     try:
+        extra_kwargs: dict = {}
+        if model == "qwen/qwen3.6-27b":
+            extra_kwargs["reasoning_effort"] = "none"  # mandatory per models.md §27.2
+
         response = await asyncio.wait_for(
             groq_client.complete(
                 model=model,
@@ -175,6 +184,7 @@ async def preprocess(inp: PreprocessorInput) -> PreprocessorResult:
                 ],
                 max_tokens=min(256, max(64, len(inp.text) // 2 + 64)),
                 temperature=0.1,
+                **extra_kwargs,
             ),
             timeout=_TIMEOUT_SECONDS,
         )
