@@ -969,7 +969,9 @@ Updated April 2026 — reduced hallucinations, better handling of numbers and sy
 
 **Voices:** diana (default), autumn, hannah, austin, daniel, troy. ✅ DOC
 **Vocal directions:** `[cheerful]`, `[whisper]` and others — English model only. ✅ DOC
-**Max input:** 5000 characters per call. ✅ PROD
+**Max input:** 200 characters per request. ✅ DOC (Groq model card, Jun 2026)
+⚠️ **CORRECTION (Jun 22, 2026):** Previous value was 5000 chars (marked ✅ PROD) — incorrect.
+Official Groq documentation states 200 chars/request. Text MUST be chunked before each TTS call.
 
 **TTS hallucination modes:** word repetition, word skipping — surface artifacts, not semantic.
 Mitigation: `correction.py` and `output_normalizer.py` clean text before TTS receives it.
@@ -981,7 +983,9 @@ Updated April 2026 — new voices Abdullah (male professional) and Aisha (female
 
 **Voices:** noura, fahad, sultan, lulwa, aisha, abdullah. ✅ DOC
 **Vocal directions:** NOT supported — Arabic model does not accept `[cheerful]` etc. ✅ DOC
-**Max input:** 5000 characters per call. ✅ PROD
+**Max input:** 200 characters per request. ✅ DOC (Groq model card, Jun 2026)
+⚠️ **CORRECTION (Jun 22, 2026):** Previous value was 5000 chars (marked ✅ PROD) — incorrect.
+Official Groq documentation states 200 chars/request. Text MUST be chunked before each TTS call.
 
 Voice ID selection owned by `prompt_policy.py` — treated as persona constant.
 
