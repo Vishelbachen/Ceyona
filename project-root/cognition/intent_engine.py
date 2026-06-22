@@ -511,7 +511,7 @@ _MATH_PATTERN = _re.compile(
 #                     genre, year, setting, visual appearance.
 #
 # No hardcoded word lists. Fully semantic — works across all 75 lingua languages.
-# Uses llama-3.1-8b-instant (FAST tier). Falls back to original text on failure.
+# Uses openai/gpt-oss-20b (FAST tier). Falls back to original text on failure.
 
 _QUERY_UNDERSTANDING_PROMPT = (
     "You are an intent-aware query planner for a web search engine.\n\n"
@@ -540,7 +540,7 @@ async def _understand_query(text: str) -> str:
         from llm.groq_client import groq_client
         prompt = _QUERY_UNDERSTANDING_PROMPT.format(text=text)
         response = await groq_client.complete(
-            model="llama-3.1-8b-instant",
+            model="openai/gpt-oss-20b",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=30,
             temperature=0.0,
@@ -596,7 +596,7 @@ async def _llm_pre_classify(text: str, history_context: str = "") -> str:
         history_block = f"\nRecent context:\n{history_context}" if history_context else ""
         prompt = _LLM_PRE_CLASSIFY_PROMPT.format(text=text[:500], history_block=history_block)
         response = await groq_client.complete(
-            model="llama-3.1-8b-instant",
+            model="openai/gpt-oss-20b",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=5,
             temperature=0.0,
