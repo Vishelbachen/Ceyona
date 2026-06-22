@@ -10,7 +10,7 @@ async def bootstrap() -> dict:
     from events.event_dispatcher import setup_dispatcher
     from events.event_store import EventStore
     from redis.asyncio import from_url as redis_from_url
-    from supabase import create_client
+    from memory.supabase_client import ResilientSupabase
 
     # ─── Redis ──────────────────────────────────────────
     # TWO separate clients, not one shared connection:
@@ -51,7 +51,7 @@ async def bootstrap() -> dict:
     )
 
     # ─── Supabase ───────────────────────────────────────
-    supabase = create_client(
+    supabase = ResilientSupabase(
         settings.supabase_url,
         settings.supabase_service_role_key,
     )
