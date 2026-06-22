@@ -103,7 +103,7 @@ async def _extract_poi_parts_via_llm(query: str) -> tuple[str, str, bool]:
             f"Query: {query}"
         )
         response = await groq_client.complete(
-            model="llama-3.1-8b-instant",
+            model="openai/gpt-oss-20b",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=80,
             temperature=0.0,
@@ -201,7 +201,7 @@ async def _extract_route_endpoints_via_llm(query: str) -> tuple[str, str]:
             f"Query: {query}"
         )
         response = await groq_client.complete(
-            model="llama-3.1-8b-instant",
+            model="openai/gpt-oss-20b",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=80,
             temperature=0.0,
