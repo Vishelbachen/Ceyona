@@ -45,12 +45,14 @@ class ToolCallResponse:
 
 # ── Context window limits per model (input tokens) ───────────────────────────
 # Conservative: actual limits minus output budget minus safety margin.
-# Source: Groq model cards (May 2026).
+# Source: Groq model cards (Jun 2026).
+# Deprecated models removed (Groq announcement Jun 17, 2026):
+#   llama-3.1-8b-instant              → deprecated Aug 16, 2026
+#   llama-3.3-70b-versatile           → deprecated Aug 16, 2026
+#   llama-4-scout-17b-16e-instruct    → deprecated Jul 17, 2026
 _CONTEXT_CHAR_LIMITS: dict[str, int] = {
-    "llama-3.1-8b-instant":           60_000,   # 128K ctx → ~60K chars safe input
-    "llama-3.3-70b-versatile":        60_000,
-    "meta-llama/llama-4-scout-17b-16e-instruct": 200_000,  # 512K ctx
-    "qwen/qwen3-32b":                 60_000,
+    "qwen/qwen3-32b":                 60_000,   # deprecated Jul 17, 2026 — kept for emergency fallback
+    "qwen/qwen3.6-27b":               60_000,   # 131K Groq limit → ~60K chars safe input
     "openai/gpt-oss-20b":             60_000,
     "openai/gpt-oss-120b":            60_000,
     "groq/compound-mini":             60_000,
