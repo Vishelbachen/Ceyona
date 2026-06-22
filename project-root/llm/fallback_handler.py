@@ -98,7 +98,7 @@ async def complete_with_fallback(
       4. Raises RuntimeError if all tiers and all models exhausted
 
     Special handling:
-      - qwen/qwen3-32b: thinking mode explicitly disabled at call site
+      - qwen/qwen3.6-27b: reasoning_effort="none" mandatory (thinking=False was qwen3-32b legacy, now deprecated)
       - response.actual_tier reflects the tier that actually executed,
         which may be lower than the requested tier after cascade.
         Callers MUST use response.actual_tier for billing (not the requested tier).
@@ -128,7 +128,7 @@ async def complete_with_fallback(
         for model in models:
             extra_params: dict = {}
             if requires_thinking_disabled(model):
-                extra_params["thinking"] = False
+                extra_params["reasoning_effort"] = "none"  # Groq API param for qwen3.6-27b (models.md §27.2); thinking=False is qwen3-32b legacy
 
             for attempt in range(max_retries + 1):
                 try:
