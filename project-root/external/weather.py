@@ -166,6 +166,7 @@ async def _extract_city(query: str) -> str:
         )
         response = await groq_client.complete(
             model="openai/gpt-oss-20b",
+            reasoning_effort="low",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=60,
             temperature=0.0,
