@@ -141,7 +141,7 @@ usage_meter.py MUST record tool call counts alongside token counts.
 **Search provider costs (external, NOT Groq-billed):**
 ```
 Tavily   (primary)   → free tier: 1000 req/mo | paid: $0.015/req above limit
-SerpAPI  (secondary) → free tier: 100 searches/mo | paid plans from $50/mo
+SerpAPI  (secondary) → free tier: 250 searches/mo | paid plans from $50/mo
 SearXNG  (tertiary)  → self-hosted: infrastructure cost only (Docker sidecar)
                        public instances: free, but unstable — not for production
 ```
