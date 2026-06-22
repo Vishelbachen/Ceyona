@@ -178,8 +178,16 @@ async def lifespan(app: FastAPI):
     init_rate_limiter(state["redis"])
 
     # ── webhook registration ──────────────────────────────
+    # Non-fatal: Telegram already knows the webhook URL from the previous run.
+    # A transient timeout (e.g. Worker not yet warm, HF→CF network blip) must
+    # not kill the whole process — incoming updates will keep arriving anyway.
     from transport.telegram.webhook import register_webhook
-    await register_webhook()
+    try:
+        ok = await register_webhook()
+        if not ok:
+            logger.warning("Webhook registration returned ok=False — will retry on next restart")
+    except Exception as exc:
+        logger.warning("Webhook registration failed — app continues", extra={"error": str(exc)})
 
     # ── background wallet poller ──────────────────────────
     wallet_task = asyncio.create_task(
