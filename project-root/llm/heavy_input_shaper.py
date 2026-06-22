@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from llm.groq_client import groq_client
+
 logger = logging.getLogger(__name__)
 
 # ─── LIMITS ───────────────────────────────────────────────────────────────────
@@ -14,6 +16,13 @@ _SUMMARY_THRESHOLD = 4096 # above this → summarization preferred over chunking
 # gpt-oss-20b is used here NOT as Fast Tier — it is a utility model
 # reasoning_effort="low" mandatory (models.md §5)
 _SHAPER_MODEL = "openai/gpt-oss-20b"
+
+_SUMMARIZE_SYSTEM = (
+    "You are a lossless compression utility. "
+    "Your task: compress the user text to reduce token count while preserving ALL key facts, "
+    "structure, and meaning. Do NOT add commentary, explanations, or preamble. "
+    "Output only the compressed text."
+)
 
 # ─── CONTRACTS ────────────────────────────────────────────────────────────────
 
@@ -31,6 +40,8 @@ class ShaperResult:
     text: str
     was_shaped: bool
     operation: str             # "passthrough" | "compressed" | "chunked" | "summarized"
+    shaper_input_tokens: int = 0   # billed per economic.md §2
+    shaper_output_tokens: int = 0
 
 
 # ─── INTERNAL HELPERS ─────────────────────────────────────────────────────────
@@ -139,10 +150,10 @@ def _chunk(text: str) -> str:
     return "\n\n---\n\n".join(chunks)
 
 
-def _summarize(text: str) -> str:
+def _summarize_local(text: str) -> str:
     """
-    For very long inputs: keep first and last sections, compress the middle.
-    Heavy Tier is optimized for long-context — we preserve structure, not truncate.
+    Local fallback: keep first and last sections, compress the middle.
+    Used only when the gpt-oss-20b summarization call fails.
     """
     lines = text.splitlines()
     total = len(lines)
@@ -183,7 +194,7 @@ def _summarize(text: str) -> str:
 
 # ─── PUBLIC API ───────────────────────────────────────────────────────────────
 
-def shape(inp: ShaperInput) -> ShaperResult:
+async def shape(inp: ShaperInput) -> ShaperResult:
     """
     Prepare input for Heavy Tier execution.
 
@@ -192,7 +203,12 @@ def shape(inp: ShaperInput) -> ShaperResult:
       - ALWAYS called on HEAVY_REQUIRED (self-gated internally)
       - Returns input as-is (NO-OP) if shaping is not needed
       - NO reasoning, NO output generation
-      - Uses llama-3.1-8b-instant as utility model, NOT as Fast Tier
+      - Uses openai/gpt-oss-20b as utility model, NOT as Fast Tier
+        reasoning_effort="low" mandatory (models.md §5)
+      - "summarized" path: LLM call to gpt-oss-20b for semantic compression;
+        falls back to local _summarize_local() on any API error
+      - "compressed" and "chunked" paths: pure local algorithms, no LLM call
+      - shaper_input_tokens / shaper_output_tokens populated for billing (economic.md §2)
 
     Never raises. Returns original input on any error.
     """
@@ -206,17 +222,55 @@ def shape(inp: ShaperInput) -> ShaperResult:
         operation = _select_operation(inp)
 
         if operation == "summarized":
-            shaped = _summarize(inp.text)
+            # LLM-based semantic summarization via gpt-oss-20b (models.md §5)
+            try:
+                llm_response = await groq_client.complete(
+                    model=_SHAPER_MODEL,
+                    messages=[
+                        {"role": "system", "content": _SUMMARIZE_SYSTEM},
+                        {"role": "user",   "content": inp.text},
+                    ],
+                    max_tokens=1024,
+                    temperature=0.0,
+                    reasoning_effort="low",  # mandatory per models.md §5
+                )
+                shaped = llm_response.text.strip()
+                shaper_input_tokens  = llm_response.input_tokens
+                shaper_output_tokens = llm_response.output_tokens
+
+                if not shaped:
+                    raise ValueError("empty LLM response — falling back to local summarize")
+
+            except Exception as llm_err:
+                logger.warning(
+                    "heavy_input_shaper: gpt-oss-20b call failed, using local fallback",
+                    extra={"error": str(llm_err)},
+                )
+                shaped = _summarize_local(inp.text)
+                shaper_input_tokens  = 0
+                shaper_output_tokens = 0
+
         elif operation == "chunked":
             shaped = _chunk(inp.text)
-        else:
+            shaper_input_tokens  = 0
+            shaper_output_tokens = 0
+
+        else:  # "compressed"
             shaped = _compress_prose(inp.text)
+            shaper_input_tokens  = 0
+            shaper_output_tokens = 0
 
         # Safety: if shaping produced empty result, return original
         if not shaped or not shaped.strip():
             return ShaperResult(text=inp.text, was_shaped=False, operation="passthrough")
 
-        return ShaperResult(text=shaped, was_shaped=True, operation=operation)
+        return ShaperResult(
+            text=shaped,
+            was_shaped=True,
+            operation=operation,
+            shaper_input_tokens=shaper_input_tokens,
+            shaper_output_tokens=shaper_output_tokens,
+        )
 
     except Exception:
         logger.exception("heavy_input_shaper failed — returning original input")
