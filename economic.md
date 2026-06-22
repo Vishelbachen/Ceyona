@@ -1,5 +1,5 @@
 # CEYONA — ECONOMIC MODEL
-Version: 5.4 — Deprecation Update + qwen3.6-27b Addition
+Version: 5.5 — qwen3.6-27b Pricing Published + Compound Tool Pricing Update (Jun 22, 2026)
 Status: Active Source of Truth
 Supersedes: economic.md (all previous versions)
 
@@ -48,22 +48,42 @@ HEAVY tier
   openai/gpt-oss-120b                           → input: $0.15   output: $0.60   (500 TPS)
   meta-llama/llama-4-scout-17b-16e-instruct     → input: $0.11   output: $0.34   (594 TPS)  ⚠️ deprecated Jul 17, 2026
 
-VISION / LONG_CONTEXT кандидат (замена llama-4-scout + резерв GENERAL)
-  qwen/qwen3.6-27b              → цена на Groq не опубликована официально (Preview, Jun 2026)
-                                   В passport указано $0.60/$3.00 — это цена Qwen API, НЕ Groq.
-                                   Использовать FAST tier ($0.05/$0.08) как placeholder до официального
-                                   подтверждения от Groq. Мониторить groq.com/pricing.
+GENERAL / VISION / LONG_CONTEXT / MULTILINGUAL primary (замена llama-3.3-70b + llama-4-scout)
+  qwen/qwen3.6-27b              → input: $0.60   output: $3.00   (500 TPS) ✅ DOC (groq.com/pricing, Jun 22, 2026)
+                                   ⚠️ CORRECTION (Jun 22, 2026): цена НЕ является placeholder.
+                                   Опубликована официально на groq.com/pricing. Предыдущий placeholder
+                                   $0.05/$0.08 (FAST tier) был некорректен.
 ```
 
 **MODEL_RATES in cost_model.py** uses the PRIMARY model of each tier for pre-execution estimation:
 
 ```python
+# ⚠️ ОБНОВИТЬ при смене primary в model_router.py (текущие значения = устаревшие primary)
+# Актуальные primary после миграции: FAST=gpt-oss-20b, GENERAL=qwen3.6-27b
 MODEL_RATES = {
-    Tier.FAST:    {"input": 0.05,  "output": 0.08},   # llama-3.1-8b-instant ⚠️ deprecated Aug 16 → обновить при смене primary
-    Tier.GENERAL: {"input": 0.59,  "output": 0.79},   # llama-3.3-70b-versatile ⚠️ deprecated Aug 16 → обновить при смене primary
+    Tier.FAST:    {"input": 0.05,  "output": 0.08},   # llama-3.1-8b-instant ⚠️ deprecated Aug 16
+                                                         # → при смене на gpt-oss-20b: $0.075/$0.30
+    Tier.GENERAL: {"input": 0.59,  "output": 0.79},   # llama-3.3-70b-versatile ⚠️ deprecated Aug 16
+                                                         # → при смене на qwen3.6-27b: $0.60/$3.00 ⚠️ КРИТИЧНО
     Tier.HEAVY:   {"input": 0.15,  "output": 0.60},   # openai/gpt-oss-120b (primary, stable)
 }
 ```
+⚠️ **КРИТИЧЕСКОЕ ПРЕДУПРЕЖДЕНИЕ (Jun 22, 2026) — влияние новых цен на EPK thresholds:**
+При смене GENERAL primary на qwen/qwen3.6-27b ($0.60/$3.00) стоимость GENERAL запросов
+вырастет в ~3.8x по output. Это изменяет поведение EPK thresholds:
+
+| Метрика | При OLD ценах ($0.59/$0.79) | При NEW ценах ($0.60/$3.00) |
+|---|---|---|
+| Макс. output до DEGRADED (1K input) | ~3051 tokens | ~800 tokens |
+| Макс. output до HEAVY_REQUIRED (1K input) | ~9380 tokens | ~2467 tokens |
+
+**Действие при смене primary в model_router.py:**
+1. Обновить MODEL_RATES[Tier.FAST] → {"input": 0.075, "output": 0.30}
+2. Обновить MODEL_RATES[Tier.GENERAL] → {"input": 0.60, "output": 3.00}
+3. Пересмотреть _DEGRADE_THRESHOLD, _HEAVY_THRESHOLD, MAX_OUTPUT_CAP — они были
+   откалиброваны под $0.79/output; при $3.00/output нормальные GENERAL ответы
+   (~800 output tokens при 1K input) уходят в DEGRADED_MODE.
+4. Обновить примеры в §5 и §6 этого документа.
 
 **Why primary-only pricing for estimation:**
 MODEL_RATES is used exclusively by `estimate_cost()` → EPK input (pre-execution safety gate).
@@ -98,11 +118,24 @@ Safety model fired = cost recorded.
 ### 1.3 Agent Layer (Compound — Groq-hosted)
 
 ```
-groq/compound      → deep_agent.py  → $5.00 / 1000 web_search tool calls
-groq/compound-mini → fast_agent.py  → pricing TBD (not publicly listed, May 2026)
+groq/compound      → deep_agent.py  → pricing per built-in tool (see table below)
+groq/compound-mini → fast_agent.py  → pricing TBD (not separately listed, Jun 2026)
+                                       Compound-mini uses same built-in tool pricing when applicable.
 ```
 
-Compound tool calls (web search) are billed separately per call, not per token.
+**Groq Built-In Tools pricing (verified groq.com/pricing, Jun 22, 2026):**
+```
+Basic Search       → $5.00  / 1000 requests  (web_search)
+Advanced Search    → $8.00  / 1000 requests  (web_search — higher quality)
+Visit Website      → $1.00  / 1000 requests  (visit_website)
+Code Execution     → $0.18  / hour           (code_interpreter)
+Browser Automation → $0.08  / hour           (browser_automation)
+```
+Ceyona использует compound как pure synthesizer (без custom tools=).
+Если встроенные инструменты не вызываются — биллинг только за токены модели.
+Compound tool call count (если будут использоваться) → usage_meter.py MUST record.
+
+Compound tool calls (if any) are billed separately per call, not per token.
 usage_meter.py MUST record tool call counts alongside token counts.
 
 **Search provider costs (external, NOT Groq-billed):**
@@ -482,7 +515,7 @@ This document is synchronized with:
 - GENERAL: qwen/qwen3-32b ✓ ⚠️ deprecated Jul 17, 2026
 - HEAVY primary: openai/gpt-oss-120b ✓
 - meta-llama/llama-4-scout-17b-16e-instruct → Vision + Long-Context (models.md §26), priced at $0.11/$0.34 ✓ ⚠️ deprecated Jul 17, 2026
-- qwen/qwen3.6-27b → VISION/LONG_CONTEXT кандидат; цена на Groq не опубликована (мониторить groq.com/pricing) ⚠️ OPEN ITEM
+- qwen/qwen3.6-27b → GENERAL/VISION/LONG_CONTEXT/MULTILINGUAL primary; $0.60/$3.00 per 1M ✅ (groq.com/pricing, Jun 22, 2026)
 - canopylabs/orpheus-v1-english → $22.00/1M chars ✓
 - canopylabs/orpheus-arabic-saudi → $40.00/1M chars ✓
 - BAAI/bge-* → HuggingFace (NOT Groq) ✓
@@ -510,7 +543,7 @@ This document is synchronized with:
 
 - [ ] **ПРИОРИТЕТ — Jul 17, 2026:** заменить qwen/qwen3-32b и llama-4-scout в model_router.py до deprecation. Обновить MODEL_RATES если новый GENERAL primary дороже $0.59/$0.79.
 - [ ] **ПРИОРИТЕТ — Aug 16, 2026:** заменить llama-3.1-8b-instant и llama-3.3-70b-versatile. Обновить MODEL_RATES.
-- [ ] **qwen/qwen3.6-27b Groq pricing:** не опубликована официально (Jun 2026). Мониторить groq.com/pricing. После публикации — добавить в §1.1 и обновить passport. Текущий placeholder: FAST tier ($0.05/$0.08).
+- [x] **qwen/qwen3.6-27b Groq pricing:** опубликована Jun 22, 2026 — $0.60/$3.00 per 1M tokens. Добавлена в §1.1. ✅ CLOSED
 - [ ] Per-route billing: preferred_model now logged per-request (models.md §25.3) → update actual_cost() to use per-model rates when ready
 - [ ] Compound/compound-mini token pricing not publicly listed — monitor Groq changelog
 - [ ] allam-2-7b pricing not listed — treated as FAST equivalent until confirmed
