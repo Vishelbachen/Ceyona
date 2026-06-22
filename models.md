@@ -661,11 +661,11 @@ preferred_model is now resolved per-request (§45).
 usage_meter MUST log resolved_model alongside tier for each request.
 This enables per-model actual_cost() billing when economic.md §12 open item is implemented.
 
-## 26. LLAMA-4-SCOUT — DUAL ROLE REGISTRY
+## 26. QWEN3.6-27B — DUAL ROLE REGISTRY (VISION + LONG_CONTEXT)
 
-`meta-llama/llama-4-scout-17b-16e-instruct` holds **two explicitly bounded roles**.
+`qwen/qwen3.6-27b` holds **two explicitly bounded roles** in addition to GENERAL and MULTILINGUAL.
 These are separate invocation paths with separate prompts and separate constraints.
-The model is NOT part of the HEAVY tier EPK path (see §4).
+Replaces `meta-llama/llama-4-scout-17b-16e-instruct` (deprecated Jul 17, 2026).
 
 ### 26.1 Role A — Vision Extraction (OUTSIDE EPK DAG)
 
@@ -674,7 +674,7 @@ The model is NOT part of the HEAVY tier EPK path (see §4).
 **Position:** parallel ingress — runs independently of the main pipeline
 
 ```
-Telegram photo → update_handler → vision_handler → llama-4-scout (direct groq_client call)
+Telegram photo → update_handler → vision_handler → qwen/qwen3.6-27b (direct groq_client call)
     → structured extraction result → update_handler forced_intent → normal pipeline
 ```
 
@@ -684,30 +684,35 @@ Telegram photo → update_handler → vision_handler → llama-4-scout (direct g
 **Prompt scope:** image extraction only — structured signals, no reasoning, no synthesis.
 
 **Constraints:**
+- `reasoning_effort="none"` MANDATORY — thinking mode must be off at every vision call site
 - MUST NOT be given reasoning or synthesis instructions
 - MUST NOT influence EPK, routing, or TruthMode
 - Never raises — returns structured result or empty on failure
+- VQ-03 (low quality images) MUST be tested before certification — model hallucinates
+  image content without warning when image quality is insufficient (documented failure mode)
 
 ### 26.2 Role B — Long-Context Transformation (EPK-gated, explicit activation)
 
 **Module:** invoked by orchestrator when `complexity == CRITICAL` AND `context_length > 32K tokens`
 **Activation:** explicit orchestrator decision — NOT EPK HEAVY_REQUIRED signal
 **Position:** pre-synthesis transformation step on long-context requests
+**Native context:** 262K tokens — replaces llama-4-scout (was 512K; 262K sufficient for LC-01/LC-02)
 
 **Prompt scope:** long-context compression and transformation only — not general reasoning.
 
 **Constraints:**
+- `reasoning_effort="none"` MANDATORY at every long-context call site
 - MUST NOT be substituted for gpt-oss-120b on reasoning tasks
 - MUST NOT self-activate
 - Role B invocation MUST be logged separately from Role A invocations
 
 ### 26.3 Instruction-following capacity note
 
-llama-4-scout-17b holds **two prompts with different scopes**.
-Before assigning additional responsibilities: measure comfortable instruction-following
-capacity (not maximum — comfortable, where behavior is stable).
-Rule: if either role's prompt approaches that limit, the roles must be split to separate models.
-One model, two prompts — acceptable. One model, two prompts + shared prompt bank — not acceptable.
+`qwen/qwen3.6-27b` holds **four roles** (GENERAL, VISION, LONG_CONTEXT, MULTILINGUAL) with
+**separate prompts per role**. Each role uses a distinct, scoped prompt — not a shared prompt bank.
+IFEval score 95.0 confirms reliable instruction-following within comfortable capacity (~30 sentences).
+Rule: if any role's prompt approaches 30 sentences, roles must be reviewed for prompt bloat.
+One model, four separate scoped prompts — acceptable. Shared prompt bank across roles — not acceptable.
 
 ---
 
@@ -846,6 +851,7 @@ compound-mini: 1 built-in tool call, 3x lower latency than compound. ✅ DOC
 - Strong bias toward bullet lists and structured enumeration — needs explicit FORMAT_RULES suppression ✅ PROD
 - Less natural warmth in conversational register ✅ PROD
 - Internally uses gpt-oss-120b, llama-4-scout, llama-3.3-70b — behavior reflects these models ✅ DOC
+  (this is compound's internal composition — these models are not called directly by Ceyona)
 - Custom tool schemas (`tools=` parameter) → HTTP 400 — confirmed May 2026 ✅ PROD
 - `output_normalizer.py` and `correction.py` clean output post-synthesis ✅ PROD
 - Max output: 8K tokens (synthesis limit) ✅ DOC
