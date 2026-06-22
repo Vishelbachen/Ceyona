@@ -8,10 +8,15 @@
  * Переменные окружения (Workers Secrets):
  *   HF_WEBHOOK_URL     — URL HF Space, например https://your-space.hf.space
  *   WEBHOOK_SECRET     — секрет для проверки запросов от Telegram (опционально)
- *   FORWARD_TIMEOUT    — таймаут в мс (по умолчанию 20000)
+ *   FORWARD_TIMEOUT    — таймаут одной попытки в мс (по умолчанию 45000)
+ *   HF_TOKEN           — токен HF (опционально)
  */
 
 const TELEGRAM_API_BASE = "https://api.telegram.org";
+
+// Количество попыток и начальная пауза между ними
+const MAX_RETRIES = 3;
+const RETRY_BASE_DELAY_MS = 3000; // 3s → 6s → 12s
 
 export default {
   async fetch(request, env) {
@@ -44,27 +49,60 @@ async function handleWebhook(request, env) {
     return new Response("Forbidden", { status: 403 });
   }
 
-  const hfUrl = env.HF_WEBHOOK_URL.replace(/\/$/, "") + "/webhook";
+  // Читаем тело один раз — оно понадобится при каждой попытке
   const body = await request.arrayBuffer();
-  const timeout = parseInt(env.FORWARD_TIMEOUT || "20000");
+  const timeout = parseInt(env.FORWARD_TIMEOUT || "45000");
+  const hfBase = env.HF_WEBHOOK_URL.replace(/\/$/, "");
+  const hfUrl = hfBase + "/webhook";
 
   const headers = { "Content-Type": "application/json" };
   if (secret) headers["X-Telegram-Bot-Api-Secret-Token"] = secret;
   if (env.HF_TOKEN) headers["Authorization"] = `Bearer ${env.HF_TOKEN}`;
 
+  // ── Wake-up: будим Space коротким GET перед основным запросом ────────────
+  // HF Space после сна отвечает на первый запрос с задержкой 20-40s.
+  // Этот GET запускает прогрев; основной POST пойдёт, когда Space уже живой.
   try {
-    const resp = await fetch(hfUrl, {
-      method: "POST",
-      headers,
-      body,
-      signal: AbortSignal.timeout(timeout),
+    await fetch(hfBase + "/health", {
+      method: "GET",
+      signal: AbortSignal.timeout(5000), // не ждём долго — это только пинг
     });
-    console.log(`Forwarded to HF, status=${resp.status}`);
-  } catch (err) {
-    // Всегда отвечаем Telegram OK, чтобы он не делал повторные попытки
-    console.error(`Forward to HF failed: ${err}`);
+  } catch (_) {
+    // Игнорируем — Space мог ещё не встать, это нормально
   }
 
+  // ── Retry loop ───────────────────────────────────────────────────────────
+  let lastError;
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const resp = await fetch(hfUrl, {
+        method: "POST",
+        headers,
+        body,
+        signal: AbortSignal.timeout(timeout),
+      });
+
+      console.log(`Forwarded to HF, attempt=${attempt}, status=${resp.status}`);
+
+      // Всегда отвечаем Telegram OK — он не должен делать повторы сам
+      return Response.json({ ok: true });
+
+    } catch (err) {
+      lastError = err;
+      console.error(`Forward to HF failed: attempt=${attempt}/${MAX_RETRIES}, error=${err}`);
+
+      if (attempt < MAX_RETRIES) {
+        // Экспоненциальная пауза: 3s, 6s, 12s …
+        const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+        console.log(`Retrying in ${delay}ms...`);
+        await sleep(delay);
+      }
+    }
+  }
+
+  // Все попытки исчерпаны — логируем, но всё равно говорим Telegram OK
+  console.error(`All ${MAX_RETRIES} attempts failed. Last error: ${lastError}`);
   return Response.json({ ok: true });
 }
 
@@ -95,4 +133,8 @@ async function handleTelegramProxy(request, env, path, url) {
       headers: { "Content-Type": "application/json" },
     });
   }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
