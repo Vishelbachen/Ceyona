@@ -774,54 +774,6 @@ healthcheck MUST NOT: influence EPK, alter routing, affect execution policy.
 
 ---
 
-## 29.1 MAINTENANCE MODE
-
-**Purpose:** controlled bot suspension with user notification during planned downtime
-(model migrations, infra changes, deployments).
-
-**Implementation:** single Redis flag, checked in `update_handler` BEFORE all other logic.
-
-```python
-# Set:   await redis.set("bot:maintenance", "1")
-# Clear: await redis.delete("bot:maintenance")
-
-# update_handler.py — first check, before Safety Gate, before EPK:
-if await redis.get("bot:maintenance"):
-    await message.reply("Ceyona временно недоступна. Скоро вернётся.")
-    return
-```
-
-**Authority boundaries:**
-- Maintenance mode is NOT an EPK signal — it is a pre-EPK gate
-- MUST be checked before Safety Gate Pass 1
-- MUST NOT influence EPK, routing, or any execution policy
-- Set/clear: manual operator action only (Redis CLI or admin script)
-- No automatic activation — never self-set by any runtime node
-
-**When to use:**
-- Model migration (e.g. Jul 17, 2026 deprecation deadline)
-- Infrastructure changes requiring restart
-- Any planned downtime > 30 seconds
-
-**EPK signal coverage (why other modes are NOT needed):**
-All other operational states are already handled by EPK signals:
-
-| Operational state | Covered by |
-|---|---|
-| Normal operation | EPK: ALLOW |
-| Degraded (low balance / oversized request) | EPK: DEGRADED_MODE |
-| Request denied (zero balance) | EPK: DENY |
-| Heavy compute required | EPK: HEAVY_REQUIRED |
-| Model unavailable | model_router fallback chain |
-| Search provider down | three-tier search fallback (§28) |
-| TTS failure | SynthesisResult(success=False) → text-only fallback |
-| ASR failure | TranscriptResult(success=False) → error response |
-| Planned downtime | Maintenance mode (this section) |
-
-No additional operational modes are required for Ceyona's architecture.
-
----
-
 ## 30. ANTI-DRIFT PRINCIPLES
 
 Architecture MUST scale through:
