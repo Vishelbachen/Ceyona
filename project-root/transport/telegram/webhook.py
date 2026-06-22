@@ -32,31 +32,38 @@ _WEBHOOK_SECRET = re.sub(r"[^A-Za-z0-9_\-]", "_", settings.bot_token)[:256]
 async def _send_message(chat_id: int, text: str) -> None:
     if not text:
         return
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.post(
-                f"{_TELEGRAM_API}/sendMessage",
-                json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
-                timeout=10.0,
+
+    async def _attempt(txt: str, parse_mode: str | None) -> int:
+        """Send one attempt, return HTTP status code. Raises on network error."""
+        payload: dict = {"chat_id": chat_id, "text": txt}
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+        async with httpx.AsyncClient(http2=False, timeout=10.0) as client:
+            resp = await client.post(f"{_TELEGRAM_API}/sendMessage", json=payload)
+            return resp.status_code, resp.text
+
+    # Attempt 1: with Markdown
+    try:
+        status, body = await _attempt(text, "Markdown")
+        if status == 200:
+            return
+        logger.error(
+            "sendMessage failed — retrying without Markdown",
+            extra={"chat_id": chat_id, "status": status, "body": body[:200]},
+        )
+    except Exception as exc:
+        logger.error("sendMessage network error — retrying without Markdown", extra={"chat_id": chat_id, "error": repr(exc)})
+
+    # Attempt 2: plain text, no parse_mode
+    try:
+        status, body = await _attempt(text, None)
+        if status != 200:
+            logger.error(
+                "sendMessage retry also failed",
+                extra={"chat_id": chat_id, "status": status, "body": body[:200]},
             )
-            if response.status_code != 200:
-                logger.error(
-                    "sendMessage failed — retrying without Markdown",
-                    extra={"chat_id": chat_id, "status": response.status_code, "body": response.text[:200]},
-                )
-                # Retry without parse_mode — Markdown parse errors cause silent 400s
-                response2 = await client.post(
-                    f"{_TELEGRAM_API}/sendMessage",
-                    json={"chat_id": chat_id, "text": text},
-                    timeout=10.0,
-                )
-                if response2.status_code != 200:
-                    logger.error(
-                        "sendMessage retry also failed",
-                        extra={"chat_id": chat_id, "status": response2.status_code, "body": response2.text[:200]},
-                    )
-        except Exception as exc:
-            logger.error("sendMessage exception", extra={"chat_id": chat_id, "error": str(exc)})
+    except Exception as exc:
+        logger.error("sendMessage retry exception", extra={"chat_id": chat_id, "error": repr(exc)})
 
 
 async def _send_message_with_topup(chat_id: int, text: str, lang: str = "en") -> None:
