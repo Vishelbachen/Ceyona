@@ -10,7 +10,7 @@ async def bootstrap() -> dict:
     from events.event_dispatcher import setup_dispatcher
     from events.event_store import EventStore
     from redis.asyncio import from_url as redis_from_url
-    from supabase import create_client
+    from supabase import create_client, ClientOptions
 
     # ─── Redis ──────────────────────────────────────────
     # TWO separate clients, not one shared connection:
@@ -51,9 +51,20 @@ async def bootstrap() -> dict:
     )
 
     # ─── Supabase ───────────────────────────────────────
+    # HuggingFace Spaces aggressively terminates idle HTTP/2 connections (~30s).
+    # Default supabase-py reuses stale connections → RemoteProtocolError on every
+    # request after idle. Fix: HTTP/1.1 with retries via httpx transport.
+    import httpx as _httpx
+    _sb_transport = _httpx.AsyncHTTPTransport(retries=3)
+    _sb_httpx = _httpx.AsyncClient(
+        transport=_sb_transport,
+        timeout=_httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0),
+        http2=False,  # force HTTP/1.1 — HF terminates HTTP/2 idle streams
+    )
     supabase = create_client(
         settings.supabase_url,
         settings.supabase_service_role_key,
+        options=ClientOptions(httpx_client=_sb_httpx),
     )
 
     # ─── Event system ───────────────────────────────────
