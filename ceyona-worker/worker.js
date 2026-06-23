@@ -15,7 +15,7 @@
 const TELEGRAM_API_BASE = "https://api.telegram.org";
 
 // Количество попыток и начальная пауза между ними
-const MAX_RETRIES = 3;
+const MAX_RETRIES = 1;
 const RETRY_BASE_DELAY_MS = 3000; // 3s → 6s → 12s
 
 export default {
