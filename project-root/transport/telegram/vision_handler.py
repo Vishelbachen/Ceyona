@@ -454,3 +454,409 @@ async def handle_vision(
         vision_input_tokens=_vision_input_tokens,
         vision_output_tokens=_vision_output_tokens,
     )
+
+# ─── MULTI-IMAGE (ALBUM) HANDLER ──────────────────────────────────────────────
+
+# Safe default: 4 images per Groq vision request.
+# Groq does not publish a hard per-request image count limit — the real constraint
+# is total token budget (each image ≈ 1500–2000 tokens at 1280px).
+# Production observation: 9 images → HTTP 400; 1-4 → stable; 5 → usually ok.
+# MAX_IMAGES_PER_BATCH = 4 gives stable headroom. On 400, we retry with batch/2.
+_MAX_IMAGES_PER_BATCH = 4
+
+_GROUP_EXTRACTION_SYSTEM = (
+    "You are an image description assistant. Your only role is to describe images.\n\n"
+    "For each image, apply the first matching rule:\n\n"
+    "RULE 1 — TEXT IMAGE (exam, problem, formula, table, code, handwriting, diagram):\n"
+    "Transcribe ALL text EXACTLY as written. Preserve structure.\n\n"
+    "RULE 2 — DRAWN / ANIMATED CHARACTER (anime, manga, game art, cartoon, illustration):\n"
+    "Describe visible appearance: hair colour/style, clothing, accessories, art style. "
+    "Attempt identification only when there are strong, specific clues; otherwise keep the description "
+    "descriptive and avoid forcing a franchise or anime guess. State confidence explicitly.\n\n"
+    "RULE 3 — REAL PERSON (photograph of an actual human):\n"
+    "Describe ONLY visible details: clothing, hair, pose, expression, background. "
+    "NEVER name, identify, or guess who the person is.\n\n"
+    "RULE 4 — OTHER (product, place, animal, object, screenshot, UI, meme):\n"
+    "Describe clearly: objects, colours, layout, any visible text, context.\n\n"
+    "ABSOLUTE RULES — these override everything:\n"
+    "- Describe only. Never solve, analyse, validate, verify, or interpret.\n"
+    "- Never produce tables, checklists, or validation results.\n"
+    "- Never write OK, fixed, satisfied, correct, or similar judgement words.\n\n"
+    "OUTPUT FORMAT — mandatory: "
+    "Return a JSON array. One element per image, in order. Each element is a plain string "
+    "containing the description of that image — no keys, no nesting, no metadata. "
+    "Example for 3 images: [\"description of first\", \"description of second\", \"description of third\"] "
+    "Each description: plain prose, starts directly with the visible content. "
+    "No JSON keys. No markdown. No prose outside the array. Output the array only."
+)
+
+# _GROUP_SYNTHESIS_SYSTEM_TEMPLATE: verbosity_rule injected in code.
+# image_count >= 5 → verbosity_rule = "1-2 sentences per image"  (brief: large album)
+# image_count  < 5 → verbosity_rule = "2-3 sentences per image"  (balanced: small album)
+# Determined in code, not by LLM — prevents model from guessing what "many" means.
+_GROUP_SYNTHESIS_SYSTEM_TEMPLATE = (
+    "Describe each image independently. "
+    "Each description should be a short, self-contained paragraph focused only on what is directly visible. "
+    "Response length: {verbosity_rule}. "
+    "Use direct, concrete language without generic introductory phrases. "
+    "Avoid meta-commentary, evaluation, or speculation. "
+    "Do not infer relationships or intent unless clearly visible in the image. "
+    "Do not speculate about why the images were sent together. "
+    "Use natural paragraph separation instead of rigid formatting."
+)
+
+
+@dataclass(frozen=True)
+class _VisionBatchResult:
+    """Internal result from a single Groq vision batch call.
+
+    descriptions: structured list — one entry per image in the batch.
+    Extraction prompt returns JSON array; parser fills this field.
+    Falls back to [raw_text] if JSON parse fails.
+    text: raw LLM output, kept for logging and fallback only.
+    """
+    descriptions: list  # list[str] — one description per image
+    text: str           # raw LLM output (logging / fallback)
+    input_tokens: int
+    output_tokens: int
+
+
+async def _call_groq_vision(
+    image_bytes_list: list[bytes],
+    caption: str,
+    *,
+    retry_on_400: bool = True,
+) -> _VisionBatchResult | None:
+    """
+    Send a batch of images to Groq vision API.
+
+    On HTTP 400 (payload too large / image count exceeded):
+    - if retry_on_400=True and batch > 1: split in half, call both halves
+      concurrently, join results with a blank line separator.
+    - if retry_on_400=True and batch == 1: single image still fails → return None.
+    - if retry_on_400=False: return None immediately (prevents infinite recursion).
+
+    Returns _VisionBatchResult with text and actual token counts, or None on error.
+    Token counts are used by handle_vision_group to compute exact billed cost.
+    """
+    user_content: list[dict] = []
+    for img_bytes in image_bytes_list:
+        b64 = base64.b64encode(img_bytes).decode("ascii")
+        user_content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+        })
+    if caption.strip():
+        user_content.append({"type": "text", "text": caption.strip()})
+
+    _max_tokens = RUNTIME.tier_configs[Tier.GENERAL].max_output_tokens
+    payload = {
+        "model": _VISION_MODEL,
+        "max_tokens": _max_tokens,
+        "temperature": 0.1,
+        "reasoning_effort": "none",  # mandatory per models.md §26.1
+        "messages": [
+            {"role": "system", "content": _GROUP_EXTRACTION_SYSTEM},
+            {"role": "user",   "content": user_content},
+        ],
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            r = await client.post(
+                _GROQ_ENDPOINT,
+                json=payload,
+                headers={
+                    "Authorization": f"Bearer {settings.groq_api_key}",
+                    "Content-Type":  "application/json",
+                },
+            )
+            r.raise_for_status()
+            data = r.json()
+            text = (
+                data.get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+                .strip()
+            )
+            if not text:
+                return None
+            _usage = data.get("usage", {})
+
+            # Parse structured JSON array from extraction prompt.
+            # Extraction now returns: ["desc1", "desc2", ...] — one string per image.
+            # Fallback: wrap raw text as single-element list (maintains contract downstream).
+            import json as _json
+            _descriptions: list[str] = []
+            try:
+                _raw = text.strip()
+                # Strip possible markdown code fences the model might add
+                if _raw.startswith("```"):
+                    _raw = _raw.split("```")[1]
+                    if _raw.startswith("json"):
+                        _raw = _raw[4:]
+                    _raw = _raw.strip()
+                parsed = _json.loads(_raw)
+                if isinstance(parsed, list) and all(isinstance(x, str) for x in parsed):
+                    _descriptions = [x.strip() for x in parsed if x.strip()]
+                else:
+                    logger.warning("Groq vision: unexpected JSON structure — using raw text fallback")
+                    _descriptions = [text]
+            except (_json.JSONDecodeError, Exception) as _e:
+                logger.warning("Groq vision: JSON parse failed — using raw text fallback",
+                               extra={"error": str(_e), "preview": text[:80]})
+                _descriptions = [text]
+
+            return _VisionBatchResult(
+                descriptions=_descriptions,
+                text=text,
+                input_tokens=_usage.get("prompt_tokens", 0),
+                output_tokens=_usage.get("completion_tokens", 0),
+            )
+
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 400 and retry_on_400 and len(image_bytes_list) > 1:
+            # Split batch in half and retry both halves concurrently.
+            mid = len(image_bytes_list) // 2
+            logger.warning(
+                "Groq vision 400 — splitting batch and retrying",
+                extra={"batch_size": len(image_bytes_list), "mid": mid},
+            )
+            left, right = await asyncio.gather(
+                _call_groq_vision(image_bytes_list[:mid], caption, retry_on_400=False),
+                _call_groq_vision(image_bytes_list[mid:], caption="", retry_on_400=False),
+                return_exceptions=True,
+            )
+            parts = [p for p in (left, right) if isinstance(p, _VisionBatchResult)]
+            if not parts:
+                return None
+            # Merge structured descriptions from both halves — preserves order.
+            merged_descriptions = []
+            for p in parts:
+                merged_descriptions.extend(p.descriptions)
+            merged_text = "\n\n".join(p.text for p in parts)
+            return _VisionBatchResult(
+                descriptions=merged_descriptions,
+                text=merged_text,
+                input_tokens=sum(p.input_tokens for p in parts),
+                output_tokens=sum(p.output_tokens for p in parts),
+            )
+
+        logger.error("Groq vision group HTTP error", extra={
+            "status": exc.response.status_code,
+            "body":   exc.response.text[:300],
+            "batch_size": len(image_bytes_list),
+        })
+        return None
+
+    except Exception as exc:
+        logger.error("Groq vision group call failed", extra={
+            "error": str(exc),
+            "batch_size": len(image_bytes_list),
+        })
+        return None
+
+
+async def _merge_descriptions(all_descriptions: list[str]) -> str:
+    """
+    Merge structured per-image descriptions into the final album response.
+
+    Architecture contract:
+    - Input: list[str] — one clean description per image, already extracted
+      by _call_groq_vision via JSON array output format.
+    - No LLM call needed: descriptions are already clean, unnumbered prose.
+    - Separator: blank line between images — standard Telegram paragraph spacing.
+
+    This replaces the previous LLM synthesis step which received raw prose
+    (potentially numbered) and reproduced that numbering in output.
+    Structured extraction eliminates the source of the artifact — no downstream
+    cleanup needed.
+    """
+    return "\n\n".join(desc.strip() for desc in all_descriptions if desc.strip())
+
+
+async def handle_vision_group(
+    file_ids: list[str],
+    caption: str = "",
+    lang: str = "en",
+) -> VisionResult:
+    """
+    Process a Telegram media group (album) with adaptive batching.
+
+    Downloads all images concurrently, splits into batches of MAX_IMAGES_PER_BATCH,
+    calls Groq vision per batch (with automatic split-retry on 400), then synthesises
+    all batch descriptions into one coherent response.
+
+    Returns VisionResult with failed=True if extraction could not be completed —
+    caller must NOT inject the text into the pipeline in that case.
+
+    Falls back to handle_vision() if the group has only one item.
+    """
+    from i18n.t import t
+    err_text = t("vision_error", lang)
+
+    if not file_ids:
+        return VisionResult(text=err_text, needs_pipeline=False, failed=True)
+
+    logger.info("[vision_input] album received", extra={
+        "image_count": len(file_ids),
+        "caption_len": len(caption),
+        "lang":        lang,
+    })
+
+    if len(file_ids) == 1:
+        return await handle_vision(file_id=file_ids[0], caption=caption, lang=lang)
+
+    # ── image count guardrail ─────────────────────────────────────────────────
+    # Llama-4-scout degrades beyond ~6 images per context: attention spreads thin,
+    # partial images are silently dropped, output quality collapses.
+    # Hard limit at orchestrator level — correct place per architecture.md.
+    _MAX_GROUP_IMAGES = 6
+    if len(file_ids) > _MAX_GROUP_IMAGES:
+        from i18n.t import t as _t
+        return VisionResult(
+            text=_t("too_many_images", lang),
+            needs_pipeline=False,
+            failed=False,
+        )
+
+    # ── download all images concurrently, throttled ───────────────────────────
+    _sem = asyncio.Semaphore(3)
+
+    async def _fetch(fid: str) -> bytes | None:
+        async with _sem:
+            url = await _get_file_url(fid)
+            if not url:
+                return None
+            raw = await _download_image(url)
+            if not raw:
+                return None
+            return _resize_image_if_needed(raw)
+
+    fetch_results = await asyncio.gather(*[_fetch(fid) for fid in file_ids], return_exceptions=True)
+
+    image_bytes_list: list[bytes] = []
+    for idx, res in enumerate(fetch_results):
+        if isinstance(res, Exception) or res is None:
+            logger.warning(
+                "Vision group: failed to load image",
+                extra={"index": idx, "error": str(res) if isinstance(res, Exception) else "None"},
+            )
+            continue
+        image_bytes_list.append(res)
+
+    loaded = len(image_bytes_list)
+    if loaded == 0:
+        return VisionResult(text=err_text, needs_pipeline=False, failed=True)
+
+    logger.info("Vision group: images loaded", extra={
+        "loaded": loaded, "total": len(file_ids),
+    })
+
+    # ── split into batches of MAX_IMAGES_PER_BATCH ────────────────────────────
+    batches = [
+        image_bytes_list[i : i + _MAX_IMAGES_PER_BATCH]
+        for i in range(0, loaded, _MAX_IMAGES_PER_BATCH)
+    ]
+
+    # ── call Groq vision for each batch concurrently ──────────────────────────
+    batch_results = await asyncio.gather(
+        *[
+            _call_groq_vision(
+                batch,
+                caption if idx == 0 else "",  # caption only on first batch
+                retry_on_400=True,
+            )
+            for idx, batch in enumerate(batches)
+        ],
+        return_exceptions=True,
+    )
+
+    all_descriptions: list[str] = []  # flat list — one str per image across all batches
+    _group_input_tokens  = 0
+    _group_output_tokens = 0
+    for idx, res in enumerate(batch_results):
+        if isinstance(res, Exception) or res is None:
+            logger.warning(
+                "Vision group: batch extraction failed",
+                extra={"batch_index": idx, "error": str(res) if isinstance(res, Exception) else "None"},
+            )
+            continue
+        # Extend with structured per-image descriptions from this batch.
+        # res.descriptions is list[str] — one clean string per image, no numbering.
+        all_descriptions.extend(res.descriptions)
+        _group_input_tokens  += res.input_tokens
+        _group_output_tokens += res.output_tokens
+
+    if not all_descriptions:
+        logger.error("Vision group: all batches failed", extra={"loaded": loaded})
+        return VisionResult(text=err_text, needs_pipeline=False, failed=True)
+
+    logger.info("[after_extraction] album batches extracted", extra={
+        "batches_total":       len(batches),
+        "descriptions_total":  len(all_descriptions),
+        "descriptions_preview": [d[:80] for d in all_descriptions],
+    })
+
+    # ── merge per-image descriptions ──────────────────────────────────────────
+    # all_descriptions is list[str] — one clean string per image, no numbering.
+    # _merge_descriptions joins with blank lines — no LLM call needed.
+    extracted = await _merge_descriptions(all_descriptions)
+
+    logger.info("[after_synthesis] album descriptions merged", extra={
+        "images_total":    len(all_descriptions),
+        "extracted_len":   len(extracted),
+        "extracted_preview": extracted[:120],
+    })
+
+    # ── routing: caption → classify; no caption → pipeline ───────────────────
+    # Same semantic contract as handle_vision().
+    # extracted = multi-image description generated by LLM → never classify.
+    # caption   = what the user typed with the album      → classify if present.
+    #
+    # No caption = no user intent to classify → intent_result=None, needs_pipeline=True.
+    # Orchestrator handles routing via its own fallback (CONVERSATION default).
+
+    intent_result = None
+    needs_pipeline = True
+    try:
+        from cognition.intent_engine import Intent, classify
+
+        _uncertainty = any(s in extracted.lower() for s in _UNCERTAINTY_SIGNALS)
+
+        if caption.strip():
+            intent_result = await classify(caption.strip(), lang=lang)
+            needs_pipeline = (
+                _uncertainty
+                or intent_result.intent != Intent.CONVERSATION
+            )
+        else:
+            # No caption — album only. No user intent to classify.
+            # Contract: intent_result=None, needs_pipeline=True.
+            # Same semantic contract as handle_vision() no-caption path.
+            intent_result = None
+            needs_pipeline = True
+
+    except Exception as exc:
+        logger.warning("Intent classify failed in vision group", extra={"error": str(exc)})
+        needs_pipeline = True
+
+    logger.info("[final_routing] album routed", extra={
+        "lang":           lang,
+        "images_loaded":  loaded,
+        "images_total":   len(file_ids),
+        "batches":        len(batches),
+        "needs_pipeline": needs_pipeline,
+        "intent":         intent_result.intent.value if intent_result else None,
+        "routing.depth":  intent_result.routing.reasoning_depth if intent_result else None,
+        "routing.truth":  intent_result.routing.truth_mode if intent_result else None,
+    })
+
+    return VisionResult(
+        text=extracted,
+        needs_pipeline=needs_pipeline,
+        intent_result=intent_result if needs_pipeline else None,
+        failed=False,
+        vision_input_tokens=_group_input_tokens,
+        vision_output_tokens=_group_output_tokens,
+    )
