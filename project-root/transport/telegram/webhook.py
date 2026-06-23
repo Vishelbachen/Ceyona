@@ -297,6 +297,7 @@ async def telegram_webhook(
         return {"ok": True}
 
     chat_id = _get_chat_id(update)
+    logger.info("chat_id resolved", extra={"chat_id": chat_id, "update_keys": list(update.keys())})
     user_id = auth.user_id
     lang = _detect_lang(update)
     supabase = request.app.state.supabase
