@@ -6,10 +6,8 @@ import traceback
 
 from contracts.shared_types import Complexity, EPKDecision, Tier
 from core.execution.orchestrator import (
-    OrchestratorRequest,
     OrchestratorResult,
     UsageRecord,
-    run,
 )
 from transport.telegram.message_router import (
     UpdateType,
