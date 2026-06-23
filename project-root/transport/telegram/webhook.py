@@ -39,7 +39,7 @@ async def _send_message(chat_id: int, text: str) -> None:
         payload: dict = {"chat_id": chat_id, "text": txt}
         if parse_mode:
             payload["parse_mode"] = parse_mode
-        async with httpx.AsyncClient(http2=False, timeout=15.0) as client:
+        async with httpx.AsyncClient(http2=False, timeout=15.0, follow_redirects=True) as client:
             resp = await client.post(_APPS_SCRIPT_URL, json=payload)
             return resp.status_code, resp.text
 
@@ -85,7 +85,7 @@ async def _send_message_with_topup(chat_id: int, text: str, lang: str = "en") ->
         ]]
     }
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(follow_redirects=True) as client:
         await client.post(
             _APPS_SCRIPT_URL,
             json={
@@ -464,12 +464,12 @@ async def telegram_webhook(
         })
 
         if chat_id:
-            # Low balance warning — show topup button when balance drops below $0.10
+            # Low balance warning — show topup button when balance drops below $0.05
             try:
                 from payments.access_controller import AccessController
                 ac2 = AccessController(supabase)
                 fresh_balance = await ac2.get_balance(user_id)
-                if 0 < fresh_balance.balance_usd < 0.10:
+                if 0 < fresh_balance.balance_usd < 0.05:
                     from i18n.t import t as _t
                     low_balance_text = _t("low_balance_warning", lang)
                     await _send_message_with_topup(chat_id, low_balance_text, lang)
