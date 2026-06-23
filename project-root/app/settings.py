@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     # ─── ECONOMY / TON ──────────────────────────────────
     ton_wallet: str = Field("", description="TON wallet address")
 
+    # ─── CLOUDFLARE WORKER PROXY ────────────────────────
+    # Set to your worker URL, e.g. https://ceyona-worker.your-subdomain.workers.dev
+    # When set, all Telegram API calls (getFile, file downloads) go through
+    # the worker's /tg/ proxy instead of api.telegram.org directly.
+    telegram_proxy_url: str = Field("", description="Cloudflare Worker base URL for Telegram API proxy")
+
     # ─── RUNTIME ────────────────────────────────────────
     debug: bool = Field(False, description="Debug mode")
     environment: str = Field("production", description="Environment name")
