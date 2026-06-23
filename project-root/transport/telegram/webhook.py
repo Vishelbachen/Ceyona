@@ -1,5 +1,4 @@
 import logging
-import re
 
 import httpx
 from app.settings import settings
@@ -24,9 +23,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-_TELEGRAM_API = "https://ceyona-webhook.whosurdaddy027.workers.dev/tg/bot" + settings.bot_token
+_TELEGRAM_API = settings.telegram_proxy_url.rstrip("/") + "/tg/bot" + settings.bot_token
 
-_WEBHOOK_SECRET = re.sub(r"[^A-Za-z0-9_\-]", "_", settings.bot_token)[:256]
+# Webhook secret is now a standalone secret (WEBHOOK_SECRET env var),
+# independent of the bot token. Set the same value in HF Space secrets
+# and Cloudflare Worker secrets.
+_WEBHOOK_SECRET = settings.webhook_secret
 
 
 async def _send_message(chat_id: int, text: str) -> None:
@@ -40,7 +42,7 @@ async def _send_message(chat_id: int, text: str) -> None:
         if parse_mode:
             payload["parse_mode"] = parse_mode
         async with httpx.AsyncClient(timeout=15.0) as client:
-            logger.info("_attempt sending", extra={"url": f"{_TELEGRAM_API}/sendMessage"})
+            logger.info("_attempt sending")
             resp = await client.post(f"{_TELEGRAM_API}/sendMessage", json=payload)
             logger.info("_attempt response", extra={"status": resp.status_code, "body": resp.text[:200]})
             return resp.status_code, resp.text
