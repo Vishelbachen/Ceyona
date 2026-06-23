@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+_APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwoElMYO01Z3DDWKMTkBX_Zt4Q903spuCOCb2T6_4LqRx-A1Jp4n8HpAIpZfiDlhK8C8g/exec"
 _TELEGRAM_API = "https://ceyona-webhook.whosurdaddy027.workers.dev/tg/bot" + settings.bot_token
 
 _WEBHOOK_SECRET = re.sub(r"[^A-Za-z0-9_\-]", "_", settings.bot_token)[:256]
@@ -39,7 +40,7 @@ async def _send_message(chat_id: int, text: str) -> None:
         if parse_mode:
             payload["parse_mode"] = parse_mode
         async with httpx.AsyncClient(http2=False, timeout=10.0) as client:
-            resp = await client.post(f"{_TELEGRAM_API}/sendMessage", json=payload)
+            resp = await client.post(_APPS_SCRIPT_URL, json=payload)
             return resp.status_code, resp.text
 
     # Attempt 1: with Markdown
@@ -85,7 +86,7 @@ async def _send_message_with_topup(chat_id: int, text: str, lang: str = "en") ->
 
     async with httpx.AsyncClient() as client:
         await client.post(
-            f"{_TELEGRAM_API}/sendMessage",
+            _APPS_SCRIPT_URL,
             json={
                 "chat_id": chat_id,
                 "text": text,
