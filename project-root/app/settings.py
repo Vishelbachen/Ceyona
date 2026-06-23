@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     # When set, all Telegram API calls (getFile, file downloads) go through
     # the worker's /tg/ proxy instead of api.telegram.org directly.
     telegram_proxy_url: str = Field("", description="Cloudflare Worker base URL for Telegram API proxy")
+    webhook_secret: str = Field("", description="Secret token for Telegram webhook verification (set in HF and Cloudflare)")
 
     # ─── RUNTIME ────────────────────────────────────────
     debug: bool = Field(False, description="Debug mode")
