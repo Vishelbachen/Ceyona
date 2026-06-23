@@ -164,6 +164,8 @@ async def transcribe(
 async def download_telegram_voice(
     file_id: str,
     bot_token: str,
+    *,
+    retries: int = 2,
 ) -> tuple[bytes, str]:
     """
     Download a Telegram voice/audio file by file_id.
@@ -174,27 +176,64 @@ async def download_telegram_voice(
     Two-step process:
       1. getFile → get file_path
       2. download from file.telegram.org/{bot_token}/{file_path}
+
+    Retries up to `retries` times on network-level errors (ConnectError,
+    RemoteProtocolError, etc.) and 429/5xx HTTP errors — these occur on
+    HuggingFace Spaces under load bursts. Backoff: 0.5s, 1.0s.
     """
     import httpx
 
+    _RETRYABLE_STATUS = {429, 500, 502, 503}
     api_base = f"https://api.telegram.org/bot{bot_token}"
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        # Step 1: resolve file_path
-        r = await client.get(f"{api_base}/getFile", params={"file_id": file_id})
-        if r.status_code != 200:
-            raise RuntimeError(f"getFile failed: {r.status_code} {r.text[:200]}")
+    for attempt in range(retries + 1):
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                # Step 1: resolve file_path
+                try:
+                    r = await client.get(f"{api_base}/getFile", params={"file_id": file_id})
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"getFile network error: {type(exc).__name__}: {exc or 'no message'}"
+                    ) from exc
 
-        file_info = r.json().get("result", {})
-        file_path = file_info.get("file_path", "")
-        if not file_path:
-            raise RuntimeError("getFile returned empty file_path")
+                if r.status_code in _RETRYABLE_STATUS:
+                    raise RuntimeError(f"getFile retryable status: {r.status_code}")
+                if r.status_code != 200:
+                    raise RuntimeError(f"getFile failed: {r.status_code} {r.text[:200]}")
 
-        # Step 2: download
-        download_url = f"https://api.telegram.org/file/bot{bot_token}/{file_path}"
-        r2 = await client.get(download_url)
-        if r2.status_code != 200:
-            raise RuntimeError(f"File download failed: {r2.status_code}")
+                file_info = r.json().get("result", {})
+                file_path = file_info.get("file_path", "")
+                if not file_path:
+                    raise RuntimeError("getFile returned empty file_path")
+
+                # Step 2: download
+                download_url = f"https://api.telegram.org/file/bot{bot_token}/{file_path}"
+                try:
+                    r2 = await client.get(download_url)
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"Voice download network error: {type(exc).__name__}: {exc or 'no message'}"
+                    ) from exc
+
+                if r2.status_code in _RETRYABLE_STATUS:
+                    raise RuntimeError(f"Voice download retryable status: {r2.status_code}")
+                if r2.status_code != 200:
+                    raise RuntimeError(f"File download failed: {r2.status_code}")
+
+                filename = file_path.split("/")[-1] or "voice.ogg"
+                return r2.content, filename
+
+        except RuntimeError as exc:
+            _is_retryable = any(s in str(exc) for s in ("network error", "retryable status"))
+            if attempt < retries and _is_retryable:
+                logger.warning(
+                    "download_telegram_voice retrying",
+                    extra={"attempt": attempt + 1, "error": str(exc), "file_id": file_id},
+                )
+                await asyncio.sleep(0.5 * (attempt + 1))
+                continue
+            raise
 
         filename = file_path.split("/")[-1] or "voice.ogg"
         return r2.content, filename
