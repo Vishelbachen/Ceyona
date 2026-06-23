@@ -30,6 +30,7 @@ _WEBHOOK_SECRET = re.sub(r"[^A-Za-z0-9_\-]", "_", settings.bot_token)[:256]
 
 
 async def _send_message(chat_id: int, text: str) -> None:
+    logger.info("_send_message called", extra={"chat_id": chat_id, "text_len": len(text) if text else 0})
     if not text:
         return
 
