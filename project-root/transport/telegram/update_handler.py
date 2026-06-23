@@ -6,8 +6,10 @@ import traceback
 
 from contracts.shared_types import Complexity, EPKDecision, Tier
 from core.execution.orchestrator import (
+    OrchestratorRequest,
     OrchestratorResult,
     UsageRecord,
+    run,
 )
 from transport.telegram.message_router import (
     UpdateType,
@@ -425,6 +427,200 @@ async def handle_message(
     except Exception as exc:
         # Non-critical — pipeline continues without hints
         logger.warning("analysis.py failed (non-critical)", extra={"error": str(exc)})
+
+    # ── conversation history ──────────────────────────────────────────────────
+    # Select token budget before loading history.
+    # Tier is unknown here (EPK runs after retrieval), so we use the same
+    # heuristic as orchestrator._estimate_tier:
+    #   LOW complexity + short message → likely FAST tier → smaller budget
+    #   everything else → GENERAL/HEAVY → larger budget
+    # This avoids the aggressive 1200-token cap that was cutting history to
+    # 0-2 turns and causing bug 13.2 (context loss).
+    from memory.conversation_history import (
+        FAST_HISTORY_BUDGET,
+        GENERAL_HISTORY_BUDGET,
+        ConversationHistory,
+    )
+    _message_tokens_pre = _estimate_tokens(text)
+    _history_budget = (
+        FAST_HISTORY_BUDGET
+        if complexity == Complexity.LOW and _message_tokens_pre < 300
+        else GENERAL_HISTORY_BUDGET
+    )
+    logger.debug("History budget selected", extra={
+        "budget":     _history_budget,
+        "complexity": complexity,
+        "msg_tokens": _message_tokens_pre,
+    })
+
+    conversation_history: list[dict] | None = None
+    history_store = None
+
+    if supabase is not None and input_type != "image_group":
+        # image_group: each album is a self-contained task — loading previous
+        # conversation history would cause the model to treat it as a continuation
+        # of the last album, mixing batches. History is still WRITTEN after the
+        # response so the user's next text message has correct context.
+        try:
+            history_store = ConversationHistory(supabase)
+            conversation_history = await history_store.get_history(
+                user_id, token_budget=_history_budget
+            )
+            logger.info("History loaded", extra={
+                "user_id":       user_id,
+                "turns":         len(conversation_history),
+                "token_budget":  _history_budget,
+            })
+        except Exception as exc:
+            logger.error("History load failed", extra={"error": str(exc)})
+            conversation_history = None
+
+    # ── token estimation ──────────────────────────────────────────────────────
+    message_tokens = _estimate_tokens(text)
+    history_tokens = _estimate_history_tokens(conversation_history)
+    input_tokens   = message_tokens + history_tokens
+
+    logger.info("Handling message", extra={
+        "user_id":        user_id,
+        "input_tokens":   input_tokens,
+        "message_tokens": message_tokens,
+        "history_tokens": history_tokens,
+        "complexity":     complexity,
+        "lang":           lang,
+    })
+
+    # ── retrieval ─────────────────────────────────────────────────────────────
+    # Fix §5.4: previously gated on `supabase is not None and redis is not None`.
+    # Redis is optional cache — pgvector similarity search only needs Supabase.
+    # If Redis is unavailable: retrieval runs without cache (degraded, not skipped).
+    # If Supabase is unavailable: retrieval is skipped (pgvector requires it).
+    retrieved_context = ""
+    embedding_tokens  = 0
+    rerank_tokens     = 0
+
+    if supabase is not None:
+        if redis is None:
+            logger.warning(
+                "Retrieval: Redis unavailable — running without cache (degraded)",
+                extra={"user_id": user_id},
+            )
+        try:
+            from contracts.retrieval_contracts import RetrievalQuery
+            from memory.supabase_store import SupabaseStore
+            from retrieval.retrieval_engine import RetrievalEngine
+
+            # Inject cache only when Redis is available.
+            # RetrievalEngine handles None values gracefully (no caching).
+            engine_kwargs: dict = {"supabase_store": SupabaseStore(supabase)}
+            if redis is not None:
+                from retrieval.cache.embedding_cache import EmbeddingCache
+                from retrieval.cache.query_cache import QueryCache
+                from retrieval.cache.rerank_cache import RerankCache
+                engine_kwargs["query_cache"]     = QueryCache(redis)
+                engine_kwargs["embedding_cache"] = EmbeddingCache(redis)
+                engine_kwargs["rerank_cache"]    = RerankCache(redis)
+
+            engine = RetrievalEngine(**engine_kwargs)
+
+            retrieval_result = await engine.retrieve(RetrievalQuery(
+                text=text,
+                user_id=str(user_id),
+                top_k=5,
+            ))
+
+            if retrieval_result.documents:
+                # Score threshold: only include documents with sufficient relevance.
+                # 0.75 is above pgvector similarity_search threshold (0.7) —
+                # documents that passed pgvector but scored low on cross-encoder
+                # reranking are excluded. This prevents nrerlevant memory records
+                # (old conversations, wrong topics) from contaminating context.
+                # Authority: update_handler owns context assembly (architecture §4).
+                # This is not policy — it is data quality filtering before context build.
+                _MIN_RETRIEVAL_SCORE = 0.75
+                _relevant_docs = [
+                    d for d in retrieval_result.documents
+                    if d.content and d.score >= _MIN_RETRIEVAL_SCORE
+                ]
+                if _relevant_docs:
+                    retrieved_context = "\n\n".join(d.content for d in _relevant_docs)
+                logger.info("Retrieval score filter applied", extra={
+                    "total_docs":    len(retrieval_result.documents),
+                    "relevant_docs": len(_relevant_docs),
+                    "threshold":     _MIN_RETRIEVAL_SCORE,
+                })
+                # Use token counts from retrieval_engine (real estimation, fixed §5.2).
+                # Do not recompute here — retrieval_engine owns this calculation.
+                embedding_tokens = retrieval_result.embedding_tokens
+                rerank_tokens    = retrieval_result.rerank_tokens
+
+            logger.info("Retrieval done", extra={
+                "user_id":       user_id,
+                "docs":          len(retrieval_result.documents),
+                "reranked":      retrieval_result.reranked,
+                "cached":        retrieval_result.cached,
+                "redis_cache":   redis is not None,
+                "chars":         len(retrieved_context),
+                "emb_tokens":    embedding_tokens,
+                "rerank_tokens": rerank_tokens,
+            })
+
+        except Exception as exc:
+            logger.warning("Retrieval failed, continuing without context", extra={
+                "error": str(exc),
+            })
+    else:
+        logger.warning(
+            "Retrieval skipped — Supabase unavailable (pgvector requires it)",
+            extra={"user_id": user_id},
+        )
+
+    # ── run pipeline ──────────────────────────────────────────────────────────
+
+    # Vision caption path: inject image descriptions into retrieved_context.
+    # _vision_image_context is set when caption is present (line 346) but was never
+    # wired into the pipeline — descriptions were silently dropped. Now they go into
+    # retrieved_context so the main LLM treats them as supporting material, not as
+    # the topic to narrate. Prevents inference/storytelling from unrelated photo sets.
+    _vic = locals().get("_vision_image_context")
+    if _vic:
+        retrieved_context = (
+            f"[Фото]\n{_vic}\n\n{retrieved_context}"
+            if retrieved_context
+            else f"[Фото]\n{_vic}"
+        )
+
+    request = OrchestratorRequest(
+        user_message=text,
+        user_balance=user_balance,
+        input_tokens=input_tokens,
+        complexity=complexity,
+        lang=lang,
+        supabase=supabase,
+        hf_client=hf_client,
+        conversation_history=conversation_history,
+        retrieved_context=retrieved_context,
+        embedding_tokens=embedding_tokens,
+        rerank_tokens=rerank_tokens,
+        # vision_intent: pre-classified by vision handler (single photo or album).
+        # If provided, orchestrator uses it directly — skips re-classify.
+        # This prevents double-routing (vision → MAPS/SEARCH) on album path.
+        vision_intent=locals().get("_vision_intent_result") or vision_intent,
+        skip_web_search=(
+            locals().get("_vision_intent_result") is not None
+            or vision_intent is not None
+        ),
+        # is_vision: routing guard against CoT artefacts on vision pipeline path.
+        # True when user_message contains extracted image descriptions (not user text).
+        # Prevents _classify_complexity() from treating LLM-generated structured text
+        # as high-complexity user input → blocks CHAIN_OF_THOUGHT reasoning mode.
+        # Set on both single-photo and album paths when needs_pipeline=True.
+        is_vision=is_vision or (locals().get("_vision_text_override") is not None),
+        request_id=request_id,
+        analysis_report=_analysis_report,
+        input_type=input_type,
+    )
+
+    result = await run(request)
 
     # ── save history ──────────────────────────────────────────────────────────
     if history_store is not None and not result.denied:
