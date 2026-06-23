@@ -86,6 +86,7 @@ def _telegram_api(method: str) -> str:
     If TELEGRAM_PROXY_URL is set (Cloudflare Worker), route through /tg/ proxy
     so HF Spaces never connects to api.telegram.org directly.
     """
+    logger.info("proxy_url=%r", settings.telegram_proxy_url)
     if settings.telegram_proxy_url:
         base = settings.telegram_proxy_url.rstrip("/")
         return f"{base}/tg/bot{settings.bot_token}/{method}"
