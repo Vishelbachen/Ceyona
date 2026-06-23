@@ -81,7 +81,27 @@ def _build_vision_intent(intent_enum, lang: str) -> object:
 # ─── TELEGRAM FILE HELPERS ────────────────────────────────────────────────────
 
 def _telegram_api(method: str) -> str:
+    """Return URL for a Telegram Bot API method.
+
+    If TELEGRAM_PROXY_URL is set (Cloudflare Worker), route through /tg/ proxy
+    so HF Spaces never connects to api.telegram.org directly.
+    """
+    if settings.telegram_proxy_url:
+        base = settings.telegram_proxy_url.rstrip("/")
+        return f"{base}/tg/bot{settings.bot_token}/{method}"
     return f"https://api.telegram.org/bot{settings.bot_token}/{method}"
+
+
+def _telegram_file_url(file_path: str) -> str:
+    """Return URL to download a Telegram file by file_path.
+
+    Routes through Cloudflare Worker proxy when TELEGRAM_PROXY_URL is set.
+    Worker path: /tg/file/bot<token>/<file_path>
+    """
+    if settings.telegram_proxy_url:
+        base = settings.telegram_proxy_url.rstrip("/")
+        return f"{base}/tg/file/bot{settings.bot_token}/{file_path}"
+    return f"https://api.telegram.org/file/bot{settings.bot_token}/{file_path}"
 
 
 async def _get_file_url(file_id: str, *, retries: int = 2) -> str | None:
@@ -99,7 +119,7 @@ async def _get_file_url(file_id: str, *, retries: int = 2) -> str | None:
                 if not file_path:
                     logger.error("getFile returned no file_path", extra={"file_id": file_id})
                     return None
-                return f"https://api.telegram.org/file/bot{settings.bot_token}/{file_path}"
+                return _telegram_file_url(file_path)
         except httpx.HTTPStatusError as exc:
             if attempt < retries and exc.response.status_code in _RETRYABLE_STATUS:
                 logger.warning("getFile retryable HTTP error — retrying", extra={
