@@ -40,7 +40,9 @@ async def _send_message(chat_id: int, text: str) -> None:
         if parse_mode:
             payload["parse_mode"] = parse_mode
         async with httpx.AsyncClient(timeout=15.0) as client:
+            logger.info("_attempt sending", extra={"url": f"{_TELEGRAM_API}/sendMessage"})
             resp = await client.post(f"{_TELEGRAM_API}/sendMessage", json=payload)
+            logger.info("_attempt response", extra={"status": resp.status_code, "body": resp.text[:200]})
             return resp.status_code, resp.text
 
     # Attempt 1: with Markdown
