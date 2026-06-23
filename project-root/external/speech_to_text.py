@@ -182,9 +182,18 @@ async def download_telegram_voice(
     HuggingFace Spaces under load bursts. Backoff: 0.5s, 1.0s.
     """
     import httpx
+    from app.settings import settings
 
     _RETRYABLE_STATUS = {429, 500, 502, 503}
-    api_base = f"https://api.telegram.org/bot{bot_token}"
+
+    # Route through Cloudflare Worker proxy when available (HF Spaces blocks direct access)
+    if settings.telegram_proxy_url:
+        _proxy = settings.telegram_proxy_url.rstrip("/")
+        api_base = f"{_proxy}/tg/bot{bot_token}"
+        _file_base = f"{_proxy}/tg/file/bot{bot_token}"
+    else:
+        api_base = f"https://api.telegram.org/bot{bot_token}"
+        _file_base = f"https://api.telegram.org/file/bot{bot_token}"
 
     for attempt in range(retries + 1):
         try:
@@ -208,7 +217,7 @@ async def download_telegram_voice(
                     raise RuntimeError("getFile returned empty file_path")
 
                 # Step 2: download
-                download_url = f"https://api.telegram.org/file/bot{bot_token}/{file_path}"
+                download_url = f"{_file_base}/{file_path}"
                 try:
                     r2 = await client.get(download_url)
                 except Exception as exc:
