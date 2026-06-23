@@ -561,10 +561,13 @@ class TestWebhookHelpers:
     @pytest.mark.asyncio
     async def test_send_message_makes_post(self):
         from transport.telegram.webhook import _send_message
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = "ok"
         mock_cm = AsyncMock()
         mock_cm.__aenter__ = AsyncMock(return_value=mock_cm)
         mock_cm.__aexit__ = AsyncMock(return_value=False)
-        mock_cm.post = AsyncMock()
+        mock_cm.post = AsyncMock(return_value=mock_response)
         with patch("transport.telegram.webhook.httpx.AsyncClient", return_value=mock_cm):
             await _send_message(chat_id=123, text="hello")
         mock_cm.post.assert_awaited_once()
