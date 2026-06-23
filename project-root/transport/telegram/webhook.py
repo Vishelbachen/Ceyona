@@ -34,16 +34,17 @@ async def _send_message(chat_id: int, text: str) -> None:
     if not text:
         return
 
-    async def _attempt(txt: str, parse_mode: str | None) -> int:
-        """Send one attempt, return HTTP status code. Raises on network error."""
+    async def _attempt(txt: str, parse_mode: str | None) -> tuple[int, str]:
+        """Send one attempt via Apps Script, return HTTP status code. Raises on network error."""
         payload: dict = {"chat_id": chat_id, "text": txt}
         if parse_mode:
             payload["parse_mode"] = parse_mode
-        async with httpx.AsyncClient(http2=False, timeout=10.0) as client:
+        async with httpx.AsyncClient(http2=False, timeout=15.0) as client:
             resp = await client.post(_APPS_SCRIPT_URL, json=payload)
             return resp.status_code, resp.text
 
-    # Attempt 1: with Markdown
+    # Single attempt with Markdown — Apps Script forwards to Telegram.
+    # Retry without Markdown only if Apps Script itself fails (non-200).
     try:
         status, body = await _attempt(text, "Markdown")
         if status == 200:
@@ -55,7 +56,7 @@ async def _send_message(chat_id: int, text: str) -> None:
     except Exception as exc:
         logger.error("sendMessage network error — retrying without Markdown", extra={"chat_id": chat_id, "error": repr(exc)})
 
-    # Attempt 2: plain text, no parse_mode
+    # Attempt 2: plain text, no parse_mode (only reached if attempt 1 failed)
     try:
         status, body = await _attempt(text, None)
         if status != 200:
