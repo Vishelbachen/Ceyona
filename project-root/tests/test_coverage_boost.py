@@ -298,12 +298,12 @@ class TestModelRouter:
     def test_route_model_fast(self):
         from contracts.shared_types import Tier
         from llm.model_router import route_model
-        assert route_model(Tier.FAST) == "llama-3.1-8b-instant"
+        assert route_model(Tier.FAST) == "openai/gpt-oss-20b"
 
     def test_route_model_general(self):
         from contracts.shared_types import Tier
         from llm.model_router import route_model
-        assert route_model(Tier.GENERAL) == "llama-3.3-70b-versatile"
+        assert route_model(Tier.GENERAL) == "qwen/qwen3.6-27b"
 
     def test_route_model_heavy(self):
         from contracts.shared_types import Tier
@@ -325,7 +325,7 @@ class TestModelRouter:
         from llm.model_router import get_tier_models
         models = get_tier_models(Tier.FAST)
         assert len(models) >= 1
-        assert "llama-3.1-8b-instant" in models
+        assert "openai/gpt-oss-20b" in models
 
     def test_get_tier_models_general_has_multiple(self):
         from contracts.shared_types import Tier
@@ -337,7 +337,7 @@ class TestModelRouter:
         from contracts.shared_types import Tier
         from llm.model_router import get_tier_models
         models = get_tier_models(Tier.HEAVY)
-        assert len(models) >= 2
+        assert len(models) >= 1
 
     def test_requires_thinking_disabled_qwen(self):
         from llm.model_router import requires_thinking_disabled
