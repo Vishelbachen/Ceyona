@@ -104,6 +104,36 @@ def _telegram_file_url(file_path: str) -> str:
     return f"https://api.telegram.org/file/bot{settings.bot_token}/{file_path}"
 
 
+
+async def _download_image_via_apps_script(file_id: str, *, retries: int = 2) -> bytes | None:
+    """Download image via Apps Script proxy (HF blocks direct Cloudflare Worker calls)."""
+    import base64 as _base64
+    _RETRYABLE_STATUS = {429, 500, 502, 503}
+    apps_url = settings.apps_script_url
+    for attempt in range(retries + 1):
+        try:
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+                r = await client.get(apps_url, params={"action": "getfile", "file_id": file_id})
+                if r.status_code in _RETRYABLE_STATUS:
+                    await asyncio.sleep(0.5 * (attempt + 1))
+                    continue
+                if r.status_code != 200:
+                    logger.error("getFile HTTP error via Apps Script", extra={"status": r.status_code})
+                    return None
+                result = r.json()
+                if not result.get("ok"):
+                    logger.error("getFile failed via Apps Script", extra={"error": result.get("error")})
+                    return None
+                return _base64.b64decode(result["data"])
+        except Exception as exc:
+            if attempt < retries:
+                logger.warning("getFile via Apps Script retrying", extra={"error": str(exc), "attempt": attempt + 1})
+                await asyncio.sleep(0.5 * (attempt + 1))
+                continue
+            logger.error("getFile via Apps Script failed", extra={"error": str(exc)})
+            return None
+    return None
+
 async def _get_file_url(file_id: str, *, retries: int = 2) -> str | None:
     _RETRYABLE_STATUS = {429, 500, 502, 503}
     for attempt in range(retries + 1):
