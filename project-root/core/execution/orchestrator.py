@@ -149,6 +149,7 @@ class OrchestratorResult:
     audio_seconds: float = 0.0
     tts_characters: int = 0
     tool_calls: int = 0
+    resolved_model: str = ""  # preferred_model resolved at routing time (models.md §25.3)
 
 
 # ─── INTERNAL HELPERS ─────────────────────────────────────────────────────────
@@ -493,6 +494,7 @@ async def _run_allow(
         intent=intent_result.intent.value,
         tool_used=bool(intent_result.tool_name),
         tool_calls=coordination.tool_calls,
+        resolved_model=intent_result.routing.preferred_model or "",
     )
 
 
@@ -587,6 +589,7 @@ async def _run_degraded(
         intent=intent_result.intent.value,
         tool_used=bool(intent_result.tool_name),
         tool_calls=coordination.tool_calls,
+        resolved_model="",  # DEGRADED_MODE: no preferred_model — FAST tier is always gpt-oss-20b
     )
 
 
@@ -599,6 +602,53 @@ async def _run_heavy(
 ) -> OrchestratorResult:
     tier = Tier.HEAVY
     strategy = select_strategy(intent_result.routing, tier)
+
+    # ── Long-Context Role B (models.md §26.2) ────────────────────────────────
+    # Activation: complexity == CRITICAL AND context_length > 32K tokens.
+    # qwen/qwen3.6-27b (262K native ctx) compresses input for gpt-oss-120b.
+    # This is a pre-synthesis transformation step — NOT a reasoning step.
+    # reasoning_effort="none" is mandatory. Must not substitute for gpt-oss-120b
+    # on reasoning tasks — it only reduces input size before Heavy Tier execution.
+    _LC_TOKEN_THRESHOLD = 32_000
+    if (
+        request.complexity == Complexity.CRITICAL
+        and request.input_tokens > _LC_TOKEN_THRESHOLD
+    ):
+        try:
+            from llm.long_context_transformer import transform as _lc_transform
+            lc_result = await _lc_transform(
+                user_message=request.user_message,
+                retrieved_context=request.retrieved_context or "",
+                conversation_history=request.conversation_history,
+                input_tokens=request.input_tokens,
+            )
+            if lc_result.success and lc_result.compressed_text:
+                logger.info(
+                    "Long-Context Role B: input compressed",
+                    extra={
+                        "original_tokens": request.input_tokens,
+                        "compressed_chars": len(lc_result.compressed_text),
+                        "model": lc_result.model_used,
+                    },
+                )
+                # Rebuild messages with compressed input — same truth_mode, same tier
+                truth_mode = resolve_truth_mode(intent_result.routing)
+                messages = build_messages(PromptContext(
+                    user_message=lc_result.compressed_text,
+                    system_prompt=request.system_prompt or intent_result.system_prompt,
+                    retrieved_context="",  # already folded into compressed_text by transformer
+                    conversation_history=request.conversation_history,
+                    truth_mode=truth_mode,
+                    lang=request.lang,
+                    tier=tier.value.lower(),
+                ))
+        except Exception as exc:
+            # Role B failure is non-fatal — continue with original messages.
+            # Heavy Tier handles long context natively (gpt-oss-120b: 40+ sentence capacity).
+            logger.warning(
+                "Long-Context Role B failed — continuing with original input",
+                extra={"error": str(exc)},
+            )
 
     shaper_result = await shape(ShaperInput(
         text=request.user_message,
@@ -704,6 +754,7 @@ async def _run_heavy(
         intent=intent_result.intent.value,
         tool_used=bool(intent_result.tool_name),
         tool_calls=coordination.tool_calls,
+        resolved_model=intent_result.routing.preferred_model or "",
     )
 
 
@@ -866,6 +917,7 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
         epk_out = evaluate(EPKInput(
             estimated_cost=estimated,
             user_balance=request.user_balance,
+            complexity=request.complexity,
         ))
 
         logger.info("EPK", extra={
