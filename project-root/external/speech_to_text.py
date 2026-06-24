@@ -42,6 +42,71 @@ _MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024
 # Formats natively supported by Groq Whisper API
 _GROQ_SUPPORTED_EXTENSIONS = {"mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm", "flac"}
 
+# VAD silencedetect parameters (ffmpeg).
+# noise: -35dB — captures typical recording noise floor without triggering on whisper.
+# d: 0.5s — minimum silence duration to count as a silence event.
+# Rationale: Telegram voice messages start and end with a brief silence burst from
+# PTT button click; 0.5s threshold avoids false positives on that artifact.
+_VAD_NOISE_FLOOR = "-35dB"
+_VAD_MIN_DURATION = "0.5"
+
+
+async def is_silent(audio_bytes: bytes, source_ext: str = "ogg") -> bool:
+    """
+    Voice Activity Detection via ffmpeg silencedetect filter.
+
+    Returns True if the audio contains no detectable speech — i.e. the entire
+    recording never produces a silence_end event (never left silence state).
+
+    Called BEFORE transcribe() to avoid sending silent audio to Whisper,
+    which returns an empty or hallucinated transcript and causes a confusing
+    generic error message to the user.
+
+    Failure mode: if ffmpeg is unavailable or crashes → returns False (pass-through).
+    The audio then proceeds to Whisper which will return an empty transcript,
+    handled by the existing asr_failed branch. No silent audio is lost.
+
+    Position in lifecycle (models.md §12, architecture.md §12):
+        download_telegram_voice → [HERE] → transcribe() → pipeline
+    """
+    in_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=f".{source_ext}", delete=False) as f:
+            f.write(audio_bytes)
+            in_path = f.name
+
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-i", in_path,
+            "-af", f"silencedetect=noise={_VAD_NOISE_FLOOR}:d={_VAD_MIN_DURATION}",
+            "-f", "null", "-",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+        output = stderr.decode(errors="replace")
+
+        # silencedetect emits "silence_end: <t>" each time audio rises above the
+        # noise floor. If no silence_end appears, the recording never contained
+        # a moment of audible sound — it was fully silent.
+        has_speech = "silence_end" in output
+
+        logger.debug(
+            "VAD result",
+            extra={"silent": not has_speech, "ext": source_ext, "bytes": len(audio_bytes)},
+        )
+        return not has_speech
+
+    except Exception as exc:
+        logger.warning(
+            "VAD ffmpeg failed — treating as non-silent (pass-through to Whisper)",
+            extra={"error": str(exc)},
+        )
+        return False  # safe default: don't block, let Whisper decide
+
+    finally:
+        if in_path and os.path.exists(in_path):
+            os.unlink(in_path)
+
 
 @dataclass(frozen=True)
 class TranscriptResult:
