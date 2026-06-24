@@ -319,11 +319,7 @@ async def handle_vision(
     })
 
     # ── download ──────────────────────────────────────────────────────────────
-    file_url = await _get_file_url(file_id)
-    if not file_url:
-        return VisionResult(text=err_text, needs_pipeline=False)
-
-    image_bytes = await _download_image(file_url)
+    image_bytes = await _download_image_via_apps_script(file_id)
     if not image_bytes:
         return VisionResult(text=err_text, needs_pipeline=False)
 
@@ -745,10 +741,7 @@ async def handle_vision_group(
 
     async def _fetch(fid: str) -> bytes | None:
         async with _sem:
-            url = await _get_file_url(fid)
-            if not url:
-                return None
-            raw = await _download_image(url)
+            raw = await _download_image_via_apps_script(fid)
             if not raw:
                 return None
             return _resize_image_if_needed(raw)
