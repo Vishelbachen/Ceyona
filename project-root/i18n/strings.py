@@ -9,7 +9,7 @@
 # - Russian/Ukrainian: feminine verb forms where applicable.
 # - All languages get the same voice, not just ru.
 
-content = '''from __future__ import annotations
+content = from __future__ import annotations
 
 # ─── SUPPORTED LANGUAGES ──────────────────────────────────────────────────────
 
