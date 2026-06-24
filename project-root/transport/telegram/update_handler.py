@@ -583,10 +583,21 @@ async def handle_message(
     # the topic to narrate. Prevents inference/storytelling from unrelated photo sets.
     _vic = locals().get("_vision_image_context")
     if _vic:
+        # VQ-03 guard: anchor model to visible content only.
+        # Without this prefix, qwen3.6-27b extrapolates beyond what is visible
+        # (e.g. screenshot of Wildberries → "это ChatGPT от OpenAI").
+        # The guard instructs the model to answer ONLY from the visual description —
+        # never to infer, guess, or name platforms/products not explicitly visible.
+        _vic_grounded = (
+            "[VISUAL CONTEXT — answer only from what is described below. "
+            "Do NOT infer, guess, or name platforms, apps, or entities "
+            "unless their name is explicitly visible in the image.]\n"
+            + _vic
+        )
         retrieved_context = (
-            f"[Фото]\n{_vic}\n\n{retrieved_context}"
+            f"[Фото]\n{_vic_grounded}\n\n{retrieved_context}"
             if retrieved_context
-            else f"[Фото]\n{_vic}"
+            else f"[Фото]\n{_vic_grounded}"
         )
 
     request = OrchestratorRequest(
