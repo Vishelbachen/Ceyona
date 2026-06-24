@@ -20,7 +20,10 @@ class UsageEntry:
     embedding_type: str
     raw_cost_usd: float
     billed_cost_usd: float      # with margin applied
-    model: str
+    model: str                  # agent model (coordination.model — final executing model)
+    resolved_model: str = ""    # preferred_model resolved by model_router before routing
+                                # (models.md §25.3 — per-model billing readiness)
+                                # Empty string when not available (e.g. DEGRADED_MODE).
     intent: str = ""
     lang: str = "en"
     # Speech billing (audio_seconds for ASR, tts_characters for TTS)
@@ -70,6 +73,7 @@ class UsageMeter:
             "raw_cost_usd":     entry.raw_cost_usd,
             "billed_cost_usd":  entry.billed_cost_usd,
             "model":            entry.model,
+            "resolved_model":   entry.resolved_model,
             "intent":           entry.intent,
             "lang":             entry.lang,
         }
@@ -104,9 +108,11 @@ class UsageMeter:
             if "PGRST204" in error_str and extended_payload:
                 logger.warning(
                     "usage_log missing extended columns — retrying core-only. "
-                    "Run migration: ALTER TABLE usage_log ADD COLUMN IF NOT EXISTS "
-                    "audio_seconds FLOAT8 DEFAULT 0, tts_characters BIGINT DEFAULT 0, "
-                    "tool_calls BIGINT DEFAULT 0.",
+                    "Run migration: ALTER TABLE usage_log "
+                    "ADD COLUMN IF NOT EXISTS audio_seconds FLOAT8 DEFAULT 0, "
+                    "ADD COLUMN IF NOT EXISTS tts_characters BIGINT DEFAULT 0, "
+                    "ADD COLUMN IF NOT EXISTS tool_calls BIGINT DEFAULT 0, "
+                    "ADD COLUMN IF NOT EXISTS resolved_model TEXT DEFAULT ''.",
                     extra={"user_id": entry.user_id, "hint": error_str[:200]},
                 )
                 try:
