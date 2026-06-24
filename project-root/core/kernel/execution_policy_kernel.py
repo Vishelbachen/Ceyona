@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from contracts.shared_types import EPKDecision
+from contracts.shared_types import Complexity, EPKDecision
 from core.kernel.policy_registry import RUNTIME
 
 # ─── THRESHOLDS ───────────────────────────────────────────────────────────
@@ -31,6 +31,7 @@ _DEGRADE_THRESHOLD: float = RUNTIME.epk.degrade_threshold
 class EPKInput:
     estimated_cost: float
     user_balance: float
+    complexity: Complexity = Complexity.MEDIUM  # models.md §16: CRITICAL → HEAVY_REQUIRED
 
 
 @dataclass(frozen=True)
@@ -48,10 +49,16 @@ def evaluate(epk_input: EPKInput) -> EPKOutput:
     Thresholds are read from policy_registry.RUNTIME — do not hardcode here.
 
     Rules (evaluated in order):
-      1. balance ≤ 0 or cost > balance → DENY
-      2. cost > HEAVY_THRESHOLD        → HEAVY_REQUIRED
-      3. cost > DEGRADE_THRESHOLD      → DEGRADED_MODE
-      4. otherwise                     → ALLOW
+      1. balance ≤ 0 or cost > balance        → DENY
+      2. complexity == CRITICAL               → HEAVY_REQUIRED  (models.md §16)
+      3. cost > HEAVY_THRESHOLD               → HEAVY_REQUIRED
+      4. cost > DEGRADE_THRESHOLD             → DEGRADED_MODE
+      5. otherwise                            → ALLOW
+
+    Complexity.CRITICAL (mixed modality / context_length > 32K) forces HEAVY_REQUIRED
+    regardless of estimated cost — the cost model underestimates long-context requests
+    because it operates on input_tokens at ingress, before full context is assembled.
+    The complexity flag is the authoritative signal for these cases (architecture.md §16).
     """
     cost = epk_input.estimated_cost
     balance = epk_input.user_balance
@@ -60,6 +67,16 @@ def evaluate(epk_input: EPKInput) -> EPKOutput:
         return EPKOutput(
             decision=EPKDecision.DENY,
             reason=f"Insufficient balance: need {cost:.6f}, have {balance:.6f}",
+        )
+
+    # CRITICAL complexity always requires Heavy Tier — models.md §16.
+    # This check precedes the cost threshold so that short-but-complex requests
+    # (e.g. mixed modality with large retrieved context) are not silently routed
+    # to GENERAL when their full context exceeds 32K tokens.
+    if epk_input.complexity == Complexity.CRITICAL:
+        return EPKOutput(
+            decision=EPKDecision.HEAVY_REQUIRED,
+            reason="Complexity.CRITICAL — mixed modality or context_length > 32K (models.md §16)",
         )
 
     if cost > _HEAVY_THRESHOLD:
