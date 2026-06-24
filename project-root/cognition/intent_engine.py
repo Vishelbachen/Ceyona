@@ -120,6 +120,7 @@ def _resolve_routing(intent: Intent, confidence: float = 1.0) -> RoutingProfile:
             reasoning_depth=ReasoningDepth.LIGHT,
             domain_hint=DomainHint.GEO,
             truth_mode=TruthMode.STRICT,
+            preferred_model=None,  # verbatim return — no LLM (models.md §3 table)
         )
 
     # ── MATH ─────────────────────────────────────────────────────────────────
@@ -131,6 +132,7 @@ def _resolve_routing(intent: Intent, confidence: float = 1.0) -> RoutingProfile:
             reasoning_depth=ReasoningDepth.HEAVY,
             domain_hint=DomainHint.MATH,
             truth_mode=TruthMode.HYBRID,
+            preferred_model="qwen/qwen3.6-27b",  # SWE-bench 77.2%, structured output
         )
 
     # ── EXAM ─────────────────────────────────────────────────────────────────
@@ -141,6 +143,7 @@ def _resolve_routing(intent: Intent, confidence: float = 1.0) -> RoutingProfile:
             reasoning_depth=ReasoningDepth.HEAVY,
             domain_hint=DomainHint.GENERAL,
             truth_mode=TruthMode.HYBRID,
+            preferred_model="qwen/qwen3.6-27b",  # SWE-bench 77.2%, CODE/EXAM group
         )
 
     # ── CODE ─────────────────────────────────────────────────────────────────
@@ -150,6 +153,7 @@ def _resolve_routing(intent: Intent, confidence: float = 1.0) -> RoutingProfile:
             reasoning_depth=ReasoningDepth.LIGHT,
             domain_hint=DomainHint.CODE,
             truth_mode=TruthMode.HYBRID,
+            preferred_model="qwen/qwen3.6-27b",  # SWE-bench 77.2%, structured output
         )
 
     # ── ANALYSIS ─────────────────────────────────────────────────────────────
@@ -160,6 +164,7 @@ def _resolve_routing(intent: Intent, confidence: float = 1.0) -> RoutingProfile:
             reasoning_depth=ReasoningDepth.LIGHT,
             domain_hint=DomainHint.GENERAL,
             truth_mode=TruthMode.HYBRID,
+            preferred_model="qwen/qwen3.6-27b",  # QUESTION/INSTRUCTION/ANALYSIS group
         )
 
     # ── INSTRUCTION ──────────────────────────────────────────────────────────
@@ -170,6 +175,7 @@ def _resolve_routing(intent: Intent, confidence: float = 1.0) -> RoutingProfile:
             reasoning_depth=ReasoningDepth.LIGHT,
             domain_hint=DomainHint.GENERAL,
             truth_mode=TruthMode.HYBRID,
+            preferred_model="qwen/qwen3.6-27b",  # QUESTION/INSTRUCTION/ANALYSIS group
         )
 
     # ── QUESTION ─────────────────────────────────────────────────────────────
@@ -183,6 +189,7 @@ def _resolve_routing(intent: Intent, confidence: float = 1.0) -> RoutingProfile:
             reasoning_depth=ReasoningDepth.LIGHT,
             domain_hint=DomainHint.GENERAL,
             truth_mode=TruthMode.HYBRID,
+            preferred_model="qwen/qwen3.6-27b",  # QUESTION/INSTRUCTION/ANALYSIS group
         )
 
     # ── RECOMMENDATION ───────────────────────────────────────────────────────
@@ -194,6 +201,7 @@ def _resolve_routing(intent: Intent, confidence: float = 1.0) -> RoutingProfile:
             reasoning_depth=ReasoningDepth.LIGHT,
             domain_hint=DomainHint.GENERAL,
             truth_mode=TruthMode.HYBRID,
+            preferred_model="qwen/qwen3.6-27b",  # SEARCH/RECOMMENDATION group
         )
 
     # ── RECALL ───────────────────────────────────────────────────────────────
@@ -204,6 +212,7 @@ def _resolve_routing(intent: Intent, confidence: float = 1.0) -> RoutingProfile:
             reasoning_depth=ReasoningDepth.LIGHT,
             domain_hint=DomainHint.GENERAL,
             truth_mode=TruthMode.HYBRID,
+            preferred_model="qwen/qwen3.6-27b",  # SEARCH/RECOMMENDATION group
         )
 
     # ── CREATIVE ─────────────────────────────────────────────────────────────
@@ -213,6 +222,7 @@ def _resolve_routing(intent: Intent, confidence: float = 1.0) -> RoutingProfile:
             reasoning_depth=ReasoningDepth.LIGHT,
             domain_hint=DomainHint.GENERAL,
             truth_mode=TruthMode.GENERATIVE,
+            preferred_model="qwen/qwen3.6-27b",  # CONVERSATION/EMOTIONAL/CREATIVE group
         )
 
     # ── CONVERSATION ─────────────────────────────────────────────────────────
@@ -222,6 +232,7 @@ def _resolve_routing(intent: Intent, confidence: float = 1.0) -> RoutingProfile:
             reasoning_depth=ReasoningDepth.NONE,
             domain_hint=DomainHint.GENERAL,
             truth_mode=TruthMode.GENERATIVE,
+            preferred_model="qwen/qwen3.6-27b",  # CONVERSATION/EMOTIONAL/CREATIVE group
         )
 
     # ── EMOTIONAL ────────────────────────────────────────────────────────────
@@ -231,6 +242,7 @@ def _resolve_routing(intent: Intent, confidence: float = 1.0) -> RoutingProfile:
             reasoning_depth=ReasoningDepth.NONE,
             domain_hint=DomainHint.GENERAL,
             truth_mode=TruthMode.GENERATIVE,
+            preferred_model="qwen/qwen3.6-27b",  # CONVERSATION/EMOTIONAL/CREATIVE group
         )
 
     # ── UNKNOWN / unhandled ───────────────────────────────────────────────────
@@ -240,6 +252,7 @@ def _resolve_routing(intent: Intent, confidence: float = 1.0) -> RoutingProfile:
         reasoning_depth=ReasoningDepth.LIGHT,
         domain_hint=DomainHint.GENERAL,
         truth_mode=TruthMode.HYBRID,
+        preferred_model=None,
     )
 
 
