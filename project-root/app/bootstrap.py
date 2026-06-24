@@ -9,7 +9,7 @@ async def bootstrap() -> dict:
     from events.event_bus import event_bus
     from events.event_dispatcher import setup_dispatcher
     from events.event_store import EventStore
-    from memory.supabase_client import ResilientSupabase
+    from infra.supabase_client import ResilientSupabase
     from redis.asyncio import from_url as redis_from_url
 
     # ─── Redis ──────────────────────────────────────────
