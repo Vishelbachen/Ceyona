@@ -450,6 +450,7 @@ async def telegram_webhook(
                     raw_cost_usd=result.usage.cost_usd,
                     billed_cost_usd=billed,
                     model=result.model,
+                    resolved_model=result.resolved_model,
                     lang=result.lang,
                     intent=result.intent,
                     audio_seconds=result.audio_seconds,
