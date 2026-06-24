@@ -101,8 +101,18 @@ QWEN_THINKING_DISABLED_MODELS: frozenset[str] = frozenset({
 
 # ─── PUBLIC API ───────────────────────────────────────────────────────────
 
-def route_model(tier: Tier) -> str:
-    """Return the primary model for the given tier."""
+def route_model(tier: Tier, preferred_model: str | None = None) -> str:
+    """
+    Return the model to use for the given tier.
+
+    If preferred_model is set and available in _TIER_MODELS[tier], use it.
+    Otherwise fall back to the tier primary (architecture.md §45.3).
+
+    preferred_model is an intent-based hint from RoutingProfile — never a
+    hard directive. model_router is the sole model selection authority (§8).
+    """
+    if preferred_model and preferred_model in _TIER_MODELS.get(tier, []):
+        return preferred_model
     return _PRIMARY[tier]
 
 
