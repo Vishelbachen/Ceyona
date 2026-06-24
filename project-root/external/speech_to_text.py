@@ -187,20 +187,18 @@ async def download_telegram_voice(
     _RETRYABLE_STATUS = {429, 500, 502, 503}
 
     # Route through Cloudflare Worker proxy when available (HF Spaces blocks direct access)
-    if settings.telegram_proxy_url:
-        _proxy = settings.telegram_proxy_url.rstrip("/")
-        api_base = f"{_proxy}/tg/bot{bot_token}"
-        _file_base = f"{_proxy}/tg/file/bot{bot_token}"
-    else:
-        api_base = f"https://api.telegram.org/bot{bot_token}"
-        _file_base = f"https://api.telegram.org/file/bot{bot_token}"
+    # Route through Apps Script (HF blocks direct Cloudflare Worker calls for file downloads)
+    _apps_script_url = settings.apps_script_url
 
     for attempt in range(retries + 1):
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                # Step 1: resolve file_path
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+                # Steps 1+2: getFile + download via Apps Script (returns base64)
                 try:
-                    r = await client.get(f"{api_base}/getFile", params={"file_id": file_id})
+                    r = await client.get(
+                        _apps_script_url,
+                        params={"action": "getfile", "file_id": file_id},
+                    )
                 except Exception as exc:
                     raise RuntimeError(
                         f"getFile network error: {type(exc).__name__}: {exc or 'no message'}"
@@ -211,15 +209,17 @@ async def download_telegram_voice(
                 if r.status_code != 200:
                     raise RuntimeError(f"getFile failed: {r.status_code} {r.text[:200]}")
 
-                file_info = r.json().get("result", {})
-                file_path = file_info.get("file_path", "")
-                if not file_path:
-                    raise RuntimeError("getFile returned empty file_path")
+                result = r.json()
+                if not result.get("ok"):
+                    raise RuntimeError(f"getFile failed: {result.get('error', 'unknown')}")
 
-                # Step 2: download
-                download_url = f"{_file_base}/{file_path}"
+                import base64 as _base64
+                file_bytes = _base64.b64decode(result["data"])
+                file_path = result["file_path"]
+
+                # Step 2: already downloaded
                 try:
-                    r2 = await client.get(download_url)
+                    r2 = type('FakeResp', (), {'content': file_bytes, 'status_code': 200})()
                 except Exception as exc:
                     raise RuntimeError(
                         f"Voice download network error: {type(exc).__name__}: {exc or 'no message'}"
