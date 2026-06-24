@@ -100,8 +100,14 @@ class RoutingProfile:
         Selects the specialised pipeline branch (MATH verification loop, etc.).
     truth_mode : TruthMode
         Declared here — assembler reads it from RoutingProfile, not from Intent.
+    preferred_model : str | None
+        Intent-based model hint for model_router (architecture.md §45, models.md §25.3).
+        Hint, not directive — model_router validates availability within tier.
+        None → route_model() returns tier primary.
+        Set by _resolve_routing() in intent_engine per models.md §3 mapping table.
     """
     retrieval_required: bool
     reasoning_depth:    ReasoningDepth
     domain_hint:        DomainHint
     truth_mode:         TruthMode
+    preferred_model:    str | None = None
