@@ -268,13 +268,36 @@ async def handle_message(
         if voice_file_id:
             try:
                 from app.settings import settings
-                from external.speech_to_text import download_telegram_voice, transcribe
+                from external.speech_to_text import download_telegram_voice, is_silent, transcribe
                 from security.safety_gate import check_pass1
 
                 audio_bytes, filename = await download_telegram_voice(
                     file_id=voice_file_id,
                     bot_token=settings.bot_token,
                 )
+
+                # ── VAD: skip Whisper on fully silent audio ───────────────────
+                # ffmpeg silencedetect: if recording never rose above noise floor
+                # → user pressed PTT without speaking.
+                # Return a soft "didn't catch that" instead of a generic error.
+                _voice_ext = filename.rsplit(".", 1)[-1].lower()
+                if await is_silent(audio_bytes, source_ext=_voice_ext):
+                    logger.info(
+                        "VAD: silent audio — returning vad_silence",
+                        extra={"user_id": user_id, "bytes": len(audio_bytes)},
+                    )
+                    from i18n.t import get_system_message
+                    return OrchestratorResult(
+                        text=get_system_message("vad_silence", lang),
+                        tier=Tier.FAST, model="",
+                        epk_decision=EPKDecision.DENY,
+                        usage=UsageRecord(
+                            input_tokens=0, output_tokens=0,
+                            embedding_tokens=0, rerank_tokens=0,
+                            tier=Tier.FAST, embedding_type="large", cost_usd=0.0,
+                        ),
+                        denied=True, deny_reason="vad_silence", lang=lang,
+                    )
 
                 tr = await transcribe(
                     audio_bytes=audio_bytes,
