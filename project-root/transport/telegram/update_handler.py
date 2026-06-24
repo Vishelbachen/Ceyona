@@ -268,7 +268,11 @@ async def handle_message(
         if voice_file_id:
             try:
                 from app.settings import settings
-                from external.speech_to_text import download_telegram_voice, is_silent, transcribe
+                from external.speech_to_text import (
+                    download_telegram_voice,
+                    is_silent,
+                    transcribe,
+                )
                 from security.safety_gate import check_pass1
 
                 audio_bytes, filename = await download_telegram_voice(
