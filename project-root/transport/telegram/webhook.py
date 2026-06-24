@@ -47,10 +47,9 @@ async def _send_message(chat_id: int, text: str) -> None:
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
             logger.info("_attempt sending")
             import json as _json
-            resp = await client.post(
+            resp = await client.get(
                 _APPS_SCRIPT_URL,
-                content=_json.dumps(payload),
-                headers={"Content-Type": "text/plain"},
+                params={"method": payload["method"], "params": _json.dumps(payload["params"])},
             )
             logger.info("_attempt response", extra={"status": resp.status_code, "body": resp.text[:200]})
             return resp.status_code, resp.text
