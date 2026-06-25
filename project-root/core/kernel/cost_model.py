@@ -21,6 +21,54 @@ MODEL_RATES: dict[str, dict[str, float]] = {
     Tier.HEAVY:   {"input": 0.15,  "output": 0.60},
 }
 
+# Safety Layer rates — verified Groq pricing, Jun 2026. economic.md §1.2
+# Both prompt-guard models are BERT classifiers: output is 1-2 tokens ("BENIGN"/"MALICIOUS").
+# Output tokens negligible — billed at input rate for simplicity.
+SAFETY_RATES: dict[str, float] = {
+    "meta-llama/llama-prompt-guard-2-22m": 0.03,   # $0.03 / 1M tokens
+    "meta-llama/llama-prompt-guard-2-86m": 0.04,   # $0.04 / 1M tokens
+    "openai/gpt-oss-safeguard-20b":        0.075,  # $0.075 / 1M input tokens
+}
+
+# Conservative pre-execution token estimates for Safety Gate EPK input.
+# Context window: 512 tokens for both prompt-guard models. Typical message: ~300 tokens.
+# Actual tokens recorded post-execution in UsageEntry via actual_safety_cost().
+_SAFETY_PASS1_ESTIMATED_TOKENS = 300   # llama-prompt-guard-2-22m
+_SAFETY_PASS2_ESTIMATED_TOKENS = 300   # llama-prompt-guard-2-86m
+
+
+def estimate_safety_cost() -> float:
+    """
+    Pre-execution estimate of Safety Gate cost for EPK input (Variant C).
+
+    Covers Pass 1 (22m) + Pass 2 (86m). safeguard-20b omitted from EPK
+    estimate — its cost is post-factum only (output varies, not pre-estimable
+    without input length, and is negligible relative to LLM cost).
+
+    Called by estimate_cost() — Safety Gate fires on every request, so its
+    cost is a fixed overhead that EPK must know about.
+    """
+    pass1 = _SAFETY_PASS1_ESTIMATED_TOKENS * SAFETY_RATES["meta-llama/llama-prompt-guard-2-22m"]
+    pass2 = _SAFETY_PASS2_ESTIMATED_TOKENS * SAFETY_RATES["meta-llama/llama-prompt-guard-2-86m"]
+    return (pass1 + pass2) / 1_000_000
+
+
+def actual_safety_cost(
+    pass1_tokens: int,
+    pass2_tokens: int,
+    safeguard_tokens: int = 0,
+) -> float:
+    """
+    Post-execution actual Safety Gate cost from real token counts.
+    Recorded in UsageEntry after safety gate completes.
+    Enables estimate vs actual drift tracking per request.
+    """
+    return (
+        pass1_tokens       * SAFETY_RATES["meta-llama/llama-prompt-guard-2-22m"]
+        + pass2_tokens     * SAFETY_RATES["meta-llama/llama-prompt-guard-2-86m"]
+        + safeguard_tokens * SAFETY_RATES["openai/gpt-oss-safeguard-20b"]
+    ) / 1_000_000
+
 # HuggingFace Inference API — BGE embeddings
 # bge-large-en-v1.5: ~$0.10/1M tokens (HF serverless)
 # bge-small-en-v1.5: ~$0.02/1M tokens
@@ -81,7 +129,7 @@ def estimate_cost(
         + estimated_output_tokens * rates["output"]
         + embedding_tokens * EMBEDDING_RATES[embedding_type]
         + rerank_tokens * RERANK_RATE
-    ) / 1_000_000
+    ) / 1_000_000 + estimate_safety_cost()
 
 
 def actual_cost(
@@ -91,6 +139,9 @@ def actual_cost(
     rerank_tokens: int,
     tier: Tier,
     embedding_type: str = "large",
+    safety_pass1_tokens: int = 0,
+    safety_pass2_tokens: int = 0,
+    safety_safeguard_tokens: int = 0,
 ) -> float:
     rates = MODEL_RATES[tier]
     return (
@@ -98,7 +149,11 @@ def actual_cost(
         + output_tokens * rates["output"]
         + embedding_tokens * EMBEDDING_RATES[embedding_type]
         + rerank_tokens * RERANK_RATE
-    ) / 1_000_000
+    ) / 1_000_000 + actual_safety_cost(
+        pass1_tokens=safety_pass1_tokens,
+        pass2_tokens=safety_pass2_tokens,
+        safeguard_tokens=safety_safeguard_tokens,
+    )
 
 
 def vision_actual_cost(input_tokens: int, output_tokens: int) -> float:
