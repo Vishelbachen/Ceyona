@@ -106,14 +106,22 @@ MODEL_RATES ДОЛЖЕН быть обновлён одновременно со
 ### 1.2 Safety Layer (Groq-hosted)
 
 ```
-meta-llama/llama-prompt-guard-2-22m    → input: $0.05  output: $0.08  (FAST tier equivalent)
-meta-llama/llama-prompt-guard-2-86m    → input: $0.05  output: $0.08  (FAST tier equivalent)
-openai/gpt-oss-safeguard-20b           → input: $0.075 output: $0.30
+meta-llama/llama-prompt-guard-2-22m    → input: $0.03  output: $0.03  per 1M tokens
+meta-llama/llama-prompt-guard-2-86m    → input: $0.04  output: $0.04  per 1M tokens
+openai/gpt-oss-safeguard-20b           → input: $0.075 output: $0.30  per 1M tokens
 ```
 
 Safety models: billed per request passing through Safety Gate. No exceptions.
-Safety model fired = cost recorded.
-22m and 86m have no official separate pricing — treated as FAST tier equivalent.
+Both prompt-guard models are BERT classifiers — output is 1-2 tokens ("BENIGN"/"MALICIOUS"),
+negligible cost. Billed conservatively at input rate for output tokens.
+
+**EPK estimate (Variant C):** `estimate_safety_cost()` in `cost_model.py` adds a fixed
+pre-execution overhead (~300 tokens × 22m rate + ~300 tokens × 86m rate) to every
+`estimate_cost()` call. EPK sees full request cost including Safety Gate.
+
+**Post-execution:** `actual_safety_cost(pass1_tokens, pass2_tokens, safeguard_tokens)`
+records real token counts from `GateResult.tokens_used` into `UsageEntry`.
+Enables estimate vs actual drift tracking per request.
 
 ### 1.3 Agent Layer (Compound — Groq-hosted)
 
