@@ -430,11 +430,13 @@ async def handle_message(
     # Blocking authority: safety_agent (post-reasoning).
     _safety_pass2_tokens = 0
     _safety_safeguard_tokens = 0
+    _safety_safeguard_output_tokens = 0
     try:
         from security.safety_gate import check_pass2
         _gate2 = await asyncio.wait_for(check_pass2(text), timeout=12.0)
-        _safety_pass2_tokens = _gate2.tokens_used              # 86m tokens
-        _safety_safeguard_tokens = _gate2.safeguard_tokens_used  # safeguard-20b tokens
+        _safety_pass2_tokens = _gate2.tokens_used                          # 86m input tokens
+        _safety_safeguard_tokens = _gate2.safeguard_tokens_used            # safeguard-20b input tokens
+        _safety_safeguard_output_tokens = _gate2.safeguard_output_tokens_used  # safeguard-20b output tokens
     except asyncio.TimeoutError:
         logger.warning("Safety Gate Pass 2 timeout — skipping", extra={"user_id": user_id})
     except Exception as exc:
@@ -734,7 +736,7 @@ async def handle_message(
     # audio_seconds and tts_characters are captured in local vars above.
     # They must be set on OrchestratorResult so webhook.py can pass them
     # to UsageEntry — otherwise speech billing always records 0.
-    if _asr_audio_seconds or _tts_characters or _safety_pass1_tokens or _safety_pass2_tokens or _safety_safeguard_tokens:
+    if _asr_audio_seconds or _tts_characters or _safety_pass1_tokens or _safety_pass2_tokens or _safety_safeguard_tokens or _safety_safeguard_output_tokens:
         from dataclasses import replace as _replace
         result = _replace(result,
             audio_seconds=_asr_audio_seconds,
@@ -742,6 +744,7 @@ async def handle_message(
             safety_pass1_tokens=_safety_pass1_tokens,
             safety_pass2_tokens=_safety_pass2_tokens,
             safety_safeguard_tokens=_safety_safeguard_tokens,
+            safety_safeguard_output_tokens=_safety_safeguard_output_tokens,
         )
 
     return result
