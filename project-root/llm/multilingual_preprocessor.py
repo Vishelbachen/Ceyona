@@ -116,6 +116,8 @@ class PreprocessorResult:
     text: str          # normalized text (may be identical to input)
     model_used: str    # model name or "passthrough"
     was_normalized: bool
+    input_tokens: int = 0   # LLM call input tokens — billed per economic.md §2
+    output_tokens: int = 0  # LLM call output tokens
 
 
 # ─── NORMALIZATION PROMPTS ────────────────────────────────────────────────────
@@ -191,6 +193,8 @@ async def preprocess(inp: PreprocessorInput) -> PreprocessorResult:
         )
 
         normalized = _clean_normalized_text(response.text)
+        _in_tok  = response.input_tokens
+        _out_tok = response.output_tokens
         if not normalized:
             logger.warning(
                 "multilingual_preprocessor: empty response — using original",
@@ -200,6 +204,8 @@ async def preprocess(inp: PreprocessorInput) -> PreprocessorResult:
                 text=inp.text,
                 model_used=model,
                 was_normalized=False,
+                input_tokens=_in_tok,
+                output_tokens=_out_tok,
             )
 
         # Guard against accidental translation or script collapse.
@@ -212,6 +218,8 @@ async def preprocess(inp: PreprocessorInput) -> PreprocessorResult:
                 text=inp.text,
                 model_used=model,
                 was_normalized=False,
+                input_tokens=_in_tok,
+                output_tokens=_out_tok,
             )
 
         logger.info(
@@ -222,6 +230,8 @@ async def preprocess(inp: PreprocessorInput) -> PreprocessorResult:
             text=normalized,
             model_used=model,
             was_normalized=True,
+            input_tokens=_in_tok,
+            output_tokens=_out_tok,
         )
 
     except Exception as exc:
