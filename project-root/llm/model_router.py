@@ -28,7 +28,8 @@ _TIER_MODELS: dict[Tier, list[str]] = {
     Tier.GENERAL: [
         "qwen/qwen3.6-27b",        # primary: IFEval 95.0, 201 langs, vision, 262K ctx
                                     # CRITICAL: reasoning_effort="none" mandatory at every call site
-                                    # params: temperature=0.7, top_p=0.80, top_k=20, presence_penalty=1.5
+                                    # params: temperature=0.7, top_p=0.80, presence_penalty=1.5
+                                    # NOTE: top_k omitted — not supported by Groq OpenAI-compatible API
         "openai/gpt-oss-120b",     # fallback: if qwen3.6-27b unavailable (models.md §3)
     ],
     Tier.HEAVY: [
