@@ -159,6 +159,7 @@ def actual_cost(
     safety_pass1_tokens: int = 0,
     safety_pass2_tokens: int = 0,
     safety_safeguard_tokens: int = 0,
+    safety_safeguard_output_tokens: int = 0,  # gpt-oss-safeguard-20b output ($0.30/1M) — was missing
 ) -> float:
     rates = MODEL_RATES[tier]
     return (
@@ -170,17 +171,5 @@ def actual_cost(
         pass1_tokens=safety_pass1_tokens,
         pass2_tokens=safety_pass2_tokens,
         safeguard_tokens=safety_safeguard_tokens,
+        safeguard_output_tokens=safety_safeguard_output_tokens,
     )
-
-
-def vision_actual_cost(input_tokens: int, output_tokens: int) -> float:
-    """
-    DEPRECATED — use payments.pricing_engine.vision_cost() instead.
-
-    Kept for backward compatibility only. Forwards to the canonical
-    implementation in payments/ where billing logic belongs.
-    Removed the inline rates: source of truth is now _VISION_RATES
-    in pricing_engine.py.
-    """
-    from payments.pricing_engine import vision_cost
-    return vision_cost(input_tokens, output_tokens)
