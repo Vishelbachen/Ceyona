@@ -204,7 +204,8 @@ async def handle_message(
             # Now: run a balance guard before returning. We can't run a full EPK
             # estimate here (no embedding_tokens, no complexity), so we use the
             # §D billing fix: compute actual cost from Groq token counts before guard.
-            # vision_cost() uses _VISION_RATES ($0.11/$0.34 per 1M) from payments/pricing_engine.
+            # vision_cost() uses _VISION_RATES ($0.60/$3.00 per 1M) from payments/pricing_engine.
+            # Model: qwen/qwen3.6-27b (replaces llama-4-scout, deprecated Jul 17, 2026).
             # Falls back to conservative $0.001 estimate if tokens weren't captured (failed=True path).
             from payments.pricing_engine import vision_cost
             _vision_cost_usd = vision_cost(
@@ -329,6 +330,8 @@ async def handle_message(
                     gate1 = await asyncio.wait_for(check_pass1(tr.text), timeout=8.0)
                     if not gate1.safe:
                         from i18n.t import get_system_message
+                        # Safety Gate ran and consumed tokens — carry them so
+                        # webhook bills gate cost even on DENY (economic.md §2).
                         return OrchestratorResult(
                             text=get_system_message("safety_block", lang),
                             tier=Tier.FAST, model="",
@@ -339,6 +342,7 @@ async def handle_message(
                                 tier=Tier.FAST, embedding_type="large", cost_usd=0.0,
                             ),
                             denied=True, deny_reason="safety_gate_pass1", lang=lang,
+                            safety_pass1_tokens=gate1.tokens_used,
                         )
                 except asyncio.TimeoutError:
                     logger.warning("Safety Gate Pass 1 (voice) timeout — skipping", extra={"user_id": user_id})
