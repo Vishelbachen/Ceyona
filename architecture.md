@@ -245,7 +245,7 @@ User Input
 → Safety Gate Pass 1  [llama-prompt-guard-2-22m — observability only, non-blocking]
 → Feature Extraction  [_classify_complexity: complexity, input_tokens estimation]
 → Multilingual Normalization  [allam-2-7b → Arabic | qwen/qwen3.6-27b → other non-Latin]
-→ Safety Gate Pass 2  [gpt-oss-safeguard-20b — observability only, non-blocking]
+→ Safety Gate Pass 2  [llama-prompt-guard-2-86m → gpt-oss-safeguard-20b — sequential, observability only, non-blocking]
 → Conversation History Load
 → Memory + Embedding Retrieval + Reranker
 → Web Search  [pre-EPK, balance-gated — skipped for zero-balance users]
@@ -273,7 +273,7 @@ input до любой обработки. Модель 22m — лёгкая, з�
 
 Multilingual Normalization стоит МЕЖДУ Pass 1 и Pass 2.
 Это архитектурно правильно по следующей причине:
-Pass 2 использует gpt-oss-safeguard-20b — LLM-based классификатор. Он значительно
+Pass 2 включает gpt-oss-safeguard-20b — LLM-based классификатор. Он значительно
 точнее работает с нормализованным текстом. Если пользователь пишет на арабском или
 другом нелатинском языке, Pass 2 получает уже нормализованный вариант — риск
 false-positive на экзотическом вводе снижается. Это также означает что у Pass 2 есть
@@ -281,6 +281,12 @@ false-positive на экзотическом вводе снижается. Эт
 
 Вариант Б (оба Gate до Multilingual) был бы симметричнее, но хуже по качеству
 классификации Pass 2 на нелатинских языках. Вариант А выбран намеренно.
+
+**Внутренний порядок Pass 2 (последовательный):**
+86m запускается первым — BERT-классификатор, узкий scope (injection/jailbreak), низкая
+латентность, 8 языков. safeguard-20b запускается вторым — LLM, более широкий scope.
+Последовательность даёт чёткий timeline в логах и упрощает добавление новых моделей
+(Pass 3 = ещё один шаг в цепочке без структурных изменений).
 
 No hidden execution stages are allowed.
 No runtime node may insert undeclared execution phases.
@@ -662,7 +668,11 @@ Pre-EPK signal logging only. Both passes always return PASS.
 Pass 1 (`llama-prompt-guard-2-22m`): model IS called. Result (`BENIGN`/`MALICIOUS`) logged
 with latency. Always returns PASS — verdict never blocks. False-positive rate on RU/AR is
 high but acceptable for observability; blocking authority remains with safety_agent only.
-Pass 2 (`gpt-oss-safeguard-20b`): model IS called for signal logging; verdict does not block.
+Pass 2 (`llama-prompt-guard-2-86m` → `gpt-oss-safeguard-20b`): two models called
+sequentially. 86m runs first — fast BERT classifier, narrow scope (injection/jailbreak),
+logs BENIGN/MALICIOUS signal. safeguard-20b runs second — LLM-based, broader policy scope,
+works best on normalized (post-Multilingual) text. Both verdicts are logged independently.
+Neither blocks execution.
 Model unavailability → pass-through for both passes.
 
 **safety_agent (post-reasoning semantic validation — SOLE BLOCKING AUTHORITY):**
