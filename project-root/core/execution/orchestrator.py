@@ -151,6 +151,9 @@ class OrchestratorResult:
     tts_characters: int = 0
     tool_calls: int = 0
     resolved_model: str = ""  # preferred_model resolved at routing time (models.md §25.3)
+    safety_pass1_tokens: int = 0     # GateResult.tokens_used from check_pass1() — for actual_safety_cost()
+    safety_pass2_tokens: int = 0     # GateResult.tokens_used from check_pass2()
+    safety_safeguard_tokens: int = 0 # gpt-oss-safeguard-20b tokens (included in pass2 call)
 
 
 # ─── INTERNAL HELPERS ─────────────────────────────────────────────────────────
