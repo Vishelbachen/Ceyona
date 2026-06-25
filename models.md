@@ -54,12 +54,18 @@ Quota exhaustion on HF does NOT trigger Groq fallback — it degrades retrieval 
 *Prices: economic.md §1.2*
 
 ```
-meta-llama/llama-prompt-guard-2-22m    → SIGNAL LOGGER (Pass 1)
+meta-llama/llama-prompt-guard-2-22m    → SIGNAL LOGGER (Pass 1) — currently no-op: model NOT called
 meta-llama/llama-prompt-guard-2-86m    → SIGNAL LOGGER (Pass 2)
-openai/gpt-oss-safeguard-20b           → SIGNAL LOGGER (Pass 2, observability)
+openai/gpt-oss-safeguard-20b           → SIGNAL LOGGER (Pass 2, observability) — model IS called
 ```
 
 **Role:** input signal logging only. NO generation. NO reasoning synthesis. NO blocking.
+
+**Pass 1 implementation note:**
+`check_pass1()` is currently a complete no-op — `llama-prompt-guard-2-22m` is NOT invoked.
+The function logs a debug event and returns `GateVerdict.PASS` immediately.
+Rationale: false-positive rate on RU/AR/casual text is unacceptable even for observability.
+If Pass 1 model invocation is restored in future, this section must be updated.
 
 **Execution order:**
 - 22m: BEFORE Feature Extraction
@@ -325,12 +331,14 @@ No policy decisions. No tier or model selection. No self-activation of Heavy Tie
 
 **Role:** FINAL OUTPUT AUTHORITY.
 
-**7-step pipeline (code-authoritative):**
+**9-step pipeline (code-authoritative):**
 
 ```
 1. assemble           — accept raw LLM output
 2. normalize_telegram — LaTeX→Unicode, strip Markdown (NOT a meta module)
+2.5 strip_cot_artifacts — remove CoT scaffolding leaked into output (architecture §19)
 3. structure          — intent-aware shaping (identity today, reserved)
+3.5 strip_unwanted_code — remove unsolicited code blocks per intent/lang rules
 4. format             — whitespace normalization
 5. correction         — meta/correction.py (preamble/sign-off stripping)
 6. output_normalizer  — meta/output_normalizer.py (retrieval contamination cleanup:
