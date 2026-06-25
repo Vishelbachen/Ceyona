@@ -124,7 +124,7 @@ async def transform(
                     "reasoning_effort": "none",
                     "temperature": 0.3,   # low temperature: compression is deterministic
                     "top_p": 0.80,
-                    "top_k": 20,
+                    # top_k omitted — not supported by Groq OpenAI-compatible API
                     "presence_penalty": 0.0,
                     "max_tokens": 4096,
                 },
