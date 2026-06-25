@@ -264,62 +264,79 @@ async def check_pass2(text: str) -> GateResult:
     """
     Safety Gate Pass 2 — deep classification (NON-BLOCKING, observability only).
 
-    Calls BOTH models per models.md §1:
+    Calls both models SEQUENTIALLY per models.md §1:
       1. llama-prompt-guard-2-86m  — multilingual BERT classifier (prompt injection / jailbreak)
-      2. gpt-oss-safeguard-20b     — semantic safety classifier (broader policy scope)
+      2. gpt-oss-safeguard-20b     — LLM-based semantic classifier (broader policy scope)
 
-    Both are called concurrently for observability. Neither blocks execution.
-    Tokens from each model are tracked separately for accurate billing (Variant C):
-      - tokens_used          → 86m tokens → billed via SAFETY_RATES["llama-prompt-guard-2-86m"]
-      - safeguard_tokens_used → safeguard-20b tokens → billed via SAFETY_RATES["gpt-oss-safeguard-20b"]
+    Sequential order is intentional:
+      - 86m is a fast BERT classifier (~single-digit ms). It runs first — narrow scope,
+        specific signal (injection/jailbreak only). If it fires, the signal is logged
+        before the heavier model is even called.
+      - safeguard-20b is an LLM — broader scope, higher latency. Runs second on the
+        same (already Multilingual-normalized) text, with full policy context.
+      - Each model produces an independent log entry. In observability, sequential
+        ordering gives a clear event timeline. Adding a future Pass 3 model is just
+        appending another step — no structural change needed.
 
-    Runs AFTER Feature Extraction, BEFORE EPK — position unchanged.
+    Tokens tracked separately per model for accurate billing (Variant C):
+      - tokens_used           → 86m input tokens  → billed at $0.04/1M
+      - safeguard_tokens_used → safeguard-20b input tokens → billed at $0.075/1M
+
+    Runs AFTER Feature Extraction + Multilingual Normalization, BEFORE EPK.
     Always returns GateVerdict.PASS. Blocking authority: safety_agent (post-reasoning).
     """
-    import asyncio
     stripped = text.strip()
     tokens_86m = 0
     tokens_safeguard = 0
 
-    async def _run_86m() -> None:
-        nonlocal tokens_86m
-        try:
-            safe, tokens_86m = await _classify_with_model(stripped, _PASS2_86M, "")
-            if not safe:
-                logger.warning(
-                    "Safety Gate Pass 2 (86m): MALICIOUS signal detected (non-blocking)",
-                    extra={"model": _PASS2_86M, "tokens": tokens_86m, "text_preview": stripped[:80]},
-                )
-            else:
-                logger.debug("Safety Gate Pass 2 (86m): BENIGN signal",
-                             extra={"model": _PASS2_86M, "tokens": tokens_86m})
-        except Exception as exc:
-            logger.error("Safety Gate Pass 2 (86m) exception (non-blocking)",
-                         extra={"model": _PASS2_86M, "error": str(exc)})
+    # ── Step 1: llama-prompt-guard-2-86m ─────────────────────────────────────
+    # BERT classifier — single user message, returns "BENIGN"/"MALICIOUS".
+    # Detects prompt injection and jailbreak attempts across 8 languages.
+    try:
+        safe_86m, tokens_86m = await _classify_with_model(stripped, _PASS2_86M, "")
+        if not safe_86m:
+            logger.warning(
+                "Safety Gate Pass 2 (86m): MALICIOUS signal detected (non-blocking)",
+                extra={"model": _PASS2_86M, "tokens": tokens_86m, "text_preview": stripped[:80]},
+            )
+        else:
+            logger.debug(
+                "Safety Gate Pass 2 (86m): BENIGN signal",
+                extra={"model": _PASS2_86M, "tokens": tokens_86m},
+            )
+    except Exception as exc:
+        logger.error(
+            "Safety Gate Pass 2 (86m) exception (non-blocking)",
+            extra={"model": _PASS2_86M, "error": str(exc)},
+        )
 
-    async def _run_safeguard() -> None:
-        nonlocal tokens_safeguard
-        try:
-            safe, tokens_safeguard = await _classify_with_model(stripped, _PASS2_SAFEGUARD, _PASS2_SYSTEM)
-            if not safe:
-                logger.warning(
-                    "Safety Gate Pass 2 (safeguard-20b): UNSAFE signal detected (non-blocking)",
-                    extra={"model": _PASS2_SAFEGUARD, "tokens": tokens_safeguard, "text_preview": stripped[:80]},
-                )
-            else:
-                logger.debug("Safety Gate Pass 2 (safeguard-20b): SAFE signal",
-                             extra={"model": _PASS2_SAFEGUARD, "tokens": tokens_safeguard})
-        except Exception as exc:
-            logger.error("Safety Gate Pass 2 (safeguard-20b) exception (non-blocking)",
-                         extra={"model": _PASS2_SAFEGUARD, "error": str(exc)})
-
-    # Run both models concurrently — observability, not gating
-    await asyncio.gather(_run_86m(), _run_safeguard())
+    # ── Step 2: gpt-oss-safeguard-20b ────────────────────────────────────────
+    # LLM-based classifier — system + user, returns "SAFE"/"UNSAFE".
+    # Broader policy scope than 86m. Works best on normalized (post-Multilingual) text.
+    try:
+        safe_safeguard, tokens_safeguard = await _classify_with_model(
+            stripped, _PASS2_SAFEGUARD, _PASS2_SYSTEM
+        )
+        if not safe_safeguard:
+            logger.warning(
+                "Safety Gate Pass 2 (safeguard-20b): UNSAFE signal detected (non-blocking)",
+                extra={"model": _PASS2_SAFEGUARD, "tokens": tokens_safeguard, "text_preview": stripped[:80]},
+            )
+        else:
+            logger.debug(
+                "Safety Gate Pass 2 (safeguard-20b): SAFE signal",
+                extra={"model": _PASS2_SAFEGUARD, "tokens": tokens_safeguard},
+            )
+    except Exception as exc:
+        logger.error(
+            "Safety Gate Pass 2 (safeguard-20b) exception (non-blocking)",
+            extra={"model": _PASS2_SAFEGUARD, "error": str(exc)},
+        )
 
     # Always PASS — blocking authority belongs to safety_agent.
     return GateResult(
         verdict=GateVerdict.PASS,
-        model_used=_PASS2_86M,           # primary Pass 2 model
-        tokens_used=tokens_86m,           # 86m tokens — billed at $0.04/1M
-        safeguard_tokens_used=tokens_safeguard,  # safeguard-20b tokens — billed at $0.075/1M
+        model_used=_PASS2_86M,
+        tokens_used=tokens_86m,
+        safeguard_tokens_used=tokens_safeguard,
     )
