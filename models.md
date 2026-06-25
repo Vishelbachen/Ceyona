@@ -1,5 +1,5 @@
 # CEYONA — MODEL REGISTRY
-Version: 9.0 — Post-Deprecation Migration Edition
+Version: 9.1 — Pass1 Status Corrected + Billing Sync (Jun 26, 2026)
 Status: Active Source of Truth
 Supersedes: v8.0 and all previous versions
 
@@ -912,9 +912,12 @@ attempting to override system instructions → BENIGN. ✅ DOC
 - This is the architectural reason for NON-BLOCKING policy (§1 rationale)
 
 **Pass 1 implementation status:**
-Currently no-op — model NOT called. `check_pass1()` returns `GateVerdict.PASS` immediately
-with only a debug log. Rationale: false-positive rate on RU/AR/casual text is unacceptable
-even for observability purposes. Restoration of model call is planned — see §1.
+Active — model IS called on every request. `check_pass1()` calls `llama-prompt-guard-2-22m`,
+logs the result (`BENIGN`/`MALICIOUS`) with `latency_ms` and `text_preview`, then always
+returns `GateVerdict.PASS`. NON-BLOCKING: result never prevents execution.
+Tokens are tracked and billed (`safety_pass1_tokens` in `OrchestratorResult`).
+Known limitation: elevated false-positive rate on RU/AR/casual text — this is why
+NON-BLOCKING policy is permanent for Pass 1 (§1 rationale).
 
 #### llama-prompt-guard-2-86m (Safety Pass 2)
 
