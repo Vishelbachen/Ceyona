@@ -3,11 +3,12 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from enum import Enum
+from typing import Tuple
 
 logger = logging.getLogger(__name__)
 
 # ─── ROLE ─────────────────────────────────────────────────────────────────────
-# Safety Gate — deterministic input firewall. Per architecture.md §21 and models1.md §1.
+# Safety Gate — deterministic input firewall. Per architecture.md §21 and models.md §1.
 #
 # Two distinct passes:
 #   Pass 1 (22m):  fast rejection filter — runs BEFORE Feature Extraction
@@ -30,6 +31,7 @@ logger = logging.getLogger(__name__)
 #
 #   Defense-in-depth is preserved:
 #     Pass 1 (22m)           → observability only (logs suspicious signals)
+#     Pass 2 (86m)           → observability only (logs suspicious signals)
 #     Pass 2 (safeguard-20b) → observability only (logs suspicious signals)
 #     safety_agent           → BLOCKING, post-reasoning, semantic authority
 #
@@ -69,7 +71,8 @@ class GateResult:
     verdict: GateVerdict
     reason: str = ""
     model_used: str = ""
-    tokens_used: int = 0   # actual input tokens sent to the model (for actual_safety_cost())
+    tokens_used: int = 0         # actual input tokens — Pass 1 (22m), or 86m for Pass 2
+    safeguard_tokens_used: int = 0  # actual input tokens for gpt-oss-safeguard-20b (Pass 2 only)
 
     @property
     def safe(self) -> bool:
@@ -78,11 +81,9 @@ class GateResult:
 
 # ─── MODEL ASSIGNMENTS ────────────────────────────────────────────────────────
 
-_PASS1_MODEL  = "meta-llama/llama-prompt-guard-2-22m"
-_PASS2_MODELS = [
-    "meta-llama/llama-prompt-guard-2-86m",
-    "openai/gpt-oss-safeguard-20b",
-]
+_PASS1_MODEL    = "meta-llama/llama-prompt-guard-2-22m"
+_PASS2_86M      = "meta-llama/llama-prompt-guard-2-86m"
+_PASS2_SAFEGUARD = "openai/gpt-oss-safeguard-20b"
 
 # Used only for openai/gpt-oss-safeguard-20b (standard chat model, accepts system messages).
 # prompt-guard models are classifiers — they receive only a user message.
@@ -118,10 +119,14 @@ _GUARD_MODELS = {
 
 # ─── INTERNAL ─────────────────────────────────────────────────────────────────
 
-async def _classify_with_model(text: str, model: str, system: str) -> bool:
+async def _classify_with_model(text: str, model: str, system: str) -> Tuple[bool, int]:
     """
     Run a single safety model classification.
-    Returns True if SAFE/BENIGN, False if UNSAFE/MALICIOUS or model unavailable.
+    Returns (is_safe, input_tokens_used).
+
+    input_tokens_used is taken from response.usage.prompt_tokens — the actual
+    token count returned by Groq API. This is used by actual_safety_cost() for
+    accurate per-request billing (Variant C).
 
     prompt-guard models (22m, 86m) are BERT classifiers:
       - Groq requires exactly one user message — no system role.
@@ -158,15 +163,17 @@ async def _classify_with_model(text: str, model: str, system: str) -> bool:
             temperature=0.0,    # deterministic classification
         )
         verdict = response.text.strip().upper()
+        # Groq returns actual prompt_tokens in response.usage — use that for billing.
+        tokens = response.input_tokens
 
         if model in _GUARD_MODELS:
             # prompt-guard returns "BENIGN" or "MALICIOUS".
-            if "MALICIOUS" in verdict:
-                return False
-            return True
+            is_safe = "MALICIOUS" not in verdict
         else:
             # gpt-oss-safeguard returns "SAFE" or "UNSAFE"
-            return verdict.startswith("SAFE")
+            is_safe = verdict.startswith("SAFE")
+
+        return is_safe, tokens
 
     except Exception as exc:
         # Fix §10.3: API error must be logged as a distinct event type.
@@ -178,7 +185,7 @@ async def _classify_with_model(text: str, model: str, system: str) -> bool:
             "Safety Gate signal lost — model API error (observability degraded)",
             extra={"model": model, "error": str(exc), "event": "safety_signal_lost"},
         )
-        return True  # error in observability path → do not block
+        return True, 0  # error in observability path → do not block, 0 tokens billed
 
 
 # ─── PUBLIC API ───────────────────────────────────────────────────────────────
@@ -197,6 +204,9 @@ async def check_pass1(text: str) -> GateResult:
       - 22m is a 22M-param DeBERTa classifier — latency is single-digit ms on Groq.
         Resource cost is negligible (HF Space: 16GB RAM, LPU inference).
 
+    Token count: taken from Groq API response.usage.prompt_tokens — actual BPE tokens.
+    Used by actual_safety_cost() for billing (Variant C).
+
     API constraints (models.md §27.5):
       - Single user message ONLY — no system role (BERT classifier, not chat model).
       - Response: "BENIGN" or "MALICIOUS" only — no score, no confidence field.
@@ -207,9 +217,10 @@ async def check_pass1(text: str) -> GateResult:
     import time
     stripped = text.strip()
     t0 = time.monotonic()
+    tokens_used = 0
 
     try:
-        safe = await _classify_with_model(stripped, _PASS1_MODEL, _PASS1_SYSTEM)
+        safe, tokens_used = await _classify_with_model(stripped, _PASS1_MODEL, _PASS1_SYSTEM)
         latency_ms = round((time.monotonic() - t0) * 1000)
 
         if not safe:
@@ -219,6 +230,7 @@ async def check_pass1(text: str) -> GateResult:
                     "model": _PASS1_MODEL,
                     "label": "MALICIOUS",
                     "latency_ms": latency_ms,
+                    "tokens": tokens_used,
                     "text_preview": stripped[:80],
                     "event": "safety_pass1_signal",
                 },
@@ -230,6 +242,7 @@ async def check_pass1(text: str) -> GateResult:
                     "model": _PASS1_MODEL,
                     "label": "BENIGN",
                     "latency_ms": latency_ms,
+                    "tokens": tokens_used,
                 },
             )
 
@@ -243,7 +256,7 @@ async def check_pass1(text: str) -> GateResult:
     return GateResult(
         verdict=GateVerdict.PASS,
         model_used=_PASS1_MODEL,
-        tokens_used=len(stripped.split()),  # approximate; Groq doesn't return token count for classifiers
+        tokens_used=tokens_used,  # actual BPE tokens from Groq API response.usage.prompt_tokens
     )
 
 
@@ -251,46 +264,62 @@ async def check_pass2(text: str) -> GateResult:
     """
     Safety Gate Pass 2 — deep classification (NON-BLOCKING, observability only).
 
-    gpt-oss-safeguard-20b is called for signal logging only. Its verdict does
-    NOT block execution. Rationale:
+    Calls BOTH models per models.md §1:
+      1. llama-prompt-guard-2-86m  — multilingual BERT classifier (prompt injection / jailbreak)
+      2. gpt-oss-safeguard-20b     — semantic safety classifier (broader policy scope)
 
-      1. gpt-oss-safeguard-20b is trained on OpenAI's internal policy and does
-         not reliably follow system prompt instructions on arbitrary languages.
-         It produces unacceptable false-positive rates on Russian/Arabic casual
-         text and everyday queries.
-
-      2. safety_agent (agents/safety_agent.py) is the authoritative blocking
-         layer. It runs post-reasoning, has full context, and is activated on
-         all non-DEGRADED paths per architecture.md §21.
-
-      3. Blocking at the input gate with an unreliable classifier creates a
-         full outage for legitimate users without adding meaningful protection
-         over what safety_agent already provides.
+    Both are called concurrently for observability. Neither blocks execution.
+    Tokens from each model are tracked separately for accurate billing (Variant C):
+      - tokens_used          → 86m tokens → billed via SAFETY_RATES["llama-prompt-guard-2-86m"]
+      - safeguard_tokens_used → safeguard-20b tokens → billed via SAFETY_RATES["gpt-oss-safeguard-20b"]
 
     Runs AFTER Feature Extraction, BEFORE EPK — position unchanged.
-    Classification result logged at WARNING if UNSAFE signal detected.
-    Always returns GateVerdict.PASS.
+    Always returns GateVerdict.PASS. Blocking authority: safety_agent (post-reasoning).
     """
+    import asyncio
     stripped = text.strip()
+    tokens_86m = 0
+    tokens_safeguard = 0
 
-    try:
-        safe = await _classify_with_model(stripped, _PASS2_MODELS[1], _PASS2_SYSTEM)
-        if not safe:
-            # Log the signal for monitoring — do NOT block.
-            # safety_agent is the blocking authority for this class of content.
-            logger.warning(
-                "Safety Gate Pass 2: UNSAFE signal detected (non-blocking, logged for monitoring)",
-                extra={"model": _PASS2_MODELS[1], "text_preview": stripped[:80]},
-            )
-    except Exception as exc:
-        logger.error(
-            "Safety Gate Pass 2 exception (non-blocking)",
-            extra={"model": _PASS2_MODELS[1], "error": str(exc)},
-        )
+    async def _run_86m() -> None:
+        nonlocal tokens_86m
+        try:
+            safe, tokens_86m = await _classify_with_model(stripped, _PASS2_86M, "")
+            if not safe:
+                logger.warning(
+                    "Safety Gate Pass 2 (86m): MALICIOUS signal detected (non-blocking)",
+                    extra={"model": _PASS2_86M, "tokens": tokens_86m, "text_preview": stripped[:80]},
+                )
+            else:
+                logger.debug("Safety Gate Pass 2 (86m): BENIGN signal",
+                             extra={"model": _PASS2_86M, "tokens": tokens_86m})
+        except Exception as exc:
+            logger.error("Safety Gate Pass 2 (86m) exception (non-blocking)",
+                         extra={"model": _PASS2_86M, "error": str(exc)})
+
+    async def _run_safeguard() -> None:
+        nonlocal tokens_safeguard
+        try:
+            safe, tokens_safeguard = await _classify_with_model(stripped, _PASS2_SAFEGUARD, _PASS2_SYSTEM)
+            if not safe:
+                logger.warning(
+                    "Safety Gate Pass 2 (safeguard-20b): UNSAFE signal detected (non-blocking)",
+                    extra={"model": _PASS2_SAFEGUARD, "tokens": tokens_safeguard, "text_preview": stripped[:80]},
+                )
+            else:
+                logger.debug("Safety Gate Pass 2 (safeguard-20b): SAFE signal",
+                             extra={"model": _PASS2_SAFEGUARD, "tokens": tokens_safeguard})
+        except Exception as exc:
+            logger.error("Safety Gate Pass 2 (safeguard-20b) exception (non-blocking)",
+                         extra={"model": _PASS2_SAFEGUARD, "error": str(exc)})
+
+    # Run both models concurrently — observability, not gating
+    await asyncio.gather(_run_86m(), _run_safeguard())
 
     # Always PASS — blocking authority belongs to safety_agent.
     return GateResult(
         verdict=GateVerdict.PASS,
-        model_used=_PASS2_MODELS[1],
-        tokens_used=len(stripped.split()),  # approximate; actual token count not returned by Groq classifier API
+        model_used=_PASS2_86M,           # primary Pass 2 model
+        tokens_used=tokens_86m,           # 86m tokens — billed at $0.04/1M
+        safeguard_tokens_used=tokens_safeguard,  # safeguard-20b tokens — billed at $0.075/1M
     )
