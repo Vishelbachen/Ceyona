@@ -429,7 +429,17 @@ async def telegram_webhook(
             gauge("webhook.last_latency_ms", round((_time.perf_counter() - _req_start) * 1000, 2))
 
         # ── billing ───────────────────────────────────────────────────────────
-        if not result.denied and result.usage.cost_usd > 0:
+        # Bill whenever there is any cost — LLM or Safety Gate tokens.
+        # DENY requests may carry Safety Gate tokens (e.g. safety_gate_pass1 voice
+        # block) and MUST be billed for them per economic.md §2.
+        # Guard: skip only when there is genuinely nothing to bill.
+        _has_safety_tokens = (
+            result.safety_pass1_tokens
+            or result.safety_pass2_tokens
+            or result.safety_safeguard_tokens
+            or result.safety_safeguard_output_tokens
+        )
+        if result.usage.cost_usd > 0 or _has_safety_tokens:
             try:
                 from core.kernel.cost_model import actual_safety_cost
                 from payments.access_controller import AccessController
@@ -439,6 +449,8 @@ async def telegram_webhook(
                 # Safety tokens are captured in update_handler after both passes complete
                 # and wired onto result via dataclasses.replace(). They are NOT included
                 # in result.usage.cost_usd (orchestrator runs between the two passes).
+                # On DENY paths where gate blocked (e.g. voice pass1), tokens are
+                # carried directly on OrchestratorResult — still billed here.
                 safety_cost = actual_safety_cost(
                     pass1_tokens=result.safety_pass1_tokens,
                     pass2_tokens=result.safety_pass2_tokens,
