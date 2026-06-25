@@ -23,9 +23,9 @@ class AgentResult:
 
 async def run(messages: list[dict], temperature: float = 0.7) -> AgentResult:
     """
-    Fast agent — Tier.FAST via complete_with_fallback (models1.md §6).
+    Fast agent — Tier.FAST via complete_with_fallback (models.md §6).
 
-    Routing: llama-3.1-8b-instant (primary, Fast Tier).
+    Routing: openai/gpt-oss-20b (primary, Fast Tier). reasoning_effort="low" mandatory.
     Uses complete_with_fallback — standard tier cascade with 413 protection.
 
     NOTE: groq/compound-mini is registered as FAST_AGENT_MODEL in model_router.py
@@ -34,7 +34,7 @@ async def run(messages: list[dict], temperature: float = 0.7) -> AgentResult:
     with a `tools` parameter — calling them as plain chat-completion produces
     empty or error responses ("DeepAgent failed" / "FastAgent failed" in Sentry).
     Revert to compound-mini when Groq tool-use API stabilises.
-    Tracked in: architecture.md §27, models1.md §6.
+    Tracked in: architecture.md §27, models.md §6.
     """
     try:
         response = await complete_with_fallback(
