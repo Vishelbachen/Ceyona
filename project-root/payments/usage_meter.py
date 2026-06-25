@@ -36,6 +36,12 @@ class UsageEntry:
     safety_pass2_tokens: int = 0              # llama-prompt-guard-2-86m input tokens
     safety_safeguard_tokens: int = 0          # gpt-oss-safeguard-20b input tokens ($0.075/1M)
     safety_safeguard_output_tokens: int = 0   # gpt-oss-safeguard-20b output tokens ($0.30/1M)
+    safety_agent_input_tokens: int = 0        # safety_agent LLM judge input tokens ($0.075/1M)
+    safety_agent_output_tokens: int = 0       # safety_agent LLM judge output tokens ($0.30/1M)
+    multilingual_input_tokens: int = 0        # multilingual_preprocessor LLM call input tokens
+    multilingual_output_tokens: int = 0       # multilingual_preprocessor LLM call output tokens
+    lc_transformer_input_tokens: int = 0      # long_context_transformer input tokens (qwen3.6-27b)
+    lc_transformer_output_tokens: int = 0     # long_context_transformer output tokens
 
 
 class UsageMeter:
@@ -100,6 +106,18 @@ class UsageMeter:
             extended_payload["safety_safeguard_tokens"] = entry.safety_safeguard_tokens
         if entry.safety_safeguard_output_tokens:
             extended_payload["safety_safeguard_output_tokens"] = entry.safety_safeguard_output_tokens
+        if entry.safety_agent_input_tokens:
+            extended_payload["safety_agent_input_tokens"] = entry.safety_agent_input_tokens
+        if entry.safety_agent_output_tokens:
+            extended_payload["safety_agent_output_tokens"] = entry.safety_agent_output_tokens
+        if entry.multilingual_input_tokens:
+            extended_payload["multilingual_input_tokens"] = entry.multilingual_input_tokens
+        if entry.multilingual_output_tokens:
+            extended_payload["multilingual_output_tokens"] = entry.multilingual_output_tokens
+        if entry.lc_transformer_input_tokens:
+            extended_payload["lc_transformer_input_tokens"] = entry.lc_transformer_input_tokens
+        if entry.lc_transformer_output_tokens:
+            extended_payload["lc_transformer_output_tokens"] = entry.lc_transformer_output_tokens
 
         payload = {**core_payload, **extended_payload}
 
@@ -129,7 +147,13 @@ class UsageMeter:
                     "ADD COLUMN IF NOT EXISTS safety_pass1_tokens BIGINT DEFAULT 0, "
                     "ADD COLUMN IF NOT EXISTS safety_pass2_tokens BIGINT DEFAULT 0, "
                     "ADD COLUMN IF NOT EXISTS safety_safeguard_tokens BIGINT DEFAULT 0, "
-                    "ADD COLUMN IF NOT EXISTS safety_safeguard_output_tokens BIGINT DEFAULT 0.",
+                    "ADD COLUMN IF NOT EXISTS safety_safeguard_output_tokens BIGINT DEFAULT 0, "
+                    "ADD COLUMN IF NOT EXISTS safety_agent_input_tokens BIGINT DEFAULT 0, "
+                    "ADD COLUMN IF NOT EXISTS safety_agent_output_tokens BIGINT DEFAULT 0, "
+                    "ADD COLUMN IF NOT EXISTS multilingual_input_tokens BIGINT DEFAULT 0, "
+                    "ADD COLUMN IF NOT EXISTS multilingual_output_tokens BIGINT DEFAULT 0, "
+                    "ADD COLUMN IF NOT EXISTS lc_transformer_input_tokens BIGINT DEFAULT 0, "
+                    "ADD COLUMN IF NOT EXISTS lc_transformer_output_tokens BIGINT DEFAULT 0.",
                     extra={"user_id": entry.user_id, "hint": error_str[:200]},
                 )
                 try:
