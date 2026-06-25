@@ -24,38 +24,43 @@ MODEL_RATES: dict[str, dict[str, float]] = {
 # Safety Layer rates — verified Groq pricing, Jun 2026. economic.md §1.2
 # Both prompt-guard models are BERT classifiers: output is 1-2 tokens ("BENIGN"/"MALICIOUS").
 # Output tokens negligible — billed at input rate for simplicity.
-SAFETY_RATES: dict[str, float] = {
-    "meta-llama/llama-prompt-guard-2-22m": 0.03,   # $0.03 / 1M tokens
-    "meta-llama/llama-prompt-guard-2-86m": 0.04,   # $0.04 / 1M tokens
-    "openai/gpt-oss-safeguard-20b":        0.075,  # $0.075 / 1M input tokens
+SAFETY_RATES: dict[str, dict[str, float]] = {
+    "meta-llama/llama-prompt-guard-2-22m": {"input": 0.03,  "output": 0.03},   # $0.03/1M both
+    "meta-llama/llama-prompt-guard-2-86m": {"input": 0.04,  "output": 0.04},   # $0.04/1M both
+    "openai/gpt-oss-safeguard-20b":        {"input": 0.075, "output": 0.30},   # $0.075/$0.30 per 1M
 }
 
 # Conservative pre-execution token estimates for Safety Gate EPK input.
 # Context window: 512 tokens for both prompt-guard models. Typical message: ~300 tokens.
 # Actual tokens recorded post-execution in UsageEntry via actual_safety_cost().
-_SAFETY_PASS1_ESTIMATED_TOKENS    = 300   # llama-prompt-guard-2-22m
-_SAFETY_PASS2_86M_ESTIMATED_TOKENS = 300   # llama-prompt-guard-2-86m (Pass 2 step 1)
-_SAFETY_PASS2_SG_ESTIMATED_TOKENS  = 300   # gpt-oss-safeguard-20b   (Pass 2 step 2)
+_SAFETY_PASS1_ESTIMATED_TOKENS     = 300  # llama-prompt-guard-2-22m input
+_SAFETY_PASS2_86M_ESTIMATED_TOKENS = 300  # llama-prompt-guard-2-86m input
+_SAFETY_PASS2_SG_ESTIMATED_TOKENS  = 300  # gpt-oss-safeguard-20b input
+_SAFETY_PASS2_SG_OUTPUT_ESTIMATED  = 2    # gpt-oss-safeguard-20b output ("SAFE"/"UNSAFE" ~2 tokens)
 
 
 def estimate_safety_cost() -> float:
     """
     Pre-execution estimate of Safety Gate cost for EPK input (Variant C).
 
-    Covers all three models called on every request:
-      Pass 1: llama-prompt-guard-2-22m  (~300 tokens × $0.03/1M)
-      Pass 2: llama-prompt-guard-2-86m  (~300 tokens × $0.04/1M)  ← sequential step 1
-      Pass 2: gpt-oss-safeguard-20b     (~300 tokens × $0.075/1M) ← sequential step 2
+    Covers all three models called on every request (input + output):
+      Pass 1: llama-prompt-guard-2-22m  (~300 input × $0.03/1M + ~2 output × $0.03/1M)
+      Pass 2: llama-prompt-guard-2-86m  (~300 input × $0.04/1M + ~2 output × $0.04/1M)
+      Pass 2: gpt-oss-safeguard-20b     (~300 input × $0.075/1M + ~2 output × $0.30/1M)
 
-    Conservative token estimate (300) — typical message length before Multilingual
-    normalization. Actual tokens recorded post-execution via actual_safety_cost().
+    Conservative input estimate (300 tokens). Output estimated at 2 tokens
+    ("BENIGN"/"MALICIOUS" or "SAFE"/"UNSAFE"). Actual tokens recorded post-execution
+    via actual_safety_cost(). economic.md §2: every call MUST be fully billed.
 
     Called by estimate_cost() — Safety Gate fires on every request, so its
     cost is a fixed overhead that EPK must account for.
     """
-    pass1 = _SAFETY_PASS1_ESTIMATED_TOKENS    * SAFETY_RATES["meta-llama/llama-prompt-guard-2-22m"]
-    pass2_86m = _SAFETY_PASS2_86M_ESTIMATED_TOKENS * SAFETY_RATES["meta-llama/llama-prompt-guard-2-86m"]
-    pass2_sg  = _SAFETY_PASS2_SG_ESTIMATED_TOKENS  * SAFETY_RATES["openai/gpt-oss-safeguard-20b"]
+    sg = SAFETY_RATES["openai/gpt-oss-safeguard-20b"]
+    r22 = SAFETY_RATES["meta-llama/llama-prompt-guard-2-22m"]
+    r86 = SAFETY_RATES["meta-llama/llama-prompt-guard-2-86m"]
+    pass1     = _SAFETY_PASS1_ESTIMATED_TOKENS     * r22["input"]  + 2 * r22["output"]
+    pass2_86m = _SAFETY_PASS2_86M_ESTIMATED_TOKENS * r86["input"]  + 2 * r86["output"]
+    pass2_sg  = _SAFETY_PASS2_SG_ESTIMATED_TOKENS  * sg["input"]   + _SAFETY_PASS2_SG_OUTPUT_ESTIMATED * sg["output"]
     return (pass1 + pass2_86m + pass2_sg) / 1_000_000
 
 
@@ -63,16 +68,22 @@ def actual_safety_cost(
     pass1_tokens: int,
     pass2_tokens: int,
     safeguard_tokens: int = 0,
+    safeguard_output_tokens: int = 0,
 ) -> float:
     """
-    Post-execution actual Safety Gate cost from real token counts.
+    Post-execution actual Safety Gate cost from real token counts (input + output).
     Recorded in UsageEntry after safety gate completes.
     Enables estimate vs actual drift tracking per request.
+    economic.md §2: every model call MUST be fully billed — input AND output.
     """
+    r22 = SAFETY_RATES["meta-llama/llama-prompt-guard-2-22m"]
+    r86 = SAFETY_RATES["meta-llama/llama-prompt-guard-2-86m"]
+    sg  = SAFETY_RATES["openai/gpt-oss-safeguard-20b"]
     return (
-        pass1_tokens       * SAFETY_RATES["meta-llama/llama-prompt-guard-2-22m"]
-        + pass2_tokens     * SAFETY_RATES["meta-llama/llama-prompt-guard-2-86m"]
-        + safeguard_tokens * SAFETY_RATES["openai/gpt-oss-safeguard-20b"]
+        pass1_tokens            * r22["input"]
+        + pass2_tokens          * r86["input"]
+        + safeguard_tokens      * sg["input"]
+        + safeguard_output_tokens * sg["output"]
     ) / 1_000_000
 
 # HuggingFace Inference API — BGE embeddings
