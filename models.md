@@ -147,7 +147,9 @@ openai/gpt-oss-120b   → FALLBACK: if qwen3.6-27b unavailable
 **CRITICAL — thinking mode:**
 `reasoning_effort="none"` MUST be passed at every call site.
 Default thinking mode produces CoT output in responses — unacceptable for production.
-Non-thinking params: `temperature=0.7, top_p=0.80, top_k=20, presence_penalty=1.5`
+Non-thinking params: `temperature=0.7, top_p=0.80, presence_penalty=1.5`
+⚠️ **Groq API note:** `top_k` is documented by Qwen as a non-thinking parameter but is **not supported**
+by Groq's OpenAI-compatible endpoint. Omit `top_k` at all Groq call sites.
 
 **CRITICAL — vision hallucination:**
 qwen3.6-27b hallucinates image content without warning when image is not accessible.
@@ -780,7 +782,8 @@ Persona drift: 11% at turn 7 (vs 34% for competing models). ✅ BENCH
 - Strong instruction-following on long prompts — rules maintained through turn 7 ✅ BENCH
 - Thinking mode: MUST be disabled at EVERY call site — `reasoning_effort="none"` ✅ DOC
   (if not disabled: model enters chain-of-thought mode → latency spike + token waste)
-- Non-thinking recommended params: `temperature=0.7, top_p=0.80, top_k=20, presence_penalty=1.5` ✅ DOC
+- Non-thinking recommended params: `temperature=0.7, top_p=0.80, presence_penalty=1.5` ✅ DOC
+  ⚠️ `top_k=20` is in Qwen's official non-thinking params but **not supported by Groq API** — omit at all Groq call sites.
 - Vision hallucination: confidently describes image content when image is not accessible,
   NO warning or error emitted — documented failure mode ✅ BENCH
 - Bullet/enumeration bias on structured tasks — needs explicit suppression for conversational output ⚠️ EST
