@@ -18,8 +18,8 @@ from core.kernel.policy_registry import RUNTIME
 # Typical HEAVY   request (3000 in / 7500 out) costs ~$0.005
 #
 # DENY:    balance ≤ 0 OR cost > balance
-# DEGRADE: cost > $0.003  (≈ ~2000 input token GENERAL request)
-# HEAVY:   cost > $0.008  (≈ ~5000 input token GENERAL / 3000 HEAVY request)
+# DEGRADE: cost > $0.006  (≈ ~2000in/2000out GENERAL request at $0.60/$3.00)
+# HEAVY:   cost > $0.010  (≈ ~5000in/4096out GENERAL / large HEAVY request)
 # ALLOW:   otherwise
 
 _DENY_THRESHOLD: float = RUNTIME.epk.deny_threshold
