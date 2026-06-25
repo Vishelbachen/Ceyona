@@ -725,6 +725,54 @@ Undeclared runtime nodes are non-canonical.
 No new module may silently introduce orchestration, create hidden routing,
 own undeclared policy, duplicate responsibilities, or redefine existing ownership domains.
 
+### 26.3 llm/long_context_transformer.py
+
+**Role:** Long-Context Role B — pre-synthesis compression step for HEAVY tier.
+Compresses a long (>32K token) input into a compact representation before
+`gpt-oss-120b` execution. Pure input transformation — no reasoning, no routing authority.
+
+**Authority:**
+- MAY compress long input and rebuild `messages` for downstream Heavy Tier execution.
+- MUST NOT influence EPK, select execution tier, alter TruthMode, or substitute for `gpt-oss-120b` on reasoning tasks.
+- MUST NOT self-activate — called only by `_run_heavy()` in `core/execution/orchestrator.py`.
+
+**Lifecycle role:** invoked inside `_run_heavy()` as a pre-shaper transformation step.
+Position in pipeline: `_run_heavy → [Role B] → shaper → coordinator → gpt-oss-120b → synthesizer`.
+
+**Invocation conditions:** `complexity == Complexity.CRITICAL AND input_tokens > 32_000`.
+
+**Upstream:** `core/execution/orchestrator._run_heavy()` — sole caller.
+**Downstream:** `llm/heavy_input_shaper.py` (shaper receives compressed text), then `llm/model_router.py` → `gpt-oss-120b`.
+
+**Model:** `qwen/qwen3.6-27b` (262K native context). `reasoning_effort="none"` MANDATORY (models.md §26.2, §27.2).
+**Logging:** tag `long_context_role_b` distinguishes from Role A (vision) invocations of the same model.
+**Failure mode:** non-fatal — caller continues with original input on any error.
+**TruthMode:** inherited from caller; Role B does not alter or inspect TruthMode.
+
+### 26.4 infra/supabase_client.py
+
+**Role:** Resilient Supabase client factory. Wraps `supabase.Client` with proactive
+connection recycling (every 4 minutes) and automatic reconnection on dead-connection
+errors (`ConnectionTerminated`, `RemoteProtocolError`, etc.). Transparent drop-in
+for `supabase.Client` via `__getattr__` forwarding.
+
+**Authority:**
+- MAY create and recreate Supabase client instances.
+- MUST NOT influence EPK, routing, execution policy, or any business logic.
+- MUST NOT be imported by any module except `app/bootstrap.py` for client construction.
+
+**Lifecycle role:** instantiated once at startup in `app/bootstrap.py`; shared instance
+injected into all consumers (`memory/`, `payments/`, `infra/healthcheck.py`, etc.) via
+`app.state.supabase`. Consumers retain the `supabase.Client` type hint — `ResilientSupabase`
+satisfies it via proxy.
+
+**Upstream:** `app/bootstrap.py` — sole instantiation site.
+**Downstream:** `memory/supabase_store.py`, `memory/conversation_history.py`,
+`payments/usage_meter.py`, `payments/wallet_manager.py`, `payments/access_controller.py`,
+`infra/healthcheck.py` — all receive injected instance, none import this module directly.
+
+**TruthMode:** not applicable (infrastructure layer, no LLM calls).
+
 ---
 
 
