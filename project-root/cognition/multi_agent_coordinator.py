@@ -174,11 +174,16 @@ async def _run_agent(
     messages: list[dict],
     temperature: float,
     lang: str = "en",
+    tier: Tier = Tier.GENERAL,
 ) -> AgentResult:
     """
     Dispatch to the correct agent module based on AgentType.
     Returns AgentResult. Never raises — catches all exceptions and returns
     a failed AgentResult so the coordinator can handle fallback/blocking.
+
+    tier is passed explicitly to deep_agent so that HEAVY_REQUIRED path
+    reaches complete_with_fallback(tier=Tier.HEAVY) → gpt-oss-120b
+    instead of hardcoding Tier.GENERAL (architecture.md §2.3, §8).
     """
     try:
         if agent_type == AgentType.COMPOUND_DEEP:
@@ -186,7 +191,7 @@ async def _run_agent(
         if agent_type == AgentType.COMPOUND_FAST:
             return await compound_agent.run_fast(messages=messages, lang=lang, temperature=temperature)
         if agent_type == AgentType.DEEP:
-            return await deep_agent.run(messages=messages, temperature=temperature)
+            return await deep_agent.run(messages=messages, temperature=temperature, tier=tier)
         if agent_type == AgentType.CREATIVE:
             return await creative_agent.run(messages=messages, temperature=temperature)
         # FAST is the default
@@ -328,13 +333,13 @@ async def coordinate(
     """
 
     # ── primary agent ─────────────────────────────────────────────────────────
-    primary_result = await _run_agent(plan.primary, messages, temperature, lang=lang)
+    primary_result = await _run_agent(plan.primary, messages, temperature, lang=lang, tier=tier)
 
     # ── consensus path (ALLOW only) ───────────────────────────────────────────
     if plan.use_consensus:
         if plan.parallel_validators:
             tasks = [
-                _run_agent(vt, messages, temperature, lang=lang)
+                _run_agent(vt, messages, temperature, lang=lang, tier=tier)
                 for vt in plan.parallel_validators
             ]
             validator_results: list[AgentResult] = await asyncio.gather(*tasks)
@@ -444,7 +449,7 @@ async def coordinate(
 
     if plan.fallback is not None and plan.fallback != plan.primary:
         logger.info("Trying fallback agent", extra={"agent": plan.fallback})
-        fallback_result = await _run_agent(plan.fallback, messages, temperature, lang=lang)
+        fallback_result = await _run_agent(plan.fallback, messages, temperature, lang=lang, tier=tier)
 
         if _agent_succeeded(fallback_result):
             logger.info("Fallback agent succeeded")
