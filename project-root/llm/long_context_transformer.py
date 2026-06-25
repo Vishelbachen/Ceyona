@@ -55,6 +55,8 @@ class LongContextResult:
     model_used: str
     success: bool
     error: str = ""
+    input_tokens: int = 0   # qwen3.6-27b input tokens — billed at $0.60/1M (economic.md §2)
+    output_tokens: int = 0  # qwen3.6-27b output tokens — billed at $3.00/1M
 
 
 async def transform(
@@ -149,12 +151,20 @@ async def transform(
         body = response.json()
         compressed = body["choices"][0]["message"]["content"].strip()
 
+        # Capture actual token counts from Groq API response for billing.
+        # economic.md §2: every model call MUST be billed (qwen3.6-27b: $0.60/$3.00 per 1M).
+        _usage     = body.get("usage", {})
+        _lc_in_tok = _usage.get("prompt_tokens", 0)
+        _lc_out_tok = _usage.get("completion_tokens", 0)
+
         if not compressed:
             return LongContextResult(
                 compressed_text="",
                 model_used=_LONG_CONTEXT_MODEL,
                 success=False,
                 error="empty compression result",
+                input_tokens=_lc_in_tok,
+                output_tokens=_lc_out_tok,
             )
 
         logger.info(
@@ -162,7 +172,8 @@ async def transform(
             extra={
                 "role": "long_context_role_b",   # distinguishes from Role A vision logs
                 "model": _LONG_CONTEXT_MODEL,
-                "input_tokens": input_tokens,
+                "input_tokens": _lc_in_tok,
+                "output_tokens": _lc_out_tok,
                 "output_chars": len(compressed),
                 "compression_ratio": round(len(compression_input) / max(len(compressed), 1), 2),
             },
@@ -172,6 +183,8 @@ async def transform(
             compressed_text=compressed,
             model_used=_LONG_CONTEXT_MODEL,
             success=True,
+            input_tokens=_lc_in_tok,
+            output_tokens=_lc_out_tok,
         )
 
     except Exception as exc:
