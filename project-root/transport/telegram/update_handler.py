@@ -330,6 +330,7 @@ async def handle_message(
                     gate1 = await asyncio.wait_for(check_pass1(tr.text), timeout=8.0)
                     if not gate1.safe:
                         from i18n.t import get_system_message
+
                         # Safety Gate ran and consumed tokens — carry them so
                         # webhook bills gate cost even on DENY (economic.md §2).
                         return OrchestratorResult(
