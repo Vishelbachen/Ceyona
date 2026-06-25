@@ -123,17 +123,19 @@ async def run_deep(
     messages: list[dict],
     lang: str = "en",
     temperature: float = 0.7,
+    tier: Tier = Tier.GENERAL,
 ) -> AgentResult:
     """
     Compound deep synthesizer — groq/compound (DEEP_AGENT_MODEL).
     Higher quality synthesis. Used for SEARCH, WEATHER, MAPS, MAPS_POI, MAPS_ROUTE
     on Tier.GENERAL/HEAVY.
+    tier is passed explicitly from coordinator — never hardcoded here (architecture.md §2.3).
     lang is accepted for interface compatibility but not passed to complete()
     (language is already enforced via system prompt in messages).
     """
     return await _run_compound(
         model=DEEP_AGENT_MODEL,
-        tier=Tier.GENERAL,
+        tier=tier,
         messages=messages,
         temperature=temperature,
     )
