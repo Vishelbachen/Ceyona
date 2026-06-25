@@ -30,6 +30,7 @@ from core.kernel.decision_matrix import select_tier
 from core.kernel.execution_policy_kernel import EPKInput, evaluate
 from i18n.t import t
 from llm.heavy_input_shaper import ShaperInput, shape
+from llm.long_context_transformer import transform as _lc_transform
 from llm.prompt_engine import PromptContext, build_messages
 from observability.metrics import gauge, increment
 from observability.tracing import trace
@@ -603,6 +604,9 @@ async def _run_heavy(
     tier = Tier.HEAVY
     strategy = select_strategy(intent_result.routing, tier)
 
+    # Track whether Role B compression succeeded — shaper must use compressed text if so.
+    _lc_compressed_text: str | None = None
+
     # ── Long-Context Role B (models.md §26.2) ────────────────────────────────
     # Activation: complexity == CRITICAL AND context_length > 32K tokens.
     # qwen/qwen3.6-27b (262K native ctx) compresses input for gpt-oss-120b.
@@ -615,7 +619,6 @@ async def _run_heavy(
         and request.input_tokens > _LC_TOKEN_THRESHOLD
     ):
         try:
-            from llm.long_context_transformer import transform as _lc_transform
             lc_result = await _lc_transform(
                 user_message=request.user_message,
                 retrieved_context=request.retrieved_context or "",
@@ -631,6 +634,7 @@ async def _run_heavy(
                         "model": lc_result.model_used,
                     },
                 )
+                _lc_compressed_text = lc_result.compressed_text
                 # Rebuild messages with compressed input — same truth_mode, same tier
                 truth_mode = resolve_truth_mode(intent_result.routing)
                 messages = build_messages(PromptContext(
@@ -650,8 +654,12 @@ async def _run_heavy(
                 extra={"error": str(exc)},
             )
 
+    # Shaper receives the compressed text if Role B succeeded, otherwise the original.
+    # This prevents shaper from rebuilding messages from the original long input and
+    # silently discarding the Role B compression output.
+    _shaper_input_text = _lc_compressed_text if _lc_compressed_text else request.user_message
     shaper_result = await shape(ShaperInput(
-        text=request.user_message,
+        text=_shaper_input_text,
         token_count=request.input_tokens,
         has_code_block=request.has_code_block,
         has_json_shape=request.has_json_shape,
@@ -666,7 +674,8 @@ async def _run_heavy(
         messages = build_messages(PromptContext(
             user_message=shaper_result.text,
             system_prompt=request.system_prompt or intent_result.system_prompt,
-            retrieved_context=request.retrieved_context or "",
+            # If Role B already folded retrieved_context into compressed_text, don't append it again.
+            retrieved_context="" if _lc_compressed_text else (request.retrieved_context or ""),
             conversation_history=request.conversation_history,
             truth_mode=truth_mode,
             lang=request.lang,
