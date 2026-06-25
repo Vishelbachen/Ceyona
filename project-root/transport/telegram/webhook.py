@@ -433,12 +433,24 @@ async def telegram_webhook(
             try:
                 from payments.access_controller import AccessController
                 from payments.usage_meter import UsageEntry, UsageMeter
+                from core.kernel.cost_model import actual_safety_cost
+
+                # Compute actual Safety Gate cost from real token counts (Variant C).
+                # Safety tokens are captured in update_handler after both passes complete
+                # and wired onto result via dataclasses.replace(). They are NOT included
+                # in result.usage.cost_usd (orchestrator runs between the two passes).
+                safety_cost = actual_safety_cost(
+                    pass1_tokens=result.safety_pass1_tokens,
+                    pass2_tokens=result.safety_pass2_tokens,
+                    safeguard_tokens=result.safety_safeguard_tokens,
+                )
+                total_cost_usd = result.usage.cost_usd + safety_cost
 
                 ac = AccessController(supabase)
-                await ac.deduct(user_id, result.usage.cost_usd)
+                await ac.deduct(user_id, total_cost_usd)
 
                 meter = UsageMeter(supabase)
-                billed = meter.compute_billed(result.usage.cost_usd)
+                billed = meter.compute_billed(total_cost_usd)
                 await meter.record(UsageEntry(
                     user_id=user_id,
                     input_tokens=result.usage.input_tokens,
@@ -447,7 +459,7 @@ async def telegram_webhook(
                     rerank_tokens=result.usage.rerank_tokens,
                     tier=result.usage.tier,
                     embedding_type=result.usage.embedding_type,
-                    raw_cost_usd=result.usage.cost_usd,
+                    raw_cost_usd=total_cost_usd,
                     billed_cost_usd=billed,
                     model=result.model,
                     resolved_model=result.resolved_model,
