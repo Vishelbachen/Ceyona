@@ -258,7 +258,7 @@ User Input
 → Economic Validation (via cost_model → EPK)
 → Retrieval / Runtime Invocation
 → Verification Stage (safety_agent)
-→ Response Synthesis (7-step pipeline)
+→ Response Synthesis (9-step pipeline — architecture §19)
 → META Normalization (correction + output_normalizer)
 → History Save
 → META Side-channel (reflection + memory_audit — async, non-blocking)
@@ -585,14 +585,19 @@ The response synthesizer owns final response authority.
 Synthesizer owns: coherence, response assembly, multilingual consistency,
 narrative stabilization, final user-facing output.
 
-**Canonical 7-step pipeline (code-authoritative):**
+**Canonical 9-step pipeline (code-authoritative):**
 
 ```
 1. assemble            — accept raw LLM output
 2. normalize_telegram  — LaTeX→Unicode, strip Markdown (headers/bold/tables)
                          MUST run before structure/format (downstream sees clean text)
                          Owned by: synthesizer (inline utility, not a meta module)
+2.5 strip_cot_artifacts — remove CoT scaffolding leaked into output (§13.3)
+                         Applied to all non-MATH intents; vision path: strips meta openers
+                         Owned by: synthesizer
 3. structure           — intent-aware shaping (reserved, identity today)
+3.5 strip_unwanted_code — remove unsolicited code blocks per intent/lang rules
+                         Owned by: synthesizer
 4. format              — whitespace normalization
 5. correction          — meta/correction.py: preamble/sign-off stripping
                          Owned by: meta/ | Executed by: synthesizer only
@@ -654,8 +659,11 @@ Two safety systems serve distinct, non-overlapping roles:
 
 **Safety Layer (input observability — NON-BLOCKING):**
 Pre-EPK signal logging only. Both passes always return PASS.
-Rationale: unacceptable false-positive rates on Russian, Arabic, and short casual messages
-would cause full outage for legitimate users. Model unavailability → pass-through.
+Pass 1 (`llama-prompt-guard-2-22m`): currently implemented as a no-op pass-through —
+model is NOT called. Logger emits a debug event only. Rationale: unacceptable false-positive
+rates on Russian, Arabic, and short casual messages would cause full outage for legitimate users.
+Pass 2 (`gpt-oss-safeguard-20b`): model IS called for signal logging; verdict does not block.
+Model unavailability → pass-through.
 
 **safety_agent (post-reasoning semantic validation — SOLE BLOCKING AUTHORITY):**
 Runs inside coordinator after primary reasoning. Only layer that can block on safety grounds.
@@ -810,7 +818,17 @@ Provider MUST NOT alter orchestration, redefine TruthMode, or mutate EPK.
 
 ## 29. HEALTHCHECK POLICY
 
-`infra/healthcheck.py` is the sole implementation of `/health`. Deployment target: Oracle Cloud (OCI).
+`infra/healthcheck.py` is the sole implementation of `/health`.
+
+**Deployment topology:**
+- **HuggingFace Spaces** — primary runtime host (FastAPI app, Python workers)
+- **Cloudflare Worker** (`ceyona-webhook`) — webhook relay layer: receives Telegram updates,
+  forwards to HF Space, proxies outgoing Telegram API calls (`/tg/*` route).
+  Required because HF Spaces blocks direct access to `api.telegram.org`.
+- **Google Apps Script** (`Код.gs`) — fallback Telegram API proxy for file downloads.
+  Used when the Cloudflare Worker proxy is unavailable or blocked.
+- **SearXNG** — self-hosted on HF Spaces (separate Space: `Warren97/ceyona-searxng`),
+  used as tertiary search fallback (architecture §28).
 
 **Canonical rules:**
 - Redis check + Supabase check run **concurrently** via `asyncio.gather` — total latency = max, not sum
