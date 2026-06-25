@@ -20,13 +20,13 @@ class AgentResult:
     actual_tier: str = ""  # tier that actually executed (may differ from requested on cascade)
 
 
-async def run(messages: list[dict], temperature: float = 0.7) -> AgentResult:
+async def run(messages: list[dict], temperature: float = 0.7, tier: Tier = Tier.GENERAL) -> AgentResult:
     """
-    Deep agent — Tier.GENERAL via complete_with_fallback (models.md §6).
+    Deep agent — routes via complete_with_fallback using the provided tier.
 
-    Routing: qwen/qwen3.6-27b (primary) → openai/gpt-oss-120b (fallback).
-    Uses complete_with_fallback — full General Tier cascade with 413 protection,
-    reasoning_effort="none" enforcement, and top_p/presence_penalty for qwen3.6-27b.
+    Default: Tier.GENERAL → qwen/qwen3.6-27b (primary) → openai/gpt-oss-120b (fallback).
+    HEAVY path: Tier.HEAVY → openai/gpt-oss-120b (reasoning_effort="high").
+    Tier is passed explicitly from coordinator — never hardcoded here (architecture.md §2.3).
 
     NOTE: groq/compound is registered as DEEP_AGENT_MODEL in model_router.py
     and is the intended long-term target for this agent (multi-step tool-use).
@@ -38,7 +38,7 @@ async def run(messages: list[dict], temperature: float = 0.7) -> AgentResult:
     """
     try:
         response = await complete_with_fallback(
-            tier=Tier.GENERAL,
+            tier=tier,
             messages=messages,
             temperature=temperature,
         )
