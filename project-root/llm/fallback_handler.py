@@ -129,6 +129,9 @@ async def complete_with_fallback(
             extra_params: dict = {}
             if requires_thinking_disabled(model):
                 extra_params["reasoning_effort"] = "none"  # Groq API param for qwen3.6-27b (models.md §27.2); thinking=False is qwen3-32b legacy
+                extra_params["top_p"] = 0.80              # models.md §3, §27.2 non-thinking params
+                extra_params["presence_penalty"] = 1.5    # models.md §3, §27.2 non-thinking params
+                # top_k omitted — not supported by Groq OpenAI-compatible API (models.md §27.2 note)
 
             for attempt in range(max_retries + 1):
                 try:
