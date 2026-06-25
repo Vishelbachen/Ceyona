@@ -445,6 +445,10 @@ async def telegram_webhook(
                     safeguard_tokens=result.safety_safeguard_tokens,
                     safeguard_output_tokens=result.safety_safeguard_output_tokens,
                 )
+                # safety_agent, multilingual_preprocessor, lc_transformer costs are
+                # already baked into result.usage.cost_usd by _run_heavy() / orchestrator.
+                # Their tokens are recorded in UsageEntry for audit/observability only.
+                # No double-billing: safety_cost (Safety Gate) is the only additive here.
                 total_cost_usd = result.usage.cost_usd + safety_cost
 
                 ac = AccessController(supabase)
@@ -473,6 +477,12 @@ async def telegram_webhook(
                     safety_pass2_tokens=result.safety_pass2_tokens,
                     safety_safeguard_tokens=result.safety_safeguard_tokens,
                     safety_safeguard_output_tokens=result.safety_safeguard_output_tokens,
+                    safety_agent_input_tokens=result.safety_agent_input_tokens,
+                    safety_agent_output_tokens=result.safety_agent_output_tokens,
+                    multilingual_input_tokens=result.multilingual_input_tokens,
+                    multilingual_output_tokens=result.multilingual_output_tokens,
+                    lc_transformer_input_tokens=result.lc_transformer_input_tokens,
+                    lc_transformer_output_tokens=result.lc_transformer_output_tokens,
                 ))
             except Exception as exc:
                 logger.error("Billing failed", extra={"error": str(exc)})
