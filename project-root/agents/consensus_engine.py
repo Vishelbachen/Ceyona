@@ -81,7 +81,7 @@ async def resolve(candidates: list[AgentResult]) -> ConsensusResult:
         response = await groq_client.complete(
             model=CONSENSUS_MODEL,
             messages=messages,
-            max_tokens=route_max_tokens(Tier.HEAVY),
+            max_tokens=route_max_tokens(Tier.GENERAL),  # arbitration, not generation — models.md §8
             temperature=0.2,   # low temp — arbitration, not generation
         )
 
