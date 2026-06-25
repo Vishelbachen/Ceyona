@@ -408,13 +408,17 @@ async def handle_message(
     complexity = _classify_complexity(text)
 
     # ── multilingual normalization ─────────────────────────────────────────────
-    # Normalize non-Latin scripts (Arabic via allam-2-7b, others via llama-3.3-70b)
+    # Normalize non-Latin scripts (Arabic via allam-2-7b, others via qwen3.6-27b)
     # before retrieval and EPK. Latin-script languages pass through unchanged.
     # Position: after text extraction, before retrieval — per architecture.md §4.
+    _ml_input_tokens  = 0
+    _ml_output_tokens = 0
     try:
         from llm.multilingual_preprocessor import PreprocessorInput
         from llm.multilingual_preprocessor import preprocess as ml_preprocess
         ml_result = await ml_preprocess(PreprocessorInput(text=text, lang=lang))
+        _ml_input_tokens  = ml_result.input_tokens
+        _ml_output_tokens = ml_result.output_tokens
         if ml_result.was_normalized:
             logger.info("Multilingual normalization applied", extra={
                 "model": ml_result.model_used,
@@ -736,7 +740,10 @@ async def handle_message(
     # audio_seconds and tts_characters are captured in local vars above.
     # They must be set on OrchestratorResult so webhook.py can pass them
     # to UsageEntry — otherwise speech billing always records 0.
-    if _asr_audio_seconds or _tts_characters or _safety_pass1_tokens or _safety_pass2_tokens or _safety_safeguard_tokens or _safety_safeguard_output_tokens:
+    if (_asr_audio_seconds or _tts_characters
+            or _safety_pass1_tokens or _safety_pass2_tokens
+            or _safety_safeguard_tokens or _safety_safeguard_output_tokens
+            or _ml_input_tokens or _ml_output_tokens):
         from dataclasses import replace as _replace
         result = _replace(result,
             audio_seconds=_asr_audio_seconds,
@@ -745,6 +752,8 @@ async def handle_message(
             safety_pass2_tokens=_safety_pass2_tokens,
             safety_safeguard_tokens=_safety_safeguard_tokens,
             safety_safeguard_output_tokens=_safety_safeguard_output_tokens,
+            multilingual_input_tokens=_ml_input_tokens,
+            multilingual_output_tokens=_ml_output_tokens,
         )
 
     return result
