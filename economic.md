@@ -193,8 +193,12 @@ RERANK_RATE = 0.10  # BAAI/bge-reranker-large — per 1M token-pairs, HF serverl
 
 ```
 allam-2-7b → Arabic normalization
-           → no public pricing listed on Groq (May 2026)
-           → treated as FAST tier equivalent: $0.05 input / $0.08 output
+           → no public pricing listed on Groq
+           → treated as FAST tier equivalent: $0.075 input / $0.30 output per 1M
+             (matches gpt-oss-20b FAST rates — cost_model.py _MULTILINGUAL_RATES)
+
+qwen/qwen3.6-27b → non-Arabic multilingual normalization
+                 → GENERAL tier: $0.60 input / $3.00 output per 1M
 ```
 
 ---
@@ -558,9 +562,9 @@ This document is synchronized with:
 - [x] **DENY billing fix (Jun 2026):** Safety Gate tokens биллятся на DENY путях (voice pass1 block). webhook.py guard обновлён. ✅ CLOSED
 - [x] **actual_cost() safeguard output (Jun 2026):** добавлен параметр safety_safeguard_output_tokens. ✅ CLOSED
 - [ ] Per-route billing: preferred_model now logged per-request (models.md §25.3) → update actual_cost() to use per-model rates when ready
-- [ ] Multilingual billing на ALLOW/DEGRADED путях: allam-2-7b и qwen3.6-27b multilingual calls не биллятся на этих путях — только на HEAVY
+- [x] **Multilingual billing на ALLOW/DEGRADED путях (Jun 2026):** webhook.py вычисляет `_ml_cost` на ALLOW/DEGRADED; на HEAVY пропускается (cost_usd уже включает). ✅ CLOSED
 - [ ] Compound/compound-mini token pricing not publicly listed — monitor Groq changelog
-- [ ] allam-2-7b pricing not listed — treated as FAST equivalent until confirmed
+- [x] **allam-2-7b pricing (Jun 2026):** нет публичного листинга — зафиксировано как FAST equivalent $0.075/$0.30 per 1M. §1.6 обновлён. ✅ CLOSED
 - [ ] HF Inference Endpoints pricing if serverless quota exceeded
 - [ ] Batch API discount (50%) — applicable when usage grows, not yet implemented
 - [ ] Prompt caching discount (50% input) — applicable for high cache-hit workloads
