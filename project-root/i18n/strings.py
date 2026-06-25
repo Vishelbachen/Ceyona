@@ -1125,7 +1125,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "nl": "🗺 Route: ${origin} → ${destination}\\n📏 Afstand: ${dist} km\\n⏱ Rijtijd: ~${dur} min",
         "sv": "🗺 Rutt: ${origin} → ${destination}\\n📏 Avstånd: ${dist} km\\n⏱ Körtid: ~${dur} min",
         "fi": "🗺 Reitti: ${origin} → ${destination}\\n📏 Etäisyys: ${dist} km\\n⏱ Ajoaika: ~${dur} min",
-        "he": "🗺 מסלול: ${origin} → ${destination}\\n📏 מרחק: ${dist} ק\\"מ\\n⏱ זמן נסיעה: ~${dur} דקות",
+        "he": "🗺 מסלול: ${origin} → ${destination}\\n📏 מרחק: ${dist} ק״מ\\n⏱ זמן נסיעה: ~${dur} דקות",
         "ka": "🗺 მარშრუტი: ${origin} → ${destination}\\n📏 მანძილი: ${dist} კმ\\n⏱ გზაში: ~${dur} წთ",
         "hy": "🗺 Yertughi: ${origin} → ${destination}\\n📏 Heravonutyun: ${dist} km\\n⏱ Chamanaparh: ~${dur} rop",
         "az": "🗺 Marşrut: ${origin} → ${destination}\\n📏 Məsafə: ${dist} km\\n⏱ Yol vaxtı: ~${dur} dəq",
