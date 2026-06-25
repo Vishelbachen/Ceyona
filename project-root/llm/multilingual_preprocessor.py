@@ -13,7 +13,8 @@ logger = logging.getLogger(__name__)
 # Responsibilities:
 #   - Detect script/language of input
 #   - For Arabic: normalize via allam-2-7b (one call, three contexts per models.md)
-#   - For all other non-Latin: normalize via llama-3.3-70b-versatile
+#   - For all other non-Latin: normalize via qwen/qwen3.6-27b (replaces llama-3.3-70b-versatile,
+#     deprecated Aug 16, 2026 — models.md §23, §28)
 #   - For Latin-script languages: pass through unchanged (no LLM call needed)
 #
 # Position in lifecycle:
@@ -142,7 +143,7 @@ async def preprocess(inp: PreprocessorInput) -> PreprocessorResult:
     Decision tree:
       1. Latin-dominant script → passthrough (no LLM call)
       2. Arabic script → allam-2-7b normalization
-      3. Other non-Latin script → llama-3.3-70b-versatile normalization
+      3. Other non-Latin script → qwen/qwen3.6-27b normalization (models.md §23)
 
     Never raises — returns original text on any failure.
     Never translates — only normalizes within the same language.
