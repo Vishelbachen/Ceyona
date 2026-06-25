@@ -35,24 +35,21 @@ All rates in USD per 1M tokens. Verified from groq.com/pricing, May 2026.
 
 ```
 FAST tier
-  llama-3.1-8b-instant          → input: $0.05   output: $0.08   (840 TPS)  ⚠️ deprecated Aug 16, 2026
-  [fallback removed: gemma2-9b-it deprecated by Groq, Aug 2025]
-  [кандидат замены: openai/gpt-oss-20b — см. models_passport.md]
+  openai/gpt-oss-20b            → input: $0.075  output: $0.30   (1000 TPS) ✅ primary
 
-GENERAL tier
-  llama-3.3-70b-versatile       → input: $0.59   output: $0.79   (394 TPS)  ⚠️ deprecated Aug 16, 2026
-  qwen/qwen3-32b                → input: $0.29   output: $0.59   (662 TPS)  ⚠️ deprecated Jul 17, 2026
-  openai/gpt-oss-20b            → input: $0.075  output: $0.30   (1000 TPS)
+GENERAL / VISION / LONG_CONTEXT / MULTILINGUAL tier
+  qwen/qwen3.6-27b              → input: $0.60   output: $3.00   (500 TPS)  ✅ primary (groq.com/pricing, Jun 22, 2026)
+  openai/gpt-oss-120b           → input: $0.15   output: $0.60   (500 TPS)  ✅ GENERAL fallback
 
 HEAVY tier
-  openai/gpt-oss-120b                           → input: $0.15   output: $0.60   (500 TPS)
-  meta-llama/llama-4-scout-17b-16e-instruct     → input: $0.11   output: $0.34   (594 TPS)  ⚠️ deprecated Jul 17, 2026
+  openai/gpt-oss-120b           → input: $0.15   output: $0.60   (500 TPS)  ✅ primary
 
-GENERAL / VISION / LONG_CONTEXT / MULTILINGUAL primary (замена llama-3.3-70b + llama-4-scout)
-  qwen/qwen3.6-27b              → input: $0.60   output: $3.00   (500 TPS) ✅ DOC (groq.com/pricing, Jun 22, 2026)
-                                   ⚠️ CORRECTION (Jun 22, 2026): цена НЕ является placeholder.
-                                   Опубликована официально на groq.com/pricing. Предыдущий placeholder
-                                   $0.05/$0.08 (FAST tier) был некорректен.
+Note: gpt-oss-120b (HEAVY/GENERAL fallback) is cheaper than qwen3.6-27b (GENERAL) on output
+due to MoE architecture — pricing follows model design, not tier rank.
+
+Deprecated models (removed from active routing, Jun 2026):
+  llama-3.1-8b-instant, llama-3.3-70b-versatile → removed Aug 16, 2026
+  qwen/qwen3-32b, llama-4-scout-17b-16e-instruct → removed Jul 17, 2026
 ```
 
 **MODEL_RATES in cost_model.py** uses the PRIMARY model of each tier for pre-execution estimation:
@@ -80,7 +77,7 @@ This is a conservative safety bound, not a billing calculation.
 When per-route billing is implemented (logging actual model per request), `actual_cost()`
 will be updated to use per-model rates — no EPK changes required.
 
-Note on HEAVY: gpt-oss-120b at $0.15/$0.60 is cheaper than GENERAL llama-3.3-70b on output
+Note on HEAVY: gpt-oss-120b at $0.15/$0.60 is cheaper than qwen3.6-27b (GENERAL primary) on output
 due to MoE architecture. This is correct and expected — HEAVY = more capable, not always more expensive.
 
 **⚠️ ACTION REQUIRED при смене primary моделей:**
@@ -105,11 +102,15 @@ pre-execution overhead to every `estimate_cost()` call. Covers all three models:
 ~300 tokens × 22m rate + ~300 tokens × 86m rate + ~300 tokens × safeguard rate.
 EPK sees full request cost including Safety Gate.
 
-**Post-execution:** `actual_safety_cost(pass1_tokens, pass2_tokens, safeguard_tokens)`
+**Post-execution:** `actual_safety_cost(pass1_tokens, pass2_tokens, safeguard_tokens, safeguard_output_tokens)`
 records real token counts from `GateResult` into `UsageEntry`:
-- `GateResult.tokens_used`            → Pass 1 (22m) or Pass 2 (86m) — billed at respective rate
-- `GateResult.safeguard_tokens_used`  → Pass 2 gpt-oss-safeguard-20b — billed at $0.075/1M
-Both models in Pass 2 run concurrently. Tokens tracked separately per model for accurate billing.
+- `pass1_tokens`              → `GateResult.tokens_used` from `check_pass1()` — billed at $0.03/1M (22m)
+- `pass2_tokens`              → `GateResult.tokens_used` from `check_pass2()` — billed at $0.04/1M (86m only)
+- `safeguard_tokens`          → `GateResult.safeguard_tokens_used` — billed at $0.075/1M (safeguard-20b input)
+- `safeguard_output_tokens`   → `GateResult.safeguard_output_tokens_used` — billed at $0.30/1M (safeguard-20b output)
+
+Note: `pass2_tokens` and `safeguard_tokens` are separate parameters — 86m and safeguard-20b
+run concurrently in Pass 2 and are billed at different rates through different fields.
 Enables estimate vs actual drift tracking per request.
 
 ### 1.3 Agent Layer (Compound — Groq-hosted)
