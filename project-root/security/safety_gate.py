@@ -71,8 +71,11 @@ class GateResult:
     verdict: GateVerdict
     reason: str = ""
     model_used: str = ""
-    tokens_used: int = 0         # actual input tokens — Pass 1 (22m), or 86m for Pass 2
-    safeguard_tokens_used: int = 0  # actual input tokens for gpt-oss-safeguard-20b (Pass 2 only)
+    tokens_used: int = 0              # actual input tokens — Pass 1 (22m), or 86m for Pass 2
+    safeguard_tokens_used: int = 0    # actual input tokens for gpt-oss-safeguard-20b (Pass 2 only)
+    safeguard_output_tokens_used: int = 0  # actual output tokens for gpt-oss-safeguard-20b (Pass 2 only)
+                                      # billed at $0.30/1M — small (1-2 tokens "SAFE"/"UNSAFE")
+                                      # but every model call MUST be fully billed (economic.md §2)
 
     @property
     def safe(self) -> bool:
@@ -119,23 +122,24 @@ _GUARD_MODELS = {
 
 # ─── INTERNAL ─────────────────────────────────────────────────────────────────
 
-async def _classify_with_model(text: str, model: str, system: str) -> Tuple[bool, int]:
+async def _classify_with_model(text: str, model: str, system: str) -> Tuple[bool, int, int]:
     """
     Run a single safety model classification.
-    Returns (is_safe, input_tokens_used).
+    Returns (is_safe, input_tokens_used, output_tokens_used).
 
-    input_tokens_used is taken from response.usage.prompt_tokens — the actual
-    token count returned by Groq API. This is used by actual_safety_cost() for
-    accurate per-request billing (Variant C).
+    Both token counts are taken from response.usage (prompt_tokens / completion_tokens)
+    — actual values returned by Groq API. Used by actual_safety_cost() for accurate
+    per-request billing (Variant C). economic.md §2: every model call MUST be fully billed.
 
     prompt-guard models (22m, 86m) are BERT classifiers:
       - Groq requires exactly one user message — no system role.
       - Response is "BENIGN" or "MALICIOUS" (not "SAFE"/"UNSAFE").
-      - They detect only prompt injection and jailbreak attacks.
+      - Output: 1-2 tokens. Billed at $0.03/$0.04 per 1M (negligible).
 
     openai/gpt-oss-safeguard-20b is a standard chat model:
       - system + user message format.
-      - Response is "SAFE" or "UNSAFE".
+      - Response is "SAFE" or "UNSAFE" — 1-2 output tokens.
+      - Output billed at $0.30/1M — small per request but correct to track.
 
     NOTE: This function is now called for OBSERVABILITY ONLY.
     Its return value is logged but does NOT block execution.
@@ -163,8 +167,9 @@ async def _classify_with_model(text: str, model: str, system: str) -> Tuple[bool
             temperature=0.0,    # deterministic classification
         )
         verdict = response.text.strip().upper()
-        # Groq returns actual prompt_tokens in response.usage — use that for billing.
-        tokens = response.input_tokens
+        # Groq returns actual token counts in response.usage — use both for billing.
+        input_tokens = response.input_tokens
+        output_tokens = response.output_tokens
 
         if model in _GUARD_MODELS:
             # prompt-guard returns "BENIGN" or "MALICIOUS".
@@ -173,7 +178,7 @@ async def _classify_with_model(text: str, model: str, system: str) -> Tuple[bool
             # gpt-oss-safeguard returns "SAFE" or "UNSAFE"
             is_safe = verdict.startswith("SAFE")
 
-        return is_safe, tokens
+        return is_safe, input_tokens, output_tokens
 
     except Exception as exc:
         # Fix §10.3: API error must be logged as a distinct event type.
@@ -185,7 +190,7 @@ async def _classify_with_model(text: str, model: str, system: str) -> Tuple[bool
             "Safety Gate signal lost — model API error (observability degraded)",
             extra={"model": model, "error": str(exc), "event": "safety_signal_lost"},
         )
-        return True, 0  # error in observability path → do not block, 0 tokens billed
+        return True, 0, 0  # error in observability path → do not block, 0 tokens billed
 
 
 # ─── PUBLIC API ───────────────────────────────────────────────────────────────
@@ -220,7 +225,7 @@ async def check_pass1(text: str) -> GateResult:
     tokens_used = 0
 
     try:
-        safe, tokens_used = await _classify_with_model(stripped, _PASS1_MODEL, _PASS1_SYSTEM)
+        safe, tokens_used, _ = await _classify_with_model(stripped, _PASS1_MODEL, _PASS1_SYSTEM)
         latency_ms = round((time.monotonic() - t0) * 1000)
 
         if not safe:
@@ -288,12 +293,13 @@ async def check_pass2(text: str) -> GateResult:
     stripped = text.strip()
     tokens_86m = 0
     tokens_safeguard = 0
+    output_tokens_safeguard = 0
 
     # ── Step 1: llama-prompt-guard-2-86m ─────────────────────────────────────
     # BERT classifier — single user message, returns "BENIGN"/"MALICIOUS".
     # Detects prompt injection and jailbreak attempts across 8 languages.
     try:
-        safe_86m, tokens_86m = await _classify_with_model(stripped, _PASS2_86M, "")
+        safe_86m, tokens_86m, _ = await _classify_with_model(stripped, _PASS2_86M, "")
         if not safe_86m:
             logger.warning(
                 "Safety Gate Pass 2 (86m): MALICIOUS signal detected (non-blocking)",
@@ -313,19 +319,20 @@ async def check_pass2(text: str) -> GateResult:
     # ── Step 2: gpt-oss-safeguard-20b ────────────────────────────────────────
     # LLM-based classifier — system + user, returns "SAFE"/"UNSAFE".
     # Broader policy scope than 86m. Works best on normalized (post-Multilingual) text.
+    # Both input and output tokens tracked — economic.md §2: every call MUST be fully billed.
     try:
-        safe_safeguard, tokens_safeguard = await _classify_with_model(
+        safe_safeguard, tokens_safeguard, output_tokens_safeguard = await _classify_with_model(
             stripped, _PASS2_SAFEGUARD, _PASS2_SYSTEM
         )
         if not safe_safeguard:
             logger.warning(
                 "Safety Gate Pass 2 (safeguard-20b): UNSAFE signal detected (non-blocking)",
-                extra={"model": _PASS2_SAFEGUARD, "tokens": tokens_safeguard, "text_preview": stripped[:80]},
+                extra={"model": _PASS2_SAFEGUARD, "tokens": tokens_safeguard, "output_tokens": output_tokens_safeguard, "text_preview": stripped[:80]},
             )
         else:
             logger.debug(
                 "Safety Gate Pass 2 (safeguard-20b): SAFE signal",
-                extra={"model": _PASS2_SAFEGUARD, "tokens": tokens_safeguard},
+                extra={"model": _PASS2_SAFEGUARD, "tokens": tokens_safeguard, "output_tokens": output_tokens_safeguard},
             )
     except Exception as exc:
         logger.error(
@@ -339,4 +346,5 @@ async def check_pass2(text: str) -> GateResult:
         model_used=_PASS2_86M,
         tokens_used=tokens_86m,
         safeguard_tokens_used=tokens_safeguard,
+        safeguard_output_tokens_used=output_tokens_safeguard,
     )
