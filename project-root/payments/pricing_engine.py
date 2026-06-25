@@ -68,14 +68,17 @@ def apply_margin(usd: float, margin: float = 1.3) -> float:
     return usd * margin
 
 
-# llama-4-scout vision extraction rates (Groq, May 2026)
-# $0.11 input / $0.34 output per 1M tokens.
-_VISION_RATES: dict[str, float] = {"input": 0.11, "output": 0.34}
+# qwen/qwen3.6-27b vision extraction rates (Groq, Jun 2026)
+# Replaces llama-4-scout-17b-16e-instruct (deprecated Jul 17, 2026).
+# Source: groq.com/pricing, Jun 22, 2026 — same rates as GENERAL tier.
+# $0.60 input / $3.00 output per 1M tokens.
+# models.md §26.1 — Role A (Vision Extraction), economic.md §1.1.
+_VISION_RATES: dict[str, float] = {"input": 0.60, "output": 3.00}
 
 
 def vision_cost(input_tokens: int, output_tokens: int) -> float:
     """
-    Compute raw cost for a llama-4-scout vision extraction call.
+    Compute raw cost for a qwen/qwen3.6-27b vision extraction call.
 
     This is the single authoritative billing function for vision tokens.
     Called by update_handler before the balance guard — always based on
@@ -83,6 +86,9 @@ def vision_cost(input_tokens: int, output_tokens: int) -> float:
 
     Falls back to 0.001 conservative estimate at the call site when tokens
     are unavailable (failed=True path in vision_handler).
+
+    Model: qwen/qwen3.6-27b (replaces llama-4-scout, deprecated Jul 17, 2026).
+    Rates: $0.60 input / $3.00 output per 1M tokens (economic.md §1.1).
     """
     return (
         input_tokens * _VISION_RATES["input"]
