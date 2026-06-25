@@ -11,7 +11,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from security.safety_gate import (
-    _PASS2_86M,
     _PASS2_SAFEGUARD,
     GateResult,
     GateVerdict,
