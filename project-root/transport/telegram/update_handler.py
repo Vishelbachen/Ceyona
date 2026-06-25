@@ -330,7 +330,6 @@ async def handle_message(
                     gate1 = await asyncio.wait_for(check_pass1(tr.text), timeout=8.0)
                     if not gate1.safe:
                         from i18n.t import get_system_message
-
                         # Safety Gate ran and consumed tokens — carry them so
                         # webhook bills gate cost even on DENY (economic.md §2).
                         return OrchestratorResult(
@@ -418,12 +417,14 @@ async def handle_message(
     # Position: after text extraction, before retrieval — per architecture.md §4.
     _ml_input_tokens  = 0
     _ml_output_tokens = 0
+    _ml_model         = "passthrough"
     try:
         from llm.multilingual_preprocessor import PreprocessorInput
         from llm.multilingual_preprocessor import preprocess as ml_preprocess
         ml_result = await ml_preprocess(PreprocessorInput(text=text, lang=lang))
         _ml_input_tokens  = ml_result.input_tokens
         _ml_output_tokens = ml_result.output_tokens
+        _ml_model         = ml_result.model_used  # "allam-2-7b" | "qwen/qwen3.6-27b" | "passthrough"
         if ml_result.was_normalized:
             logger.info("Multilingual normalization applied", extra={
                 "model": ml_result.model_used,
@@ -759,6 +760,7 @@ async def handle_message(
             safety_safeguard_output_tokens=_safety_safeguard_output_tokens,
             multilingual_input_tokens=_ml_input_tokens,
             multilingual_output_tokens=_ml_output_tokens,
+            multilingual_model=_ml_model,
         )
 
     return result
