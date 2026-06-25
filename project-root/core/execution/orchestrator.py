@@ -155,6 +155,12 @@ class OrchestratorResult:
     safety_pass2_tokens: int = 0              # GateResult.tokens_used from check_pass2()
     safety_safeguard_tokens: int = 0          # gpt-oss-safeguard-20b input tokens (included in pass2 call)
     safety_safeguard_output_tokens: int = 0   # gpt-oss-safeguard-20b output tokens ($0.30/1M)
+    safety_agent_input_tokens: int = 0        # gpt-oss-safeguard-20b input tokens from safety_agent LLM judge
+    safety_agent_output_tokens: int = 0       # gpt-oss-safeguard-20b output tokens from safety_agent LLM judge
+    multilingual_input_tokens: int = 0        # multilingual_preprocessor LLM call input tokens
+    multilingual_output_tokens: int = 0       # multilingual_preprocessor LLM call output tokens
+    lc_transformer_input_tokens: int = 0      # long_context_transformer input tokens (qwen3.6-27b, $0.60/1M)
+    lc_transformer_output_tokens: int = 0     # long_context_transformer output tokens ($3.00/1M)
 
 
 # ─── INTERNAL HELPERS ─────────────────────────────────────────────────────────
@@ -731,6 +737,42 @@ async def _run_heavy(
         )
 
     _billing_tier = coordination.actual_tier or tier
+
+    # long_context_transformer billing — uses qwen3.6-27b ($0.60/$3.00 per 1M).
+    # economic.md §2: every model call MUST be billed. Tokens from LongContextResult.
+    _lc_in_tok  = lc_result.input_tokens  if "lc_result" in dir() and lc_result.success else 0
+    _lc_out_tok = lc_result.output_tokens if "lc_result" in dir() and lc_result.success else 0
+    _lc_cost = actual_cost(
+        input_tokens=_lc_in_tok,
+        output_tokens=_lc_out_tok,
+        embedding_tokens=0,
+        rerank_tokens=0,
+        tier=Tier.GENERAL,  # qwen3.6-27b is GENERAL tier
+        embedding_type=request.embedding_type,
+    ) if _lc_in_tok else 0.0
+
+    # heavy_input_shaper billing — uses GENERAL model (qwen3.6-27b, $0.60/$3.00 per 1M).
+    # economic.md §2: every model call MUST be billed. Tokens from ShaperResult.
+    _shaper_cost = actual_cost(
+        input_tokens=shaper_result.shaper_input_tokens,
+        output_tokens=shaper_result.shaper_output_tokens,
+        embedding_tokens=0,
+        rerank_tokens=0,
+        tier=Tier.GENERAL,
+        embedding_type=request.embedding_type,
+    ) if shaper_result.was_shaped else 0.0
+
+    # safety_agent billing — LLM judge uses gpt-oss-safeguard-20b ($0.075/$0.30 per 1M).
+    # Separate from Safety Gate (different call site, different purpose).
+    # Tokens flow from CoordinationResult.safety_agent_input/output_tokens.
+    from core.kernel.cost_model import actual_safety_cost as _actual_safety_cost
+    _safety_agent_cost = _actual_safety_cost(
+        pass1_tokens=0,
+        pass2_tokens=0,
+        safeguard_tokens=coordination.safety_agent_input_tokens,
+        safeguard_output_tokens=coordination.safety_agent_output_tokens,
+    )
+
     cost = actual_cost(
         input_tokens=coordination.input_tokens,
         output_tokens=coordination.output_tokens,
@@ -738,7 +780,7 @@ async def _run_heavy(
         rerank_tokens=request.rerank_tokens,
         tier=_billing_tier,
         embedding_type=request.embedding_type,
-    )
+    ) + _lc_cost + _shaper_cost + _safety_agent_cost
 
     synthesis = synthesize(SynthesisInput(
         raw_text=coordination.text,
@@ -768,6 +810,10 @@ async def _run_heavy(
         tool_used=bool(intent_result.tool_name),
         tool_calls=coordination.tool_calls,
         resolved_model=intent_result.routing.preferred_model or "",
+        safety_agent_input_tokens=coordination.safety_agent_input_tokens,
+        safety_agent_output_tokens=coordination.safety_agent_output_tokens,
+        lc_transformer_input_tokens=_lc_in_tok,
+        lc_transformer_output_tokens=_lc_out_tok,
     )
 
 
