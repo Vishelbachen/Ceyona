@@ -186,14 +186,60 @@ async def check_pass1(text: str) -> GateResult:
     """
     Safety Gate Pass 1 — fast pre-filter (NON-BLOCKING, observability only).
 
-    llama-prompt-guard-2-22m produces too many false positives on non-English
-    text and short casual messages.
+    llama-prompt-guard-2-22m is called for signal logging only.
+    Its verdict NEVER blocks execution — always returns GateVerdict.PASS.
 
-    Pass 1 only LOGS — never DENYs. Preserves observability while eliminating
-    false positive blocks. Blocking authority: safety_agent (post-reasoning).
+    Why call despite known false-positive rate on RU/AR:
+      - Blocking authority belongs to safety_agent (post-reasoning) — not here.
+      - Even noisy signals have monitoring value: patterns accumulate over time,
+        attack vectors can be identified, model can be calibrated on production data.
+      - 22m is a 22M-param DeBERTa classifier — latency is single-digit ms on Groq.
+        Resource cost is negligible (HF Space: 16GB RAM, LPU inference).
+
+    API constraints (models.md §27.5):
+      - Single user message ONLY — no system role (BERT classifier, not chat model).
+      - Response: "BENIGN" or "MALICIOUS" only — no score, no confidence field.
+      - Input truncated to 512 tokens (context window limit).
+
+    Blocking authority: safety_agent (post-reasoning).
     """
-    logger.debug("Safety Gate Pass 1: non-blocking pass-through", extra={"len": len(text.strip())})
-    return GateResult(verdict=GateVerdict.PASS, model_used="pass1-nonblocking")
+    import time
+    stripped = text.strip()
+    t0 = time.monotonic()
+
+    try:
+        safe = await _classify_with_model(stripped, _PASS1_MODEL, _PASS1_SYSTEM)
+        latency_ms = round((time.monotonic() - t0) * 1000)
+
+        if not safe:
+            logger.warning(
+                "Safety Gate Pass 1: MALICIOUS signal detected (non-blocking, logged for monitoring)",
+                extra={
+                    "model": _PASS1_MODEL,
+                    "label": "MALICIOUS",
+                    "latency_ms": latency_ms,
+                    "text_preview": stripped[:80],
+                    "event": "safety_pass1_signal",
+                },
+            )
+        else:
+            logger.debug(
+                "Safety Gate Pass 1: BENIGN signal",
+                extra={
+                    "model": _PASS1_MODEL,
+                    "label": "BENIGN",
+                    "latency_ms": latency_ms,
+                },
+            )
+
+    except Exception as exc:
+        logger.error(
+            "Safety Gate Pass 1: signal lost — model API error (observability degraded)",
+            extra={"model": _PASS1_MODEL, "error": str(exc), "event": "safety_signal_lost"},
+        )
+
+    # Always PASS — blocking authority belongs to safety_agent.
+    return GateResult(verdict=GateVerdict.PASS, model_used=_PASS1_MODEL)
 
 
 async def check_pass2(text: str) -> GateResult:
