@@ -754,7 +754,9 @@ Beyond that: constraint adherence degrades, conciseness rules may be deprioritiz
 - Holds negative rules ("do not do X") more reliably than positive framing ✅ DOC
 - Below 45% accuracy on CJK (Chinese/Japanese/Korean) — STEM/English training bias ✅ BENCH
 - RU/AR: sufficient for FAST role (short responses, tool calls) — not used for MULTILINGUAL ✅ EST
-- `reasoning_effort="low"` MUST be set at every FAST call site — reduces latency and cost ✅ DOC
+- `reasoning_effort="low"` REQUIRED at all FAST call sites — reduces latency and cost ✅ DOC
+  **API default: "medium". MUST be set explicitly — omitting it uses "medium" on FAST path, adding unnecessary latency.**
+  Implementation: `model_router.get_reasoning_effort(model, tier)` → `fallback_handler` applies via `extra_params`. ✅ PROD (fixed Jun 2026)
 - Tool use and JSON structured output: reliable ✅ DOC
 
 **Persona implications:**
@@ -828,6 +830,8 @@ For HEAVY role this is acceptable — deep reasoning tasks expect latency.
 - Multilingual: 81+ languages — weaker than qwen3.6-27b on multilingual tasks ✅ BENCH
 - Creative writing polish: below frontier proprietary models ✅ BENCH
 - `reasoning_effort` (low/medium/high): use "high" for HEAVY, "medium" for Consensus ✅ DOC
+  **API default: "medium" (confirmed Groq API reference Jun 2026). MUST be set explicitly at every call site — omitting it silently uses "medium" instead of "high" on HEAVY path.**
+  Implementation: `model_router.get_reasoning_effort(model, tier)` → `fallback_handler` applies via `extra_params`. ✅ PROD (fixed Jun 2026)
 - Harmony role hierarchy: System → Developer → User → Assistant — use at every call site ✅ DOC
 - MoE architecture: cheaper on output tokens than apparent size suggests ✅ DOC
 
