@@ -22,11 +22,11 @@ class AgentResult:
 
 async def run(messages: list[dict], temperature: float = 0.7) -> AgentResult:
     """
-    Deep agent — Tier.GENERAL via complete_with_fallback (models1.md §6).
+    Deep agent — Tier.GENERAL via complete_with_fallback (models.md §6).
 
-    Routing: llama-3.3-70b-versatile → qwen/qwen3-32b → openai/gpt-oss-20b.
-    Uses complete_with_fallback — full General Tier cascade with 413 protection
-    and qwen thinking=False enforcement.
+    Routing: qwen/qwen3.6-27b (primary) → openai/gpt-oss-120b (fallback).
+    Uses complete_with_fallback — full General Tier cascade with 413 protection,
+    reasoning_effort="none" enforcement, and top_p/presence_penalty for qwen3.6-27b.
 
     NOTE: groq/compound is registered as DEEP_AGENT_MODEL in model_router.py
     and is the intended long-term target for this agent (multi-step tool-use).
@@ -34,7 +34,7 @@ async def run(messages: list[dict], temperature: float = 0.7) -> AgentResult:
     with a `tools` parameter — calling them as plain chat-completion produces
     empty or error responses ("DeepAgent failed" in Sentry).
     Revert to compound when Groq tool-use API stabilises.
-    Tracked in: architecture.md §27, models1.md §6.
+    Tracked in: architecture.md §27, models.md §6.
     """
     try:
         response = await complete_with_fallback(
