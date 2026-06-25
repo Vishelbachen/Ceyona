@@ -659,11 +659,11 @@ Two safety systems serve distinct, non-overlapping roles:
 
 **Safety Layer (input observability — NON-BLOCKING):**
 Pre-EPK signal logging only. Both passes always return PASS.
-Pass 1 (`llama-prompt-guard-2-22m`): currently implemented as a no-op pass-through —
-model is NOT called. Logger emits a debug event only. Rationale: unacceptable false-positive
-rates on Russian, Arabic, and short casual messages would cause full outage for legitimate users.
+Pass 1 (`llama-prompt-guard-2-22m`): model IS called. Result (`BENIGN`/`MALICIOUS`) logged
+with latency. Always returns PASS — verdict never blocks. False-positive rate on RU/AR is
+high but acceptable for observability; blocking authority remains with safety_agent only.
 Pass 2 (`gpt-oss-safeguard-20b`): model IS called for signal logging; verdict does not block.
-Model unavailability → pass-through.
+Model unavailability → pass-through for both passes.
 
 **safety_agent (post-reasoning semantic validation — SOLE BLOCKING AUTHORITY):**
 Runs inside coordinator after primary reasoning. Only layer that can block on safety grounds.
