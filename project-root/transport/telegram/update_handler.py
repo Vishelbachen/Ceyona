@@ -395,9 +395,11 @@ async def handle_message(
     # NON-BLOCKING per architecture.md §21 — check_pass1 always returns PASS.
     # DENY branch removed: safety_gate v2 (May 2026) is observability-only.
     # Blocking authority: safety_agent (post-reasoning).
+    _safety_pass1_tokens = 0
     try:
         from security.safety_gate import check_pass1
-        await asyncio.wait_for(check_pass1(text), timeout=8.0)
+        _gate1 = await asyncio.wait_for(check_pass1(text), timeout=8.0)
+        _safety_pass1_tokens = _gate1.tokens_used
     except asyncio.TimeoutError:
         logger.warning("Safety Gate Pass 1 timeout — skipping", extra={"user_id": user_id})
     except Exception as exc:
@@ -426,9 +428,11 @@ async def handle_message(
     # NON-BLOCKING per architecture.md §21 — check_pass2 always returns PASS.
     # DENY branch removed: safety_gate v2 (May 2026) is observability-only.
     # Blocking authority: safety_agent (post-reasoning).
+    _safety_pass2_tokens = 0
     try:
         from security.safety_gate import check_pass2
-        await asyncio.wait_for(check_pass2(text), timeout=12.0)
+        _gate2 = await asyncio.wait_for(check_pass2(text), timeout=12.0)
+        _safety_pass2_tokens = _gate2.tokens_used
     except asyncio.TimeoutError:
         logger.warning("Safety Gate Pass 2 timeout — skipping", extra={"user_id": user_id})
     except Exception as exc:
@@ -728,11 +732,13 @@ async def handle_message(
     # audio_seconds and tts_characters are captured in local vars above.
     # They must be set on OrchestratorResult so webhook.py can pass them
     # to UsageEntry — otherwise speech billing always records 0.
-    if _asr_audio_seconds or _tts_characters:
+    if _asr_audio_seconds or _tts_characters or _safety_pass1_tokens or _safety_pass2_tokens:
         from dataclasses import replace as _replace
         result = _replace(result,
             audio_seconds=_asr_audio_seconds,
             tts_characters=_tts_characters,
+            safety_pass1_tokens=_safety_pass1_tokens,
+            safety_pass2_tokens=_safety_pass2_tokens,
         )
 
     return result
