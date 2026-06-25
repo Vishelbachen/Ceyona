@@ -1,5 +1,5 @@
 # CEYONA — ECONOMIC MODEL
-Version: 5.5 — qwen3.6-27b Pricing Published + Compound Tool Pricing Update (Jun 22, 2026)
+Version: 5.6 — Billing Fixes + Threshold Calibration + Documentation Sync (Jun 26, 2026)
 Status: Active Source of Truth
 Supersedes: economic.md (all previous versions)
 
@@ -58,32 +58,17 @@ GENERAL / VISION / LONG_CONTEXT / MULTILINGUAL primary (замена llama-3.3-7
 **MODEL_RATES in cost_model.py** uses the PRIMARY model of each tier for pre-execution estimation:
 
 ```python
-# ⚠️ ОБНОВИТЬ при смене primary в model_router.py (текущие значения = устаревшие primary)
-# Актуальные primary после миграции: FAST=gpt-oss-20b, GENERAL=qwen3.6-27b
+# Актуальные значения (Jun 2026) — синхронизированы с model_router.py
 MODEL_RATES = {
-    Tier.FAST:    {"input": 0.05,  "output": 0.08},   # llama-3.1-8b-instant ⚠️ deprecated Aug 16
-                                                         # → при смене на gpt-oss-20b: $0.075/$0.30
-    Tier.GENERAL: {"input": 0.59,  "output": 0.79},   # llama-3.3-70b-versatile ⚠️ deprecated Aug 16
-                                                         # → при смене на qwen3.6-27b: $0.60/$3.00 ⚠️ КРИТИЧНО
+    Tier.FAST:    {"input": 0.075, "output": 0.30},   # openai/gpt-oss-20b (primary)
+    Tier.GENERAL: {"input": 0.60,  "output": 3.00},   # qwen/qwen3.6-27b (primary)
     Tier.HEAVY:   {"input": 0.15,  "output": 0.60},   # openai/gpt-oss-120b (primary, stable)
 }
 ```
-⚠️ **КРИТИЧЕСКОЕ ПРЕДУПРЕЖДЕНИЕ (Jun 22, 2026) — влияние новых цен на EPK thresholds:**
-При смене GENERAL primary на qwen/qwen3.6-27b ($0.60/$3.00) стоимость GENERAL запросов
-вырастет в ~3.8x по output. Это изменяет поведение EPK thresholds:
 
-| Метрика | При OLD ценах ($0.59/$0.79) | При NEW ценах ($0.60/$3.00) |
-|---|---|---|
-| Макс. output до DEGRADED (1K input) | ~3051 tokens | ~800 tokens |
-| Макс. output до HEAVY_REQUIRED (1K input) | ~9380 tokens | ~2467 tokens |
-
-**Действие при смене primary в model_router.py:**
-1. Обновить MODEL_RATES[Tier.FAST] → {"input": 0.075, "output": 0.30}
-2. Обновить MODEL_RATES[Tier.GENERAL] → {"input": 0.60, "output": 3.00}
-3. Пересмотреть _DEGRADE_THRESHOLD, _HEAVY_THRESHOLD, MAX_OUTPUT_CAP — они были
-   откалиброваны под $0.79/output; при $3.00/output нормальные GENERAL ответы
-   (~800 output tokens при 1K input) уходят в DEGRADED_MODE.
-4. Обновить примеры в §5 и §6 этого документа.
+EPK thresholds пересмотрены и откалиброваны под новые цены (Jun 2026) — см. §5 и §6.
+При смене primary в model_router.py: обновить MODEL_RATES одновременно, затем пересчитать
+MAX_OUTPUT_CAP и пример-таблицы в §5/§6.
 
 **Why primary-only pricing for estimation:**
 MODEL_RATES is used exclusively by `estimate_cost()` → EPK input (pre-execution safety gate).
@@ -338,8 +323,8 @@ EPK is the sole policy authority. It evaluates estimated cost before any executi
 
 ```python
 _DENY_THRESHOLD:    float = 0.0001  # balance ≤ 0 or effectively zero
-_DEGRADE_THRESHOLD: float = 0.003   # above this → DEGRADED_MODE
-_HEAVY_THRESHOLD:   float = 0.008   # above this → HEAVY_REQUIRED
+_DEGRADE_THRESHOLD: float = 0.006   # above this → DEGRADED_MODE (raised from 0.003, calibrated to qwen3.6-27b $3.00/output)
+_HEAVY_THRESHOLD:   float = 0.010   # above this → HEAVY_REQUIRED (raised from 0.008)
 
 def evaluate(estimated_cost, user_balance) -> EPKDecision:
     """
@@ -371,11 +356,16 @@ EPK does NOT select tier. Tier selection happens in decision_matrix.py, AFTER EP
 of all sub-intents. Atomicity: if sum exceeds threshold → DENY applies to entire request.
 Partial execution (some sub-intents ALLOW, others DENY) is forbidden.
 
-**What these thresholds mean in practice (at GENERAL primary rates):**
-- A 500-token input + 600-token output at GENERAL = ~$0.00077 → ALLOW
-- A 2000-token input + 2000-token output at GENERAL = ~$0.00276 → ALLOW
-- A 3000-token input + 800-token output at GENERAL = ~$0.00420 → DEGRADED_MODE
-- A 8000-token input + 4096-token output at GENERAL = ~$0.0172 → HEAVY_REQUIRED
+**What these thresholds mean in practice (at GENERAL primary rates: $0.60/$3.00 per 1M):**
+- 500 input + 600 estimated output at GENERAL = (500×0.60 + 600×3.00)/1M = $0.0021 → ALLOW
+- 1000 input + 800 estimated output at GENERAL = (1000×0.60 + 800×3.00)/1M = $0.0030 → ALLOW
+- 2000 input + 800 estimated output at GENERAL = (2000×0.60 + 800×3.00)/1M = $0.0036 → ALLOW
+- 2000 input + 2000 estimated output at GENERAL = (2000×0.60 + 2000×3.00)/1M = $0.0072 → DEGRADED_MODE
+- 5000 input + 4096 estimated output at GENERAL = (5000×0.60 + 4096×3.00)/1M = $0.0153 → HEAVY_REQUIRED
+
+Note: MAX_OUTPUT_CAP[GENERAL] = 800 tokens (EPK estimation cap) — most GENERAL requests
+are estimated at ≤800 output tokens and land in ALLOW. Actual responses may be longer;
+EPK cap is a conservative estimation bound, not a hard output limit.
 
 ---
 
@@ -385,9 +375,9 @@ Called ONLY after EPK returns ALLOW. HEAVY_REQUIRED and DEGRADED_MODE bypass thi
 
 ```python
 # Ascending order is mandatory — enforced by design.
-_FAST_CEILING:    float = 0.0005  # below $0.0005 → FAST
-_GENERAL_CEILING: float = 0.003   # below $0.003  → GENERAL (= EPK _DEGRADE_THRESHOLD)
-# above $0.003 → HEAVY (theoretically unreachable on ALLOW path — EPK gates at $0.008)
+_FAST_CEILING:    float = 0.001   # below $0.001 → FAST (raised from 0.0005; FAST now $0.30/output gpt-oss-20b)
+_GENERAL_CEILING: float = 0.006   # below $0.006 → GENERAL (= EPK _DEGRADE_THRESHOLD)
+# above $0.006 → HEAVY (theoretically unreachable on ALLOW path — EPK gates at $0.010)
 
 def select_tier(estimated_cost: float) -> Tier:
     if estimated_cost < _FAST_CEILING:
@@ -397,23 +387,27 @@ def select_tier(estimated_cost: float) -> Tier:
     return Tier.HEAVY
 ```
 
-**What these thresholds mean in practice (at FAST rates $0.05/$0.08 per 1M):**
-- 500 input + 300 estimated output = $0.000049 → FAST
-- 3000 input + 600 estimated output = $0.000198 → FAST (under $0.0005)
-- 5000 input + 1000 estimated output = $0.000330 → FAST
+**What these thresholds mean in practice (at FAST rates $0.075/$0.30 per 1M):**
+- 500 input + 300 estimated output  = (500×0.075 + 300×0.30)/1M = $0.000128 → FAST
+- 3000 input + 512 estimated output = (3000×0.075 + 512×0.30)/1M = $0.000379 → FAST
+- 5000 input + 512 estimated output = (5000×0.075 + 512×0.30)/1M = $0.000529 → GENERAL
 
-At GENERAL rates ($0.59/$0.79 per 1M):
-- 1000 input + 1200 estimated output = $0.00154 → GENERAL
-- 2000 input + 2000 estimated output = $0.00276 → GENERAL
+At GENERAL rates ($0.60/$3.00 per 1M):
+- 1000 input + 800 estimated output = (1000×0.60 + 800×3.00)/1M = $0.0030 → GENERAL
+- 1500 input + 800 estimated output = (1500×0.60 + 800×3.00)/1M = $0.0033 → GENERAL
+- 2000 input + 800 estimated output = (2000×0.60 + 800×3.00)/1M = $0.0036 → GENERAL
 
 **Bug fixed (v5.0):**
-Previous values were `_FAST_CEILING = 0.05` and `_GENERAL_CEILING = 0.003`.
+Previously values were `_FAST_CEILING = 0.05` and `_GENERAL_CEILING = 0.003`.
 Since 0.05 > 0.003, GENERAL was unreachable — every request went FAST or HEAVY.
-Corrected to ascending order: 0.0005 < 0.003.
+Corrected to ascending order: 0.001 < 0.006.
 
 **Synchronization contract:**
-`_GENERAL_CEILING` MUST equal EPK `_DEGRADE_THRESHOLD` (both = 0.003).
-Any change to EPK thresholds requires updating decision_matrix thresholds.
+`_GENERAL_CEILING` MUST equal EPK `_DEGRADE_THRESHOLD` (both = 0.006).
+`_FAST_CEILING` MUST equal `RUNTIME.epk.fast_ceiling` (both = 0.001).
+Both values live in `policy_registry.py` as the single source of truth.
+decision_matrix.py and execution_policy_kernel.py read from RUNTIME automatically.
+Any change to thresholds: update policy_registry.py only.
 
 ---
 
@@ -479,9 +473,9 @@ credits_usd = actual_cost * MARGIN
 _DEFAULT_BALANCE_USD = 0.10   # $0.10 free trial
 ```
 
-Capacity at FAST tier ($0.05/$0.08 per 1M, ~500 token requests):
-≈ 50-100 short queries on FAST tier
-≈ 5-10 queries on GENERAL tier
+Capacity at FAST tier ($0.075/$0.30 per 1M, ~500 token requests):
+≈ 30-60 short queries on FAST tier (~500 input + 300 output = $0.000128/query × 1.3 margin)
+≈ 3-5 queries on GENERAL tier (~1000 input + 800 output = $0.003/query × 1.3 margin)
 
 When balance drops below $0.10 threshold → webhook.py sends low_balance_warning.
 When balance reaches $0.00 → EPK returns DENY → user sees balance_exhausted message.
@@ -502,7 +496,7 @@ When balance reaches $0.00 → EPK returns DENY → user sees balance_exhausted 
 4.  reranker                    → bill: rerank_tokens [HuggingFace]
 5.  estimate_cost()             → EPK input (no billing yet)
 6.  EPK: DENY / ALLOW / DEGRADED_MODE / HEAVY_REQUIRED
-7.  [DENY → exit, no LLM billing; Safety Gate cost not recorded on DENY]
+7.  [DENY → exit, no LLM billing; Safety Gate cost IS billed if gate tokens present on result]
 7b. [VERBATIM → exit, no LLM billing, tool cost only — §47]
 8.  Safety Gate usage           → bill: safety tokens [Groq]  ← recorded post-confirmation
 9.  select_tier() [ALLOW only]
@@ -524,16 +518,17 @@ When balance reaches $0.00 → EPK returns DENY → user sees balance_exhausted 
 This document is synchronized with:
 
 **models.md** — model names, tier assignments, fallback order:
-- FAST primary: llama-3.1-8b-instant ✓ ⚠️ deprecated Aug 16, 2026
+- FAST primary: openai/gpt-oss-20b — $0.075/$0.30 per 1M ✓
 - FAST fallback: gemma2-9b-it REMOVED (deprecated Aug 2025) ✓
-- GENERAL primary: llama-3.3-70b-versatile ✓ ⚠️ deprecated Aug 16, 2026
-- GENERAL: qwen/qwen3-32b ✓ ⚠️ deprecated Jul 17, 2026
-- HEAVY primary: openai/gpt-oss-120b ✓
-- meta-llama/llama-4-scout-17b-16e-instruct → Vision + Long-Context (models.md §26), priced at $0.11/$0.34 ✓ ⚠️ deprecated Jul 17, 2026
-- qwen/qwen3.6-27b → GENERAL/VISION/LONG_CONTEXT/MULTILINGUAL primary; $0.60/$3.00 per 1M ✅ (groq.com/pricing, Jun 22, 2026)
+- GENERAL primary: qwen/qwen3.6-27b — $0.60/$3.00 per 1M ✓
+- HEAVY primary: openai/gpt-oss-120b — $0.15/$0.60 per 1M ✓
+- VISION: qwen/qwen3.6-27b — $0.60/$3.00 per 1M (billing in pricing_engine._VISION_RATES) ✓
+- LONG_CONTEXT: qwen/qwen3.6-27b — same rates, billed as lc_transformer tokens ✓
+- MULTILINGUAL: qwen/qwen3.6-27b (primary) + allam-2-7b (Arabic) ✓
 - canopylabs/orpheus-v1-english → $22.00/1M chars ✓
 - canopylabs/orpheus-arabic-saudi → $40.00/1M chars ✓
 - BAAI/bge-* → HuggingFace (NOT Groq) ✓
+- llama-4-scout, llama-3.3-70b-versatile, qwen3-32b, llama-3.1-8b-instant → deprecated, removed from active routing ✓
 
 **architecture.md** — EPK signals and execution paths:
 - EPK signals: ALLOW / DENY / DEGRADED_MODE / HEAVY_REQUIRED ✓
@@ -541,13 +536,13 @@ This document is synchronized with:
 - HEAVY_REQUIRED → bypasses select_tier() ✓
 - Safety Gate → both passes billed ✓
 
-**decision_matrix.py** — thresholds must match this document exactly:
-- `_FAST_CEILING = 0.0005` ✓
-- `_GENERAL_CEILING = 0.003` ✓
+**decision_matrix.py** — reads from RUNTIME (policy_registry.py), no hardcoded values:
+- `_FAST_CEILING = RUNTIME.epk.fast_ceiling` = 0.001 ✓
+- `_GENERAL_CEILING = RUNTIME.epk.degrade_threshold` = 0.006 ✓
 
-**execution_policy_kernel.py** — EPK thresholds must match this document:
-- `_DEGRADE_THRESHOLD = 0.003` ✓
-- `_HEAVY_THRESHOLD = 0.008` ✓
+**execution_policy_kernel.py** — reads from RUNTIME (policy_registry.py):
+- `_DEGRADE_THRESHOLD = RUNTIME.epk.degrade_threshold` = 0.006 ✓
+- `_HEAVY_THRESHOLD = RUNTIME.epk.heavy_threshold` = 0.010 ✓
 
 **access_controller.py** — initial balance must match this document:
 - `_DEFAULT_BALANCE_USD = 0.10` ✓
@@ -556,10 +551,14 @@ This document is synchronized with:
 
 ## 12. OPEN ITEMS (FUTURE)
 
-- [ ] **ПРИОРИТЕТ — Jul 17, 2026:** заменить qwen/qwen3-32b и llama-4-scout в model_router.py до deprecation. Обновить MODEL_RATES если новый GENERAL primary дороже $0.59/$0.79.
-- [ ] **ПРИОРИТЕТ — Aug 16, 2026:** заменить llama-3.1-8b-instant и llama-3.3-70b-versatile. Обновить MODEL_RATES.
+- [x] **Jul 17, 2026:** qwen/qwen3-32b и llama-4-scout заменены на qwen3.6-27b и gpt-oss-20b в model_router.py. MODEL_RATES обновлены. ✅ CLOSED
+- [x] **Aug 16, 2026:** llama-3.1-8b-instant и llama-3.3-70b-versatile — заменены (gpt-oss-20b как FAST primary, qwen3.6-27b как GENERAL). ✅ CLOSED
 - [x] **qwen/qwen3.6-27b Groq pricing:** опубликована Jun 22, 2026 — $0.60/$3.00 per 1M tokens. Добавлена в §1.1. ✅ CLOSED
+- [x] **Vision billing fix (Jun 2026):** _VISION_RATES обновлены с llama-4-scout ($0.11/$0.34) на qwen3.6-27b ($0.60/$3.00). ✅ CLOSED
+- [x] **DENY billing fix (Jun 2026):** Safety Gate tokens биллятся на DENY путях (voice pass1 block). webhook.py guard обновлён. ✅ CLOSED
+- [x] **actual_cost() safeguard output (Jun 2026):** добавлен параметр safety_safeguard_output_tokens. ✅ CLOSED
 - [ ] Per-route billing: preferred_model now logged per-request (models.md §25.3) → update actual_cost() to use per-model rates when ready
+- [ ] Multilingual billing на ALLOW/DEGRADED путях: allam-2-7b и qwen3.6-27b multilingual calls не биллятся на этих путях — только на HEAVY
 - [ ] Compound/compound-mini token pricing not publicly listed — monitor Groq changelog
 - [ ] allam-2-7b pricing not listed — treated as FAST equivalent until confirmed
 - [ ] HF Inference Endpoints pricing if serverless quota exceeded
