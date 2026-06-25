@@ -431,9 +431,9 @@ async def telegram_webhook(
         # ── billing ───────────────────────────────────────────────────────────
         if not result.denied and result.usage.cost_usd > 0:
             try:
+                from core.kernel.cost_model import actual_safety_cost
                 from payments.access_controller import AccessController
                 from payments.usage_meter import UsageEntry, UsageMeter
-                from core.kernel.cost_model import actual_safety_cost
 
                 # Compute actual Safety Gate cost from real token counts (Variant C).
                 # Safety tokens are captured in update_handler after both passes complete
