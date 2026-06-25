@@ -33,24 +33,30 @@ SAFETY_RATES: dict[str, float] = {
 # Conservative pre-execution token estimates for Safety Gate EPK input.
 # Context window: 512 tokens for both prompt-guard models. Typical message: ~300 tokens.
 # Actual tokens recorded post-execution in UsageEntry via actual_safety_cost().
-_SAFETY_PASS1_ESTIMATED_TOKENS = 300   # llama-prompt-guard-2-22m
-_SAFETY_PASS2_ESTIMATED_TOKENS = 300   # llama-prompt-guard-2-86m
+_SAFETY_PASS1_ESTIMATED_TOKENS    = 300   # llama-prompt-guard-2-22m
+_SAFETY_PASS2_86M_ESTIMATED_TOKENS = 300   # llama-prompt-guard-2-86m (Pass 2 step 1)
+_SAFETY_PASS2_SG_ESTIMATED_TOKENS  = 300   # gpt-oss-safeguard-20b   (Pass 2 step 2)
 
 
 def estimate_safety_cost() -> float:
     """
     Pre-execution estimate of Safety Gate cost for EPK input (Variant C).
 
-    Covers Pass 1 (22m) + Pass 2 (86m). safeguard-20b omitted from EPK
-    estimate — its cost is post-factum only (output varies, not pre-estimable
-    without input length, and is negligible relative to LLM cost).
+    Covers all three models called on every request:
+      Pass 1: llama-prompt-guard-2-22m  (~300 tokens × $0.03/1M)
+      Pass 2: llama-prompt-guard-2-86m  (~300 tokens × $0.04/1M)  ← sequential step 1
+      Pass 2: gpt-oss-safeguard-20b     (~300 tokens × $0.075/1M) ← sequential step 2
+
+    Conservative token estimate (300) — typical message length before Multilingual
+    normalization. Actual tokens recorded post-execution via actual_safety_cost().
 
     Called by estimate_cost() — Safety Gate fires on every request, so its
-    cost is a fixed overhead that EPK must know about.
+    cost is a fixed overhead that EPK must account for.
     """
-    pass1 = _SAFETY_PASS1_ESTIMATED_TOKENS * SAFETY_RATES["meta-llama/llama-prompt-guard-2-22m"]
-    pass2 = _SAFETY_PASS2_ESTIMATED_TOKENS * SAFETY_RATES["meta-llama/llama-prompt-guard-2-86m"]
-    return (pass1 + pass2) / 1_000_000
+    pass1 = _SAFETY_PASS1_ESTIMATED_TOKENS    * SAFETY_RATES["meta-llama/llama-prompt-guard-2-22m"]
+    pass2_86m = _SAFETY_PASS2_86M_ESTIMATED_TOKENS * SAFETY_RATES["meta-llama/llama-prompt-guard-2-86m"]
+    pass2_sg  = _SAFETY_PASS2_SG_ESTIMATED_TOKENS  * SAFETY_RATES["openai/gpt-oss-safeguard-20b"]
+    return (pass1 + pass2_86m + pass2_sg) / 1_000_000
 
 
 def actual_safety_cost(
