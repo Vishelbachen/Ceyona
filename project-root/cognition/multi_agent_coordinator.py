@@ -176,6 +176,7 @@ async def _run_agent(
     messages: list[dict],
     temperature: float,
     lang: str = "en",
+    tier: Tier = Tier.GENERAL,
 ) -> AgentResult:
     """
     Dispatch to the correct agent module based on AgentType.
@@ -330,13 +331,13 @@ async def coordinate(
     """
 
     # ── primary agent ─────────────────────────────────────────────────────────
-    primary_result = await _run_agent(plan.primary, messages, temperature, lang=lang)
+    primary_result = await _run_agent(plan.primary, messages, temperature, lang=lang, tier=tier)
 
     # ── consensus path (ALLOW only) ───────────────────────────────────────────
     if plan.use_consensus:
         if plan.parallel_validators:
             tasks = [
-                _run_agent(vt, messages, temperature, lang=lang)
+                _run_agent(vt, messages, temperature, lang=lang, tier=tier)
                 for vt in plan.parallel_validators
             ]
             validator_results: list[AgentResult] = await asyncio.gather(*tasks)
@@ -458,7 +459,7 @@ async def coordinate(
 
     if plan.fallback is not None and plan.fallback != plan.primary:
         logger.info("Trying fallback agent", extra={"agent": plan.fallback})
-        fallback_result = await _run_agent(plan.fallback, messages, temperature, lang=lang)
+        fallback_result = await _run_agent(plan.fallback, messages, temperature, lang=lang, tier=tier)
 
         if _agent_succeeded(fallback_result):
             logger.info("Fallback agent succeeded")
