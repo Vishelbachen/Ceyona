@@ -1,3 +1,5 @@
+
+
 from __future__ import annotations
 
 import asyncio
@@ -12,7 +14,7 @@ import agents.fast_agent as fast_agent
 from agents.consensus_engine import ConsensusResult, resolve
 from agents.fast_agent import AgentResult
 from agents.safety_agent import SafetyInput, SafetyResult, SafetyVerdict
-from agents.safety_agent import check as safety_check
+from agents.safety_agent import check_async as safety_check
 from cognition.intent_engine import Intent
 from cognition.reasoning_engine import ReasoningMode, ReasoningStrategy
 from contracts.shared_types import DomainHint, ReasoningDepth, RoutingProfile, Tier
@@ -174,24 +176,19 @@ async def _run_agent(
     messages: list[dict],
     temperature: float,
     lang: str = "en",
-    tier: Tier = Tier.GENERAL,
 ) -> AgentResult:
     """
     Dispatch to the correct agent module based on AgentType.
     Returns AgentResult. Never raises — catches all exceptions and returns
     a failed AgentResult so the coordinator can handle fallback/blocking.
-
-    tier is passed explicitly to deep_agent so that HEAVY_REQUIRED path
-    reaches complete_with_fallback(tier=Tier.HEAVY) → gpt-oss-120b
-    instead of hardcoding Tier.GENERAL (architecture.md §2.3, §8).
     """
     try:
         if agent_type == AgentType.COMPOUND_DEEP:
-            return await compound_agent.run_deep(messages=messages, lang=lang, temperature=temperature)
+            return await compound_agent.run_deep(messages=messages, lang=lang, temperature=temperature, tier=tier)
         if agent_type == AgentType.COMPOUND_FAST:
             return await compound_agent.run_fast(messages=messages, lang=lang, temperature=temperature)
         if agent_type == AgentType.DEEP:
-            return await deep_agent.run(messages=messages, temperature=temperature, tier=tier)
+            return await deep_agent.run(messages=messages, temperature=temperature)
         if agent_type == AgentType.CREATIVE:
             return await creative_agent.run(messages=messages, temperature=temperature)
         # FAST is the default
@@ -333,13 +330,13 @@ async def coordinate(
     """
 
     # ── primary agent ─────────────────────────────────────────────────────────
-    primary_result = await _run_agent(plan.primary, messages, temperature, lang=lang, tier=tier)
+    primary_result = await _run_agent(plan.primary, messages, temperature, lang=lang)
 
     # ── consensus path (ALLOW only) ───────────────────────────────────────────
     if plan.use_consensus:
         if plan.parallel_validators:
             tasks = [
-                _run_agent(vt, messages, temperature, lang=lang, tier=tier)
+                _run_agent(vt, messages, temperature, lang=lang)
                 for vt in plan.parallel_validators
             ]
             validator_results: list[AgentResult] = await asyncio.gather(*tasks)
@@ -355,7 +352,7 @@ async def coordinate(
         # Position-based selection is deterministic — primary is always first.
         if candidates:
             safety_candidate = candidates[0]
-            safety: SafetyResult = safety_check(SafetyInput(
+            safety: SafetyResult = await safety_check(SafetyInput(
                 reasoning_plan=reasoning_plan,
                 draft_response=safety_candidate.text,
                 user_message=user_message,
@@ -419,7 +416,7 @@ async def coordinate(
         # DEGRADED/NONE-depth/default-GENERAL: safety_agent skipped
         is_heavy = (tier == Tier.HEAVY)
         if is_heavy:
-            safety = safety_check(SafetyInput(
+            safety = await safety_check(SafetyInput(
                 reasoning_plan=reasoning_plan,
                 draft_response=primary_result.text,
                 user_message=user_message,
@@ -449,7 +446,7 @@ async def coordinate(
 
     if plan.fallback is not None and plan.fallback != plan.primary:
         logger.info("Trying fallback agent", extra={"agent": plan.fallback})
-        fallback_result = await _run_agent(plan.fallback, messages, temperature, lang=lang, tier=tier)
+        fallback_result = await _run_agent(plan.fallback, messages, temperature, lang=lang)
 
         if _agent_succeeded(fallback_result):
             logger.info("Fallback agent succeeded")
