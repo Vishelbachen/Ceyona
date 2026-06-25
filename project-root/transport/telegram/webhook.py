@@ -442,7 +442,10 @@ async def telegram_webhook(
         _has_ml_tokens = bool(result.multilingual_input_tokens or result.multilingual_output_tokens)
         if result.usage.cost_usd > 0 or _has_safety_tokens or _has_ml_tokens:
             try:
-                from core.kernel.cost_model import actual_multilingual_cost, actual_safety_cost
+                from core.kernel.cost_model import (
+                    actual_multilingual_cost,
+                    actual_safety_cost,
+                )
                 from payments.access_controller import AccessController
                 from payments.usage_meter import UsageEntry, UsageMeter
 
@@ -467,6 +470,7 @@ async def telegram_webhook(
                 _ml_cost = 0.0
                 if result.multilingual_input_tokens or result.multilingual_output_tokens:
                     from contracts.orchestrator import EPKDecision as _EPKDecision
+
                     # _run_heavy() bakes multilingual cost into cost_usd — skip to avoid double-billing
                     if result.epk_decision != _EPKDecision.HEAVY_REQUIRED:
                         _ml_cost = actual_multilingual_cost(
