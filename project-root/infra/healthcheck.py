@@ -6,8 +6,8 @@ from supabase import Client
 
 logger = logging.getLogger(__name__)
 
-# Fly.io healthcheck timeout = 5s (fly.toml).
-# Each sub-check must complete well within that window.
+# Healthcheck timeout budget.
+# Each sub-check must complete well within the Cloudflare Worker's forward timeout (20s default).
 # Redis: typically <5ms. Supabase (sync client via to_thread): can be slow on cold start.
 # Budget: 3s per check → total worst case ~6s, but checks run concurrently → actual ~3s.
 _REDIS_TIMEOUT    = 3.0   # seconds
