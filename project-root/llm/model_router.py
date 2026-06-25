@@ -111,8 +111,8 @@ _GPT_OSS_REASONING_EFFORT: dict[str, dict[Tier, str]] = {
     },
     "openai/gpt-oss-20b": {
         Tier.FAST:    "low",     # fast inference — minimal effort mandatory (models.md §2, §27.1)
-        Tier.GENERAL: "medium",  # cascade fallback — balanced
-        Tier.HEAVY:   "medium",  # cascade fallback — balanced
+        # GENERAL/HEAVY omitted: gpt-oss-20b not in _TIER_MODELS[GENERAL] or [HEAVY].
+        # get_reasoning_effort() returns None for unknown tiers → param not sent → API default "medium".
     },
 }
 
