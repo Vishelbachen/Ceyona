@@ -16,23 +16,21 @@ _MAX_HISTORY_FETCH = 40
 
 # Tier-dependent token budgets for conversation history.
 #
-# Budget calculation (FAST tier — llama-3.1-8b-instant, 6000 TPM):
+# Budget calculation (FAST tier — openai/gpt-oss-20b):
 #   system prompt total:  ~1300-1800 tokens
 #   output cap (FAST):    ~1024 tokens
 #   user message:         ~100-300 tokens
 #   safety buffer:        300 tokens
 #   ──────────────────────────────────────
-#   available for history: 6000 - 1800 - 1024 - 300 - 300 = ~1200 tokens (conservative)
-#   → raised to 1800: headroom for shorter system prompts and brief messages
+#   available for history: conservative ~2800 tokens
 #
-# Budget calculation (GENERAL / HEAVY tier — llama-3.3-70b-versatile, 12 000 TPM):
+# Budget calculation (GENERAL / HEAVY tier — qwen/qwen3.6-27b):
 #   system prompt total:  ~1300-1800 tokens
 #   output cap (GENERAL): ~3072 tokens
 #   user message:         ~100-300 tokens
 #   safety buffer:        500 tokens
 #   ──────────────────────────────────────────
-#   available for history: 12000 - 1800 - 3072 - 300 - 500 = ~6328 tokens
-#   → capped at 3500: keeps context meaningful without ballooning cost
+#   available for history: conservative ~3500 tokens
 #
 # Tier is unknown at history load time (EPK runs after retrieval).
 # Caller passes the appropriate budget based on complexity heuristic
