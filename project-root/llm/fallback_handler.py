@@ -6,6 +6,7 @@ from contracts.shared_types import Tier
 from llm.groq_client import LLMResponse, groq_client
 from llm.model_router import (
     get_tier_models,
+    get_reasoning_effort,
     requires_thinking_disabled,
     route_max_tokens,
 )
@@ -132,6 +133,10 @@ async def complete_with_fallback(
                 extra_params["top_p"] = 0.80              # models.md §3, §27.2 non-thinking params
                 extra_params["presence_penalty"] = 1.5    # models.md §3, §27.2 non-thinking params
                 # top_k omitted — not supported by Groq OpenAI-compatible API (models.md §27.2 note)
+            else:
+                effort = get_reasoning_effort(model, current_tier)
+                if effort is not None:
+                    extra_params["reasoning_effort"] = effort  # gpt-oss-120b: "high" on HEAVY, "medium" on GENERAL/consensus; gpt-oss-20b: "low" on FAST (models.md §4, §27.1, §27.3)
 
             for attempt in range(max_retries + 1):
                 try:
