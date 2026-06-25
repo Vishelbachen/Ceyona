@@ -69,6 +69,7 @@ class GateResult:
     verdict: GateVerdict
     reason: str = ""
     model_used: str = ""
+    tokens_used: int = 0   # actual input tokens sent to the model (for actual_safety_cost())
 
     @property
     def safe(self) -> bool:
@@ -239,7 +240,11 @@ async def check_pass1(text: str) -> GateResult:
         )
 
     # Always PASS — blocking authority belongs to safety_agent.
-    return GateResult(verdict=GateVerdict.PASS, model_used=_PASS1_MODEL)
+    return GateResult(
+        verdict=GateVerdict.PASS,
+        model_used=_PASS1_MODEL,
+        tokens_used=len(stripped.split()),  # approximate; Groq doesn't return token count for classifiers
+    )
 
 
 async def check_pass2(text: str) -> GateResult:
@@ -287,4 +292,5 @@ async def check_pass2(text: str) -> GateResult:
     return GateResult(
         verdict=GateVerdict.PASS,
         model_used=_PASS2_MODELS[1],
+        tokens_used=len(stripped.split()),  # approximate; actual token count not returned by Groq classifier API
     )
