@@ -91,6 +91,12 @@ class UsageMeter:
             extended_payload["tts_characters"] = entry.tts_characters
         if entry.tool_calls:
             extended_payload["tool_calls"] = entry.tool_calls
+        if entry.safety_pass1_tokens:
+            extended_payload["safety_pass1_tokens"] = entry.safety_pass1_tokens
+        if entry.safety_pass2_tokens:
+            extended_payload["safety_pass2_tokens"] = entry.safety_pass2_tokens
+        if entry.safety_safeguard_tokens:
+            extended_payload["safety_safeguard_tokens"] = entry.safety_safeguard_tokens
 
         payload = {**core_payload, **extended_payload}
 
@@ -116,7 +122,10 @@ class UsageMeter:
                     "ADD COLUMN IF NOT EXISTS audio_seconds FLOAT8 DEFAULT 0, "
                     "ADD COLUMN IF NOT EXISTS tts_characters BIGINT DEFAULT 0, "
                     "ADD COLUMN IF NOT EXISTS tool_calls BIGINT DEFAULT 0, "
-                    "ADD COLUMN IF NOT EXISTS resolved_model TEXT DEFAULT ''.",
+                    "ADD COLUMN IF NOT EXISTS resolved_model TEXT DEFAULT '', "
+                    "ADD COLUMN IF NOT EXISTS safety_pass1_tokens BIGINT DEFAULT 0, "
+                    "ADD COLUMN IF NOT EXISTS safety_pass2_tokens BIGINT DEFAULT 0, "
+                    "ADD COLUMN IF NOT EXISTS safety_safeguard_tokens BIGINT DEFAULT 0.",
                     extra={"user_id": entry.user_id, "hint": error_str[:200]},
                 )
                 try:
