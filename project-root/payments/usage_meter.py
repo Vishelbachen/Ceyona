@@ -31,6 +31,10 @@ class UsageEntry:
     tts_characters: int = 0         # orpheus billing: per 1M characters
     # Agent tool call billing (compound web_search: $5.00 / 1000 calls)
     tool_calls: int = 0
+    # Safety Gate billing — actual tokens from GateResult.tokens_used (Variant C)
+    safety_pass1_tokens: int = 0     # llama-prompt-guard-2-22m actual input tokens
+    safety_pass2_tokens: int = 0     # llama-prompt-guard-2-86m actual input tokens
+    safety_safeguard_tokens: int = 0 # gpt-oss-safeguard-20b actual input tokens
 
 
 class UsageMeter:
