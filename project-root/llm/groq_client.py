@@ -51,7 +51,6 @@ class ToolCallResponse:
 #   llama-3.3-70b-versatile           → deprecated Aug 16, 2026
 #   llama-4-scout-17b-16e-instruct    → deprecated Jul 17, 2026
 _CONTEXT_CHAR_LIMITS: dict[str, int] = {
-    "qwen/qwen3-32b":                 60_000,   # deprecated Jul 17, 2026 — kept for emergency fallback
     "qwen/qwen3.6-27b":               60_000,   # 131K Groq limit → ~60K chars safe input
     "openai/gpt-oss-20b":             60_000,
     "openai/gpt-oss-120b":            60_000,
