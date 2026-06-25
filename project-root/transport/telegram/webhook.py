@@ -439,9 +439,10 @@ async def telegram_webhook(
             or result.safety_safeguard_tokens
             or result.safety_safeguard_output_tokens
         )
-        if result.usage.cost_usd > 0 or _has_safety_tokens:
+        _has_ml_tokens = bool(result.multilingual_input_tokens or result.multilingual_output_tokens)
+        if result.usage.cost_usd > 0 or _has_safety_tokens or _has_ml_tokens:
             try:
-                from core.kernel.cost_model import actual_safety_cost
+                from core.kernel.cost_model import actual_multilingual_cost, actual_safety_cost
                 from payments.access_controller import AccessController
                 from payments.usage_meter import UsageEntry, UsageMeter
 
@@ -457,11 +458,26 @@ async def telegram_webhook(
                     safeguard_tokens=result.safety_safeguard_tokens,
                     safeguard_output_tokens=result.safety_safeguard_output_tokens,
                 )
-                # safety_agent, multilingual_preprocessor, lc_transformer costs are
-                # already baked into result.usage.cost_usd by _run_heavy() / orchestrator.
-                # Their tokens are recorded in UsageEntry for audit/observability only.
-                # No double-billing: safety_cost (Safety Gate) is the only additive here.
-                total_cost_usd = result.usage.cost_usd + safety_cost
+
+                # Compute actual multilingual_preprocessor cost (economic.md §2).
+                # Runs in update_handler BEFORE orchestrator — not included in
+                # result.usage.cost_usd on ALLOW/DEGRADED paths (only on HEAVY).
+                # model: "allam-2-7b" ($0.075/$0.30) | "qwen/qwen3.6-27b" ($0.60/$3.00) | "passthrough" ($0)
+                # On HEAVY path _run_heavy() already billed these — guard against double-billing.
+                _ml_cost = 0.0
+                if result.multilingual_input_tokens or result.multilingual_output_tokens:
+                    from contracts.orchestrator import EPKDecision as _EPKDecision
+                    # _run_heavy() bakes multilingual cost into cost_usd — skip to avoid double-billing
+                    if result.epk_decision != _EPKDecision.HEAVY_REQUIRED:
+                        _ml_cost = actual_multilingual_cost(
+                            input_tokens=result.multilingual_input_tokens,
+                            output_tokens=result.multilingual_output_tokens,
+                            model=result.multilingual_model,
+                        )
+
+                # safety_agent and lc_transformer costs are already baked into
+                # result.usage.cost_usd by _run_heavy(). No double-billing.
+                total_cost_usd = result.usage.cost_usd + safety_cost + _ml_cost
 
                 ac = AccessController(supabase)
                 await ac.deduct(user_id, total_cost_usd)
@@ -493,6 +509,7 @@ async def telegram_webhook(
                     safety_agent_output_tokens=result.safety_agent_output_tokens,
                     multilingual_input_tokens=result.multilingual_input_tokens,
                     multilingual_output_tokens=result.multilingual_output_tokens,
+                    multilingual_model=result.multilingual_model,
                     lc_transformer_input_tokens=result.lc_transformer_input_tokens,
                     lc_transformer_output_tokens=result.lc_transformer_output_tokens,
                 ))
