@@ -9,9 +9,9 @@ from core.kernel.policy_registry import RUNTIME
 # Read from policy_registry.RUNTIME — single source of truth.
 # economic.md §5 defines the values; policy_registry.py holds them at runtime.
 #
-# Calibrated to ACTUAL Groq prices (May 2026):
-#   FAST    llama-3.1-8b-instant:    $0.05 / $0.08  per 1M
-#   GENERAL llama-3.3-70b-versatile: $0.59 / $0.79  per 1M
+# Calibrated to ACTUAL Groq prices (June 2026):
+#   FAST    openai/gpt-oss-20b:   see economic.md §1.1
+#   GENERAL qwen/qwen3.6-27b:     see economic.md §1.1
 #   HEAVY   openai/gpt-oss-120b:     $0.15 / $0.60  per 1M
 #
 # Typical GENERAL request (500 in / 900 out) costs ~$0.001
