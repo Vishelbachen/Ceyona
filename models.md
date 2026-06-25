@@ -54,7 +54,7 @@ Quota exhaustion on HF does NOT trigger Groq fallback — it degrades retrieval 
 *Prices: economic.md §1.2*
 
 ```
-meta-llama/llama-prompt-guard-2-22m    → SIGNAL LOGGER (Pass 1) — currently no-op: model NOT called
+meta-llama/llama-prompt-guard-2-22m    → SIGNAL LOGGER (Pass 1) — model called, observability only
 meta-llama/llama-prompt-guard-2-86m    → SIGNAL LOGGER (Pass 2)
 openai/gpt-oss-safeguard-20b           → SIGNAL LOGGER (Pass 2, observability) — model IS called
 ```
@@ -62,10 +62,10 @@ openai/gpt-oss-safeguard-20b           → SIGNAL LOGGER (Pass 2, observability)
 **Role:** input signal logging only. NO generation. NO reasoning synthesis. NO blocking.
 
 **Pass 1 implementation note:**
-`check_pass1()` is currently a complete no-op — `llama-prompt-guard-2-22m` is NOT invoked.
-The function logs a debug event and returns `GateVerdict.PASS` immediately.
-Rationale: false-positive rate on RU/AR/casual text is unacceptable even for observability.
-If Pass 1 model invocation is restored in future, this section must be updated.
+`check_pass1()` calls `llama-prompt-guard-2-22m` on every request.
+Result (`BENIGN`/`MALICIOUS`) is logged with `latency_ms` and `text_preview`.
+Always returns `GateVerdict.PASS` — verdict never blocks execution.
+API format: single `user` message, no `system` role (BERT classifier constraint). ✅ DOC
 
 **Execution order:**
 - 22m: BEFORE Feature Extraction
@@ -886,19 +886,54 @@ search/weather/maps result assembly (compound-mini for single-source, compound f
 #### llama-prompt-guard-2-22m (Safety Pass 1)
 
 **Nature:** DeBERTa-xsmall base (22M params). No multilingual pretraining. ✅ DOC
-Context window: 512 tokens. ✅ DOC
-Speed: lowest latency in safety stack — designed for fast pre-filter.
+Context window: 512 tokens. Max output tokens: 512. ✅ DOC
+Price: $0.03 / $0.03 per 1M tokens (input/output). ✅ DOC
+Speed: lowest latency in safety stack — 75% faster than 86m. ✅ DOC
+
+**What it detects:**
+Prompt injection and jailbreak attacks ONLY — prompts that explicitly attempt to override
+prior instructions embedded in an LLM. ✅ DOC
+NOT a general harmful-content classifier. A message asking about dangerous topics but NOT
+attempting to override system instructions → BENIGN. ✅ DOC
+
+**Performance benchmarks (English):** ✅ DOC
+- 99.5% AUC for jailbreak detection
+- 88.7% recall @ 1% FPR
+- 78.4% attack prevention rate
+
+**API format (CRITICAL):**
+- Single `user` message ONLY — no `system` role. BERT-based classifier, not a chat model. ✅ DOC
+- Response: `"BENIGN"` or `"MALICIOUS"` — binary only. NO score, NO confidence field. ✅ DOC
+- For inputs >512 tokens: split into segments, scan in parallel. ✅ DOC
 
 **Known limitations:**
 - No multilingual pretraining → significant false positive rate on RU/AR/short casual messages ✅ DOC
+- English-only reliable detection; for non-English attacks use llama-prompt-guard-2-86m ✅ DOC
 - This is the architectural reason for NON-BLOCKING policy (§1 rationale)
-- English-only attack detection: reliable ✅ DOC
-- Non-English attacks: use llama-prompt-guard-2-86m for multilingual coverage ✅ DOC
+
+**Pass 1 implementation status:**
+Currently no-op — model NOT called. `check_pass1()` returns `GateVerdict.PASS` immediately
+with only a debug log. Rationale: false-positive rate on RU/AR/casual text is unacceptable
+even for observability purposes. Restoration of model call is planned — see §1.
 
 #### llama-prompt-guard-2-86m (Safety Pass 2)
 
 **Nature:** mDeBERTa-base (86M params). Multilingual pretraining — detects EN and non-EN attacks. ✅ DOC
-Context window: 512 tokens. ✅ DOC
+Context window: 512 tokens. Max output tokens: 512. ✅ DOC
+Price: $0.04 / $0.04 per 1M tokens (input/output). ✅ DOC
+
+**What it detects:** same scope as 22m — prompt injection and jailbreak ONLY. ✅ DOC
+Multilingual support across 8 languages. ✅ DOC
+
+**Performance benchmarks:** ✅ DOC
+- 99.8% AUC for English jailbreak detection
+- 97.5% recall @ 1% FPR (vs 88.7% for 22m)
+- 81.2% attack prevention rate
+
+**API format (CRITICAL — same as 22m):**
+- Single `user` message ONLY — no `system` role. ✅ DOC
+- Response: `"BENIGN"` or `"MALICIOUS"` — binary only. NO score, NO confidence field. ✅ DOC
+- For inputs >512 tokens: split into segments, scan in parallel. ✅ DOC
 
 **Known limitations:**
 - Better than 22m on non-Latin scripts, but still produces false positives on casual messages ⚠️ EST
