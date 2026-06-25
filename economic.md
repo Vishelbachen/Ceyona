@@ -116,11 +116,15 @@ Both prompt-guard models are BERT classifiers — output is 1-2 tokens ("BENIGN"
 negligible cost. Billed conservatively at input rate for output tokens.
 
 **EPK estimate (Variant C):** `estimate_safety_cost()` in `cost_model.py` adds a fixed
-pre-execution overhead (~300 tokens × 22m rate + ~300 tokens × 86m rate) to every
-`estimate_cost()` call. EPK sees full request cost including Safety Gate.
+pre-execution overhead to every `estimate_cost()` call. Covers all three models:
+~300 tokens × 22m rate + ~300 tokens × 86m rate + ~300 tokens × safeguard rate.
+EPK sees full request cost including Safety Gate.
 
 **Post-execution:** `actual_safety_cost(pass1_tokens, pass2_tokens, safeguard_tokens)`
-records real token counts from `GateResult.tokens_used` into `UsageEntry`.
+records real token counts from `GateResult` into `UsageEntry`:
+- `GateResult.tokens_used`            → Pass 1 (22m) or Pass 2 (86m) — billed at respective rate
+- `GateResult.safeguard_tokens_used`  → Pass 2 gpt-oss-safeguard-20b — billed at $0.075/1M
+Both models in Pass 2 run concurrently. Tokens tracked separately per model for accurate billing.
 Enables estimate vs actual drift tracking per request.
 
 ### 1.3 Agent Layer (Compound — Groq-hosted)
@@ -253,7 +257,10 @@ COMPLEXITY_MULTIPLIER = {
 # These control EPK cost gate input. They MUST NOT be equal.
 MAX_OUTPUT_CAP = {
     Tier.FAST:    512,    # estimation cap (actual API limit: 1024)
-    Tier.GENERAL: 2048,   # estimation cap (actual API limit: 3072)
+    Tier.GENERAL: 800,    # estimation cap — lowered from 2048 for qwen3.6-27b ($3.00/output per 1M).
+                          # At 2048 estimated output tokens: (1000×0.60 + 2048×3.00)/1M ≈ $0.0068 → DEGRADED_MODE.
+                          # At 800 estimated output tokens:  (1000×0.60 + 800×3.00)/1M  ≈ $0.003  → ALLOW boundary.
+                          # actual API limit remains 3072 (policy_registry.py) — this is EPK estimation only.
     Tier.HEAVY:   4096,   # estimation cap (actual API limit: 6144)
 }
 
@@ -367,8 +374,8 @@ Partial execution (some sub-intents ALLOW, others DENY) is forbidden.
 **What these thresholds mean in practice (at GENERAL primary rates):**
 - A 500-token input + 600-token output at GENERAL = ~$0.00077 → ALLOW
 - A 2000-token input + 2000-token output at GENERAL = ~$0.00276 → ALLOW
-- A 3000-token input + 2048-token output at GENERAL = ~$0.00338 → DEGRADED_MODE
-- A 8000-token input + 4096-token output at GENERAL = ~$0.0084 → HEAVY_REQUIRED
+- A 3000-token input + 800-token output at GENERAL = ~$0.00420 → DEGRADED_MODE
+- A 8000-token input + 4096-token output at GENERAL = ~$0.0172 → HEAVY_REQUIRED
 
 ---
 
