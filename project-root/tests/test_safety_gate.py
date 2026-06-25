@@ -11,7 +11,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from security.safety_gate import (
-    _PASS2_MODELS,
+    _PASS2_86M,
+    _PASS2_SAFEGUARD,
     GateResult,
     GateVerdict,
     _classify_with_model,
@@ -153,7 +154,7 @@ class TestClassifyWithModel:
             with patch("llm.groq_client.groq_client", mock_client):
                 # Use gpt-oss model (not guard model) — returns SAFE/UNSAFE
                 result = await _classify_with_model(
-                    "hello", _PASS2_MODELS[1], "system prompt"
+                    "hello", _PASS2_SAFEGUARD, "system prompt"
                 )
         # Can't easily mock the import inside the function, but we verify the logic:
         # This test verifies the parsing code path exists and doesn't crash
@@ -166,7 +167,7 @@ class TestClassifyWithModel:
             # _classify_with_model imports groq_client internally
             # On exception → returns True (do not block)
             try:
-                result = await _classify_with_model("text", _PASS2_MODELS[1], "system")
+                result = await _classify_with_model("text", _PASS2_SAFEGUARD, "system")
                 assert result is True
             except Exception:
                 # If import fails in test env without groq — that's expected
