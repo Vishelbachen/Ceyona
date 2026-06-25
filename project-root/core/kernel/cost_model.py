@@ -173,3 +173,35 @@ def actual_cost(
         safeguard_tokens=safety_safeguard_tokens,
         safeguard_output_tokens=safety_safeguard_output_tokens,
     )
+
+
+# Multilingual model rates — economic.md §1.6
+# allam-2-7b: no public pricing → treated as FAST equivalent ($0.075/$0.30 per 1M)
+# qwen/qwen3.6-27b: GENERAL tier rates ($0.60/$3.00 per 1M)
+# "passthrough": no LLM call — zero cost
+_MULTILINGUAL_RATES: dict[str, dict[str, float]] = {
+    "allam-2-7b":        {"input": 0.075, "output": 0.30},   # FAST equivalent (economic.md §1.6)
+    "qwen/qwen3.6-27b":  {"input": 0.60,  "output": 3.00},   # GENERAL tier
+    "passthrough":       {"input": 0.0,   "output": 0.0},    # no LLM call
+}
+
+
+def actual_multilingual_cost(
+    input_tokens: int,
+    output_tokens: int,
+    model: str,
+) -> float:
+    """
+    Compute actual billing cost for a multilingual_preprocessor LLM call.
+
+    Called from webhook.py post-execution alongside actual_safety_cost().
+    Model is carried from PreprocessorResult.model_used via OrchestratorResult.multilingual_model.
+
+    Rates: allam-2-7b → FAST equivalent ($0.075/$0.30 per 1M, economic.md §1.6)
+           qwen/qwen3.6-27b → GENERAL tier ($0.60/$3.00 per 1M, economic.md §1.1)
+           passthrough → $0.00 (no LLM call)
+    """
+    if not input_tokens and not output_tokens:
+        return 0.0
+    rates = _MULTILINGUAL_RATES.get(model, _MULTILINGUAL_RATES["qwen/qwen3.6-27b"])
+    return (input_tokens * rates["input"] + output_tokens * rates["output"]) / 1_000_000
