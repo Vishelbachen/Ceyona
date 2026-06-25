@@ -26,6 +26,8 @@ class SafetyInput:
 class SafetyResult:
     verdict: SafetyVerdict
     reason: str = ""
+    input_tokens: int = 0   # gpt-oss-safeguard-20b input tokens — billed at $0.075/1M
+    output_tokens: int = 0  # gpt-oss-safeguard-20b output tokens — billed at $0.30/1M
 
     @property
     def safe(self) -> bool:
@@ -79,12 +81,17 @@ _REVISE_SIGNALS: list[str] = [
 ]
 
 
-async def _llm_judge(combined: str) -> SafetyVerdict:
+async def _llm_judge(combined: str) -> tuple[SafetyVerdict, int, int]:
     """
     Ask gpt-oss-safeguard-20b to judge whether the emergent content is harmful.
 
-    Falls back to ALLOW on any exception — observability degraded, not blocked.
+    Returns (verdict, input_tokens, output_tokens) for billing.
+    Falls back to (ALLOW, 0, 0) on any exception — observability degraded, not blocked.
     Same principle as safety_gate: error in safety path must not cause outage.
+
+    Tokens billed at gpt-oss-safeguard-20b rates (economic.md §1.2):
+      input:  $0.075/1M
+      output: $0.30/1M  (1-2 tokens "SAFE"/"UNSAFE"/"BLOCK"/"REVISE" — small but must bill)
     """
     try:
         from llm.groq_client import groq_client
@@ -99,19 +106,21 @@ async def _llm_judge(combined: str) -> SafetyVerdict:
             temperature=0.0,
         )
         verdict_text = response.text.strip().upper()
+        in_tok  = response.input_tokens
+        out_tok = response.output_tokens
 
         if "BLOCK" in verdict_text:
-            return SafetyVerdict.BLOCK
+            return SafetyVerdict.BLOCK, in_tok, out_tok
         if "REVISE" in verdict_text:
-            return SafetyVerdict.REVISE
-        return SafetyVerdict.ALLOW
+            return SafetyVerdict.REVISE, in_tok, out_tok
+        return SafetyVerdict.ALLOW, in_tok, out_tok
 
     except Exception as exc:
         logger.error(
             "safety_agent: LLM judge unavailable (observability degraded, defaulting ALLOW)",
             extra={"error": str(exc), "event": "safety_judge_signal_lost"},
         )
-        return SafetyVerdict.ALLOW
+        return SafetyVerdict.ALLOW, 0, 0
 
 
 def check(inp: SafetyInput) -> SafetyResult:
@@ -156,19 +165,33 @@ def check(inp: SafetyInput) -> SafetyResult:
             )
             # Return ALLOW; the async coordinator path uses check_async directly.
             return SafetyResult(verdict=SafetyVerdict.ALLOW)
-        verdict = loop.run_until_complete(_llm_judge(combined))
+        verdict, in_tok, out_tok = loop.run_until_complete(_llm_judge(combined))
     except Exception as exc:
         logger.error("safety_agent: sync judge fallback failed", extra={"error": str(exc)})
-        verdict = SafetyVerdict.ALLOW
+        verdict, in_tok, out_tok = SafetyVerdict.ALLOW, 0, 0
 
     if verdict == SafetyVerdict.BLOCK:
         logger.warning("safety_agent BLOCK", extra={"verdict": "BLOCK"})
-        return SafetyResult(verdict=SafetyVerdict.BLOCK, reason="unsafe emergent content (LLM judge)")
+        return SafetyResult(
+            verdict=SafetyVerdict.BLOCK,
+            reason="unsafe emergent content (LLM judge)",
+            input_tokens=in_tok,
+            output_tokens=out_tok,
+        )
     if verdict == SafetyVerdict.REVISE:
         logger.info("safety_agent REVISE", extra={"verdict": "REVISE"})
-        return SafetyResult(verdict=SafetyVerdict.REVISE, reason="content requires revision (LLM judge)")
+        return SafetyResult(
+            verdict=SafetyVerdict.REVISE,
+            reason="content requires revision (LLM judge)",
+            input_tokens=in_tok,
+            output_tokens=out_tok,
+        )
 
-    return SafetyResult(verdict=SafetyVerdict.ALLOW)
+    return SafetyResult(
+        verdict=SafetyVerdict.ALLOW,
+        input_tokens=in_tok,
+        output_tokens=out_tok,
+    )
 
 
 async def check_async(inp: SafetyInput) -> SafetyResult:
@@ -189,13 +212,27 @@ async def check_async(inp: SafetyInput) -> SafetyResult:
             )
 
     # Semantic path: LLM judge
-    verdict = await _llm_judge(combined)
+    verdict, in_tok, out_tok = await _llm_judge(combined)
 
     if verdict == SafetyVerdict.BLOCK:
         logger.warning("safety_agent BLOCK", extra={"verdict": "BLOCK"})
-        return SafetyResult(verdict=SafetyVerdict.BLOCK, reason="unsafe emergent content (LLM judge)")
+        return SafetyResult(
+            verdict=SafetyVerdict.BLOCK,
+            reason="unsafe emergent content (LLM judge)",
+            input_tokens=in_tok,
+            output_tokens=out_tok,
+        )
     if verdict == SafetyVerdict.REVISE:
         logger.info("safety_agent REVISE", extra={"verdict": "REVISE"})
-        return SafetyResult(verdict=SafetyVerdict.REVISE, reason="content requires revision (LLM judge)")
+        return SafetyResult(
+            verdict=SafetyVerdict.REVISE,
+            reason="content requires revision (LLM judge)",
+            input_tokens=in_tok,
+            output_tokens=out_tok,
+        )
 
-    return SafetyResult(verdict=SafetyVerdict.ALLOW)
+    return SafetyResult(
+        verdict=SafetyVerdict.ALLOW,
+        input_tokens=in_tok,
+        output_tokens=out_tok,
+    )
