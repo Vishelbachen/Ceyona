@@ -159,6 +159,7 @@ class OrchestratorResult:
     safety_agent_output_tokens: int = 0       # gpt-oss-safeguard-20b output tokens from safety_agent LLM judge
     multilingual_input_tokens: int = 0        # multilingual_preprocessor LLM call input tokens
     multilingual_output_tokens: int = 0       # multilingual_preprocessor LLM call output tokens
+    multilingual_model: str = ""              # model used: "allam-2-7b" | "qwen/qwen3.6-27b" | "passthrough"
     lc_transformer_input_tokens: int = 0      # long_context_transformer input tokens (qwen3.6-27b, $0.60/1M)
     lc_transformer_output_tokens: int = 0     # long_context_transformer output tokens ($3.00/1M)
 
