@@ -92,10 +92,9 @@ ORPHEUS_ENGLISH = "canopylabs/orpheus-v1-english"
 ORPHEUS_ARABIC = "canopylabs/orpheus-arabic-saudi"
 
 # qwen models with thinking mode — MUST have thinking disabled at every call site
-# qwen3-32b: deprecated Jul 17, kept here until removal in case of emergency fallback
-# qwen3.6-27b: new GENERAL primary — reasoning_effort="none" is the Groq API equivalent
+# qwen3.6-27b: GENERAL primary — reasoning_effort="none" is the Groq API equivalent
+# (qwen/qwen3-32b removed after Jul 17, 2026 deprecation — no longer in active routing)
 QWEN_THINKING_DISABLED_MODELS: frozenset[str] = frozenset({
-    "qwen/qwen3-32b",     # deprecated Jul 17, 2026
     "qwen/qwen3.6-27b",   # GENERAL primary — thinking: False mandatory (models.md §3)
 })
 
@@ -172,7 +171,7 @@ def get_primary_model(tier: Tier) -> str:
 def requires_thinking_disabled(model: str) -> bool:
     """
     Return True if the model must have thinking mode explicitly disabled.
-    Applies to qwen/qwen3-32b — thinking: False must be enforced at call site.
+    Applies to qwen/qwen3.6-27b — reasoning_effort="none" must be enforced at call site.
     """
     return model in QWEN_THINKING_DISABLED_MODELS
 
