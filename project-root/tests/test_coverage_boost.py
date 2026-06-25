@@ -341,7 +341,8 @@ class TestModelRouter:
 
     def test_requires_thinking_disabled_qwen(self):
         from llm.model_router import requires_thinking_disabled
-        assert requires_thinking_disabled("qwen/qwen3-32b") is True
+        assert requires_thinking_disabled("qwen/qwen3.6-27b") is True
+        assert requires_thinking_disabled("qwen/qwen3-32b") is False  # removed after Jul 17 deprecation
 
     def test_requires_thinking_disabled_llama(self):
         from llm.model_router import requires_thinking_disabled
