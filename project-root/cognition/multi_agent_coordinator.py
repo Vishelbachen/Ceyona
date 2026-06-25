@@ -54,6 +54,8 @@ class CoordinationResult:
     block_reason: str = ""
     actual_tier: str = ""  # tier that actually executed (may be lower than requested on cascade)
     tool_calls: int = 0   # total compound tool calls executed — flows to billing
+    safety_agent_input_tokens: int = 0   # gpt-oss-safeguard-20b input tokens (safety_agent LLM judge)
+    safety_agent_output_tokens: int = 0  # gpt-oss-safeguard-20b output tokens (safety_agent LLM judge)
 
 
 # ─── PLAN SELECTION ───────────────────────────────────────────────────────────
@@ -361,12 +363,16 @@ async def coordinate(
                 return CoordinationResult(
                     text="", model="", input_tokens=0, output_tokens=0,
                     blocked=True, block_reason="safety_block",
+                    safety_agent_input_tokens=safety.input_tokens,
+                    safety_agent_output_tokens=safety.output_tokens,
                 )
 
         if candidates:
             consensus: ConsensusResult = await resolve(candidates)
             if consensus.text:
                 _total_tool_calls = sum(getattr(r, "tool_calls", 0) for r in candidates)
+                _safety_in  = safety.input_tokens  if "safety" in dir() else 0  # type: ignore[name-defined]
+                _safety_out = safety.output_tokens if "safety" in dir() else 0  # type: ignore[name-defined]
                 return CoordinationResult(
                     text=consensus.text,
                     model=consensus.model,
@@ -374,6 +380,8 @@ async def coordinate(
                     output_tokens=consensus.output_tokens,
                     actual_tier=candidates[0].actual_tier,
                     tool_calls=_total_tool_calls,
+                    safety_agent_input_tokens=_safety_in,
+                    safety_agent_output_tokens=_safety_out,
                 )
 
         logger.warning("All consensus candidates failed — attempting fallback")
@@ -425,8 +433,12 @@ async def coordinate(
                 return CoordinationResult(
                     text="", model="", input_tokens=0, output_tokens=0,
                     blocked=True, block_reason="safety_block",
+                    safety_agent_input_tokens=safety.input_tokens,
+                    safety_agent_output_tokens=safety.output_tokens,
                 )
 
+        _sa_in  = safety.input_tokens  if is_heavy else 0
+        _sa_out = safety.output_tokens if is_heavy else 0
         return CoordinationResult(
             text=primary_result.text,
             model=primary_result.model,
@@ -434,6 +446,8 @@ async def coordinate(
             output_tokens=primary_result.output_tokens,
             actual_tier=primary_result.actual_tier,
             tool_calls=getattr(primary_result, "tool_calls", 0),
+            safety_agent_input_tokens=_sa_in,
+            safety_agent_output_tokens=_sa_out,
         )
 
     # ── primary failed → fallback ─────────────────────────────────────────────
