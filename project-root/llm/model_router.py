@@ -100,7 +100,41 @@ QWEN_THINKING_DISABLED_MODELS: frozenset[str] = frozenset({
 })
 
 
-# ─── PUBLIC API ───────────────────────────────────────────────────────────
+# reasoning_effort per model per tier — gpt-oss models only (models.md §4, §27.1, §27.3)
+# Groq API reference: supported values low/medium/high, default=medium (✅ DOC Jun 2026)
+# qwen models use requires_thinking_disabled() path instead — reasoning_effort="none"
+# None = do not send the parameter (use API default)
+_GPT_OSS_REASONING_EFFORT: dict[str, dict[Tier, str]] = {
+    "openai/gpt-oss-120b": {
+        Tier.HEAVY:   "high",    # deep reasoning — full effort (models.md §4, §27.3)
+        Tier.GENERAL: "medium",  # consensus arbiter — balanced (models.md §8, §27.3)
+        Tier.FAST:    "medium",  # cascade fallback — keep balanced
+    },
+    "openai/gpt-oss-20b": {
+        Tier.FAST:    "low",     # fast inference — minimal effort mandatory (models.md §2, §27.1)
+        Tier.GENERAL: "medium",  # cascade fallback — balanced
+        Tier.HEAVY:   "medium",  # cascade fallback — balanced
+    },
+}
+
+
+def get_reasoning_effort(model: str, tier: Tier) -> str | None:
+    """
+    Return the reasoning_effort value for gpt-oss models at the given tier.
+
+    Returns None for models that do not use this parameter (qwen, safety, speech).
+    Callers MUST NOT send reasoning_effort for qwen models — use requires_thinking_disabled() instead.
+
+    Source: Groq API reference (Jun 2026) — low/medium/high supported, default=medium.
+    models.md §4 (HEAVY: "high"), §8 (Consensus: "medium"), §27.1 (FAST: "low"), §27.3.
+    """
+    tier_map = _GPT_OSS_REASONING_EFFORT.get(model)
+    if tier_map is None:
+        return None
+    return tier_map.get(tier)
+
+
+
 
 def route_model(tier: Tier, preferred_model: str | None = None) -> str:
     """
@@ -162,5 +196,6 @@ __all__ = [
     "get_primary_model",
     "route_max_tokens",
     "get_tier_models",
+    "get_reasoning_effort",
     "requires_thinking_disabled",
 ]
