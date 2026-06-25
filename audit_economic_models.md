@@ -1,47 +1,47 @@
-# Аудит: economic.md + models.md vs код
-Дата: 25 июня 2026  
-Файлы: economic.md v5.5, models.md v9.0, cost_model.py, policy_registry.py, decision_matrix.py, execution_policy_kernel.py, pricing_engine.py, usage_meter.py, orchestrator.py
+# Аудит: economic.md v5.6 + models.md v9.1 vs код
+Дата: 26 июня 2026  
+Базовый аудит: audit_economic_models.md (25 июня 2026, v5.5/v9.0)  
+Текущие версии: economic.md v5.6, models.md v9.1  
+Файлы кода: cost_model.py, policy_registry.py, decision_matrix.py, execution_policy_kernel.py, pricing_engine.py, usage_meter.py, orchestrator.py, model_router.py, webhook.py, update_handler.py, vision_handler.py
 
 ---
 
-## 🔴 КРИТИЧЕСКИЕ БАГИ (revenue leak / неверный биллинг)
+## ИТОГ: Что было закрыто (v5.5→v5.6 / v9.0→v9.1)
+
+| # | Баг из прошлого аудита | Статус |
+|---|---|---|
+| BUG-01 | Vision billing: ставки llama-4-scout вместо qwen3.6-27b | ✅ ЗАКРЫТ |
+| BUG-02 | Safety Gate не биллится в _run_allow / _run_degraded | ✅ ЗАКРЫТ (webhook) |
+| BUG-03 | actual_cost() не пробрасывал safeguard_output_tokens | ✅ ЗАКРЫТ |
+| MISMATCH-01 | economic.md §5/6/11 — пороги устарели | ✅ ЗАКРЫТ |
+| MISMATCH-02 | economic.md §5/6 — примеры по старым тарифам | ✅ ЗАКРЫТ |
+| MISMATCH-03 | economic.md §1.1 — устаревший блок MODEL_RATES | ✅ ЗАКРЫТ |
+| MISMATCH-04 | models.md §27.5 — Pass1 заявлен no-op | ✅ ЗАКРЫТ |
+| MISMATCH-05 | economic.md §3 — ссылка на policy_registry отсутствует | ✅ ЗАКРЫТ |
+| DEBT-01 | multilingual billing отсутствует на ALLOW/DEGRADED путях | ✅ ЗАКРЫТ (webhook) |
+| DEBT-02 | vision_actual_cost() deprecated wrapper | ✅ ЗАКРЫТ |
+| DEBT-03 | Safety Gate cost = revenue leak при DENY | ✅ ЗАКРЫТ |
+| DEBT-04 | gpt-oss-20b reasoning_effort на HEAVY fallback пути | ✅ ЗАКРЫТ |
+| DEBT-05 | qwen3-32b в QWEN_THINKING_DISABLED_MODELS | ✅ ЗАКРЫТ |
+| DEBT-06 | economic.md §12: open item Jul 17 не закрыт | ✅ ЗАКРЫТ |
+| DEBT-07 | estimate_safety_cost() vs Pass1 no-op | ✅ ЗАКРЫТ (через MISMATCH-04) |
+
+**Из 15 позиций прошлого аудита все 15 закрыты.** Ниже — новые находки при проверке текущего кода.
 
 ---
 
-### BUG-01 — Vision billing: устаревшие ставки llama-4-scout
-
-**Файл:** `payments/pricing_engine.py`, строки 71–73  
-**Статус:** АКТИВНЫЙ, деньги считаются неверно
-
-Vision модель сменилась с `llama-4-scout` ($0.11/$0.34) на `qwen/qwen3.6-27b` ($0.60/$3.00), но `_VISION_RATES` не обновлены.
-
-```python
-# СЕЙЧАС (неверно):
-# llama-4-scout vision extraction rates (Groq, May 2026)
-# $0.11 input / $0.34 output per 1M tokens.
-_VISION_RATES: dict[str, float] = {"input": 0.11, "output": 0.34}
-```
-
-```python
-# ДОЛЖНО БЫТЬ:
-# qwen/qwen3.6-27b vision extraction rates (Groq, Jun 2026)
-# $0.60 input / $3.00 output per 1M tokens.
-_VISION_RATES: dict[str, float] = {"input": 0.60, "output": 3.00}
-```
-
-**Эффект:** vision запросы занижают стоимость в ~8.8x по output. Пользователь платит за `qwen3.6-27b` по тарифу `llama-4-scout`.  
-**Комментарий в коде и docstring** тоже надо обновить — сейчас написано "Compute raw cost for a llama-4-scout vision extraction call" — это уже неправда.
+## 🔴 АКТИВНЫЕ БАГИ
 
 ---
 
-### BUG-02 — `_run_allow` и `_run_degraded`: Safety Gate токены не входят в `actual_cost()`
+### BUG-A1 — Safety Gate стоимость не входит в `result.usage.cost_usd` на ALLOW/DEGRADED путях
 
-**Файл:** `core/execution/orchestrator.py`, строки ~472 и ~567
+**Файлы:** `core/execution/orchestrator.py` (строки ~473, ~568)  
+**Приоритет:** Средний (функциональный, не revenue leak)
 
-В `_run_allow` и `_run_degraded` вызов `actual_cost()` идёт без `safety_pass1_tokens` / `safety_pass2_tokens` / `safety_safeguard_tokens`. Это значит Safety Gate на этих путях **не биллится**.
+**Суть:** `_run_allow()` и `_run_degraded()` вычисляют `cost_usd` без safety-токенов:
 
 ```python
-# СЕЙЧАС (оба пути — неверно):
 cost = actual_cost(
     input_tokens=coordination.input_tokens,
     output_tokens=coordination.output_tokens,
@@ -49,46 +49,35 @@ cost = actual_cost(
     rerank_tokens=request.rerank_tokens,
     tier=_billing_tier,
     embedding_type=request.embedding_type,
-    # safety токены НЕ переданы
+    # safety_pass1_tokens, safety_pass2_tokens — НЕ ПЕРЕДАНЫ
 )
 ```
 
-В `_run_heavy` это сделано правильно (строка ~776). В двух других путях — нет.
+Фактически пользователь с Safety Gate правильно биллится через `webhook.py`, где `safety_cost = actual_safety_cost(...)` добавляется к `result.usage.cost_usd` отдельно. Это **намеренная архитектура** (безопасность выполняется до EPK, вне контекста оркестратора). Но тогда:
 
-**Эффект:** Safety Gate (все три модели) не оплачивается на ALLOW и DEGRADED_MODE путях. По economic.md §2 это запрещено: "Every model call that produces a response MUST be billed."
+1. `result.usage.cost_usd` отражает только LLM-стоимость — не полную стоимость запроса
+2. Поле семантически неполно: `UsageRecord.cost_usd` ≠ `total_cost_usd` в webhook
 
-**Фикс:** добавить в оба вызова:
-```python
-safety_pass1_tokens=gate_result.tokens_used,
-safety_pass2_tokens=gate_result.pass2_tokens,
-safety_safeguard_tokens=gate_result.safeguard_tokens_used,
-```
+**Риск:** Если кто-то читает `result.usage.cost_usd` напрямую (логирование, метрики) — видит заниженную стоимость. `billed_cost_usd` в Supabase правильный (через webhook), но промежуточное поле вводит в заблуждение.
+
+**Рекомендация:** добавить комментарий в `UsageRecord` или переименовать в `llm_cost_usd`, либо явно передавать safety_tokens в `_run_allow`/`_run_degraded` и включать в `cost_usd`.
 
 ---
 
-### BUG-03 — `actual_cost()` не имеет параметра `safety_safeguard_output_tokens`
+### BUG-A2 — `_run_allow()`: multilingual cost не включён в `result.usage.cost_usd`
 
-**Файл:** `core/kernel/cost_model.py`, строка 152
+**Файлы:** `core/execution/orchestrator.py` (~473), `transport/telegram/webhook.py` (~471)  
+**Приоритет:** Низкий (revenue не теряется, но учёт неполный)
 
-`actual_safety_cost()` принимает `safeguard_output_tokens`, но `actual_cost()` его **не пробрасывает**. `gpt-oss-safeguard-20b` стоит $0.30/1M output — это не копейки.
+На ALLOW/DEGRADED путях `_ml_cost` добавляется в `total_cost_usd` только в `webhook.py`:
 
 ```python
-# actual_cost() сейчас:
-def actual_cost(
-    ...
-    safety_safeguard_tokens: int = 0,
-    # safety_safeguard_output_tokens — ОТСУТСТВУЕТ
-) -> float:
-    ...
-    return ... + actual_safety_cost(
-        pass1_tokens=safety_pass1_tokens,
-        pass2_tokens=safety_pass2_tokens,
-        safeguard_tokens=safety_safeguard_tokens,
-        # safeguard_output_tokens=??? — не передаётся
-    )
+total_cost_usd = result.usage.cost_usd + safety_cost + _ml_cost
 ```
 
-**Эффект:** output-токены `gpt-oss-safeguard-20b` ($0.30/1M) никогда не биллятся через `actual_cost()`.
+В `_run_heavy()` multilingual cost бакается в `cost_usd` напрямую. Различие поведения между путями: на HEAVY `cost_usd` включает multilingual, на ALLOW — нет.
+
+**Риск:** аналогично BUG-A1 — поле `cost_usd` семантически разное в зависимости от пути. Billing в Supabase корректен. Но при анализе cost_usd по записям в usage_log ALLOW и HEAVY записи будут несравнимы без учёта этого.
 
 ---
 
@@ -96,234 +85,260 @@ def actual_cost(
 
 ---
 
-### MISMATCH-01 — economic.md §5, §6, §11: значения порогов устарели
+### MISMATCH-A1 — `vision_handler.py`: docstring ссылается на устаревший llama-4-scout
 
-**Документ:** `economic.md`, §5 EPK, §6 Decision Matrix, §11 Sync Contracts
+**Файл:** `transport/telegram/vision_handler.py`, строка 334  
+**Тип:** stale comment
 
-economic.md утверждает:
-```
-_DEGRADE_THRESHOLD = 0.003  ✓
-_HEAVY_THRESHOLD   = 0.008  ✓
-_FAST_CEILING      = 0.0005 ✓
-_GENERAL_CEILING   = 0.003  ✓
-```
-
-Реальные значения в `policy_registry.py`:
+Функция `process_single_image()` имеет docstring:
 ```python
-degrade_threshold = 0.006   # было 0.003
-heavy_threshold   = 0.010   # было 0.008
-fast_ceiling      = 0.001   # было 0.0005
+"""
+Step 1 — llama-4-scout extracts image content (text or description).
+...
+"""
 ```
 
-`decision_matrix.py` корректно читает из `RUNTIME` (значения 0.001 / 0.006), но `economic.md` §11 ставит галочки ✓ напротив старых значений.
+Реальная модель в коде: `_VISION_MODEL = "qwen/qwen3.6-27b"` (строка 17).  
+llama-4-scout удалён, qwen3.6-27b используется. Docstring не обновлён.
 
-**Что нужно:** обновить §5, §6, §11 economic.md с актуальными цифрами из policy_registry.py. Особенно §5 — все примеры ("→ ALLOW", "→ DEGRADED_MODE") считают по старым порогам 0.003 и дают неверные выводы.
+**Фикс:** заменить "llama-4-scout" на "qwen/qwen3.6-27b" в docstring.
 
 ---
 
-### MISMATCH-02 — economic.md §5, §6: примеры считают по старым тарифам
+### MISMATCH-A2 — economic.md §7: поле `resolved_model` не включено в таблицу обязательных полей usage_meter
 
-**Документ:** `economic.md`, §5 и §6
+**Документ:** `economic.md`, §7 (USAGE METER — MANDATORY FIELDS)  
+**Файл:** `payments/usage_meter.py`
 
-Примеры в §5 используют старые GENERAL ставки ($0.59/$0.79):
-```
-- A 500-token input + 600-token output at GENERAL = ~$0.00077 → ALLOW
-  Реально: (500×0.60 + 600×3.00)/1M = $0.002100 → ALLOW (при degrade=0.006)
-  
-- A 2000-token input + 2000-token output at GENERAL = ~$0.00276 → ALLOW
-  Реально: (2000×0.60 + 2000×3.00)/1M = $0.007200 → DEGRADED_MODE
-```
-
-В §6 Decision Matrix примеры используют старые FAST ставки ($0.05/$0.08) и порог $0.0005:
-```
-- 500 input + 300 estimated output = $0.000049 → FAST
-  Реально: (500×0.075 + 300×0.30)/1M = $0.000128 → FAST (при ceiling=0.001 — верно)
-```
-
-**Что нужно:** пересчитать все примеры §5 и §6 с актуальными ценами и порогами.
-
----
-
-### MISMATCH-03 — economic.md §1.1: MODEL_RATES отмечены как устаревшие, но код уже обновлён
-
-**Документ:** `economic.md`, §1.1, блок `MODEL_RATES in cost_model.py`
-
-В economic.md написано:
+В §7 таблица обязательных полей `usage`:
 ```python
-# ⚠️ ОБНОВИТЬ при смене primary в model_router.py (текущие значения = устаревшие primary)
-MODEL_RATES = {
-    Tier.FAST:    {"input": 0.05,  "output": 0.08},   # llama-3.1-8b-instant ⚠️ deprecated
-    Tier.GENERAL: {"input": 0.59,  "output": 0.79},   # llama-3.3-70b-versatile ⚠️ deprecated
-    ...
+usage = {
+    "input_tokens":     int,
+    "output_tokens":    int,
+    "tier":             str,
+    "embedding_tokens": int,
+    "embedding_type":   str,
+    "rerank_tokens":    int,
+    "audio_seconds":    float,
+    "tts_characters":   int,
+    "tool_calls":       int,
 }
 ```
 
-В реальном `cost_model.py` MODEL_RATES **уже обновлены**:
+В реальном `UsageEntry` есть дополнительные поля, которые отсутствуют в §7:
+- `resolved_model` — требуется models.md §25.3 (per-model billing readiness)
+- `safety_pass1_tokens`, `safety_pass2_tokens`, `safety_safeguard_tokens`, `safety_safeguard_output_tokens`
+- `safety_agent_input_tokens`, `safety_agent_output_tokens`
+- `multilingual_input_tokens`, `multilingual_output_tokens`, `multilingual_model`
+- `lc_transformer_input_tokens`, `lc_transformer_output_tokens`
+
+Документ описывает базовый MVP, а код реализует расширенный вариант. При добавлении новых полей §7 не обновлялся.
+
+**Фикс:** обновить §7 economic.md, добавив все поля UsageEntry.
+
+---
+
+### MISMATCH-A3 — economic.md §4.2: `actual_cost()` описан без параметров safety
+
+**Документ:** `economic.md`, §4.2
+
+Документальная сигнатура:
 ```python
-MODEL_RATES = {
-    Tier.FAST:    {"input": 0.075, "output": 0.30},   # gpt-oss-20b ✅
-    Tier.GENERAL: {"input": 0.60,  "output": 3.00},   # qwen3.6-27b ✅
-    Tier.HEAVY:   {"input": 0.15,  "output": 0.60},   # gpt-oss-120b ✅
-}
+def actual_cost(
+    input_tokens,
+    output_tokens,
+    embedding_tokens,
+    rerank_tokens,
+    tier,
+    embedding_type="large",
+) -> float:
 ```
 
-В §1.1 этот блок с пометкой "⚠️ ОБНОВИТЬ" — мёртвый устаревший документ внутри документа. Вводит в заблуждение.
-
-**Что нужно:** обновить §1.1 economic.md — убрать "устаревший" блок MODEL_RATES, заменить актуальным.
-
----
-
-### MISMATCH-04 — models.md §27.5: Pass 1 заявлен как no-op, но модель вызывается
-
-**Документ:** `models.md`, §27.5, раздел llama-prompt-guard-2-22m
-
-```
-Pass 1 implementation status:
-Currently no-op — model NOT called. `check_pass1()` returns `GateVerdict.PASS` immediately
-with only a debug log.
-```
-
-Реальный `security/safety_gate.py` (строка 198): `check_pass1()` **вызывает** `_classify_with_model()` и логирует MALICIOUS/BENIGN сигналы.
-
-Это либо документация отстала от кода, либо код опередил документацию. В любом случае — несостыковка.
-
-`estimate_safety_cost()` считает Pass1 в оценку — это правильно в обоих сценариях. Но документ вводит в заблуждение о статусе.
-
-**Что нужно:** обновить описание в models.md §27.5 — Pass 1 активен, model вызывается.
-
----
-
-### MISMATCH-05 — economic.md §3: MAX_OUTPUT_CAP для FAST заявлен "estimation cap (actual API limit: 1024)"
-
-**Документ:** `economic.md`, §3
-
-```
-Tier.FAST: 512,  # estimation cap (actual API limit: 1024)
-```
-
-В `policy_registry.py`:
+Реальная сигнатура в `cost_model.py`:
 ```python
-Tier.FAST: TierConfig(max_output_tokens=1_024)
+def actual_cost(
+    input_tokens: int,
+    output_tokens: int,
+    embedding_tokens: int,
+    rerank_tokens: int,
+    tier: Tier,
+    embedding_type: str = "large",
+    safety_pass1_tokens: int = 0,
+    safety_pass2_tokens: int = 0,
+    safety_safeguard_tokens: int = 0,
+    safety_safeguard_output_tokens: int = 0,  # добавлен в v5.6
+) -> float:
 ```
 
-Это верно. Но для GENERAL:
-```
-Tier.GENERAL: 800,  # estimation cap — lowered from 2048
-               # actual API limit remains 3072 (policy_registry.py)
-```
+Четыре параметра `safety_*` не отражены в §4.2. Это делает документальный пример неверным.
 
-`policy_registry.py` реально: `max_output_tokens=3_072` — совпадает. ✓  
-Но в примечании economic.md написано "actual API limit remains 3072" без упоминания `policy_registry.py`. Для HEAVY: `max_output_tokens=6_144` в реестре — тоже совпадает.
-
-Фактически всё верно, но пояснение неполное — не ссылается на policy_registry как источник истины.
+**Фикс:** обновить §4.2 actual_cost() сигнатурой с safety-параметрами.
 
 ---
 
-## 🟡 КОСЯКИ И ТЕХНИЧЕСКИЙ ДОЛГ
+### MISMATCH-A4 — economic.md §8: формула `user_charge` ссылается на `access_controller.py`, но margin применяется в `usage_meter.py`
+
+**Документ:** `economic.md`, §8
+
+Документ:
+```python
+# access_controller.py
+credits_usd = actual_cost * MARGIN
+# deduct credits_usd from user_balance_usd
+```
+
+Реальный код: `access_controller.deduct(user_id, total_cost_usd)` принимает уже вычисленный `total_cost_usd` из webhook, без применения margin. Margin применяется в `usage_meter.compute_billed()` → `apply_margin()`. `AccessController` margin не знает.
+
+Схема из webhook.py:
+1. `total_cost_usd` = raw cost (без margin)
+2. `ac.deduct(user_id, total_cost_usd)` — списывает RAW
+3. `billed = meter.compute_billed(total_cost_usd)` — RAW × 1.3 = что пишем в Supabase usage_log
+
+**Вопрос:** с баланса списывается `total_cost_usd` (raw), а в `billed_cost_usd` пишется raw × 1.3. Это означает, что баланс уменьшается на raw-стоимость, а не на "billed" (с наценкой). Либо это намеренно и документ в §8 неточен, либо в `deduct()` должен передаваться `billed`.
+
+**Риск:** реальный вычет из баланса пользователя = raw LLM cost, не raw × 1.3. Платформа не удерживает маржу из баланса. `billed_cost_usd` в Supabase — аналитическое поле, не фактическое списание.
+
+Если маржа должна удерживаться из пользовательского баланса — это бизнес-решение, требующее исправления в webhook.py:
+```python
+await ac.deduct(user_id, meter.compute_billed(total_cost_usd))  # billed, не raw
+```
+
+Если намеренно (баланс = raw, billed = аналитика) — §8 нужно обновить.
 
 ---
 
-### DEBT-01 — `actual_cost()` не биллит multilingual и lc_transformer
+## 🟡 ТЕХНИЧЕСКИЙ ДОЛГ
+
+---
+
+### DEBT-A1 — `lc_transformer_input/output_tokens` не включены в EPK estimated_cost
+
+**Файл:** `core/execution/orchestrator.py`, `core/kernel/cost_model.py`
+
+Long-context трансформер (qwen3.6-27b, $0.60/$3.00) активируется при `complexity == CRITICAL`. EPK получает `HEAVY_REQUIRED` по complexity-флагу до знания о lc_transformer-стоимости. Стоимость lc_transformer не учитывается в EPK `estimate_cost()`.
+
+Это корректное архитектурное решение (LC активируется EPK-решением, не предшествует ему), но означает, что EPK-оценка для CRITICAL запросов систематически занижена — lc_transformer может добавить значительную стоимость поверх HEAVY-тира. Если пользователь с минимальным балансом получает CRITICAL + lc_transformer, списание может превысить баланс.
+
+**Рекомендация:** добавить примечание в economic.md §5 о том, что CRITICAL-путь может генерировать lc_transformer overhead сверх EPK-оценки.
+
+---
+
+### DEBT-A2 — `compound-mini` токенный биллинг: pricing не опубликован
+
+**Документ:** economic.md §1.3  
+**Файл:** `core/kernel/cost_model.py`
+
+`groq/compound-mini` используется на FAST пути. В economic.md §1.3: "compound-mini: pricing TBD (not separately listed, Jun 2026)". В `cost_model.py` нет отдельных ставок для compound/compound-mini — используются тарифы тира (FAST/GENERAL), а не модели.
+
+При вызовах compound-mini токены биллятся по `Tier.FAST` ставкам (`$0.075/$0.30`), что может быть как завышено, так и занижено относительно реальных ставок Groq. Это acknowledged gap, но без мониторинга в production drift может вырасти.
+
+**Рекомендация:** добавить alert в Groq changelog monitoring. Когда pricing появится — обновить `_COMPOUND_RATES` (можно добавить заглушку в cost_model.py).
+
+---
+
+### DEBT-A3 — `_run_allow()` и `_run_degraded()` не передают safety_tokens в `OrchestratorResult`
 
 **Файл:** `core/execution/orchestrator.py`
 
-В `_run_heavy()` multilingual и lc_transformer биллятся отдельными вызовами `actual_cost()` (строки ~745, ~756). В `_run_allow()` и `_run_degraded()` — нет вообще.
+`OrchestratorResult` имеет поля `safety_pass1_tokens`, `safety_pass2_tokens`, `safety_safeguard_tokens`, `safety_safeguard_output_tokens`. На ALLOW/DEGRADED путях они не заполняются оркестратором — их устанавливает `update_handler.py` через `dataclasses.replace()`.
 
-В models.md/economic.md есть поля `multilingual_input_tokens` / `lc_transformer_input_tokens` в UsageEntry, они пишутся в Supabase. Но в расчёт `cost_usd` в `UsageRecord` попадают только через `_run_heavy`. На других путях multilingual-биллинг отсутствует.
+Это работает, но создаёт неочевидный контракт: поля `OrchestratorResult` при выходе из `_run_allow()` всегда 0, и только после прохода через `update_handler` они становятся правильными. Документирование этого контракта отсутствует.
 
-Это не катастрофа (multilingual = allam-2-7b ≈ FAST tier, дёшево), но по economic.md §2 — "Every model call... MUST be billed".
-
----
-
-### DEBT-02 — `vision_actual_cost()` в cost_model.py — deprecated wrapper, не удалён
-
-**Файл:** `core/kernel/cost_model.py`, строка 176
-
-Функция помечена DEPRECATED, перенаправляет в `pricing_engine.vision_cost()`. Существует только "для обратной совместимости". Поиск по коду показывает, что вызывающих нет — только `update_handler.py` импортирует напрямую из `pricing_engine`. Wrapper можно и нужно удалить.
+**Рекомендация:** добавить комментарий в `OrchestratorResult` к safety-полям: "Populated by update_handler.py after gate completes — always 0 on orchestrator return."
 
 ---
 
-### DEBT-03 — economic.md §10: "Safety Gate executes before EPK" противоречит описанию billing flow
+### DEBT-A4 — `vision_handler.py` `process_media_group()`: второй проход использует тот же docstring с упоминанием llama-4-scout
 
-**Документ:** `economic.md`, §10
+**Файл:** `transport/telegram/vision_handler.py` (~596-605)
 
-Строка 7b: `[VERBATIM → exit, no LLM billing, tool cost only — §47]`  
-Строка 7: `[DENY → exit, no LLM billing; Safety Gate cost not recorded on DENY]`
-
-По architecture.md Safety Gate идёт до EPK. Если DENY — Safety Gate уже выполнилась, но биллинг на неё не идёт. Это задокументировано в §10 ("Safety Gate usage ← recorded post-confirmation"). Но формулировка "not recorded on DENY" означает revenue leak на DENY-запросах — это **намеренная политика**, но нигде не обоснована как бизнес-решение. При высоком уровне DENYs (спамеры, атаки) это реальная дыра.
+Та же ситуация, что MISMATCH-A1, но в функции `process_media_group()`. Обе функции обрабатывают изображения, обе используют `_VISION_MODEL = "qwen/qwen3.6-27b"`, но docstring в обоих местах не обновлены. (Связан с MISMATCH-A1 — один фикс закрывает оба.)
 
 ---
 
-### DEBT-04 — `gpt-oss-20b` в HEAVY fallback цепочке: reasoning_effort не определён для этого сценария
-
-**Файл:** `llm/model_router.py`
-
-```python
-_GPT_OSS_REASONING_EFFORT = {
-    "openai/gpt-oss-20b": {
-        Tier.FAST:    "low",
-        Tier.GENERAL: "medium",
-        Tier.HEAVY:   "medium",  # cascade fallback — keep balanced
-    },
-}
-```
-
-Если `gpt-oss-20b` используется на HEAVY пути как fallback (чего по архитектуре быть не должно — HEAVY = только gpt-oss-120b), то reasoning_effort будет "medium" вместо "high". Это не баг биллинга, но потенциальная деградация качества без алерта.
-
----
-
-### DEBT-05 — `qwen/qwen3-32b` в `QWEN_THINKING_DISABLED_MODELS` — deprecated модель в активном frozenset
-
-**Файл:** `llm/model_router.py`
-
-```python
-QWEN_THINKING_DISABLED_MODELS: frozenset[str] = frozenset({
-    "qwen/qwen3-32b",     # deprecated Jul 17, 2026
-    "qwen/qwen3.6-27b",
-})
-```
-
-Комментарий "deprecated Jul 17, kept here until removal in case of emergency fallback" — но этой модели нет в `_TIER_MODELS`. Она никогда не будет выбрана через нормальный routing. Оставлять её в frozenset означает, что `requires_thinking_disabled()` вернёт True для несуществующего пути. Чистить после Jul 17.
-
----
-
-### DEBT-06 — economic.md §12 open items: "ПРИОРИТЕТ Jul 17" уже частично сделан, но не закрыт
-
-**Документ:** `economic.md`, §12
-
-```
-- [ ] ПРИОРИТЕТ — Jul 17, 2026: заменить qwen/qwen3-32b и llama-4-scout в model_router.py
-      до deprecation. Обновить MODEL_RATES если новый GENERAL primary дороже $0.59/$0.79.
-```
-
-Судя по коду: model_router уже использует `qwen3.6-27b` и `gpt-oss-120b` вместо deprecated моделей. MODEL_RATES уже обновлены. Этот пункт можно закрывать — [x].
-
----
-
-### DEBT-07 — `estimate_safety_cost()` включает Pass 1 в оценку, но Pass 1 был заявлен как no-op (связан с MISMATCH-04)
-
-**Файл:** `core/kernel/cost_model.py`
-
-`estimate_safety_cost()` добавляет ~300 токенов Pass1 в EPK оценку. Если Pass1 реально no-op — переоценка (консервативно, допустимо). Если Pass1 активен (как показывает код) — оценка корректна. Нужно разрешить противоречие MISMATCH-04, после чего этот пункт закрывается автоматически.
-
----
-
-## 📋 Сводная таблица
+## 📋 Сводная таблица новых находок
 
 | # | Категория | Файл | Приоритет |
 |---|---|---|---|
-| BUG-01 | Vision billing: ставки llama-4-scout вместо qwen3.6-27b | pricing_engine.py | 🔴 Срочно |
-| BUG-02 | Safety Gate не биллится в _run_allow / _run_degraded | orchestrator.py | 🔴 Срочно |
-| BUG-03 | actual_cost() не пробрасывает safeguard_output_tokens | cost_model.py | 🔴 Срочно |
-| MISMATCH-01 | economic.md §5/6/11 — пороги 0.003/0.008/0.0005 вместо актуальных | economic.md | 🟠 |
-| MISMATCH-02 | economic.md §5/6 — примеры по старым тарифам | economic.md | 🟠 |
-| MISMATCH-03 | economic.md §1.1 — "устаревший" блок MODEL_RATES уже не устарел | economic.md | 🟠 |
-| MISMATCH-04 | models.md §27.5 — Pass1 заявлен no-op, код вызывает модель | models.md | 🟠 |
-| MISMATCH-05 | economic.md §3 — ссылка на policy_registry как источник истины отсутствует | economic.md | 🟡 |
-| DEBT-01 | multilingual billing отсутствует на ALLOW/DEGRADED путях | orchestrator.py | 🟡 |
-| DEBT-02 | vision_actual_cost() deprecated wrapper не удалён | cost_model.py | 🟡 |
-| DEBT-03 | Safety Gate cost = revenue leak при DENY | economic.md §10 | 🟡 |
-| DEBT-04 | gpt-oss-20b reasoning_effort на HEAVY fallback пути | model_router.py | 🟡 |
-| DEBT-05 | qwen3-32b в QWEN_THINKING_DISABLED_MODELS после deprecation | model_router.py | 🟡 |
-| DEBT-06 | economic.md §12: open item Jul 17 уже выполнен, не закрыт | economic.md | 🟡 |
-| DEBT-07 | estimate_safety_cost() vs Pass1 no-op — зависит от MISMATCH-04 | cost_model.py | 🟡 |
+| BUG-A1 | `result.usage.cost_usd` не включает safety cost на ALLOW/DEGRADED путях | orchestrator.py | 🟠 Средний |
+| BUG-A2 | `result.usage.cost_usd` не включает multilingual cost на ALLOW/DEGRADED | orchestrator.py | 🟡 Низкий |
+| MISMATCH-A1 | vision_handler.py docstring: "llama-4-scout" вместо "qwen3.6-27b" | vision_handler.py | 🟡 Низкий |
+| MISMATCH-A2 | economic.md §7: таблица MANDATORY FIELDS неполная | economic.md | 🟠 Средний |
+| MISMATCH-A3 | economic.md §4.2: actual_cost() сигнатура без safety-параметров | economic.md | 🟠 Средний |
+| MISMATCH-A4 | economic.md §8: margin применяется в usage_meter, не access_controller | economic.md / webhook.py | 🔴 Требует решения |
+| DEBT-A1 | lc_transformer cost не входит в EPK estimate_cost() для CRITICAL | cost_model.py | 🟡 Низкий |
+| DEBT-A2 | compound-mini pricing TBD — неизвестный тарифный дрейф | economic.md | 🟡 Низкий |
+| DEBT-A3 | safety-поля OrchestratorResult всегда 0 при выходе из оркестратора | orchestrator.py | 🟡 Низкий |
+| DEBT-A4 | vision_handler.py process_media_group(): тот же stale docstring | vision_handler.py | 🟡 Низкий |
+
+---
+
+## Детальный разбор MISMATCH-A4 (margin vs deduct)
+
+Это единственная находка с неопределённым бизнес-намерением. Текущий flow:
+
+```
+webhook.py:
+  total_cost_usd = result.usage.cost_usd + safety_cost + _ml_cost  # raw
+  await ac.deduct(user_id, total_cost_usd)                         # списываем raw
+  billed = meter.compute_billed(total_cost_usd)                    # raw × 1.3
+  await meter.record(UsageEntry(..., billed_cost_usd=billed))      # пишем в Supabase
+```
+
+Варианты:
+
+**Вариант A (текущее поведение — маржа НЕ берётся с баланса):**
+- Пользователь платит raw LLM cost из баланса
+- `billed_cost_usd` — аналитическое поле для расчёта Revenue (что платформа "должна была" заработать)
+- Бизнес-смысл: пользователь не видит наценку в списаниях, маржа = разница между платежом TON и реальным расходом Groq
+- Нужно: обновить §8 economic.md, убрать упоминание `MARGIN` из формулы `deduct()`
+
+**Вариант B (маржа должна браться с баланса — economic.md §8 верен):**
+- В webhook.py нужно исправить: `await ac.deduct(user_id, billed)` вместо `total_cost_usd`
+- Revenue = billed - raw (правильная маржа)
+- Риск: пользовательский баланс тает быстрее на 30%
+
+Рекомендация: зафиксировать намерение и привести код и документацию к единому варианту.
+
+---
+
+## Что полностью соответствует документации
+
+Для справки — проверенные аспекты, расхождений не найдено:
+
+- `MODEL_RATES` в cost_model.py: $0.075/$0.30 (FAST), $0.60/$3.00 (GENERAL), $0.15/$0.60 (HEAVY) ✅
+- `EMBEDDING_RATES`: large=0.10, small=0.02 ✅
+- `RERANK_RATE`: 0.10 ✅
+- `MAX_OUTPUT_CAP`: FAST=512, GENERAL=800, HEAVY=4096 ✅
+- `COMPLEXITY_MULTIPLIER`: LOW=1.2, MEDIUM=1.8, HIGH=2.5, CRITICAL=3.0 ✅
+- `policy_registry.RUNTIME`: degrade=0.006, heavy=0.010, fast_ceiling=0.001, deny=0.0001 ✅
+- `decision_matrix` читает из RUNTIME (не хардкодит) ✅
+- `execution_policy_kernel` читает из RUNTIME (не хардкодит) ✅
+- Complexity.CRITICAL → HEAVY_REQUIRED в EPK ✅
+- `_DEFAULT_BALANCE_USD = 0.10` (policy_registry → access_controller) ✅
+- `apply_margin(usd, margin=1.3)` ✅
+- `_VISION_RATES`: input=0.60, output=3.00 (qwen3.6-27b) ✅
+- `_VISION_MODEL = "qwen/qwen3.6-27b"` в vision_handler ✅
+- FAST primary: `openai/gpt-oss-20b` ✅
+- GENERAL primary: `qwen/qwen3.6-27b`, fallback: `openai/gpt-oss-120b` ✅
+- HEAVY primary: `openai/gpt-oss-120b` ✅
+- CONSENSUS_MODEL: `openai/gpt-oss-120b` ✅
+- FAST_AGENT_MODEL: `groq/compound-mini`, DEEP_AGENT_MODEL: `groq/compound` ✅
+- MULTILINGUAL_ARABIC_MODEL: `allam-2-7b`, OTHER: `qwen/qwen3.6-27b` ✅
+- LONG_CONTEXT_MODEL: `qwen/qwen3.6-27b` ✅
+- SHAPER_MODEL: `openai/gpt-oss-20b` ✅
+- `QWEN_THINKING_DISABLED_MODELS` — только `qwen/qwen3.6-27b` (qwen3-32b удалён) ✅
+- `_MAX_TOKENS` читается из `policy_registry.RUNTIME.tier_configs` ✅
+- `preferred_model` присвоен во всех 12 ненулевых ветках `_resolve_routing()` (verbatim=None) ✅
+- Safety Gate: NON-BLOCKING, оба пасса всегда PASS ✅
+- Pass 1 (22m): вызывается, логирует, всегда возвращает PASS ✅
+- `estimate_safety_cost()`: включает все три модели ✅
+- `actual_safety_cost()`: принимает safeguard_output_tokens ✅
+- `actual_cost()`: принимает все safety-параметры ✅
+- multilingual billing на ALLOW/DEGRADED: обрабатывается в webhook.py (с guard против double-billing на HEAVY) ✅
+- `resolved_model` логируется в Supabase через UsageEntry ✅
+- Deprecated models (qwen3-32b, llama-4-scout, llama-3.1-8b, llama-3.3-70b): удалены из активного routing ✅
+- `lc_transformer_input/output_tokens` в UsageEntry и OrchestratorResult ✅
+- `long_context_transformer.py` существует (`llm/long_context_transformer.py`) ✅
+- economic.md §10: DENY path биллит Safety Gate если токены есть (webhook guard) ✅
+- reasoning_effort: "low" для gpt-oss-20b/FAST, "high" для gpt-oss-120b/HEAVY ✅
