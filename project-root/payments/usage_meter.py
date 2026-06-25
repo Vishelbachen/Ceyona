@@ -40,6 +40,7 @@ class UsageEntry:
     safety_agent_output_tokens: int = 0       # safety_agent LLM judge output tokens ($0.30/1M)
     multilingual_input_tokens: int = 0        # multilingual_preprocessor LLM call input tokens
     multilingual_output_tokens: int = 0       # multilingual_preprocessor LLM call output tokens
+    multilingual_model: str = ""              # "allam-2-7b" | "qwen/qwen3.6-27b" | "passthrough"
     lc_transformer_input_tokens: int = 0      # long_context_transformer input tokens (qwen3.6-27b)
     lc_transformer_output_tokens: int = 0     # long_context_transformer output tokens
 
@@ -114,6 +115,8 @@ class UsageMeter:
             extended_payload["multilingual_input_tokens"] = entry.multilingual_input_tokens
         if entry.multilingual_output_tokens:
             extended_payload["multilingual_output_tokens"] = entry.multilingual_output_tokens
+        if entry.multilingual_model and entry.multilingual_model != "passthrough":
+            extended_payload["multilingual_model"] = entry.multilingual_model
         if entry.lc_transformer_input_tokens:
             extended_payload["lc_transformer_input_tokens"] = entry.lc_transformer_input_tokens
         if entry.lc_transformer_output_tokens:
