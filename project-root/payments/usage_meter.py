@@ -31,10 +31,11 @@ class UsageEntry:
     tts_characters: int = 0         # orpheus billing: per 1M characters
     # Agent tool call billing (compound web_search: $5.00 / 1000 calls)
     tool_calls: int = 0
-    # Safety Gate billing — actual tokens from GateResult.tokens_used (Variant C)
-    safety_pass1_tokens: int = 0     # llama-prompt-guard-2-22m actual input tokens
-    safety_pass2_tokens: int = 0     # llama-prompt-guard-2-86m actual input tokens
-    safety_safeguard_tokens: int = 0 # gpt-oss-safeguard-20b actual input tokens
+    # Safety Gate billing — actual tokens from GateResult (Variant C)
+    safety_pass1_tokens: int = 0              # llama-prompt-guard-2-22m input tokens
+    safety_pass2_tokens: int = 0              # llama-prompt-guard-2-86m input tokens
+    safety_safeguard_tokens: int = 0          # gpt-oss-safeguard-20b input tokens ($0.075/1M)
+    safety_safeguard_output_tokens: int = 0   # gpt-oss-safeguard-20b output tokens ($0.30/1M)
 
 
 class UsageMeter:
@@ -97,6 +98,8 @@ class UsageMeter:
             extended_payload["safety_pass2_tokens"] = entry.safety_pass2_tokens
         if entry.safety_safeguard_tokens:
             extended_payload["safety_safeguard_tokens"] = entry.safety_safeguard_tokens
+        if entry.safety_safeguard_output_tokens:
+            extended_payload["safety_safeguard_output_tokens"] = entry.safety_safeguard_output_tokens
 
         payload = {**core_payload, **extended_payload}
 
@@ -125,7 +128,8 @@ class UsageMeter:
                     "ADD COLUMN IF NOT EXISTS resolved_model TEXT DEFAULT '', "
                     "ADD COLUMN IF NOT EXISTS safety_pass1_tokens BIGINT DEFAULT 0, "
                     "ADD COLUMN IF NOT EXISTS safety_pass2_tokens BIGINT DEFAULT 0, "
-                    "ADD COLUMN IF NOT EXISTS safety_safeguard_tokens BIGINT DEFAULT 0.",
+                    "ADD COLUMN IF NOT EXISTS safety_safeguard_tokens BIGINT DEFAULT 0, "
+                    "ADD COLUMN IF NOT EXISTS safety_safeguard_output_tokens BIGINT DEFAULT 0.",
                     extra={"user_id": entry.user_id, "hint": error_str[:200]},
                 )
                 try:
