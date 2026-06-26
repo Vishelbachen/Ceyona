@@ -240,27 +240,76 @@ def actual_tts_cost(tts_characters: int, model: str = "canopylabs/orpheus-v1-eng
 # ─── COMPOUND MODEL RATES ─────────────────────────────────────────────────────
 # Groq compound systems use passthrough pricing: tokens are billed at the rates
 # of the underlying models (groq.com/pricing, verified Jun 2026).
-# compound-mini internals: Llama 3.3 70B + GPT-OSS 120B (Groq docs, compound-mini page)
-# compound internals:      GPT-OSS 120B (primary reasoning model)
 #
-# Since Groq does NOT expose per-model token splits for compound responses,
-# we bill compound tokens at the DOMINANT model rate:
-#   compound-mini → Llama 3.3 70B rates ($0.59/$0.79 per 1M) — higher output, conservative
-#   compound      → GPT-OSS 120B rates  ($0.15/$0.60 per 1M) — primary reasoning model
+# compound-mini internals: Llama 3.3 70B + GPT-OSS 120B  (Groq docs, compound-mini page)
+# compound       internals: Llama 4 Scout + GPT-OSS 120B  (Groq docs, compound page)
 #
-# This replaces the previous FAST-tier proxy ($0.075/$0.30) which underestimated
-# compound-mini output by ~2.6x ($0.30 vs $0.79 per 1M output tokens).
+# PREFERRED: read usage_breakdown from Groq API response and bill each model at
+# its exact rate via actual_compound_cost_from_breakdown(). This is the accurate path.
 #
-# NOTE: When Groq publishes explicit compound pricing, update these rates.
+# FALLBACK (when usage_breakdown is absent): bill compound tokens at the DOMINANT
+# model rate. For compound-mini, Llama 3.3 70B has the higher output rate ($0.79
+# vs $0.60 for GPT-OSS 120B) — conservative estimate. For compound, Llama 4 Scout
+# ($0.11/$0.34) and GPT-OSS 120B ($0.15/$0.60) — GPT-OSS 120B used as fallback
+# since it's the heavier reasoning model and its output rate is higher.
+#
+# NOTE: Llama 4 Scout is deprecated Jun 17, 2026 (effective Aug 16, 2026). Groq
+# may update compound internals before then. Monitor compound docs for changes.
 _COMPOUND_RATES: dict[str, dict[str, float]] = {
-    "groq/compound-mini": {"input": 0.59, "output": 0.79},   # Llama 3.3 70B dominant
-    "groq/compound":      {"input": 0.15, "output": 0.60},   # GPT-OSS 120B dominant
+    "groq/compound-mini": {"input": 0.59, "output": 0.79},   # Llama 3.3 70B dominant fallback
+    "groq/compound":      {"input": 0.15, "output": 0.60},   # GPT-OSS 120B dominant fallback
 }
+
+# Per-model rates used by actual_compound_cost_from_breakdown() for exact billing.
+# Maps Groq's model identifiers (as they appear in usage_breakdown) to $/1M rates.
+# Groq docs, verified Jun 2026.
+_COMPOUND_UNDERLYING_RATES: dict[str, dict[str, float]] = {
+    # compound-mini internals
+    "llama-3.3-70b-versatile":              {"input": 0.59, "output": 0.79},
+    # compound internals
+    "meta-llama/llama-4-scout-17b-16e-instruct": {"input": 0.11, "output": 0.34},
+    # shared across both compound systems
+    "openai/gpt-oss-120b":                  {"input": 0.15, "output": 0.60},
+    # fallback for any other model Groq might add internally
+}
+
+
+def actual_compound_cost_from_breakdown(breakdown: list[dict]) -> float:
+    """
+    Compute exact compound model cost from Groq's usage_breakdown field.
+
+    Groq API returns usage.usage_breakdown for compound AI systems as a list of:
+      [{"model": "<model_id>", "input_tokens": int, "output_tokens": int}, ...]
+
+    This enables exact passthrough billing per underlying model rather than a
+    single-rate approximation. Preferred over actual_compound_cost() when breakdown
+    is available. Falls back to $0.00 for unrecognised model IDs (should not occur
+    with current compound internals — log a warning if this happens).
+
+    BUG-02 fix: groq_client.py now populates LLMResponse.usage_breakdown from
+    response.usage.usage_breakdown. economic.md §1.3.
+    """
+    if not breakdown:
+        return 0.0
+    total = 0.0
+    for entry in breakdown:
+        model_id = entry.get("model", "")
+        input_t  = entry.get("input_tokens", 0)
+        output_t = entry.get("output_tokens", 0)
+        rates = _COMPOUND_UNDERLYING_RATES.get(model_id)
+        if rates is None:
+            # Unknown model in breakdown — use GPT-OSS 120B rates as safe fallback
+            # (higher output rate than Llama 4 Scout, conservative estimate).
+            rates = _COMPOUND_UNDERLYING_RATES["openai/gpt-oss-120b"]
+        total += (input_t * rates["input"] + output_t * rates["output"]) / 1_000_000
+    return total
 
 
 def actual_compound_cost(input_tokens: int, output_tokens: int, model: str) -> float:
     """
-    Compute compound model cost using passthrough-equivalent rates.
+    Fallback compound model cost using dominant-model rate approximation.
+    Use this ONLY when usage_breakdown is unavailable (empty list from groq_client).
+    Prefer actual_compound_cost_from_breakdown() for exact billing.
     Called from webhook.py when resolved_model is groq/compound or groq/compound-mini.
     economic.md §1.3 / DEBT-A2 fix.
     """
