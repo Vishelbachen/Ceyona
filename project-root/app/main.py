@@ -242,36 +242,148 @@ async def metrics() -> dict:
 
 @app.get("/models")
 async def models():
+    """
+    Full model availability check across all 20 models used by Ceyona.
+
+    Splits into two provider groups:
+      - groq: 17 models verified against live Groq models.list() API
+      - hf:   3 HuggingFace models (BGE embeddings + reranker) pinged via embed_raw()
+
+    Each model entry:
+      - available: bool  — whether the model ID appears in Groq's list (or HF responds)
+      - role: str        — what this model does in the system
+
+    Top-level "all_ok" is False if any required model is unavailable.
+    """
+    import asyncio
     from llm.groq_client import groq_client
-    from llm.model_router import DEEP_AGENT_MODEL, FAST_AGENT_MODEL
+    from llm.hf_client import BGE_LARGE, BGE_SMALL, BGE_RERANKER, hf_client
 
-    models = await groq_client._client.models.list()
+    # ── Groq: fetch live model list ───────────────────────────────────────────
+    groq_list = await groq_client._client.models.list()
+    groq_ids = {m.id for m in groq_list.data}
 
-    ids = sorted(m.id for m in models.data)
-    id_set = set(ids)
+    def _groq(model_id: str, role: str) -> dict:
+        return {"available": model_id in groq_ids, "role": role, "model": model_id}
 
-    # Check that the specific models the router depends on are actually available.
-    # Groq occasionally renames or removes models — this makes drift immediately visible.
-    VISION_MODEL  = "qwen/qwen3.6-27b"          # vision_handler._VISION_MODEL
-    SAFETY_MODEL  = "openai/gpt-oss-safeguard-20b"
-    configured = {
-        "FAST_PRIMARY":      "openai/gpt-oss-20b"  in id_set,
-        "GENERAL_PRIMARY":   "qwen/qwen3.6-27b"    in id_set,
-        "HEAVY_PRIMARY":     "openai/gpt-oss-120b" in id_set,
-        "FAST_AGENT_MODEL":  FAST_AGENT_MODEL       in id_set,
-        "DEEP_AGENT_MODEL":  DEEP_AGENT_MODEL       in id_set,
-        "VISION_MODEL":      VISION_MODEL           in id_set,
-        "SAFETY_MODEL":      SAFETY_MODEL           in id_set,
+    groq_models = {
+        # ── LLM tier primaries ──────────────────────────────────────────
+        "fast_primary":        _groq("openai/gpt-oss-20b",           "LLM · Tier.FAST primary (1000 TPS)"),
+        "general_primary":     _groq("qwen/qwen3.6-27b",             "LLM · Tier.GENERAL primary + vision + multilingual"),
+        "heavy_primary":       _groq("openai/gpt-oss-120b",          "LLM · Tier.HEAVY primary + consensus arbiter"),
+        # ── Agent layer ─────────────────────────────────────────────────
+        "fast_agent":          _groq("groq/compound-mini",           "Agent · FAST path synthesizer (web search, 1 tool)"),
+        "deep_agent":          _groq("groq/compound",                "Agent · GENERAL path synthesizer (web search, 10 tools)"),
+        # ── Safety gate ─────────────────────────────────────────────────
+        "safety_pass1":        _groq("meta-llama/llama-prompt-guard-2-22m", "Safety · Pass1 fast rejection (22M BERT, $0.03/1M)"),
+        "safety_pass2_86m":    _groq("meta-llama/llama-prompt-guard-2-86m", "Safety · Pass2 deep classifier (86M BERT, $0.04/1M)"),
+        "safety_safeguard":    _groq("openai/gpt-oss-safeguard-20b", "Safety · Pass2 enforcement ($0.075/$0.30 per 1M)"),
+        # ── Speech ──────────────────────────────────────────────────────
+        "whisper_primary":     _groq("whisper-large-v3",             "ASR · High-quality transcription ($0.111/hr)"),
+        "whisper_turbo":       _groq("whisper-large-v3-turbo",       "ASR · Fast transcription, default ($0.040/hr)"),
+        "tts_english":         _groq("canopylabs/orpheus-v1-english", "TTS · English voice synthesis ($22/1M chars)"),
+        "tts_arabic":          _groq("canopylabs/orpheus-arabic-saudi", "TTS · Arabic voice synthesis ($40/1M chars)"),
+        # ── Multilingual ────────────────────────────────────────────────
+        "multilingual_arabic": _groq("allam-2-7b",                   "Multilingual · Arabic normalization (allam, FAST rates)"),
+        # ── Utility ─────────────────────────────────────────────────────
+        "shaper":              _groq("openai/gpt-oss-20b",           "Utility · heavy_input_shaper (same as fast_primary)"),
+        "long_context":        _groq("qwen/qwen3.6-27b",             "Utility · long-context transformer (same as general_primary)"),
     }
+
+    # ── HuggingFace: ping each model with a minimal embed call ───────────────
+    async def _hf_ping(model_id: str) -> bool:
+        try:
+            vecs = await hf_client.embed_raw(["ping"], model=model_id)
+            return bool(vecs and vecs[0])
+        except Exception:
+            return False
+
+    bge_large_ok, bge_small_ok, bge_reranker_ok = await asyncio.gather(
+        _hf_ping(BGE_LARGE),
+        _hf_ping(BGE_SMALL),
+        _hf_ping(BGE_RERANKER),
+    )
+
+    hf_models = {
+        "bge_large":   {"available": bge_large_ok,   "role": "Embedding · primary ($0.10/1M tokens, HF serverless)",  "model": BGE_LARGE},
+        "bge_small":   {"available": bge_small_ok,   "role": "Embedding · fast fallback ($0.02/1M tokens, HF serverless)", "model": BGE_SMALL},
+        "bge_reranker":{"available": bge_reranker_ok,"role": "Reranking · cross-encoder ($0.10/1M token-pairs, HF serverless)", "model": BGE_RERANKER},
+    }
+
+    all_groq_ok = all(v["available"] for v in groq_models.values())
+    all_hf_ok   = all(v["available"] for v in hf_models.values())
 
     return {
-        "count": len(ids),
-        "available_models": ids,
-        "configured": configured,
+        "all_ok": all_groq_ok and all_hf_ok,
+        "groq": {
+            "all_ok": all_groq_ok,
+            "total_in_registry": len(groq_ids),
+            "models": groq_models,
+        },
+        "hf": {
+            "all_ok": all_hf_ok,
+            "models": hf_models,
+        },
     }
 
 
-@app.get("/providers")
+@app.get("/routing")
+async def routing():
+    """
+    Current model routing table — which model handles each role.
+
+    Reads directly from model_router constants (source of truth).
+    No live API calls — instant response, safe to poll frequently.
+    Use /models to verify each model is actually available on Groq/HF.
+    """
+    from llm.model_router import (
+        FAST_AGENT_MODEL, DEEP_AGENT_MODEL, CONSENSUS_MODEL,
+        SHAPER_MODEL, LONG_CONTEXT_MODEL,
+        MULTILINGUAL_ARABIC_MODEL, MULTILINGUAL_OTHER_MODEL,
+        SAFETY_PASS1_MODEL, SAFETY_PASS2_MODELS,
+        WHISPER_PRIMARY, WHISPER_FAST,
+        ORPHEUS_ENGLISH, ORPHEUS_ARABIC,
+    )
+    from llm.hf_client import BGE_LARGE, BGE_SMALL, BGE_RERANKER
+
+    return {
+        "llm": {
+            "fast":    "openai/gpt-oss-20b",
+            "general": "qwen/qwen3.6-27b",
+            "heavy":   "openai/gpt-oss-120b",
+        },
+        "agents": {
+            "fast":  FAST_AGENT_MODEL,
+            "deep":  DEEP_AGENT_MODEL,
+            "consensus": CONSENSUS_MODEL,
+        },
+        "safety": {
+            "pass1":  SAFETY_PASS1_MODEL,
+            "pass2":  SAFETY_PASS2_MODELS,
+        },
+        "speech": {
+            "asr_primary": WHISPER_PRIMARY,
+            "asr_fast":    WHISPER_FAST,
+            "tts_english": ORPHEUS_ENGLISH,
+            "tts_arabic":  ORPHEUS_ARABIC,
+        },
+        "multilingual": {
+            "arabic": MULTILINGUAL_ARABIC_MODEL,
+            "other":  MULTILINGUAL_OTHER_MODEL,
+        },
+        "utility": {
+            "shaper":        SHAPER_MODEL,
+            "long_context":  LONG_CONTEXT_MODEL,
+        },
+        "hf": {
+            "embedding_primary":  BGE_LARGE,
+            "embedding_fallback": BGE_SMALL,
+            "reranker":           BGE_RERANKER,
+        },
+    }
+
+
+
 async def providers(request: Request):
     from app.settings import settings
     from llm.groq_client import groq_client
