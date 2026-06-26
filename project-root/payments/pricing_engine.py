@@ -2,6 +2,8 @@ import logging
 
 import httpx
 
+from app.settings import settings
+
 logger = logging.getLogger(__name__)
 
 _NANO = 1_000_000_000        # 1 TON = 1_000_000_000 nanoTON
@@ -45,10 +47,16 @@ def ton_to_nano(ton: float) -> int:
 
 
 async def nano_to_usd(nano: int) -> float:
-    """Convert nanoTON to USD using live price."""
+    """Convert nanoTON to USD using live price and platform topup_rate.
+
+    Returns USD credits to add to user balance.
+    topup_rate < 1.0 activates platform margin at top-up time — the only
+    place margin is applied. All per-request deductions use raw cost only.
+    See economic.md §8 and app/settings.py (topup_rate).
+    """
     ton = nano_to_ton(nano)
     price = await get_ton_price_usd()
-    return ton * price
+    return ton * price * settings.topup_rate
 
 
 async def usd_to_nano(usd: float) -> int:
