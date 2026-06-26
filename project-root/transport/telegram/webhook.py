@@ -446,6 +446,9 @@ async def telegram_webhook(
                 from core.kernel.cost_model import (
                     actual_multilingual_cost,
                     actual_safety_cost,
+                    actual_asr_cost,
+                    actual_tts_cost,
+                    actual_compound_cost,
                 )
                 from payments.access_controller import AccessController
                 from payments.usage_meter import UsageEntry, UsageMeter
@@ -482,7 +485,50 @@ async def telegram_webhook(
 
                 # safety_agent and lc_transformer costs are already baked into
                 # result.usage.llm_cost_usd by _run_heavy(). No double-billing.
-                total_cost_usd = result.usage.llm_cost_usd + safety_cost + _ml_cost
+
+                # ── Speech billing (ASR + TTS) ─────────────────────────────
+                # audio_seconds → Whisper ($/hour), tts_characters → Orpheus ($/1M chars).
+                # These are NOT in llm_cost_usd — computed separately here.
+                # economic.md §1.4 / revenue-leak fix Jun 2026.
+                _asr_cost = actual_asr_cost(
+                    audio_seconds=result.audio_seconds,
+                ) if result.audio_seconds else 0.0
+                _tts_cost = actual_tts_cost(
+                    tts_characters=result.tts_characters,
+                    model=result.tts_model or "canopylabs/orpheus-v1-english",
+                ) if result.tts_characters else 0.0
+
+                # ── Compound model billing override ────────────────────────
+                # compound / compound-mini use passthrough pricing (Groq docs, Jun 2026).
+                # llm_cost_usd was computed with FAST-tier rates — subtract and replace
+                # with actual compound rates when resolved_model is a compound model.
+                # economic.md §1.3 / DEBT-A2 fix.
+                _compound_cost_delta = 0.0
+                _COMPOUND_MODELS = {"groq/compound-mini", "groq/compound"}
+                if result.resolved_model in _COMPOUND_MODELS:
+                    _compound_actual = actual_compound_cost(
+                        input_tokens=result.usage.input_tokens,
+                        output_tokens=result.usage.output_tokens,
+                        model=result.resolved_model,
+                    )
+                    # llm_cost_usd includes FAST-tier rates for these tokens — replace with compound rates
+                    from core.kernel.cost_model import MODEL_RATES
+                    from contracts.shared_types import Tier
+                    _fast_rates = MODEL_RATES[Tier.FAST]
+                    _fast_proxy = (
+                        result.usage.input_tokens * _fast_rates["input"]
+                        + result.usage.output_tokens * _fast_rates["output"]
+                    ) / 1_000_000
+                    _compound_cost_delta = _compound_actual - _fast_proxy
+
+                total_cost_usd = (
+                    result.usage.llm_cost_usd
+                    + safety_cost
+                    + _ml_cost
+                    + _asr_cost
+                    + _tts_cost
+                    + _compound_cost_delta
+                )
                 _total_cost_usd = total_cost_usd  # expose to outer scope for logging
 
                 ac = AccessController(supabase)
