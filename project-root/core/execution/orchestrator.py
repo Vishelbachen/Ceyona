@@ -153,6 +153,8 @@ class OrchestratorResult:
     tts_audio_bytes: bytes = b""
     audio_seconds: float = 0.0
     tts_characters: int = 0
+    tts_model: str = ""               # TTS model used: "canopylabs/orpheus-v1-english" | "canopylabs/orpheus-arabic-saudi"
+                                      # Required for billing: English=$22/1M chars, Arabic=$40/1M chars
     tool_calls: int = 0
     resolved_model: str = ""  # preferred_model resolved at routing time (models.md §25.3)
     safety_pass1_tokens: int = 0              # GateResult.tokens_used from check_pass1() — for actual_safety_cost()
