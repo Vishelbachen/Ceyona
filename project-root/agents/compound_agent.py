@@ -97,6 +97,7 @@ async def _run_compound(
         output_tokens=result.output_tokens,
         success=bool(result.text.strip()),
         tool_calls=0,  # compound no longer executes external tools
+        usage_breakdown=getattr(result, "usage_breakdown", []),
     )
 
 
