@@ -1,5 +1,5 @@
 # CEYONA — ECONOMIC MODEL
-Version: 5.6 — Billing Fixes + Threshold Calibration + Documentation Sync (Jun 26, 2026)
+Version: 5.7 — Full Documentation Sync (Jun 26, 2026)
 Status: Active Source of Truth
 Supersedes: economic.md (all previous versions)
 
@@ -120,6 +120,23 @@ groq/compound      → deep_agent.py  → pricing per built-in tool (see table b
 groq/compound-mini → fast_agent.py  → pricing TBD (not separately listed, Jun 2026)
                                        Compound-mini uses same built-in tool pricing when applicable.
 ```
+
+**⚠️ compound-mini pricing gap:**
+`groq/compound-mini` token pricing is not publicly listed by Groq (as of Jun 2026).
+In `cost_model.py`, compound-mini token calls are billed at `Tier.FAST` rates ($0.075/$0.30 per 1M)
+as the closest approximation. This may be over- or under-billing relative to actual Groq charges.
+
+```python
+# cost_model.py — placeholder, update when Groq publishes compound-mini rates
+_COMPOUND_RATES = {
+    "compound":      None,  # uses Tier.GENERAL rates as approximation
+    "compound-mini": None,  # uses Tier.FAST rates as approximation — TBD
+}
+```
+
+**Action required:** monitor Groq changelog for compound-mini pricing announcement.
+When rates are published: add `_COMPOUND_RATES` with exact values and update `actual_cost()`
+to use per-model rates for compound calls instead of tier approximation.
 
 **Groq Built-In Tools pricing (verified groq.com/pricing, Jun 22, 2026):**
 ```
@@ -300,21 +317,24 @@ Uses primary model rates (worst-case). Conservative by design — EPK must not u
 
 ```python
 def actual_cost(
-    input_tokens,
-    output_tokens,            # real token counts from Groq usage response
-    embedding_tokens,
-    rerank_tokens,
-    tier,
-    embedding_type="large",
+    input_tokens: int,
+    output_tokens: int,                    # real token counts from Groq usage response
+    embedding_tokens: int,
+    rerank_tokens: int,
+    tier: Tier,
+    embedding_type: str = "large",
+    # Safety Gate tokens — optional, default 0 (not all paths call Safety Gate)
+    safety_pass1_tokens: int = 0,          # llama-prompt-guard-2-22m input tokens
+    safety_pass2_tokens: int = 0,          # llama-prompt-guard-2-86m input tokens
+    safety_safeguard_tokens: int = 0,      # gpt-oss-safeguard-20b input tokens
+    safety_safeguard_output_tokens: int = 0,  # gpt-oss-safeguard-20b output tokens (added v5.6)
 ) -> float:
-    rates = MODEL_RATES[tier]
-    return (
-        input_tokens * rates["input"]
-        + output_tokens * rates["output"]
-        + embedding_tokens * EMBEDDING_RATES[embedding_type]
-        + rerank_tokens * RERANK_RATE
-    ) / 1_000_000
 ```
+
+Note: safety parameters exist in the function signature but Safety Gate billing is handled
+separately via `actual_safety_cost()` in the orchestrator and webhook — `actual_cost()` is
+called for LLM + retrieval cost only. The safety parameters are present for future unified
+billing path.
 
 Currently uses primary model rates per tier.
 When per-route billing is implemented (logging actual model name per request),
@@ -360,6 +380,20 @@ EPK does NOT select tier. Tier selection happens in decision_matrix.py, AFTER EP
 **Multi-intent requests (architecture.md §44.5):** EPK receives summed estimated_cost
 of all sub-intents. Atomicity: if sum exceeds threshold → DENY applies to entire request.
 Partial execution (some sub-intents ALLOW, others DENY) is forbidden.
+
+**⚠️ CRITICAL path overhead (lc_transformer):**
+EPK routes `complexity == CRITICAL` to `HEAVY_REQUIRED` based on estimated cost only.
+The long-context transformer (qwen3.6-27b, $0.60/$3.00 per 1M) is activated AFTER EPK,
+inside `_run_heavy()`, when `input_tokens > 32 000`. Its cost is NOT included in the EPK
+estimate — it is charged on top of the HEAVY tier cost.
+
+For a CRITICAL request with 40K input tokens, lc_transformer adds up to:
+`(40000 × 0.60 + 800 × 3.00) / 1M ≈ $0.026` on top of the HEAVY execution cost.
+
+This means EPK may allow a request whose total real cost exceeds the user balance.
+The gap is bounded by lc_transformer cost only (bounded by input size).
+No fix planned — lc_transformer cannot run before EPK (circular dependency).
+Mitigation: ensure free trial balance ($0.10) comfortably covers worst-case overhead.
 
 **What these thresholds mean in practice (at GENERAL primary rates: $0.60/$3.00 per 1M):**
 - 500 input + 600 estimated output at GENERAL = (500×0.60 + 600×3.00)/1M = $0.0021 → ALLOW
@@ -418,28 +452,77 @@ Any change to thresholds: update policy_registry.py only.
 
 ## 7. USAGE METER — MANDATORY FIELDS
 
-Every request MUST record:
+Every request MUST record. Full schema of `UsageEntry` in `payments/usage_meter.py`:
 
 ```python
 usage = {
-    # LLM tokens (Groq)
+    # ── Core LLM tokens (Groq) ──────────────────────────────────────────────
     "input_tokens":      int,    # from Groq response.usage.prompt_tokens
     "output_tokens":     int,    # from Groq response.usage.completion_tokens
     "tier":              str,    # Tier.FAST / GENERAL / HEAVY
+    "model":             str,    # agent model (final executing model from coordination.model)
+    "resolved_model":    str,    # preferred_model from model_router (models.md §25.3)
+                                 # empty string on DEGRADED_MODE (no routing, always gpt-oss-20b)
 
-    # Retrieval (HuggingFace — separate cost stream)
+    # ── Retrieval (HuggingFace — separate cost stream) ───────────────────────
     "embedding_tokens":  int,    # tokens sent to HF embedding API
     "embedding_type":    str,    # "large" or "small"
     "rerank_tokens":     int,    # token-pairs sent to HF reranker
 
-    # Speech — Groq (if applicable)
-    "audio_seconds":     float,  # for ASR billing (whisper)
-    "tts_characters":    int,    # for TTS billing (orpheus)
+    # ── Cost fields ──────────────────────────────────────────────────────────
+    "raw_cost_usd":      float,  # total_cost_usd from webhook (LLM + safety + multilingual)
+                                 # does NOT include 30% margin
+    "billed_cost_usd":  float,   # raw_cost_usd × 1.3 — what platform records as revenue
 
-    # Tool calls — Groq Compound (if applicable)
-    "tool_calls":        int,    # compound web_search calls
+    # ── Speech — Groq (if applicable, default 0) ─────────────────────────────
+    "audio_seconds":     float,  # for ASR billing (whisper), default 0.0
+    "tts_characters":    int,    # for TTS billing (orpheus), default 0
+
+    # ── Tool calls — Groq Compound (if applicable, default 0) ────────────────
+    "tool_calls":        int,    # compound web_search calls, $5.00/1000
+
+    # ── Safety Gate tokens (Groq, default 0 per field) ───────────────────────
+    # Populated by update_handler.py AFTER gate completes; always 0 at orchestrator return.
+    # Billed via actual_safety_cost() in webhook.py — included in raw_cost_usd.
+    "safety_pass1_tokens":             int,   # llama-prompt-guard-2-22m input tokens
+    "safety_pass2_tokens":             int,   # llama-prompt-guard-2-86m input tokens
+    "safety_safeguard_tokens":         int,   # gpt-oss-safeguard-20b input tokens ($0.075/1M)
+    "safety_safeguard_output_tokens":  int,   # gpt-oss-safeguard-20b output tokens ($0.30/1M)
+    "safety_agent_input_tokens":       int,   # safety_agent LLM judge input tokens ($0.075/1M)
+    "safety_agent_output_tokens":      int,   # safety_agent LLM judge output tokens ($0.30/1M)
+
+    # ── Multilingual preprocessor (Groq, default 0) ──────────────────────────
+    # On ALLOW/DEGRADED: billed via actual_multilingual_cost() in webhook.py.
+    # On HEAVY: already included in result.usage.cost_usd by _run_heavy().
+    # webhook.py guards against double-billing (skips if epk_decision == HEAVY_REQUIRED).
+    "multilingual_input_tokens":   int,   # allam-2-7b or qwen3.6-27b input tokens
+    "multilingual_output_tokens":  int,   # allam-2-7b or qwen3.6-27b output tokens
+    "multilingual_model":          str,   # "allam-2-7b" | "qwen/qwen3.6-27b" | "passthrough"
+
+    # ── Long-context transformer (Groq, default 0) ───────────────────────────
+    # qwen3.6-27b, GENERAL tier rates ($0.60/$3.00 per 1M).
+    # Billed inside _run_heavy() — included in result.usage.cost_usd.
+    "lc_transformer_input_tokens":   int,  # qwen3.6-27b input tokens
+    "lc_transformer_output_tokens":  int,  # qwen3.6-27b output tokens
+
+    # ── Metadata ─────────────────────────────────────────────────────────────
+    "intent":  str,   # classified intent value (for analytics)
+    "lang":    str,   # request language code, default "en"
 }
 ```
+
+**`result.usage.cost_usd` semantics (IMPORTANT):**
+This field is NOT the total request cost. It represents LLM execution cost only:
+- On ALLOW/DEGRADED paths: `cost_usd` = LLM tokens + embedding + rerank (no safety, no multilingual)
+- On HEAVY path: `cost_usd` = LLM tokens + embedding + rerank + lc_transformer + shaper + safety_agent
+
+Safety Gate cost and multilingual cost on ALLOW/DEGRADED are added in `webhook.py`:
+```python
+total_cost_usd = result.usage.cost_usd + safety_cost + _ml_cost
+```
+`total_cost_usd` is what gets deducted from the user balance and recorded as `raw_cost_usd`.
+`result.usage.cost_usd` alone is semantically incomplete — always use `raw_cost_usd` from
+`UsageEntry` for analytics, never `result.usage.cost_usd` directly.
 
 Without complete usage_meter data the system cannot bill correctly.
 Missing fields = unbillable request = revenue leak.
@@ -453,21 +536,55 @@ from Groq costs for accurate split billing and quota management.
 
 ```python
 MARGIN = 1.3   # 30% markup over raw LLM cost
-
-def user_charge(actual_cost_usd: float) -> float:
-    return actual_cost_usd * MARGIN
 ```
 
 Margin rationale: covers HuggingFace embedding costs (estimated), operational overhead,
 and provides sustainable revenue. 30% is conservative — revisit when usage data available.
 
-TON billing:
+**Actual billing flow (webhook.py):**
+
 ```python
-# access_controller.py
-credits_usd = actual_cost * MARGIN
-# deduct credits_usd from user_balance_usd
-# log to Supabase usage_log table
+# 1. Compute total raw cost from all components
+total_cost_usd = result.usage.cost_usd + safety_cost + _ml_cost
+
+# 2. Deduct RAW cost from user balance
+await ac.deduct(user_id, total_cost_usd)
+
+# 3. Apply margin for analytics/revenue record
+billed = meter.compute_billed(total_cost_usd)   # total_cost_usd × 1.3
+
+# 4. Record both raw and billed to Supabase
+await meter.record(UsageEntry(
+    raw_cost_usd=total_cost_usd,
+    billed_cost_usd=billed,
+    ...
+))
 ```
+
+⚠️ **KNOWN DISCREPANCY — requires resolution:**
+Currently `ac.deduct()` receives `total_cost_usd` (raw), NOT `billed` (raw × 1.3).
+This means the 30% margin is **not** deducted from the user balance — it is only recorded
+as an analytics field (`billed_cost_usd`) for revenue tracking.
+
+**Consequence:** if a user tops up exactly $1.00 and makes requests totalling $1.00 raw cost,
+their balance reaches $0.00, but the platform has generated only $0.00 margin from those
+requests (not $0.30). Platform revenue comes from the spread between TON top-up conversion
+rate and raw LLM cost — NOT from the 30% field on the balance deduction.
+
+**Resolution required:** one of two approaches must be chosen:
+
+- **Option A (recommended):** deduct `billed` from balance, not raw.
+  User pays 30% markup on balance. Revenue = billed − raw = 30% of LLM cost.
+  Fix: `await ac.deduct(user_id, meter.compute_billed(total_cost_usd))`
+
+- **Option B:** keep deducting raw, remove margin from deduct flow entirely.
+  Margin is captured via TON → USD conversion rate at top-up time.
+  `billed_cost_usd` becomes a pure analytics field (what platform "would charge").
+  Requires: update §8 to remove `MARGIN` from deduction formula, document
+  that revenue model is conversion-rate-based, not per-request markup.
+
+**Current status:** Option A has NOT been implemented. `ac.deduct(user_id, total_cost_usd)`
+passes raw cost. Until resolved, `billed_cost_usd` in Supabase is an analytics estimate only.
 
 ---
 
@@ -509,12 +626,22 @@ When balance reaches $0.00 → EPK returns DENY → user sees balance_exhausted 
 11. [Compound tool calls]       → bill: tool_calls count [Groq]
 12. [Speech if is_voice_input]  → bill: audio_seconds / tts_characters [Groq]
 13. usage_meter records all fields
-14. actual_cost() computed
-15. user_charge = actual_cost * MARGIN
-16. access_controller.deduct(user_id, user_charge)
-17. usage_log written to Supabase
+14. total_cost_usd = result.usage.cost_usd + safety_cost + _ml_cost  (webhook.py)
+15. ac.deduct(user_id, total_cost_usd)   ← raw cost deducted from balance  ⚠️ see §8
+16. billed_cost_usd = total_cost_usd × 1.3
+17. usage_log written to Supabase (raw_cost_usd + billed_cost_usd)
 18. response delivered
 ```
+
+**OrchestratorResult safety fields lifecycle:**
+`OrchestratorResult.safety_pass1_tokens`, `.safety_pass2_tokens`, `.safety_safeguard_tokens`,
+`.safety_safeguard_output_tokens` are **always 0 at orchestrator return** on ALLOW/DEGRADED paths.
+They are populated by `update_handler.py` via `dataclasses.replace()` AFTER the gate completes,
+before the result reaches `webhook.py`. Do not read these fields inside the orchestrator — they
+will be 0. Only `webhook.py` and `usage_meter.py` see the final populated values.
+
+`safety_agent_input_tokens` / `safety_agent_output_tokens` are the exception: these are set
+by the orchestrator itself (filled from `CoordinationResult`) and are correct at orchestrator return.
 
 ---
 
@@ -562,9 +689,10 @@ This document is synchronized with:
 - [x] **Vision billing fix (Jun 2026):** _VISION_RATES обновлены с llama-4-scout ($0.11/$0.34) на qwen3.6-27b ($0.60/$3.00). ✅ CLOSED
 - [x] **DENY billing fix (Jun 2026):** Safety Gate tokens биллятся на DENY путях (voice pass1 block). webhook.py guard обновлён. ✅ CLOSED
 - [x] **actual_cost() safeguard output (Jun 2026):** добавлен параметр safety_safeguard_output_tokens. ✅ CLOSED
+- [ ] **MISMATCH-A4 (CRITICAL):** `ac.deduct()` снимает raw cost, не billed. Маржа 30% не удерживается с баланса пользователя. Требует бизнес-решения: Option A (deduct billed) или Option B (revenue через конвертацию TON→USD). См. §8.
 - [ ] Per-route billing: preferred_model now logged per-request (models.md §25.3) → update actual_cost() to use per-model rates when ready
 - [x] **Multilingual billing на ALLOW/DEGRADED путях (Jun 2026):** webhook.py вычисляет `_ml_cost` на ALLOW/DEGRADED; на HEAVY пропускается (cost_usd уже включает). ✅ CLOSED
-- [ ] Compound/compound-mini token pricing not publicly listed — monitor Groq changelog
+- [ ] Compound/compound-mini token pricing not publicly listed — monitor Groq changelog; update _COMPOUND_RATES in cost_model.py when published (placeholder added §1.3)
 - [x] **allam-2-7b pricing (Jun 2026):** нет публичного листинга — зафиксировано как FAST equivalent $0.075/$0.30 per 1M. §1.6 обновлён. ✅ CLOSED
 - [ ] HF Inference Endpoints pricing if serverless quota exceeded
 - [ ] Batch API discount (50%) — applicable when usage grows, not yet implemented
