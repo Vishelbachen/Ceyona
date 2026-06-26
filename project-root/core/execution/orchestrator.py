@@ -479,6 +479,20 @@ async def _run_allow(
         embedding_type=request.embedding_type,
     )
 
+    # BUG-O1 fix: safety_agent runs on consensus paths (CREATIVE, CODE, MATH, ANALYSIS,
+    # SEARCH/RECOMMENDATION — all have use_consensus=True in plan_agents()).
+    # Tokens arrive in CoordinationResult but were never billed or propagated.
+    # economic.md §2: every model call MUST be billed.
+    # Model: gpt-oss-safeguard-20b ($0.075 input / $0.30 output per 1M).
+    from core.kernel.cost_model import actual_safety_cost as _actual_safety_cost
+    _sa_cost = _actual_safety_cost(
+        pass1_tokens=0,
+        pass2_tokens=0,
+        safeguard_tokens=coordination.safety_agent_input_tokens,
+        safeguard_output_tokens=coordination.safety_agent_output_tokens,
+    )
+    cost += _sa_cost
+
     synthesis = synthesize(SynthesisInput(
         raw_text=coordination.text,
         intent=intent_result.intent,
@@ -507,6 +521,8 @@ async def _run_allow(
         tool_used=bool(intent_result.tool_name),
         tool_calls=coordination.tool_calls,
         resolved_model=intent_result.routing.preferred_model or "",
+        safety_agent_input_tokens=coordination.safety_agent_input_tokens,
+        safety_agent_output_tokens=coordination.safety_agent_output_tokens,
     )
 
 
@@ -741,8 +757,9 @@ async def _run_heavy(
 
     # long_context_transformer billing — uses qwen3.6-27b ($0.60/$3.00 per 1M).
     # economic.md §2: every model call MUST be billed. Tokens from LongContextResult.
-    _lc_in_tok  = lc_result.input_tokens  if "lc_result" in dir() and lc_result.success else 0
-    _lc_out_tok = lc_result.output_tokens if "lc_result" in dir() and lc_result.success else 0
+    # BUG-O4 fix: dir() does not reliably check local variables — use locals() instead.
+    _lc_in_tok  = lc_result.input_tokens  if "lc_result" in locals() and lc_result.success else 0
+    _lc_out_tok = lc_result.output_tokens if "lc_result" in locals() and lc_result.success else 0
     _lc_cost = actual_cost(
         input_tokens=_lc_in_tok,
         output_tokens=_lc_out_tok,
@@ -752,14 +769,16 @@ async def _run_heavy(
         embedding_type=request.embedding_type,
     ) if _lc_in_tok else 0.0
 
-    # heavy_input_shaper billing — uses GENERAL model (qwen3.6-27b, $0.60/$3.00 per 1M).
+    # heavy_input_shaper billing — uses gpt-oss-20b (FAST tier, $0.075/$0.30 per 1M).
+    # models.md §5: SHAPER_MODEL = openai/gpt-oss-20b — NOT qwen3.6-27b.
     # economic.md §2: every model call MUST be billed. Tokens from ShaperResult.
+    # BUG-O2 fix: was Tier.GENERAL ($0.60/$3.00) — wrong model, ~8x output overcharge.
     _shaper_cost = actual_cost(
         input_tokens=shaper_result.shaper_input_tokens,
         output_tokens=shaper_result.shaper_output_tokens,
         embedding_tokens=0,
         rerank_tokens=0,
-        tier=Tier.GENERAL,
+        tier=Tier.FAST,  # gpt-oss-20b = FAST tier
         embedding_type=request.embedding_type,
     ) if shaper_result.was_shaped else 0.0
 
