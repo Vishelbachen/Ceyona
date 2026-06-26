@@ -193,6 +193,83 @@ def actual_cost(
     )
 
 
+# ─── SPEECH LAYER RATES ──────────────────────────────────────────────────────
+# Groq-hosted, verified groq.com/pricing Jun 2026. economic.md §1.4
+# ASR: billed per audio hour transcribed. Audio billed at 10s minimum per request.
+# TTS: billed per 1M characters.
+_WHISPER_RATES: dict[str, float] = {
+    "whisper-large-v3":       0.111,  # $ per hour transcribed
+    "whisper-large-v3-turbo": 0.040,  # $ per hour transcribed (default)
+}
+_DEFAULT_WHISPER_MODEL = "whisper-large-v3-turbo"
+
+_TTS_RATES: dict[str, float] = {
+    "canopylabs/orpheus-v1-english":   22.00,  # $ per 1M characters
+    "canopylabs/orpheus-arabic-saudi": 40.00,  # $ per 1M characters
+}
+
+# Minimum billing: 10 seconds per ASR request (Groq policy)
+_ASR_MIN_SECONDS: float = 10.0
+
+
+def actual_asr_cost(audio_seconds: float, model: str = _DEFAULT_WHISPER_MODEL) -> float:
+    """
+    Compute ASR (Whisper) cost from recorded audio_seconds.
+    Groq bills at 10s minimum per request — apply floor before computing.
+    Rate in $/hour → convert seconds to hours.
+    economic.md §1.4
+    """
+    if audio_seconds <= 0:
+        return 0.0
+    billed_seconds = max(audio_seconds, _ASR_MIN_SECONDS)
+    rate = _WHISPER_RATES.get(model, _WHISPER_RATES[_DEFAULT_WHISPER_MODEL])
+    return (billed_seconds / 3600.0) * rate
+
+
+def actual_tts_cost(tts_characters: int, model: str = "canopylabs/orpheus-v1-english") -> float:
+    """
+    Compute TTS (Orpheus) cost from recorded tts_characters.
+    Rate in $/1M characters. economic.md §1.4
+    """
+    if tts_characters <= 0:
+        return 0.0
+    rate = _TTS_RATES.get(model, _TTS_RATES["canopylabs/orpheus-v1-english"])
+    return tts_characters * rate / 1_000_000
+
+
+# ─── COMPOUND MODEL RATES ─────────────────────────────────────────────────────
+# Groq compound systems use passthrough pricing: tokens are billed at the rates
+# of the underlying models (groq.com/pricing, verified Jun 2026).
+# compound-mini internals: Llama 3.3 70B + GPT-OSS 120B (Groq docs, compound-mini page)
+# compound internals:      GPT-OSS 120B (primary reasoning model)
+#
+# Since Groq does NOT expose per-model token splits for compound responses,
+# we bill compound tokens at the DOMINANT model rate:
+#   compound-mini → Llama 3.3 70B rates ($0.59/$0.79 per 1M) — higher output, conservative
+#   compound      → GPT-OSS 120B rates  ($0.15/$0.60 per 1M) — primary reasoning model
+#
+# This replaces the previous FAST-tier proxy ($0.075/$0.30) which underestimated
+# compound-mini output by ~2.6x ($0.30 vs $0.79 per 1M output tokens).
+#
+# NOTE: When Groq publishes explicit compound pricing, update these rates.
+_COMPOUND_RATES: dict[str, dict[str, float]] = {
+    "groq/compound-mini": {"input": 0.59, "output": 0.79},   # Llama 3.3 70B dominant
+    "groq/compound":      {"input": 0.15, "output": 0.60},   # GPT-OSS 120B dominant
+}
+
+
+def actual_compound_cost(input_tokens: int, output_tokens: int, model: str) -> float:
+    """
+    Compute compound model cost using passthrough-equivalent rates.
+    Called from webhook.py when resolved_model is groq/compound or groq/compound-mini.
+    economic.md §1.3 / DEBT-A2 fix.
+    """
+    if not input_tokens and not output_tokens:
+        return 0.0
+    rates = _COMPOUND_RATES.get(model, _COMPOUND_RATES["groq/compound-mini"])
+    return (input_tokens * rates["input"] + output_tokens * rates["output"]) / 1_000_000
+
+
 # Multilingual model rates — economic.md §1.6
 # allam-2-7b: no public pricing → treated as FAST equivalent ($0.075/$0.30 per 1M)
 # qwen/qwen3.6-27b: GENERAL tier rates ($0.60/$3.00 per 1M)
