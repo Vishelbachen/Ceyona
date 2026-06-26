@@ -19,6 +19,14 @@ class AgentResult:
     error: str = ""
     actual_tier: str = ""  # tier that actually executed (may differ from requested on cascade)
     tool_calls: int = 0   # compound tool calls executed (web_search, get_weather, geocode)
+    # Per-model token breakdown for compound AI systems. Populated from
+    # LLMResponse.usage_breakdown. Empty for non-compound agents (fast, general, heavy).
+    # Flows: compound_agent → AgentResult → CoordinationResult → OrchestratorResult → webhook.
+    usage_breakdown: list = None  # list[dict]
+
+    def __post_init__(self):
+        if self.usage_breakdown is None:
+            object.__setattr__(self, "usage_breakdown", [])
 
 
 async def run(messages: list[dict], temperature: float = 0.7) -> AgentResult:
