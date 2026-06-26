@@ -116,27 +116,63 @@ Enables estimate vs actual drift tracking per request.
 ### 1.3 Agent Layer (Compound — Groq-hosted)
 
 ```
-groq/compound      → deep_agent.py  → pricing per built-in tool (see table below)
-groq/compound-mini → fast_agent.py  → pricing TBD (not separately listed, Jun 2026)
-                                       Compound-mini uses same built-in tool pricing when applicable.
+groq/compound      → deep_agent.py  → passthrough pricing via underlying models
+groq/compound-mini → fast_agent.py  → passthrough pricing via underlying models
 ```
 
-**⚠️ compound-mini pricing gap:**
-`groq/compound-mini` token pricing is not publicly listed by Groq (as of Jun 2026).
-In `cost_model.py`, compound-mini token calls are billed at `Tier.FAST` rates ($0.075/$0.30 per 1M)
-as the closest approximation. This may be over- or under-billing relative to actual Groq charges.
+**Compound passthrough pricing (verified Groq docs, Jun 2026):**
+Groq compound systems use passthrough pricing — tokens are billed at the rates of the
+underlying models that actually executed, not at a single compound-level rate.
+
+```
+compound-mini internals: Llama 3.3 70B + GPT-OSS 120B
+  llama-3.3-70b-versatile          → input: $0.59  output: $0.79  per 1M
+  openai/gpt-oss-120b              → input: $0.15  output: $0.60  per 1M
+
+compound internals: Llama 4 Scout + GPT-OSS 120B
+  meta-llama/llama-4-scout-17b-16e-instruct → input: $0.11  output: $0.34  per 1M
+  openai/gpt-oss-120b              → input: $0.15  output: $0.60  per 1M
+```
+
+⚠️ Llama 4 Scout deprecated Jul 17, 2026 — Groq may update compound internals. Monitor compound docs.
+
+**Billing implementation in cost_model.py:**
 
 ```python
-# cost_model.py — placeholder, update when Groq publishes compound-mini rates
+# Per-model rates for exact passthrough billing via usage_breakdown
+_COMPOUND_UNDERLYING_RATES = {
+    "llama-3.3-70b-versatile":                    {"input": 0.59, "output": 0.79},
+    "meta-llama/llama-4-scout-17b-16e-instruct":  {"input": 0.11, "output": 0.34},
+    "openai/gpt-oss-120b":                        {"input": 0.15, "output": 0.60},
+}
+
+# Dominant-model fallback rates (used when usage_breakdown is absent)
 _COMPOUND_RATES = {
-    "compound":      None,  # uses Tier.GENERAL rates as approximation
-    "compound-mini": None,  # uses Tier.FAST rates as approximation — TBD
+    "groq/compound-mini": {"input": 0.59, "output": 0.79},  # Llama 3.3 70B dominant
+    "groq/compound":      {"input": 0.15, "output": 0.60},  # GPT-OSS 120B dominant
 }
 ```
 
-**Action required:** monitor Groq changelog for compound-mini pricing announcement.
-When rates are published: add `_COMPOUND_RATES` with exact values and update `actual_cost()`
-to use per-model rates for compound calls instead of tier approximation.
+**Billing flow (webhook.py):**
+Groq API returns `usage.usage_breakdown` — a list of `{model, input_tokens, output_tokens}` per
+underlying model. This enables exact per-model billing via `actual_compound_cost_from_breakdown()`.
+
+```python
+# Preferred path: exact billing from Groq API breakdown
+if compound_breakdown:
+    _compound_actual = actual_compound_cost_from_breakdown(compound_breakdown)
+else:
+    # Fallback: dominant-model approximation
+    _compound_actual = actual_compound_cost(input_tokens, output_tokens, model)
+
+# Delta vs FAST-tier proxy already baked into llm_cost_usd
+_compound_cost_delta = _compound_actual - _fast_proxy
+total_cost_usd += _compound_cost_delta
+```
+
+`groq_client.py` parses `usage.usage_breakdown` in both `complete()` and `complete_with_tools()`.
+`LLMResponse.usage_breakdown` and `ToolCallResponse.usage_breakdown` carry the breakdown through
+`AgentResult → CoordinationResult.usage_breakdown → OrchestratorResult.compound_breakdown → webhook.py`.
 
 **Groq Built-In Tools pricing (verified groq.com/pricing, Jun 22, 2026):**
 ```
@@ -702,7 +738,7 @@ This document is synchronized with:
 - [ ] **TOPUP_RATE (ACTION REQUIRED before production scale):** `pricing_engine.nano_to_usd()` uses live market rate with no markup. Apply `TOPUP_RATE = 1.0 / 1.3` to activate 30% margin. See §8.
 - [ ] Per-route billing: preferred_model now logged per-request (models.md §25.3) → update actual_cost() to use per-model rates when ready
 - [x] **Multilingual billing на ALLOW/DEGRADED путях (Jun 2026):** webhook.py вычисляет `_ml_cost` на ALLOW/DEGRADED; на HEAVY пропускается (cost_usd уже включает). ✅ CLOSED
-- [ ] Compound/compound-mini token pricing not publicly listed — monitor Groq changelog; update _COMPOUND_RATES in cost_model.py when published (placeholder added §1.3)
+- [x] **Compound/compound-mini billing (CLOSED Jun 2026):** Groq confirmed passthrough pricing. `_COMPOUND_RATES`, `_COMPOUND_UNDERLYING_RATES`, and `actual_compound_cost_from_breakdown()` implemented in `cost_model.py`. `groq_client.py` parses `usage.usage_breakdown`. Exact per-model billing active in `webhook.py`. `§1.3` updated. ✅
 - [x] **allam-2-7b pricing (Jun 2026):** нет публичного листинга — зафиксировано как FAST equivalent $0.075/$0.30 per 1M. §1.6 обновлён. ✅ CLOSED
 - [ ] HF Inference Endpoints pricing if serverless quota exceeded
 - [ ] Batch API discount (50%) — applicable when usage grows, not yet implemented
