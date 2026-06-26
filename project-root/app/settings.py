@@ -39,6 +39,13 @@ class Settings(BaseSettings):
     # ─── ECONOMY / TON ──────────────────────────────────
     ton_wallet: str = Field("", description="TON wallet address")
 
+    # Platform margin applied at top-up time.
+    # User receives (ton_amount × market_price × topup_rate) USD credits.
+    # topup_rate = 1.0 / target_markup, e.g. 1.0/1.3 ≈ 0.769 for 30% gross margin.
+    # Set to 1.0 to disable margin (testing / free period).
+    # Change here only — no other billing code needs to be touched.
+    topup_rate: float = Field(1.0, description="TON→USD conversion rate multiplier (< 1.0 activates platform margin)")
+
     # ─── CLOUDFLARE WORKER PROXY ────────────────────────
     # Set to your worker URL, e.g. https://ceyona-worker.your-subdomain.workers.dev
     # When set, all Telegram API calls (getFile, file downloads) go through
