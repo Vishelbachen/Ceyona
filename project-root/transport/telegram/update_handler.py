@@ -728,6 +728,7 @@ async def handle_message(
 
     # ── TTS (voice response when input was voice) ─────────────────────────────
     _tts_characters = 0
+    _tts_model = ""
     if _is_voice_input and result.text and not result.denied:
         try:
             from external.text_to_speech import synthesize as tts_synthesize
@@ -736,6 +737,7 @@ async def handle_message(
                 from dataclasses import replace
                 result = replace(result, tts_audio_bytes=tts_result.audio_bytes)
                 _tts_characters = tts_result.char_count
+                _tts_model = tts_result.model_used
                 logger.info(
                     "TTS synthesis complete",
                     extra={"chars": tts_result.char_count, "model": tts_result.model_used},
@@ -755,6 +757,7 @@ async def handle_message(
         result = _replace(result,
             audio_seconds=_asr_audio_seconds,
             tts_characters=_tts_characters,
+            tts_model=_tts_model,
             safety_pass1_tokens=_safety_pass1_tokens,
             safety_pass2_tokens=_safety_pass2_tokens,
             safety_safeguard_tokens=_safety_safeguard_tokens,
