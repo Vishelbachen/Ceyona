@@ -287,7 +287,7 @@ def _make_usage():
     return UsageRecord(
         input_tokens=10, output_tokens=20,
         embedding_tokens=0, rerank_tokens=0,
-        tier=Tier.FAST, embedding_type="large", cost_usd=0.0001,
+        tier=Tier.FAST, embedding_type="large", llm_cost_usd=0.0001,
     )
 
 
