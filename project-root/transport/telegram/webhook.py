@@ -446,6 +446,7 @@ async def telegram_webhook(
                 from core.kernel.cost_model import (
                     actual_asr_cost,
                     actual_compound_cost,
+                    actual_compound_cost_from_breakdown,
                     actual_multilingual_cost,
                     actual_safety_cost,
                     actual_tts_cost,
@@ -498,27 +499,37 @@ async def telegram_webhook(
                     model=result.tts_model or "canopylabs/orpheus-v1-english",
                 ) if result.tts_characters else 0.0
 
-                # ── Compound model billing override ────────────────────────
+                # ── Compound model billing ─────────────────────────────────
                 # compound / compound-mini use passthrough pricing (Groq docs, Jun 2026).
-                # llm_cost_usd was computed with FAST-tier rates — subtract and replace
-                # with actual compound rates when resolved_model is a compound model.
-                # economic.md §1.3 / DEBT-A2 fix.
+                # Preferred path: use usage_breakdown from Groq API for exact per-model billing.
+                # Fallback: dominant-model rate approximation when breakdown is absent.
+                # In both cases, subtract the FAST-tier proxy already baked into llm_cost_usd
+                # and add the correct compound cost. economic.md §1.3 / BUG-01+BUG-02 fix.
                 _compound_cost_delta = 0.0
                 _COMPOUND_MODELS = {"groq/compound-mini", "groq/compound"}
                 if result.resolved_model in _COMPOUND_MODELS:
-                    _compound_actual = actual_compound_cost(
-                        input_tokens=result.usage.input_tokens,
-                        output_tokens=result.usage.output_tokens,
-                        model=result.resolved_model,
-                    )
-                    # llm_cost_usd includes FAST-tier rates for these tokens — replace with compound rates
                     from contracts.shared_types import Tier
-                    from core.kernel.cost_model import MODEL_RATES
+                    from core.kernel.cost_model import (
+                        MODEL_RATES,
+                        actual_compound_cost_from_breakdown,
+                    )
                     _fast_rates = MODEL_RATES[Tier.FAST]
                     _fast_proxy = (
                         result.usage.input_tokens * _fast_rates["input"]
                         + result.usage.output_tokens * _fast_rates["output"]
                     ) / 1_000_000
+
+                    _breakdown = getattr(result, "compound_breakdown", [])
+                    if _breakdown:
+                        # Exact billing: per-model rates from Groq usage_breakdown
+                        _compound_actual = actual_compound_cost_from_breakdown(_breakdown)
+                    else:
+                        # Fallback: dominant-model approximation
+                        _compound_actual = actual_compound_cost(
+                            input_tokens=result.usage.input_tokens,
+                            output_tokens=result.usage.output_tokens,
+                            model=result.resolved_model,
+                        )
                     _compound_cost_delta = _compound_actual - _fast_proxy
 
                 total_cost_usd = (
