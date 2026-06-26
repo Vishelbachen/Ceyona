@@ -151,7 +151,7 @@ async def handle_message(
                 usage=UsageRecord(
                     input_tokens=0, output_tokens=0,
                     embedding_tokens=0, rerank_tokens=0,
-                    tier=Tier.FAST, embedding_type="large", cost_usd=0.0,
+                    tier=Tier.FAST, embedding_type="large", llm_cost_usd=0.0,
                 ),
                 denied=False,
                 deny_reason="",
@@ -189,7 +189,7 @@ async def handle_message(
                 usage=UsageRecord(
                     input_tokens=0, output_tokens=0,
                     embedding_tokens=0, rerank_tokens=0,
-                    tier=Tier.FAST, embedding_type="large", cost_usd=0.0,
+                    tier=Tier.FAST, embedding_type="large", llm_cost_usd=0.0,
                 ),
                 denied=True,
                 deny_reason="vision_error",
@@ -226,7 +226,7 @@ async def handle_message(
                     usage=UsageRecord(
                         input_tokens=0, output_tokens=0,
                         embedding_tokens=0, rerank_tokens=0,
-                        tier=Tier.FAST, embedding_type="large", cost_usd=0.0,
+                        tier=Tier.FAST, embedding_type="large", llm_cost_usd=0.0,
                     ),
                     denied=True,
                     deny_reason="insufficient_balance",
@@ -243,7 +243,7 @@ async def handle_message(
                     input_tokens=vision_result.vision_input_tokens,
                     output_tokens=vision_result.vision_output_tokens,
                     embedding_tokens=0, rerank_tokens=0,
-                    tier=Tier.GENERAL, embedding_type="large", cost_usd=_vision_cost_usd,
+                    tier=Tier.GENERAL, embedding_type="large", llm_cost_usd=_vision_cost_usd,
                 ),
                 denied=False,
                 deny_reason="",
@@ -299,7 +299,7 @@ async def handle_message(
                         usage=UsageRecord(
                             input_tokens=0, output_tokens=0,
                             embedding_tokens=0, rerank_tokens=0,
-                            tier=Tier.FAST, embedding_type="large", cost_usd=0.0,
+                            tier=Tier.FAST, embedding_type="large", llm_cost_usd=0.0,
                         ),
                         denied=True, deny_reason="vad_silence", lang=lang,
                     )
@@ -320,7 +320,7 @@ async def handle_message(
                         usage=UsageRecord(
                             input_tokens=0, output_tokens=0,
                             embedding_tokens=0, rerank_tokens=0,
-                            tier=Tier.FAST, embedding_type="large", cost_usd=0.0,
+                            tier=Tier.FAST, embedding_type="large", llm_cost_usd=0.0,
                         ),
                         denied=True, deny_reason="asr_failed", lang=lang,
                     )
@@ -340,7 +340,7 @@ async def handle_message(
                             usage=UsageRecord(
                                 input_tokens=0, output_tokens=0,
                                 embedding_tokens=0, rerank_tokens=0,
-                                tier=Tier.FAST, embedding_type="large", cost_usd=0.0,
+                                tier=Tier.FAST, embedding_type="large", llm_cost_usd=0.0,
                             ),
                             denied=True, deny_reason="safety_gate_pass1", lang=lang,
                             safety_pass1_tokens=gate1.tokens_used,
@@ -389,7 +389,7 @@ async def handle_message(
             usage=UsageRecord(
                 input_tokens=0, output_tokens=0,
                 embedding_tokens=0, rerank_tokens=0,
-                tier=Tier.FAST, embedding_type="large", cost_usd=0.0,
+                tier=Tier.FAST, embedding_type="large", llm_cost_usd=0.0,
             ),
             denied=True,
             deny_reason="empty_message",
@@ -706,7 +706,7 @@ async def handle_message(
             model=result.model or "",
             response_text=result.text or "",
             response_truncated=len(result.text or "") >= 4096,
-            cost_usd=result.usage.cost_usd,
+            cost_usd=result.usage.llm_cost_usd,
             was_degraded_mode=str(result.epk_decision) == "DEGRADED_MODE",
             safety_blocked=result.deny_reason == "safety_block",
             user_id=user_id,
