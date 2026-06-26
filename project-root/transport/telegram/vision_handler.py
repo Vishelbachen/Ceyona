@@ -331,7 +331,7 @@ async def handle_vision(
     lang: str = "en",
 ) -> VisionResult:
     """
-    Step 1 — llama-4-scout extracts image content (text or description).
+    Step 1 — qwen/qwen3.6-27b extracts image content (text or description).
     Step 2 — intent_engine.classify() determines whether the extracted content
               requires the main pipeline or can be answered directly.
 
