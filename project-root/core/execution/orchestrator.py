@@ -130,7 +130,11 @@ class UsageRecord:
     rerank_tokens: int
     tier: Tier
     embedding_type: str
-    cost_usd: float
+    llm_cost_usd: float  # LLM + retrieval cost only — NOT total request cost.
+                         # Safety Gate and multilingual costs are added in webhook.py:
+                         # total_cost_usd = llm_cost_usd + safety_cost + _ml_cost
+                         # On HEAVY path: also includes lc_transformer + shaper + safety_agent.
+                         # Never read this field as "full cost" — use UsageEntry.raw_cost_usd.
 
 
 @dataclass
@@ -196,7 +200,7 @@ def _denied_result(
             rerank_tokens=rerank_tokens,
             tier=tier,
             embedding_type=embedding_type,
-            cost_usd=0.0,
+            llm_cost_usd=0.0,
         ),
         denied=True,
         deny_reason=reason,
@@ -215,7 +219,7 @@ def _empty_usage(
         rerank_tokens=request.rerank_tokens,
         tier=tier,
         embedding_type=request.embedding_type,
-        cost_usd=0.0,
+        llm_cost_usd=0.0,
     )
 
 
@@ -246,7 +250,7 @@ def _clarify_result(
             rerank_tokens=request.rerank_tokens,
             tier=tier,
             embedding_type=embedding_type,
-            cost_usd=0.0,
+            llm_cost_usd=0.0,
         ),
         denied=False,
         deny_reason="",
@@ -514,7 +518,7 @@ async def _run_allow(
             rerank_tokens=request.rerank_tokens,
             tier=_billing_tier,
             embedding_type=request.embedding_type,
-            cost_usd=cost,
+            llm_cost_usd=cost,
         ),
         lang=lang,
         intent=intent_result.intent.value,
@@ -611,7 +615,7 @@ async def _run_degraded(
             rerank_tokens=request.rerank_tokens,
             tier=_billing_tier,
             embedding_type=request.embedding_type,
-            cost_usd=cost,
+            llm_cost_usd=cost,
         ),
         lang=lang,
         intent=intent_result.intent.value,
@@ -823,7 +827,7 @@ async def _run_heavy(
             rerank_tokens=request.rerank_tokens,
             tier=_billing_tier,
             embedding_type=request.embedding_type,
-            cost_usd=cost,
+            llm_cost_usd=cost,
         ),
         lang=lang,
         intent=intent_result.intent.value,
