@@ -139,14 +139,32 @@ def estimate_cost(
     rerank_tokens: int,
     tier: Tier,
     embedding_type: str = "large",
+    lc_transformer_input_tokens: int = 0,
 ) -> float:
+    """Estimate request cost before execution for EPK balance check.
+
+    lc_transformer_input_tokens: pass request.input_tokens when
+    complexity == CRITICAL and input_tokens > 32_000, to include
+    long-context transformer overhead in the EPK estimate.
+    lc_transformer output is estimated conservatively at 800 tokens
+    (same cap as GENERAL tier). Rates: $0.60/$3.00 per 1M (qwen3.6-27b).
+    See economic.md §5 (DEBT-A1).
+    """
+    _LC_OUTPUT_ESTIMATE = 800   # conservative estimate, matches GENERAL MAX_OUTPUT_CAP
+    _LC_INPUT_RATE = 0.60       # qwen3.6-27b input  ($0.60/1M)
+    _LC_OUTPUT_RATE = 3.00      # qwen3.6-27b output ($3.00/1M)
+    lc_overhead = (
+        lc_transformer_input_tokens * _LC_INPUT_RATE
+        + _LC_OUTPUT_ESTIMATE * _LC_OUTPUT_RATE
+    ) / 1_000_000 if lc_transformer_input_tokens > 0 else 0.0
+
     rates = MODEL_RATES[tier]
     return (
         input_tokens * rates["input"]
         + estimated_output_tokens * rates["output"]
         + embedding_tokens * EMBEDDING_RATES[embedding_type]
         + rerank_tokens * RERANK_RATE
-    ) / 1_000_000 + estimate_safety_cost()
+    ) / 1_000_000 + estimate_safety_cost() + lc_overhead
 
 
 def actual_cost(
