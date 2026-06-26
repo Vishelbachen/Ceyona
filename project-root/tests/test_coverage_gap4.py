@@ -253,7 +253,7 @@ def _make_input(**kwargs):
     from meta.reflection import ReflectionInput
     defaults = dict(
         intent="search", lang="ru", tier="GENERAL", model="llama-3.3-70b",
-        response_text="Вот результат.", response_truncated=False, cost_usd=0.001,
+        response_text="Вот результат.", response_truncated=False, llm_cost_usd=0.001,
     )
     defaults.update(kwargs)
     return ReflectionInput(**defaults)
@@ -344,7 +344,7 @@ class TestReflectionReport:
         from meta.reflection import reflect
         inp = _make_input(
             intent="code", lang="en", tier="HEAVY", model="gpt-oss-120b",
-            response_text="x" * 100, cost_usd=0.005,
+            response_text="x" * 100, llm_cost_usd=0.005,
             user_id=42, session_id="trace-abc",
         )
         r = reflect(inp)
@@ -353,7 +353,7 @@ class TestReflectionReport:
         assert r.tier == "HEAVY"
         assert r.model == "gpt-oss-120b"
         assert r.response_len == 100
-        assert r.cost_usd == pytest.approx(0.005)
+        assert r.llm_cost_usd == pytest.approx(0.005)
         assert r.user_id == 42
         assert r.session_id == "trace-abc"
         assert isinstance(r.timestamp_utc, str)
@@ -381,7 +381,7 @@ class TestReflectionReport:
         r = reflect(_make_input())
         d = r.to_dict()
         for key in ("timestamp_utc", "intent", "lang", "tier", "model",
-                    "response_len", "cost_usd", "signals", "notes",
+                    "response_len", "llm_cost_usd", "signals", "notes",
                     "user_id", "session_id", "lightweight"):
             assert key in d
 
