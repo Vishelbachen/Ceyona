@@ -209,7 +209,7 @@ async def _verify_math_solution(
     solution: str,
     messages: list[dict],
     temperature: float = 0.1,
-) -> tuple[bool, str]:
+) -> tuple[bool, str, int, int]:
     """
     Self-verification step for MATH/logic puzzle solutions.
 
@@ -218,7 +218,9 @@ async def _verify_math_solution(
     every stated constraint and returns either VERIFIED or a list of
     violated constraints.
 
-    Returns: (is_correct: bool, feedback: str)
+    Returns: (is_correct: bool, feedback: str, input_tokens: int, output_tokens: int)
+    BUG-O3 fix: token counts added so the caller can accumulate them for billing.
+    economic.md §2: every model call MUST be billed — including this verifier call.
     """
     verification_prompt = (
         f"TASK: Verify the following solution against ALL constraints in the problem.\n\n"
@@ -246,20 +248,20 @@ async def _verify_math_solution(
     try:
         result = await fast_agent.run(verify_messages, temperature=temperature)
         if not result.success:
-            return True, ""  # verification failed silently → pass through
+            return True, "", result.input_tokens, result.output_tokens
 
         verdict = result.text.strip()
         last_line = verdict.split("\n")[-1].strip().upper()
 
         if last_line.startswith("VERIFIED"):
-            return True, ""
+            return True, "", result.input_tokens, result.output_tokens
 
         # Extract violation feedback for the correction round
-        return False, verdict
+        return False, verdict, result.input_tokens, result.output_tokens
 
     except Exception as exc:
         logger.warning("MATH verifier failed", extra={"error": str(exc)})
-        return True, ""  # silent failure → pass through original solution
+        return True, "", 0, 0  # silent failure → pass through original solution
 
 
 async def _correct_math_solution(
@@ -372,8 +374,10 @@ async def coordinate(
             consensus: ConsensusResult = await resolve(candidates)
             if consensus.text:
                 _total_tool_calls = sum(getattr(r, "tool_calls", 0) for r in candidates)
-                _safety_in  = safety.input_tokens  if "safety" in dir() else 0  # type: ignore[name-defined]
-                _safety_out = safety.output_tokens if "safety" in dir() else 0  # type: ignore[name-defined]
+                # BUG-O4 fix: "safety" in dir() does not reliably check local variable
+                # existence — use locals() instead.
+                _safety_in  = safety.input_tokens  if "safety" in locals() else 0  # type: ignore[name-defined]
+                _safety_out = safety.output_tokens if "safety" in locals() else 0  # type: ignore[name-defined]
                 return CoordinationResult(
                     text=consensus.text,
                     model=consensus.model,
@@ -396,13 +400,22 @@ async def coordinate(
         # any request classified with DomainHint.MATH gets verification,
         # regardless of what intent label was assigned.
         # Bounded to max 1 correction pass — no infinite loops (§17, §25).
+        #
+        # BUG-O3 fix: accumulate verify + correct LLM token counts so they are
+        # billed by the orchestrator. Both calls hit Groq and MUST be billed per
+        # economic.md §2. _math_extra_in/out are summed into CoordinationResult.
+        _math_extra_in  = 0
+        _math_extra_out = 0
         if routing.domain_hint == DomainHint.MATH and user_message:
-            is_correct, feedback = await _verify_math_solution(
+            is_correct, feedback, _v_in, _v_out = await _verify_math_solution(
                 user_message=user_message,
                 solution=primary_result.text,
                 messages=messages,
                 temperature=0.05,
             )
+            # BUG-O3 fix: accumulate verify tokens.
+            _math_extra_in  += _v_in
+            _math_extra_out += _v_out
             if not is_correct and feedback:
                 logger.info("MATH verifier found violations — attempting correction")
                 corrected = await _correct_math_solution(
@@ -411,6 +424,9 @@ async def coordinate(
                     verification_feedback=feedback,
                     temperature=0.1,
                 )
+                # Accumulate correction tokens regardless of success.
+                _math_extra_in  += corrected.input_tokens
+                _math_extra_out += corrected.output_tokens
                 if _agent_succeeded(corrected):
                     logger.info("MATH correction succeeded")
                     primary_result = corrected
@@ -438,13 +454,15 @@ async def coordinate(
                     safety_agent_output_tokens=safety.output_tokens,
                 )
 
+        # BUG-O4 fix: use is_heavy bool instead of "safety" in dir() — dir() does
+        # not reliably reflect local variable existence in async functions.
         _sa_in  = safety.input_tokens  if is_heavy else 0
         _sa_out = safety.output_tokens if is_heavy else 0
         return CoordinationResult(
             text=primary_result.text,
             model=primary_result.model,
-            input_tokens=primary_result.input_tokens,
-            output_tokens=primary_result.output_tokens,
+            input_tokens=primary_result.input_tokens + _math_extra_in,
+            output_tokens=primary_result.output_tokens + _math_extra_out,
             actual_tier=primary_result.actual_tier,
             tool_calls=getattr(primary_result, "tool_calls", 0),
             safety_agent_input_tokens=_sa_in,
@@ -456,6 +474,14 @@ async def coordinate(
         "agent": plan.primary,
         "error": getattr(primary_result, "error", ""),
     })
+    # BUG-O5 fix: primary agent made a real Groq API call before failing.
+    # economic.md §2: "Failed calls that returned no output" are not billed —
+    # but only for genuine API/network errors (no tokens consumed).
+    # If primary returned a response but it was empty/malformed, tokens were
+    # consumed. We add primary tokens to fallback result to avoid silent loss.
+    # If primary failed with a network error, its input_tokens = 0 (safe to add).
+    _failed_primary_in  = primary_result.input_tokens
+    _failed_primary_out = primary_result.output_tokens
 
     if plan.fallback is not None and plan.fallback != plan.primary:
         logger.info("Trying fallback agent", extra={"agent": plan.fallback})
@@ -466,8 +492,8 @@ async def coordinate(
             return CoordinationResult(
                 text=fallback_result.text,
                 model=fallback_result.model,
-                input_tokens=fallback_result.input_tokens,
-                output_tokens=fallback_result.output_tokens,
+                input_tokens=fallback_result.input_tokens + _failed_primary_in,
+                output_tokens=fallback_result.output_tokens + _failed_primary_out,
                 actual_tier=fallback_result.actual_tier,
                 tool_calls=getattr(fallback_result, "tool_calls", 0),
             )
