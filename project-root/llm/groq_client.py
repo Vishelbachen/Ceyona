@@ -13,6 +13,17 @@ class LLMResponse:
     output_tokens: int
     model: str
     actual_tier: str = ""   # tier that actually executed (may differ from requested on cascade)
+    # Per-model token breakdown for compound AI systems (groq/compound, groq/compound-mini).
+    # Groq API returns usage.usage_breakdown as a list of {model, input_tokens, output_tokens}
+    # dicts when multiple underlying models are used. Empty list for standard (non-compound) models.
+    # Use actual_compound_cost_from_breakdown() in cost_model.py for exact passthrough billing.
+    # economic.md §1.3 / BUG-02 fix.
+    usage_breakdown: list[dict] = None  # type: ignore[assignment]
+
+    def __post_init__(self):
+        # Freeze-safe default: replace None with empty list
+        if self.usage_breakdown is None:
+            object.__setattr__(self, "usage_breakdown", [])
 
 
 @dataclass(frozen=True)
@@ -41,6 +52,12 @@ class ToolCallResponse:
     output_tokens: int
     model: str
     raw_message: dict = field(default_factory=dict)  # full assistant message for history
+    # Per-model token breakdown — see LLMResponse.usage_breakdown docstring.
+    usage_breakdown: list[dict] = None  # type: ignore[assignment]
+
+    def __post_init__(self):
+        if self.usage_breakdown is None:
+            object.__setattr__(self, "usage_breakdown", [])
 
 
 # ── Context window limits per model (input tokens) ───────────────────────────
@@ -157,11 +174,29 @@ class GroqClient:
         choice = response.choices[0]
         usage = response.usage
 
+        # Parse per-model token breakdown for compound AI systems.
+        # Groq returns usage.usage_breakdown as a list when multiple underlying models
+        # are used (groq/compound, groq/compound-mini). Falls back to [] for standard models.
+        _breakdown = []
+        if hasattr(usage, "usage_breakdown") and usage.usage_breakdown:
+            try:
+                _breakdown = [
+                    {
+                        "model":        b.model if hasattr(b, "model") else b.get("model", ""),
+                        "input_tokens":  b.input_tokens if hasattr(b, "input_tokens") else b.get("input_tokens", 0),
+                        "output_tokens": b.output_tokens if hasattr(b, "output_tokens") else b.get("output_tokens", 0),
+                    }
+                    for b in usage.usage_breakdown
+                ]
+            except Exception:
+                _breakdown = []
+
         return LLMResponse(
             text=choice.message.content or "",
             input_tokens=usage.prompt_tokens,
             output_tokens=usage.completion_tokens,
             model=response.model,
+            usage_breakdown=_breakdown,
         )
 
     async def complete_with_tools(
@@ -203,6 +238,21 @@ class GroqClient:
         choice = response.choices[0]
         usage  = response.usage
 
+        # Parse per-model token breakdown — see complete() for details.
+        _breakdown = []
+        if hasattr(usage, "usage_breakdown") and usage.usage_breakdown:
+            try:
+                _breakdown = [
+                    {
+                        "model":         b.model if hasattr(b, "model") else b.get("model", ""),
+                        "input_tokens":  b.input_tokens if hasattr(b, "input_tokens") else b.get("input_tokens", 0),
+                        "output_tokens": b.output_tokens if hasattr(b, "output_tokens") else b.get("output_tokens", 0),
+                    }
+                    for b in usage.usage_breakdown
+                ]
+            except Exception:
+                _breakdown = []
+
         # Model requested tool execution.
         # CRITICAL: check message.tool_calls FIRST — some compound model variants
         # (notably groq/compound-mini) return finish_reason="stop" WITH tool_calls
@@ -242,6 +292,7 @@ class GroqClient:
                 output_tokens=usage.completion_tokens,
                 model=response.model,
                 raw_message=raw_message,
+                usage_breakdown=_breakdown,
             )
 
         # Model produced a text answer directly
@@ -250,6 +301,7 @@ class GroqClient:
             input_tokens=usage.prompt_tokens,
             output_tokens=usage.completion_tokens,
             model=response.model,
+            usage_breakdown=_breakdown,
         )
 
 
