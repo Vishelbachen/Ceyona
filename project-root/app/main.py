@@ -256,8 +256,9 @@ async def models():
     Top-level "all_ok" is False if any required model is unavailable.
     """
     import asyncio
+
     from llm.groq_client import groq_client
-    from llm.hf_client import BGE_LARGE, BGE_SMALL, BGE_RERANKER, hf_client
+    from llm.hf_client import BGE_LARGE, BGE_RERANKER, BGE_SMALL, hf_client
 
     # ── Groq: fetch live model list ───────────────────────────────────────────
     groq_list = await groq_client._client.models.list()
@@ -336,15 +337,22 @@ async def routing():
     No live API calls — instant response, safe to poll frequently.
     Use /models to verify each model is actually available on Groq/HF.
     """
+    from llm.hf_client import BGE_LARGE, BGE_RERANKER, BGE_SMALL
     from llm.model_router import (
-        FAST_AGENT_MODEL, DEEP_AGENT_MODEL, CONSENSUS_MODEL,
-        SHAPER_MODEL, LONG_CONTEXT_MODEL,
-        MULTILINGUAL_ARABIC_MODEL, MULTILINGUAL_OTHER_MODEL,
-        SAFETY_PASS1_MODEL, SAFETY_PASS2_MODELS,
-        WHISPER_PRIMARY, WHISPER_FAST,
-        ORPHEUS_ENGLISH, ORPHEUS_ARABIC,
+        CONSENSUS_MODEL,
+        DEEP_AGENT_MODEL,
+        FAST_AGENT_MODEL,
+        LONG_CONTEXT_MODEL,
+        MULTILINGUAL_ARABIC_MODEL,
+        MULTILINGUAL_OTHER_MODEL,
+        ORPHEUS_ARABIC,
+        ORPHEUS_ENGLISH,
+        SAFETY_PASS1_MODEL,
+        SAFETY_PASS2_MODELS,
+        SHAPER_MODEL,
+        WHISPER_FAST,
+        WHISPER_PRIMARY,
     )
-    from llm.hf_client import BGE_LARGE, BGE_SMALL, BGE_RERANKER
 
     return {
         "llm": {
