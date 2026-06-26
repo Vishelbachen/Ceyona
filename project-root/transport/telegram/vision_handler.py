@@ -36,7 +36,7 @@ class VisionResult:
                      Caller should send a localized error message directly.
     vision_input_tokens  — actual input tokens from Groq API response (for billing).
     vision_output_tokens — actual output tokens from Groq API response (for billing).
-                           Both are 0 on failure — cost_usd will be 0, billing skipped.
+                           Both are 0 on failure — llm_cost_usd will be 0, billing skipped.
     """
     text: str
     needs_pipeline: bool
