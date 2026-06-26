@@ -1,7 +1,7 @@
-# Аудит: economic.md v5.6 + models.md v9.1 vs код
+# Аудит: economic.md v5.7 + models.md v9.1 vs код
 Дата: 26 июня 2026  
 Базовый аудит: audit_economic_models.md (25 июня 2026, v5.5/v9.0)  
-Текущие версии: economic.md v5.6, models.md v9.1  
+Текущие версии: economic.md v5.7, models.md v9.1  
 Файлы кода: cost_model.py, policy_registry.py, decision_matrix.py, execution_policy_kernel.py, pricing_engine.py, usage_meter.py, orchestrator.py, model_router.py, webhook.py, update_handler.py, vision_handler.py
 
 ---
@@ -220,16 +220,14 @@ Output оценивается консервативно в 800 токенов (
 
 ---
 
-### DEBT-A2 — `compound-mini` токенный биллинг: pricing не опубликован
+### DEBT-A2 — ✅ ЗАКРЫТ (Jun 2026)
 
-**Документ:** economic.md §1.3  
-**Файл:** `core/kernel/cost_model.py`
-
-`groq/compound-mini` используется на FAST пути. В economic.md §1.3: "compound-mini: pricing TBD (not separately listed, Jun 2026)". В `cost_model.py` нет отдельных ставок для compound/compound-mini — используются тарифы тира (FAST/GENERAL), а не модели.
-
-При вызовах compound-mini токены биллятся по `Tier.FAST` ставкам (`$0.075/$0.30`), что может быть как завышено, так и занижено относительно реальных ставок Groq. Это acknowledged gap, но без мониторинга в production drift может вырасти.
-
-**Рекомендация:** добавить alert в Groq changelog monitoring. Когда pricing появится — обновить `_COMPOUND_RATES` (можно добавить заглушку в cost_model.py).
+Groq официально подтвердил passthrough pricing для compound систем. Реализовано:
+- `_COMPOUND_UNDERLYING_RATES` в `cost_model.py` — точные ставки по каждой внутренней модели
+- `actual_compound_cost_from_breakdown(breakdown)` — точный биллинг по `usage.usage_breakdown` из Groq API
+- `groq_client.py` парсит `usage.usage_breakdown` в обоих методах (`complete()`, `complete_with_tools()`)
+- `webhook.py` использует breakdown-first подход с fallback на `_COMPOUND_RATES` (dominant-model)
+- `economic.md §1.3` обновлён — описывает реальную реализацию. ✅
 
 ---
 
@@ -264,7 +262,7 @@ Output оценивается консервативно в 800 токенов (
 | MISMATCH-A3 | economic.md §4.2: actual_cost() сигнатура без safety-параметров | economic.md | 🟠 Средний |
 | MISMATCH-A4 | economic.md §8: margin применяется в usage_meter, не access_controller | economic.md / webhook.py | 🔴 Требует решения |
 | DEBT-A1 | lc_transformer cost не входит в EPK estimate_cost() для CRITICAL | cost_model.py | 🟡 Низкий |
-| DEBT-A2 | compound-mini pricing TBD — неизвестный тарифный дрейф | economic.md | 🟡 Низкий |
+| DEBT-A2 | compound billing — закрыт через usage_breakdown + `_COMPOUND_UNDERLYING_RATES` | cost_model.py | ✅ Закрыт |
 | DEBT-A3 | safety-поля OrchestratorResult всегда 0 при выходе из оркестратора | orchestrator.py | 🟡 Низкий |
 | DEBT-A4 | vision_handler.py process_media_group(): тот же stale docstring | vision_handler.py | 🟡 Низкий |
 
