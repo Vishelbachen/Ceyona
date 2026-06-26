@@ -243,14 +243,31 @@ async def metrics() -> dict:
 @app.get("/models")
 async def models():
     from llm.groq_client import groq_client
+    from llm.model_router import DEEP_AGENT_MODEL, FAST_AGENT_MODEL
 
     models = await groq_client._client.models.list()
 
     ids = sorted(m.id for m in models.data)
+    id_set = set(ids)
+
+    # Check that the specific models the router depends on are actually available.
+    # Groq occasionally renames or removes models — this makes drift immediately visible.
+    VISION_MODEL  = "qwen/qwen3.6-27b"          # vision_handler._VISION_MODEL
+    SAFETY_MODEL  = "openai/gpt-oss-safeguard-20b"
+    configured = {
+        "FAST_PRIMARY":      "openai/gpt-oss-20b"  in id_set,
+        "GENERAL_PRIMARY":   "qwen/qwen3.6-27b"    in id_set,
+        "HEAVY_PRIMARY":     "openai/gpt-oss-120b" in id_set,
+        "FAST_AGENT_MODEL":  FAST_AGENT_MODEL       in id_set,
+        "DEEP_AGENT_MODEL":  DEEP_AGENT_MODEL       in id_set,
+        "VISION_MODEL":      VISION_MODEL           in id_set,
+        "SAFETY_MODEL":      SAFETY_MODEL           in id_set,
+    }
 
     return {
         "count": len(ids),
         "available_models": ids,
+        "configured": configured,
     }
 
 
