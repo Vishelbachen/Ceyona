@@ -56,6 +56,12 @@ class CoordinationResult:
     tool_calls: int = 0   # total compound tool calls executed — flows to billing
     safety_agent_input_tokens: int = 0   # gpt-oss-safeguard-20b input tokens (safety_agent LLM judge)
     safety_agent_output_tokens: int = 0  # gpt-oss-safeguard-20b output tokens (safety_agent LLM judge)
+    # Per-model token breakdown from compound AI system — flows to OrchestratorResult.compound_breakdown.
+    usage_breakdown: list = None  # list[dict]
+
+    def __post_init__(self):
+        if self.usage_breakdown is None:
+            object.__setattr__(self, "usage_breakdown", [])
 
 
 # ─── PLAN SELECTION ───────────────────────────────────────────────────────────
@@ -467,6 +473,7 @@ async def coordinate(
             tool_calls=getattr(primary_result, "tool_calls", 0),
             safety_agent_input_tokens=_sa_in,
             safety_agent_output_tokens=_sa_out,
+            usage_breakdown=getattr(primary_result, "usage_breakdown", []),
         )
 
     # ── primary failed → fallback ─────────────────────────────────────────────
@@ -496,6 +503,7 @@ async def coordinate(
                 output_tokens=fallback_result.output_tokens + _failed_primary_out,
                 actual_tier=fallback_result.actual_tier,
                 tool_calls=getattr(fallback_result, "tool_calls", 0),
+                usage_breakdown=getattr(fallback_result, "usage_breakdown", []),
             )
 
         logger.error("Fallback agent also failed",
