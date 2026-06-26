@@ -47,7 +47,8 @@ class ReflectionReport:
       tier           — execution tier used
       model          — model that produced the final response
       response_len   — character length of the final response
-      cost_usd       — actual cost of the request
+      llm_cost_usd   — LLM cost of the request (excludes Safety Gate + multilingual;
+                       full cost is assembled in webhook.py as total_cost_usd)
       signals        — quality signals observed
       notes          — human-readable observations (lightweight: empty list)
       lightweight    — True when produced in DEGRADED_MODE
@@ -58,7 +59,7 @@ class ReflectionReport:
     tier: str
     model: str
     response_len: int
-    cost_usd: float
+    llm_cost_usd: float
     signals: list[QualitySignal]
     notes: list[str] = field(default_factory=list)
     user_id: int | None = None
@@ -76,7 +77,7 @@ class ReflectionReport:
             "tier":          self.tier,
             "model":         self.model,
             "response_len":  self.response_len,
-            "cost_usd":      self.cost_usd,
+            "llm_cost_usd":  self.llm_cost_usd,
             "signals":       [s.value for s in self.signals],
             "notes":         self.notes,
             "user_id":       self.user_id,
@@ -100,7 +101,7 @@ class ReflectionInput:
     model: str
     response_text: str
     response_truncated: bool
-    cost_usd: float
+    llm_cost_usd: float
     agent_fallback_used: bool = False
     consensus_used: bool = False
     tool_used: bool = False
@@ -228,7 +229,7 @@ def reflect(inp: ReflectionInput, lightweight: bool = False) -> ReflectionReport
             tier           = inp.tier,
             model          = inp.model,
             response_len   = len(inp.response_text),
-            cost_usd       = inp.cost_usd,
+            llm_cost_usd   = inp.llm_cost_usd,
             signals        = signals,
             notes          = notes,
             user_id        = inp.user_id,
@@ -245,7 +246,7 @@ def reflect(inp: ReflectionInput, lightweight: bool = False) -> ReflectionReport
             tier          = getattr(inp, "tier", "FAST"),
             model         = getattr(inp, "model", ""),
             response_len  = 0,
-            cost_usd      = 0.0,
+            llm_cost_usd  = 0.0,
             signals       = [QualitySignal.RESPONSE_EMPTY],
             notes         = ["ReflectionReport construction failed."],
             lightweight   = lightweight,
