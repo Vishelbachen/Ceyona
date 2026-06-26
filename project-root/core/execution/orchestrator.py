@@ -987,6 +987,16 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             request.complexity,
             _estimate_tier,
         )
+        # Include lc_transformer overhead for CRITICAL requests above 32K tokens.
+        # lc_transformer activates inside _run_heavy() — EPK can't know its actual
+        # cost yet, so we add a conservative estimate here to avoid allowing requests
+        # the user cannot afford. See economic.md §5 (DEBT-A1).
+        _LC_TOKEN_THRESHOLD = 32_000
+        _lc_estimate_tokens = (
+            request.input_tokens
+            if request.complexity == Complexity.CRITICAL and request.input_tokens > _LC_TOKEN_THRESHOLD
+            else 0
+        )
         estimated = estimate_cost(
             input_tokens=request.input_tokens,
             estimated_output_tokens=estimated_output,
@@ -994,6 +1004,7 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             rerank_tokens=request.rerank_tokens,
             tier=_estimate_tier,
             embedding_type=request.embedding_type,
+            lc_transformer_input_tokens=_lc_estimate_tokens,
         )
 
         # ── EPK ──────────────────────────────────────────────────────────────
