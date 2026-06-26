@@ -534,23 +534,28 @@ from Groq costs for accurate split billing and quota management.
 
 ## 8. MARGIN AND USER BILLING
 
+### Revenue model (DECIDED — Jun 2026)
+
+Platform margin is captured at **top-up time via TON→USD conversion rate**, not at
+per-request deduction. This is the intentional architecture.
+
+`ac.deduct(user_id, total_cost_usd)` correctly deducts **raw cost** from balance.
+Applying × 1.3 at deduction time would double-charge margin and must NOT be done.
+
 ```python
-MARGIN = 1.3   # 30% markup over raw LLM cost
+MARGIN = 1.3   # target markup — applies to billed_cost_usd analytics and top-up rate
 ```
 
-Margin rationale: covers HuggingFace embedding costs (estimated), operational overhead,
-and provides sustainable revenue. 30% is conservative — revisit when usage data available.
-
-**Actual billing flow (webhook.py):**
+### Correct billing flow (webhook.py)
 
 ```python
 # 1. Compute total raw cost from all components
-total_cost_usd = result.usage.cost_usd + safety_cost + _ml_cost
+total_cost_usd = result.usage.llm_cost_usd + safety_cost + _ml_cost
 
-# 2. Deduct RAW cost from user balance
+# 2. Deduct RAW cost from user balance  ← correct, margin is in top-up conversion rate
 await ac.deduct(user_id, total_cost_usd)
 
-# 3. Apply margin for analytics/revenue record
+# 3. Compute billed for revenue analytics only
 billed = meter.compute_billed(total_cost_usd)   # total_cost_usd × 1.3
 
 # 4. Record both raw and billed to Supabase
@@ -561,30 +566,34 @@ await meter.record(UsageEntry(
 ))
 ```
 
-⚠️ **KNOWN DISCREPANCY — requires resolution:**
-Currently `ac.deduct()` receives `total_cost_usd` (raw), NOT `billed` (raw × 1.3).
-This means the 30% margin is **not** deducted from the user balance — it is only recorded
-as an analytics field (`billed_cost_usd`) for revenue tracking.
+### What `billed_cost_usd` is for
 
-**Consequence:** if a user tops up exactly $1.00 and makes requests totalling $1.00 raw cost,
-their balance reaches $0.00, but the platform has generated only $0.00 margin from those
-requests (not $0.30). Platform revenue comes from the spread between TON top-up conversion
-rate and raw LLM cost — NOT from the 30% field on the balance deduction.
+`billed_cost_usd` (= `raw_cost_usd × 1.3`) is a **revenue analytics field**.
+It is recorded to Supabase on every request but is NOT deducted from user balance.
 
-**Resolution required:** one of two approaches must be chosen:
+Purpose:
+- **Revenue tracking:** `SUM(billed_cost_usd)` = theoretical gross revenue per period
+- **Profitability analysis:** `billed_cost_usd − raw_cost_usd` = 30% per-request margin target
+- **Migration path:** if revenue model ever switches to per-request markup, this field already
+  contains the correct value — one line change: `ac.deduct(user_id, billed)`
 
-- **Option A (recommended):** deduct `billed` from balance, not raw.
-  User pays 30% markup on balance. Revenue = billed − raw = 30% of LLM cost.
-  Fix: `await ac.deduct(user_id, meter.compute_billed(total_cost_usd))`
+### Top-up conversion rate — open action item
 
-- **Option B:** keep deducting raw, remove margin from deduct flow entirely.
-  Margin is captured via TON → USD conversion rate at top-up time.
-  `billed_cost_usd` becomes a pure analytics field (what platform "would charge").
-  Requires: update §8 to remove `MARGIN` from deduction formula, document
-  that revenue model is conversion-rate-based, not per-request markup.
+`pricing_engine.nano_to_usd()` currently uses live CoinGecko market rate with **no markup**.
+The margin model requires a spread to be applied here:
 
-**Current status:** Option A has NOT been implemented. `ac.deduct(user_id, total_cost_usd)`
-passes raw cost. Until resolved, `billed_cost_usd` in Supabase is an analytics estimate only.
+```python
+# pricing_engine.py — nano_to_usd() — CURRENT (0% margin)
+return ton * price
+
+# TO ACTIVATE MARGIN — apply before going to production at scale:
+TOPUP_RATE = 1.0 / 1.3   # user receives ~76.9% of market rate in USD credits
+return ton * price * TOPUP_RATE
+```
+
+⚠️ **Until `TOPUP_RATE` is applied in `pricing_engine.py`, platform earns 0% margin.**
+`billed_cost_usd` exists and is correct — revenue mechanism just needs to be activated
+at the top-up layer. This is the single open action item for the billing system.
 
 ---
 
@@ -627,7 +636,7 @@ When balance reaches $0.00 → EPK returns DENY → user sees balance_exhausted 
 12. [Speech if is_voice_input]  → bill: audio_seconds / tts_characters [Groq]
 13. usage_meter records all fields
 14. total_cost_usd = result.usage.cost_usd + safety_cost + _ml_cost  (webhook.py)
-15. ac.deduct(user_id, total_cost_usd)   ← raw cost deducted from balance  ⚠️ see §8
+15. ac.deduct(user_id, total_cost_usd)   ← raw cost deducted from balance (correct, see §8)
 16. billed_cost_usd = total_cost_usd × 1.3
 17. usage_log written to Supabase (raw_cost_usd + billed_cost_usd)
 18. response delivered
@@ -689,7 +698,8 @@ This document is synchronized with:
 - [x] **Vision billing fix (Jun 2026):** _VISION_RATES обновлены с llama-4-scout ($0.11/$0.34) на qwen3.6-27b ($0.60/$3.00). ✅ CLOSED
 - [x] **DENY billing fix (Jun 2026):** Safety Gate tokens биллятся на DENY путях (voice pass1 block). webhook.py guard обновлён. ✅ CLOSED
 - [x] **actual_cost() safeguard output (Jun 2026):** добавлен параметр safety_safeguard_output_tokens. ✅ CLOSED
-- [ ] **MISMATCH-A4 (CRITICAL):** `ac.deduct()` снимает raw cost, не billed. Маржа 30% не удерживается с баланса пользователя. Требует бизнес-решения: Option A (deduct billed) или Option B (revenue через конвертацию TON→USD). См. §8.
+- [x] **MISMATCH-A4 (CLOSED Jun 2026):** Revenue model decided — margin via TON→USD conversion rate at top-up, not per-request deduction. `ac.deduct(raw)` is correct. `billed_cost_usd` is analytics field. §8 updated. ✅
+- [ ] **TOPUP_RATE (ACTION REQUIRED before production scale):** `pricing_engine.nano_to_usd()` uses live market rate with no markup. Apply `TOPUP_RATE = 1.0 / 1.3` to activate 30% margin. See §8.
 - [ ] Per-route billing: preferred_model now logged per-request (models.md §25.3) → update actual_cost() to use per-model rates when ready
 - [x] **Multilingual billing на ALLOW/DEGRADED путях (Jun 2026):** webhook.py вычисляет `_ml_cost` на ALLOW/DEGRADED; на HEAVY пропускается (cost_usd уже включает). ✅ CLOSED
 - [ ] Compound/compound-mini token pricing not publicly listed — monitor Groq changelog; update _COMPOUND_RATES in cost_model.py when published (placeholder added §1.3)
