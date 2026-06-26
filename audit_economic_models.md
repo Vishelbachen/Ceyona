@@ -211,15 +211,12 @@ await ac.deduct(user_id, meter.compute_billed(total_cost_usd))  # billed, не r
 
 ---
 
-### DEBT-A1 — `lc_transformer_input/output_tokens` не включены в EPK estimated_cost
+### DEBT-A1 — ✅ ЗАКРЫТ (Jun 2026)
 
-**Файл:** `core/execution/orchestrator.py`, `core/kernel/cost_model.py`
-
-Long-context трансформер (qwen3.6-27b, $0.60/$3.00) активируется при `complexity == CRITICAL`. EPK получает `HEAVY_REQUIRED` по complexity-флагу до знания о lc_transformer-стоимости. Стоимость lc_transformer не учитывается в EPK `estimate_cost()`.
-
-Это корректное архитектурное решение (LC активируется EPK-решением, не предшествует ему), но означает, что EPK-оценка для CRITICAL запросов систематически занижена — lc_transformer может добавить значительную стоимость поверх HEAVY-тира. Если пользователь с минимальным балансом получает CRITICAL + lc_transformer, списание может превысить баланс.
-
-**Рекомендация:** добавить примечание в economic.md §5 о том, что CRITICAL-путь может генерировать lc_transformer overhead сверх EPK-оценки.
+`estimate_cost()` теперь принимает `lc_transformer_input_tokens`. Orchestrator передаёт
+`request.input_tokens` когда `complexity == CRITICAL and input_tokens > 32_000`.
+Output оценивается консервативно в 800 токенов (GENERAL MAX_OUTPUT_CAP).
+Для 40K input: overhead ≈ $0.026 — теперь включён в EPK estimate.
 
 ---
 
