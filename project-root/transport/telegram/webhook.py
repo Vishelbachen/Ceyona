@@ -444,11 +444,11 @@ async def telegram_webhook(
         if result.usage.llm_cost_usd > 0 or _has_safety_tokens or _has_ml_tokens:
             try:
                 from core.kernel.cost_model import (
-                    actual_asr_cost,
-                    actual_compound_cost,
                     actual_multilingual_cost,
                     actual_safety_cost,
+                    actual_asr_cost,
                     actual_tts_cost,
+                    actual_compound_cost,
                 )
                 from payments.access_controller import AccessController
                 from payments.usage_meter import UsageEntry, UsageMeter
@@ -512,8 +512,8 @@ async def telegram_webhook(
                         model=result.resolved_model,
                     )
                     # llm_cost_usd includes FAST-tier rates for these tokens — replace with compound rates
-                    from contracts.shared_types import Tier
                     from core.kernel.cost_model import MODEL_RATES
+                    from contracts.shared_types import Tier
                     _fast_rates = MODEL_RATES[Tier.FAST]
                     _fast_proxy = (
                         result.usage.input_tokens * _fast_rates["input"]
