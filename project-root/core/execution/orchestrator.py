@@ -168,6 +168,16 @@ class OrchestratorResult:
     multilingual_model: str = ""              # model used: "allam-2-7b" | "qwen/qwen3.6-27b" | "passthrough"
     lc_transformer_input_tokens: int = 0      # long_context_transformer input tokens (qwen3.6-27b, $0.60/1M)
     lc_transformer_output_tokens: int = 0     # long_context_transformer output tokens ($3.00/1M)
+    # Per-model token breakdown for compound AI systems (groq/compound, groq/compound-mini).
+    # Populated from LLMResponse.usage_breakdown when compound_agent returns a result.
+    # Used in webhook.py to call actual_compound_cost_from_breakdown() for exact billing.
+    # Empty list when resolved_model is not a compound system or breakdown was absent.
+    # BUG-02 fix. economic.md §1.3.
+    compound_breakdown: list = None  # list[dict] — avoid mutable default in dataclass
+
+    def __post_init__(self):
+        if self.compound_breakdown is None:
+            object.__setattr__(self, "compound_breakdown", [])
 
 
 # ─── INTERNAL HELPERS ─────────────────────────────────────────────────────────
@@ -529,6 +539,7 @@ async def _run_allow(
         resolved_model=intent_result.routing.preferred_model or "",
         safety_agent_input_tokens=coordination.safety_agent_input_tokens,
         safety_agent_output_tokens=coordination.safety_agent_output_tokens,
+        compound_breakdown=getattr(coordination, "usage_breakdown", []),
     )
 
 
@@ -624,6 +635,7 @@ async def _run_degraded(
         tool_used=bool(intent_result.tool_name),
         tool_calls=coordination.tool_calls,
         resolved_model="",  # DEGRADED_MODE: no preferred_model — FAST tier is always gpt-oss-20b
+        compound_breakdown=getattr(coordination, "usage_breakdown", []),
     )
 
 
@@ -840,6 +852,7 @@ async def _run_heavy(
         safety_agent_output_tokens=coordination.safety_agent_output_tokens,
         lc_transformer_input_tokens=_lc_in_tok,
         lc_transformer_output_tokens=_lc_out_tok,
+        compound_breakdown=getattr(coordination, "usage_breakdown", []),
     )
 
 
