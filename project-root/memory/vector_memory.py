@@ -1,6 +1,8 @@
 import logging
 from dataclasses import dataclass
 
+from events.event_bus import event_bus
+from events.event_types import EventName, BaseEvent
 from llm.hf_client import BGE_LARGE, BGE_SMALL, hf_client
 from memory.supabase_store import MemoryEntry, MemoryRecord, SupabaseStore
 
@@ -57,7 +59,27 @@ class VectorMemory:
                 metadata=metadata or {},
                 source_url=(metadata or {}).get("source_url"),
             )
-            return await self._store.insert(entry)
+            stored = await self._store.insert(entry)
+            if stored:
+                # Publish memory.written — non-blocking, fire-and-forget.
+                try:
+                    _uid_int: int | None = None
+                    try:
+                        _uid_int = int(user_id)
+                    except (ValueError, TypeError):
+                        pass
+                    await event_bus.publish(BaseEvent(
+                        name=EventName.MEMORY_WRITTEN,
+                        user_id=_uid_int,
+                        payload={
+                            "mem_type":   mem_type,
+                            "importance": importance,
+                            "content_len": len(content),
+                        },
+                    ))
+                except Exception as _ev_exc:
+                    logger.debug("MEMORY_WRITTEN event publish failed", extra={"error": str(_ev_exc)})
+            return stored
 
         except Exception as exc:
             logger.error("remember failed", extra={
