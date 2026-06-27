@@ -45,23 +45,67 @@ class AgentPlan:
 # ─── RESULT CONTRACT ──────────────────────────────────────────────────────────
 
 @dataclass
+class AgentCallMetrics:
+    """
+    Token accounting for all LLM calls inside coordinate().
+
+    Three slots — primary, revision, safety — each tracks input+output tokens
+    for one logical call type. Orchestrator unpacks these into flat fields on
+    OrchestratorResult so the boundary toward webhook/usage_meter stays stable.
+
+    revision slot: populated only when REVISE loop fires (max 1 pass).
+    safety slot:   populated only on HEAVY path and consensus path.
+    primary slot:  always populated (includes MATH extra tokens).
+
+    economic.md §2: every model call MUST be billed — no zero-slot exceptions.
+    """
+    # primary agent tokens (includes MATH verify+correct extras, summed here)
+    primary_input_tokens: int = 0
+    primary_output_tokens: int = 0
+    # revision pass tokens (SAFETY-6 REVISE loop — max 1 retry)
+    revision_input_tokens: int = 0
+    revision_output_tokens: int = 0
+    # safety_agent LLM judge tokens (gpt-oss-safeguard-20b)
+    safety_input_tokens: int = 0
+    safety_output_tokens: int = 0
+
+
+@dataclass
 class CoordinationResult:
     text: str
     model: str
-    input_tokens: int
-    output_tokens: int
     blocked: bool = False
     block_reason: str = ""
     actual_tier: str = ""  # tier that actually executed (may be lower than requested on cascade)
     tool_calls: int = 0   # total compound tool calls executed — flows to billing
-    safety_agent_input_tokens: int = 0   # gpt-oss-safeguard-20b input tokens (safety_agent LLM judge)
-    safety_agent_output_tokens: int = 0  # gpt-oss-safeguard-20b output tokens (safety_agent LLM judge)
+    metrics: AgentCallMetrics = field(default_factory=AgentCallMetrics)
     # Per-model token breakdown from compound AI system — flows to OrchestratorResult.compound_breakdown.
-    usage_breakdown: list = None  # list[dict]
+    usage_breakdown: list = field(default_factory=list)
 
-    def __post_init__(self):
-        if self.usage_breakdown is None:
-            object.__setattr__(self, "usage_breakdown", [])
+    # ── convenience properties — orchestrator reads these, not metrics directly ──
+    @property
+    def input_tokens(self) -> int:
+        return self.metrics.primary_input_tokens
+
+    @property
+    def output_tokens(self) -> int:
+        return self.metrics.primary_output_tokens
+
+    @property
+    def safety_agent_input_tokens(self) -> int:
+        return self.metrics.safety_input_tokens
+
+    @property
+    def safety_agent_output_tokens(self) -> int:
+        return self.metrics.safety_output_tokens
+
+    @property
+    def revision_input_tokens(self) -> int:
+        return self.metrics.revision_input_tokens
+
+    @property
+    def revision_output_tokens(self) -> int:
+        return self.metrics.revision_output_tokens
 
 
 # ─── PLAN SELECTION ───────────────────────────────────────────────────────────
@@ -298,6 +342,35 @@ def _agent_succeeded(result: AgentResult) -> bool:
     return result.success and bool(result.text.strip())
 
 
+def _build_revision_messages(
+    messages: list[dict],
+    draft: str,
+    reason: str,
+) -> list[dict]:
+    """
+    Construct messages for the REVISE retry pass.
+
+    Appends the draft as an assistant turn + a user revision instruction
+    carrying SafetyResult.reason so the model knows exactly what to fix.
+
+    Tool outputs and prior context are preserved — the revision is a
+    targeted rewrite, not a new pipeline. reasoning_plan is NOT re-run
+    (§21: revision = correction pass, not new reasoning).
+
+    architecture.md §21 / SAFETY-6.
+    """
+    revision_instruction = (
+        "Revision required.\n\n"
+        f"Reason:\n{reason}\n\n"
+        "Rewrite the answer while preserving all useful information "
+        "and removing the unsafe or problematic content identified above."
+    )
+    return list(messages) + [
+        {"role": "assistant", "content": draft},
+        {"role": "user",      "content": revision_instruction},
+    ]
+
+
 # ─── MAIN COORDINATOR ─────────────────────────────────────────────────────────
 
 async def coordinate(
@@ -372,100 +445,36 @@ async def coordinate(
                 logger.warning("safety_agent BLOCK before consensus",
                                extra={"reason": _safety_result.reason})
                 return CoordinationResult(
-                    text="", model="", input_tokens=0, output_tokens=0,
-                    blocked=True, block_reason="safety_block",
-                    safety_agent_input_tokens=_safety_result.input_tokens,
-                    safety_agent_output_tokens=_safety_result.output_tokens,
-                )
-            if _safety_result.verdict == SafetyVerdict.SAFETY_UNAVAILABLE:
-                # Judge unavailable — fail-open with full observability (§21 contract).
-                # Metric already incremented inside _llm_judge.
-                logger.warning("safety_agent UNAVAILABLE before consensus — proceeding fail-open")
-
-        if candidates:
-            consensus: ConsensusResult = await resolve(candidates)
-            if consensus.text:
-                _total_tool_calls = sum(getattr(r, "tool_calls", 0) for r in candidates)
-                # BUG-O4 fix: explicit _safety_result variable — locals() forbidden (§21 rule 4).
-                _safety_in  = _safety_result.input_tokens  if _safety_result is not None else 0
-                _safety_out = _safety_result.output_tokens if _safety_result is not None else 0
-                return CoordinationResult(
-                    text=consensus.text,
-                    model=consensus.model,
-                    input_tokens=consensus.input_tokens,
-                    output_tokens=consensus.output_tokens,
-                    actual_tier=candidates[0].actual_tier,
-                    tool_calls=_total_tool_calls,
-                    safety_agent_input_tokens=_safety_in,
-                    safety_agent_output_tokens=_safety_out,
+                    text="", model="", blocked=True, block_reason="safety_block",
+                    metrics=AgentCallMetrics(
+                        primary_input_tokens=primary_result.input_tokens,
+                        primary_output_tokens=primary_result.output_tokens,
+                        safety_input_tokens=_safety_result.input_tokens,
+                        safety_output_tokens=_safety_result.output_tokens,
+                    ),
                 )
 
-        logger.warning("All consensus candidates failed — attempting fallback")
-
-    # ── primary succeeded (non-consensus path) ────────────────────────────────
-    if _agent_succeeded(primary_result):
-
-        # ── MATH self-correction loop ─────────────────────────────────────────
-        # Activates on domain_hint == MATH (not intent == MATH).
-        # This decouples the verification loop from the intent taxonomy:
-        # any request classified with DomainHint.MATH gets verification,
-        # regardless of what intent label was assigned.
-        # Bounded to max 1 correction pass — no infinite loops (§17, §25).
-        #
-        # BUG-O3 fix: accumulate verify + correct LLM token counts so they are
-        # billed by the orchestrator. Both calls hit Groq and MUST be billed per
-        # economic.md §2. _math_extra_in/out are summed into CoordinationResult.
-        _math_extra_in  = 0
-        _math_extra_out = 0
-        if routing.domain_hint == DomainHint.MATH and user_message:
-            is_correct, feedback, _v_in, _v_out = await _verify_math_solution(
-                user_message=user_message,
-                solution=primary_result.text,
-                messages=messages,
-                temperature=0.05,
-            )
-            # BUG-O3 fix: accumulate verify tokens.
-            _math_extra_in  += _v_in
-            _math_extra_out += _v_out
-            if not is_correct and feedback:
-                logger.info("MATH verifier found violations — attempting correction")
-                corrected = await _correct_math_solution(
+            # ── REVISE loop — HEAVY path (SAFETY-6) ──────────────────────────
+            # Max 1 retry. reasoning_plan not re-run — revision pass only.
+            # If second pass returns REVISE again → pass-through (audit.md §SAFETY-6).
+            if _sa_result.verdict == SafetyVerdict.REVISE:
+                logger.info("safety_agent REVISE on HEAVY path — attempting revision pass")
+                _rev_messages = _build_revision_messages(
                     messages=messages,
-                    original_solution=primary_result.text,
-                    verification_feedback=feedback,
-                    temperature=0.1,
+                    draft=primary_result.text,
+                    reason=_sa_result.reason,
                 )
-                # Accumulate correction tokens regardless of success.
-                _math_extra_in  += corrected.input_tokens
-                _math_extra_out += corrected.output_tokens
-                if _agent_succeeded(corrected):
-                    logger.info("MATH correction succeeded")
-                    primary_result = corrected
+                _rev_result = await _run_agent(
+                    plan.primary, _rev_messages, temperature, lang=lang, tier=tier,
+                )
+                _rev_in  = _rev_result.input_tokens
+                _rev_out = _rev_result.output_tokens
+                if _agent_succeeded(_rev_result):
+                    logger.info("Revision pass succeeded on HEAVY path")
+                    primary_result = _rev_result
                 else:
-                    logger.warning("MATH correction failed — using original solution")
-            else:
-                logger.info("MATH verifier passed")
+                    logger.warning("Revision pass failed on HEAVY path — using original draft")
 
-        # HEAVY path: safety_agent mandatory (§21).
-        # DEGRADED / NONE-depth / default-GENERAL: safety_agent skipped (Safety Lite — planned).
-        # _sa_result initialised to None — explicit pattern, no locals() (§21 rule 4).
-        _sa_result: SafetyResult | None = None
-        is_heavy = (tier == Tier.HEAVY)
-        if is_heavy:
-            _sa_result = await safety_check(SafetyInput(
-                reasoning_plan=reasoning_plan,
-                draft_response=primary_result.text,
-                user_message=user_message,
-            ))
-            if _sa_result.verdict == SafetyVerdict.BLOCK:
-                logger.warning("safety_agent BLOCK on HEAVY path",
-                               extra={"reason": _sa_result.reason})
-                return CoordinationResult(
-                    text="", model="", input_tokens=0, output_tokens=0,
-                    blocked=True, block_reason="safety_block",
-                    safety_agent_input_tokens=_sa_result.input_tokens,
-                    safety_agent_output_tokens=_sa_result.output_tokens,
-                )
             if _sa_result.verdict == SafetyVerdict.SAFETY_UNAVAILABLE:
                 # Judge unavailable — fail-open with full observability (§21 contract).
                 logger.warning("safety_agent UNAVAILABLE on HEAVY path — proceeding fail-open")
@@ -476,12 +485,16 @@ async def coordinate(
         return CoordinationResult(
             text=primary_result.text,
             model=primary_result.model,
-            input_tokens=primary_result.input_tokens + _math_extra_in,
-            output_tokens=primary_result.output_tokens + _math_extra_out,
             actual_tier=primary_result.actual_tier,
             tool_calls=getattr(primary_result, "tool_calls", 0),
-            safety_agent_input_tokens=_sa_in,
-            safety_agent_output_tokens=_sa_out,
+            metrics=AgentCallMetrics(
+                primary_input_tokens=primary_result.input_tokens + _math_extra_in,
+                primary_output_tokens=primary_result.output_tokens + _math_extra_out,
+                revision_input_tokens=_rev_in,
+                revision_output_tokens=_rev_out,
+                safety_input_tokens=_sa_in,
+                safety_output_tokens=_sa_out,
+            ),
             usage_breakdown=getattr(primary_result, "usage_breakdown", []),
         )
 
@@ -508,10 +521,13 @@ async def coordinate(
             return CoordinationResult(
                 text=fallback_result.text,
                 model=fallback_result.model,
-                input_tokens=fallback_result.input_tokens + _failed_primary_in,
-                output_tokens=fallback_result.output_tokens + _failed_primary_out,
                 actual_tier=fallback_result.actual_tier,
                 tool_calls=getattr(fallback_result, "tool_calls", 0),
+                metrics=AgentCallMetrics(
+                    # primary tokens included per BUG-O5 — may be 0 on network error
+                    primary_input_tokens=fallback_result.input_tokens + _failed_primary_in,
+                    primary_output_tokens=fallback_result.output_tokens + _failed_primary_out,
+                ),
                 usage_breakdown=getattr(fallback_result, "usage_breakdown", []),
             )
 
@@ -531,11 +547,10 @@ async def coordinate(
         return CoordinationResult(
             text=fallback_text,
             model="rule-based-fallback",
-            input_tokens=0,
-            output_tokens=0,
+            metrics=AgentCallMetrics(),
         )
 
     return CoordinationResult(
-        text="", model="", input_tokens=0, output_tokens=0,
-        blocked=True, block_reason="no_response",
+        text="", model="", blocked=True, block_reason="no_response",
+        metrics=AgentCallMetrics(),
     )
