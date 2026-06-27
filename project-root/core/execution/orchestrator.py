@@ -163,6 +163,8 @@ class OrchestratorResult:
     safety_safeguard_output_tokens: int = 0   # gpt-oss-safeguard-20b output tokens ($0.30/1M)
     safety_agent_input_tokens: int = 0        # gpt-oss-safeguard-20b input tokens from safety_agent LLM judge
     safety_agent_output_tokens: int = 0       # gpt-oss-safeguard-20b output tokens from safety_agent LLM judge
+    revision_input_tokens: int = 0            # SAFETY-6 REVISE loop input tokens (primary model, max 1 pass)
+    revision_output_tokens: int = 0           # SAFETY-6 REVISE loop output tokens
     multilingual_input_tokens: int = 0        # multilingual_preprocessor LLM call input tokens
     multilingual_output_tokens: int = 0       # multilingual_preprocessor LLM call output tokens
     multilingual_model: str = ""              # model used: "allam-2-7b" | "qwen/qwen3.6-27b" | "passthrough"
@@ -539,6 +541,8 @@ async def _run_allow(
         resolved_model=intent_result.routing.preferred_model or "",
         safety_agent_input_tokens=coordination.safety_agent_input_tokens,
         safety_agent_output_tokens=coordination.safety_agent_output_tokens,
+        revision_input_tokens=coordination.revision_input_tokens,
+        revision_output_tokens=coordination.revision_output_tokens,
         compound_breakdown=getattr(coordination, "usage_breakdown", []),
     )
 
@@ -890,6 +894,8 @@ async def _run_heavy(
         resolved_model=intent_result.routing.preferred_model or "",
         safety_agent_input_tokens=coordination.safety_agent_input_tokens,
         safety_agent_output_tokens=coordination.safety_agent_output_tokens,
+        revision_input_tokens=coordination.revision_input_tokens,
+        revision_output_tokens=coordination.revision_output_tokens,
         lc_transformer_input_tokens=_lc_in_tok,
         lc_transformer_output_tokens=_lc_out_tok,
         compound_breakdown=getattr(coordination, "usage_breakdown", []),
