@@ -97,9 +97,15 @@ Version: актуально на июнь 2026
 | ARCH-1 | architecture.md §21 не содержал полного контракта safety_agent | Переписан: уровни проверки, таблица вердиктов с действиями coordinator, профили одного агента |
 | ARCH-2 | §20, §35, §44, §47, §48.3 расходились с реальностью | Статусы planned/not implemented зафиксированы явно |
 
----
+### ✅ сессия 6 (июнь 2026) — SAFETY-6 + AgentCallMetrics
 
-## ОТКРЫТЫЕ ЗАДАЧИ
+| # | Суть | Ключевое решение |
+|---|------|-----------------|
+| SAFETY-6 | REVISE loop не был реализован — verdict проходил насквозь как ALLOW | `_build_revision_messages()` + revision loop в consensus и HEAVY путях. Max 1 retry. `SafetyResult.reason` передаётся в revision hint. Если второй pass снова REVISE → pass-through, не BLOCK. |
+| BILLING-R1 | Revision — отдельный Groq вызов, не биллировался | `revision_input_tokens` / `revision_output_tokens` через полную цепочку: `AgentCallMetrics` → `CoordinationResult` → `OrchestratorResult` → `webhook.py` (`_revision_cost`) → `UsageEntry` → Supabase |
+| ARCH-3 | `CoordinationResult` имел плоские billing поля — паттерн ведущий к разрастанию | `AgentCallMetrics` dataclass (primary / revision / safety слоты). `CoordinationResult` несёт `metrics: AgentCallMetrics`. Convenience properties сохраняют обратную совместимость для orchestrator. Граница изоляции: orchestrator разворачивает `metrics` в плоские поля `OrchestratorResult` — webhook/usage_meter/Supabase остаются плоскими. |
+
+---
 
 ### 🔴 SAFETY-4 — Safety Lite для FAST/DEGRADED путей
 
@@ -128,20 +134,6 @@ Safety Extended = раздельная проверка reasoning_plan и draft_
 - Вызов в coordinator на HEAVY пути вместо текущего `safety_check()`
 
 **Приоритет:** низкий. HEAVY уже проверяется. Extended — следующий уровень.
-
----
-
-### 🔴 SAFETY-6 — REVISE loop в coordinator
-
-**Суть:** сейчас REVISE verdict передаётся в synthesizer с флагом, но повторной
-генерации нет. Таблица вердиктов §21 фиксирует это как planned.
-
-**Что нужно:**
-- При REVISE: повторный вызов primary agent с revision hint в промпте
-- Максимум 1 retry (аналогично MATH correction loop)
-- Bounded — рекурсия запрещена (§17, §25)
-
-**Приоритет:** средний. Влияет на качество ответов где REVISE срабатывает.
 
 ---
 
@@ -299,8 +291,7 @@ retrieval quality regression, mypy strict mode.
 Приоритет реализации открытых задач:
 
 1. **SAFETY-4** — Safety Lite для FAST/DEGRADED
-2. **SAFETY-6** — REVISE loop в coordinator
-3. **SAFETY-5** — Safety Extended для HEAVY
-4. **§44 + §47** — multi-intent + verbatim return (совместно)
-5. **§35** — history-after-EPK
-6. **§20** — source_credibility call site B
+2. **SAFETY-5** — Safety Extended для HEAVY
+3. **§44 + §47** — multi-intent + verbatim return (совместно)
+4. **§35** — history-after-EPK
+5. **§20** — source_credibility call site B
