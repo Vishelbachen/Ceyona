@@ -532,6 +532,24 @@ async def telegram_webhook(
                         )
                     _compound_cost_delta = _compound_actual - _fast_proxy
 
+                # ── SAFETY-6 Revision pass billing ────────────────────────
+                # Revision is a separate Groq LLM call — billed at primary tier rates.
+                # Tokens are NOT in llm_cost_usd (that tracks primary only).
+                # economic.md §2: every model call MUST be billed.
+                # _run_heavy() path: revision uses HEAVY (gpt-oss-120b) rates.
+                # ALLOW/consensus path: revision uses primary model rates for that tier.
+                # Both map to result.usage.tier — safe approximation (same model, same tier).
+                _revision_cost = 0.0
+                if result.revision_input_tokens or result.revision_output_tokens:
+                    from contracts.shared_types import Tier as _Tier
+                    from core.kernel.cost_model import MODEL_RATES as _MODEL_RATES
+                    _rev_tier = result.usage.tier if result.usage.tier else _Tier.GENERAL
+                    _rev_rates = _MODEL_RATES[_rev_tier]
+                    _revision_cost = (
+                        result.revision_input_tokens * _rev_rates["input"]
+                        + result.revision_output_tokens * _rev_rates["output"]
+                    ) / 1_000_000
+
                 total_cost_usd = (
                     result.usage.llm_cost_usd
                     + safety_cost
@@ -539,6 +557,7 @@ async def telegram_webhook(
                     + _asr_cost
                     + _tts_cost
                     + _compound_cost_delta
+                    + _revision_cost
                 )
                 _total_cost_usd = total_cost_usd  # expose to outer scope for logging
 
@@ -570,6 +589,8 @@ async def telegram_webhook(
                     safety_safeguard_output_tokens=result.safety_safeguard_output_tokens,
                     safety_agent_input_tokens=result.safety_agent_input_tokens,
                     safety_agent_output_tokens=result.safety_agent_output_tokens,
+                    revision_input_tokens=result.revision_input_tokens,
+                    revision_output_tokens=result.revision_output_tokens,
                     multilingual_input_tokens=result.multilingual_input_tokens,
                     multilingual_output_tokens=result.multilingual_output_tokens,
                     multilingual_model=result.multilingual_model,
