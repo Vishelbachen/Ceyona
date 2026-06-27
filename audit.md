@@ -1,13 +1,20 @@
+# CEYONA — AUDIT
+Version: актуально на июнь 2026
+Соответствует architecture.md v8.5
+
+---
+
 ## ПРИНЦИП — ЧИТАТЬ ПЕРВЫМ
 
 **Пользователь видит только ответ бота. Не архитектуру, не pipeline — только ответ.**
 Целевой уровень: Claude / ChatGPT — живой, прямой, без роботизации.
 
-**Без костылей.** Каждое решение — правильное и масштабируемое с первого раза. Запрещающие строки в промпте — не решение, это whack-a-mole: уберёшь одно — вылезет синоним. Правильный подход: задать target pattern (как должен выглядеть правильный ответ), а не список запретов.
+**Без костылей.** Каждое решение — правильное и масштабируемое с первого раза.
+Языковые словари, списки запрещённых строк, per-language exceptions — не решения.
+Правильный подход: LLM умеет делать задачу универсально — делегировать ему.
 
-**Критерий изменения:** стал ли ответ бота лучше или хуже. Если хуже — откат, даже если изменение архитектурно красиво.
-
-**Масштаб:** 100+ файлов. Не переписывать код без причины. Минимальное изменение с максимальным эффектом.
+**Критерий изменения:** стал ли ответ бота лучше или хуже.
+Если хуже — откат, даже если изменение архитектурно красиво.
 
 ---
 
@@ -15,335 +22,285 @@
 
 | Файл | Что решает |
 |------|-----------|
-| `transport/telegram/vision_handler.py` | Промпты для vision (группа и одиночное фото), лимиты |
-| `transport/telegram/update_handler.py` | Flow ответа, caption/vision routing, история, retrieval score filter |
+| `transport/telegram/vision_handler.py` | Промпты для vision, лимиты |
+| `transport/telegram/update_handler.py` | Flow ответа, routing, история, retrieval score filter |
 | `transport/telegram/webhook.py` | Команды /balance, /start, /help, /clear, /reset_memory |
 | `cognition/intent_engine.py` | System prompts для каждого intent — голос и стиль |
 | `llm/prompt_engine.py` | Сборка промпта перед LLM |
-| `core/execution/orchestrator.py` | intent → путь → ответ, STRICT truth gate |
+| `core/execution/orchestrator.py` | intent → путь → ответ, STRICT truth gate, EPK |
 | `cognition/response_synthesizer.py` | Финальная обработка перед отправкой |
+| `agents/safety_agent.py` | Post-reasoning semantic validator — SOLE BLOCKING AUTHORITY |
+| `cognition/multi_agent_coordinator.py` | Agent dispatch, consensus, safety_agent вызов |
 | `memory/supabase_store.py` | Хранение и retrieval памяти, similarity scores |
 | `retrieval/retrieval_engine.py` | Retrieval pipeline, score propagation |
-| `retrieval/cache/query_cache.py` | User-scoped retrieval cache, delete_by_user |
 | `i18n/strings.py` | Все локализованные строки бота |
 
-### Симптомы сломанных ответов
+---
 
-- `«Из контекста можно сделать вывод»` → retrieval достаёт нерелевантную старую память, модель строит ответ по мусорному контексту
-- `«Изображение N представляет собой»` / `«Первое/Второе изображение...»` → дефолтный шаблон модели в `_GROUP_EXTRACTION_SYSTEM`
-- `Constraints:`, `Candidates:`, `Проверка каждого constraints:` → CoT артефакты (13.3)
-- Тон сухой на простых вопросах → CONVERSATION system prompt
-- Модель строит единый нарратив по альбому → caption+фото смешиваются в user_message
+## ТЕКУЩИЙ СТАТУС СИСТЕМЫ (июнь 2026)
+
+### Что работает в production
+
+- EPK pipeline (ALLOW / DENY / DEGRADED / HEAVY_REQUIRED)
+- Billing: токены по всем путям включая safety_agent, compound, lc_transformer
+- Safety Layer Pass 1/2 (observability, non-blocking)
+- safety_agent на ALLOW + HEAVY путях (consensus + HEAVY tier)
+- Conversation history с tier-зависимыми бюджетами
+- Retrieval pipeline: similarity score propagation + score filter 0.75
+- Vision pipeline: album aggregation, batch extraction, synthesis
+- TTS / ASR pipeline
+- Команды /clear, /reset_memory
+- Multi-provider search fallback: Tavily → SerpAPI → SearXNG
+- source_credibility call site A (search results filtering)
+- Compound agent как синтезатор (не агент) для tool intents
+- MediaGroupAggregator (Redis-backed, Lua atomicity)
+- ResilientSupabase (auto-reconnect)
+- Multilingual normalization: allam-2-7b (AR), qwen3.6-27b (other non-Latin)
 
 ---
 
-## АРХИТЕКТУРА VISION PIPELINE (задокументировано май 2026)
+## ЗАКРЫТЫЕ ЗАДАЧИ (хронология)
 
-### Реальный путь данных
+### ✅ сессии 1–3 (май 2026)
 
-```
-telegram album
-    ↓
-update_handler.py
-    ↓
-handle_vision_group()  [vision_handler.py]
-    ├── лимит > 6 → ответ пользователю (too_many_images)
-    ├── скачать все фото параллельно
-    ├── split в батчи по _MAX_IMAGES_PER_BATCH=4
-    ├── _call_groq_vision() на каждый батч  ← _GROUP_EXTRACTION_SYSTEM
-    └── если батчей > 1: _synthesise_batch_descriptions()  ← _GROUP_SYNTHESIS_SYSTEM_TEMPLATE
-         ↓
-VisionResult(text, needs_pipeline, intent_result)
-    ↓
-update_handler.py routing:
-    ├── needs_pipeline=False → ответ напрямую (CONVERSATION, нет uncertainty)
-    └── needs_pipeline=True  → основной pipeline
-         ├── caption есть → text=caption, image_descriptions → retrieved_context [ФОТО]
-         └── caption нет  → text=descriptions
-```
+| # | Суть | Ключевое решение |
+|---|------|-----------------|
+| 8.1 | Мёртвые DENY-check в update_handler | Ветки удалены |
+| 13.1 | Tool intents → «сервис недоступен» | compound = синтезатор; tool_choice убран |
+| 13.5 | Описательный запрос → поиск по сырому тексту | `_understand_query()` — KNOWN_ENTITY vs DESCRIPTIVE |
+| 13.6 | Бот отвечал на каждое фото альбома отдельно | Redis-backed MediaGroupAggregator, debounce, Lua |
+| 13.6.1 | Lock bug, смешение партий, lang хардкод | `_LUA_FLUSH` атомарный DEL, `MediaGroupItem.lang` |
+| 17.1 | CoT infinite loop | reasoning_engine: QUESTION → mode=DIRECT |
+| 17.3 | Шаблонные ответы, «Изображения представляют собой» | target pattern в synthesis, `detect_repetitive_opening` |
+| 18.1–18.4 | Vision: нумерация, caption нарратив, лимит фото | constraints в extraction prompt, `_MAX_GROUP_IMAGES=6` |
+| 20.1 | Memory contamination | similarity score propagation + score filter 0.75 |
+| 20.2 | /clear и /reset_memory отсутствовали | Две команды с разной семантикой, двухшаговое подтверждение |
 
----
+### ✅ сессия 4 (июнь 2026) — Billing audit
 
-## АРХИТЕКТУРА RETRIEVAL + TRUTH MODEL (задокументировано май 2026, сессия 3)
+| # | Суть | Ключевое решение |
+|---|------|-----------------|
+| BUG-O1 | safety_agent токены не биллировались | `actual_safety_cost()` добавлен в `_run_allow()` |
+| BUG-O2 | compound breakdown не передавался в UsageEntry | `compound_breakdown` поле добавлено в OrchestratorResult |
+| BUG-O3 | MATH verifier токены не биллировались | `_math_extra_in/out` накапливается и передаётся в CoordinationResult |
+| BUG-O5 | Failed primary agent токены терялись | `_failed_primary_in/out` суммируются в fallback result |
+| Supabase migration | 6 новых колонок в `usage_log` | `tool_calls`, `safety_agent_input_tokens`, etc. |
 
-### Реальный путь данных retrieval
+### ✅ сессия 5 (июнь 2026) — Safety contract
 
-```
-update_handler.py
-    ↓
-RetrievalEngine.retrieve(query, user_id)
-    ↓
-bge_engine.embed(query)           → dense embedding
-    ↓
-SupabaseStore.similarity_search() → MemoryRecord[] с реальным similarity score
-    ↓
-source_credibility.score_documents()  → pass-through (нет source_url пока)
-    ↓
-cross_encoder.rerank()            → отсортированные (content, score) пары
-    ↓
-RetrievalResult.documents[]       → RetrievedDocument(content, score)
-    ↓
-update_handler: score filter ≥ 0.75  → отбрасывает нерелевантные документы
-    ↓
-retrieved_context → OrchestratorRequest
-    ↓
-orchestrator: STRICT truth gate
-    has_grounding = bool(retrieved_context) or bool(tool_output)
-    если STRICT и нет grounding → DENY (no_grounded_data)
-    ↓
-LLM получает только релевантный контекст
-```
-
-### Ключевые инсайты (сессия 3)
-
-**Инсайт 1: score 1.0 хардкод скрывал нерелевантность**
-
-До фикса: `candidates = [(r.content, 1.0) for r in records]` — все memory записи получали максимальный score независимо от реальной релевантности. pgvector threshold 0.7 пропускал семантически близкие но контекстуально нерелевантные записи из старых сессий.
-
-**Инсайт 2: similarity не доходил до RetrievedDocument**
-
-`MemoryRecord` не содержал поле `similarity`. Score терялся на шаге `similarity_search() → MemoryRecord`. После фикса: `MemoryRecord.similarity` заполняется из `row.get("similarity", 1.0)` RPC ответа.
-
-**Инсайт 3: TruthMode — confidence model, не бинарная верификация**
-
-`truth_check(answer, retrieval_context) -> float` как отдельный verification step нереализуем без компромисса:
-- Полный LLM-judge: семантически правильно, но x2 latency и x2 cost на каждый STRICT запрос — неприемлемо для Telegram-бота
-- Cross-encoder как judge: не по назначению (он ранжирует релевантность, не верифицирует факты)
-
-Правильная архитектурная позиция: truth — это не модуль, это **confidence function over the pipeline**. То что реализовано (retrieval scoring + threshold gating + STRICT gate) — это production-grade implicit truth proxy, 70-80% решения для Telegram-scale системы.
-
-**Что реально отсутствует** (следующий уровень, не сейчас):
-- contradiction detection
-- memory-vs-context separation  
-- time-awareness
-
----
-
-## ЗАКРЫТЫЕ ЗАДАЧИ СЕССИИ 3 (май 2026)
-
-### ✅ 20.1 — Memory contamination: нерелевантный контекст из старых сессий
-
-**Симптом:** бот отвечал «Из контекста можно сделать вывод...» и описывал содержимое старых разговоров (аниме, «Госпожа Кагуя») вместо ответа на новый вопрос. При очищенном чате и новом вопросе retrieval доставал старые memory записи с высоким embedding score.
-
-**Корень:** три связанных проблемы:
-1. `MemoryRecord` не содержал поле `similarity` — score терялся, все записи получали `1.0`
-2. `retrieved_context` собирался по наличию документов без проверки score
-3. Команды `/clear` не существовало — пользователь не мог сбросить ни историю, ни память
-
-**Решение — три файла:**
-
-`memory/supabase_store.py`: добавлено поле `similarity: float = 1.0` в `MemoryRecord`, заполняется из `row.get("similarity", 1.0)` в `similarity_search()`
-
-`retrieval/retrieval_engine.py`: `(r.content, 1.0)` → `(r.content, r.similarity)` — реальный score идёт в cross-encoder и далее в `RetrievedDocument.score`
-
-`transport/telegram/update_handler.py`: фильтр перед сборкой контекста:
-```python
-_MIN_RETRIEVAL_SCORE = 0.75  # выше pgvector threshold 0.7
-_relevant_docs = [d for d in retrieval_result.documents if d.content and d.score >= _MIN_RETRIEVAL_SCORE]
-if _relevant_docs:
-    retrieved_context = "\n\n".join(d.content for d in _relevant_docs)
-```
-Если после фильтра контекст пустой → STRICT gate в orchestrator вернёт `no_grounded_data` вместо галлюцинации.
-
-**Файлы:** `memory/supabase_store.py`, `retrieval/retrieval_engine.py`, `transport/telegram/update_handler.py`
-**Статус:** ✅ закрыт
-
----
-
-### ✅ 20.2 — Команды /clear и /reset_memory отсутствовали
-
-**Симптом:** пользователь очищал чат в Telegram UI, но `conversation_history` и `memory` в Supabase не трогались. Бот «помнил» всё из прошлых сессий.
-
-**Корень:** обработчиков `/clear` и `/reset_memory` не было ни в `webhook.py`, ни в `update_handler.py`. `ConversationHistory.clear()` и `SupabaseStore.delete_by_user()` существовали, но нигде не вызывались.
-
-**Решение — две команды с разной семантикой (архитектурно правильная модель):**
-
-**Mode A — `/clear` (Session Reset):**
-- Очищает `conversation_history` (Supabase)
-- НЕ трогает долгосрочную память (`SupabaseStore`) — пользователь хочет новый диалог, но не терять персонализацию
-- Кеш не трогается — он инфраструктура, не пользовательская идентичность
-- Безопасная, частая операция
-
-**Mode B — `/reset_memory confirm` (Full Memory Wipe):**
-- Очищает `conversation_history` + `SupabaseStore.delete_by_user()` (долгосрочная память)
-- Очищает `QueryCache` (единственный user-scoped кеш, keyed by `sha256(user_id:query)`)
-- `EmbeddingCache` и `RerankCache` НЕ трогаются — они глобальная инфраструктура без user_id в ключах; их очистка = деградация latency без пользы
-- Двухшаговое подтверждение: первый вызов → предупреждение, `/reset_memory confirm` → выполнение
-- Irreversible, логируется
-
-**Почему две команды, не одна:** разный intent = разная команда (architecture §2.3, No Hidden Authority). Одна команда с «режимами» — скрытый authority.
-
-**Добавлено в `query_cache.py`:** метод `delete_by_user(user_id)` через `SCAN` (не `KEYS` — non-blocking для production Redis). Чистит все `qcache:*` ключи — обратить хеш невозможно, но TTL 10 минут делает collateral минимальным.
-
-**Добавлено в `i18n/strings.py`:** три новых ключа на 12 языках:
-- `session_cleared` — подтверждение /clear с подсказкой про /reset_memory
-- `memory_reset_confirm` — предупреждение перед полным сбросом
-- `memory_reset_done` — подтверждение полного сброса
-
-**Обновлён `help_display`** для en и ru: добавлены упоминания `/clear` и `/reset_memory`.
-
-**Файлы:** `transport/telegram/webhook.py`, `retrieval/cache/query_cache.py`, `i18n/strings.py`
-**Статус:** ✅ закрыт
-
----
-
-### ✅ 8.1 — Мёртвый DENY-check в update_handler (сессия 2, верифицировано сессия 3)
-
-**Суть:** `safety_gate.py` всегда возвращает `GateVerdict.PASS`, три ветки в `update_handler.py` проверяли `gate.verdict == GateVerdict.DENY` — мёртвый код. Заменены комментарием.
-**Статус:** ✅ закрыт
+| # | Суть | Ключевое решение |
+|---|------|-----------------|
+| BUG-O4 | `locals()` в coordinator — хрупкая проверка существования safety переменной | `_safety_result: SafetyResult \| None = None` — явный паттерн |
+| SAFETY-1 | `check()` из async контекста → молчаливый ALLOW | `RuntimeError` вместо warning+ALLOW |
+| SAFETY-2 | `_llm_judge` except → ALLOW (невидимая дыра) | `SAFETY_UNAVAILABLE` вердикт + `increment("safety_agent.judge_unavailable")` |
+| SAFETY-3 | `_REVISE_SIGNALS` — английские строки в мультиязычной системе | **Удалены полностью.** Fast path был языковым костылём. LLM judge покрывает REVISE семантически на всех языках без словарей. |
+| ARCH-1 | architecture.md §21 не содержал полного контракта safety_agent | Переписан: уровни проверки, таблица вердиктов с действиями coordinator, профили одного агента |
+| ARCH-2 | §20, §35, §44, §47, §48.3 расходились с реальностью | Статусы planned/not implemented зафиксированы явно |
 
 ---
 
 ## ОТКРЫТЫЕ ЗАДАЧИ
 
-### 🟡 17.2 — TruthMode: частично реализовано через confidence-based retrieval gating
+### 🔴 SAFETY-4 — Safety Lite для FAST/DEGRADED путей
 
-**Исходная проблема:** TruthMode (STRICT/HYBRID) — инструкция в промпт, не enforcement layer. `truth_check(answer, retrieval_context) -> float` не существует ни в одном файле.
+**Суть:** сейчас safety_agent не вызывается на FAST/DEGRADED. Контракт §21:
+каждый ответ проходит post-check, глубина зависит от пайплайна.
+Safety Lite = облегчённый промпт, тот же safeguard-20b, max_tokens=3.
 
-**Что реализовано в сессии 3 (implicit truth proxy):**
-- `MemoryRecord.similarity` — реальный pgvector score вместо хардкода 1.0
-- Score propagation через весь retrieval pipeline до `RetrievedDocument.score`
-- Score filter `≥ 0.75` в `update_handler` перед сборкой контекста
-- Pre-execution STRICT gate в orchestrator (существовал, теперь получает качественный контекст)
+**Что нужно:**
+- `safety_check_lite(inp: SafetyInput) -> SafetyResult` в `safety_agent.py`
+- Вызов в `_run_degraded()` в orchestrator
+- Вызов в coordinator для FAST-tier путей
 
-Это production pattern (RAG safety gating): `if retrieval weak → no grounding → no strict answer`.
-
-**Что НЕ реализовано (следующий уровень):**
-- Post-generation factual verification
-- Contradiction detection (ответ противоречит контексту)
-- Memory-vs-context separation (старая память vs свежий retrieval)
-- Time-awareness (устаревшие факты в памяти)
-
-**Архитектурная позиция зафиксирована:** `truth_check` как отдельный verification step нереализуем без компромисса при текущих constraints (Telegram, latency, cost). Full LLM-judge = x2 latency + x2 cost. Cross-encoder как judge = не по назначению. Правильный вывод: truth — confidence function over pipeline, не отдельный модуль.
-
-**Статус:** 🟡 частично реализовано. Следующий уровень — contradiction detection и memory-vs-context separation — после стабилизации текущих изменений.
+**Приоритет:** средний. Система работает, Safety Layer Pass 1/2 прикрывают вход.
+Реализовать после стабилизации текущих изменений.
 
 ---
 
-### 🟡 13.3 — CoT артефакты (остаточные случаи)
+### 🔴 SAFETY-5 — Safety Extended для HEAVY пути
 
-**Симптом:** `Constraints:`, `Candidates:`, `Проверка каждого constraints:`, `NO ERRORS FOUND`, `Verification table` в ответе пользователю. Наблюдалось при вопросе «Кто такой Бан из 7 смертных грехов?» в загрязнённой сессии.
+**Суть:** сейчас HEAVY использует тот же `check_async()` что и GENERAL.
+Safety Extended = раздельная проверка reasoning_plan и draft_response.
 
-**Связь с retrieval:** нерелевантный контекст из памяти провоцировал модель на избыточное reasoning → CoT вылезал наружу. После фикса retrieval (20.1) этот триггер устранён. Но механизм stripping должен ловить артефакты независимо от причины.
+**Что нужно:**
+- `safety_check_extended(inp: SafetyInput) -> SafetyResult` в `safety_agent.py`
+- Два LLM-вызова: один на reasoning_plan, один на draft_response
+- Вызов в coordinator на HEAVY пути вместо текущего `safety_check()`
 
-**Верифицировано кодом:** `_strip_cot_artifacts()` в `response_synthesizer.py` реализован. Покрывает Mode A (loop detection) и Mode B (header stripping). Путь vision + не-MATH intent + CoT не покрыт отдельными тестами.
+**Приоритет:** низкий. HEAVY уже проверяется. Extended — следующий уровень.
 
-**Файлы:** `cognition/response_synthesizer.py`, `transport/telegram/vision_handler.py`
-**Статус:** 🟡 частично. Мониторить после деплоя 20.1 — вероятно основной триггер устранён.
+---
+
+### 🔴 SAFETY-6 — REVISE loop в coordinator
+
+**Суть:** сейчас REVISE verdict передаётся в synthesizer с флагом, но повторной
+генерации нет. Таблица вердиктов §21 фиксирует это как planned.
+
+**Что нужно:**
+- При REVISE: повторный вызов primary agent с revision hint в промпте
+- Максимум 1 retry (аналогично MATH correction loop)
+- Bounded — рекурсия запрещена (§17, §25)
+
+**Приоритет:** средний. Влияет на качество ответов где REVISE срабатывает.
+
+---
+
+### 🟡 §35 — History load до EPK: архитектурный долг
+
+**Суть:** история загружается с `GENERAL_HISTORY_BUDGET` до EPK, поэтому
+на DEGRADED-пути prompt содержит больше истории чем нужно.
+
+**Целевой порядок:**
+```
+Safety Gates → Feature Extraction → EPK (pre-check)
+    → History Load (бюджет под EPK-решение)
+    → Retrieval → Full pipeline
+```
+
+Требует двухфазного EPK или conservative estimate на первом проходе.
+
+**Приоритет:** низкий. Не ломает систему, лишние токены на DEGRADED.
+
+---
+
+### 🟡 §47 — Verbatim return: не реализовано
+
+**Суть:** WEATHER/MAPS tool output сейчас всегда идёт через LLM-синтез.
+Verbatim return (прямой вывод без LLM) снизит latency и cost для tool-only запросов.
+
+**Зависимость:** реализуется совместно с §44 multi-intent decomposition.
+
+**Приоритет:** низкий. Функционально работает, только дороже.
+
+---
+
+### 🟡 §44 — Multi-intent decomposition: не реализовано
+
+**Суть:** `classify()` возвращает один `IntentResult`. Параллельного
+исполнения tool-intents через `asyncio.gather` нет.
+
+**Что нужно:**
+- `classify()` → `list[IntentResult]` с `is_primary: bool`
+- `asyncio.gather` для tool-intents в orchestrator
+- EPK агрегирует суммарный cost всех sub-intents
+
+**Приоритет:** низкий. Реализовать после Safety fixes.
+
+---
+
+### 🟡 §20 — source_credibility Call site B: не активен
+
+**Суть:** `MemoryRecord.source_url` определён и propagated через `vector_memory.py`,
+но `source_credibility.score_documents()` в retrieval_engine — pass-through.
+
+**Что нужно перед активацией:**
+1. Аудит и коррекция токенных ставок в `cost_model.py` по актуальным ценам Groq
+2. Активация `score_documents()` в `retrieval_engine.py`
+
+**Приоритет:** низкий.
+
+---
+
+### 🟡 §48.3 — Product Knowledge Фазы 2 и 3: не реализованы
+
+**Суть:** Фаза 1 (inline) реализована. Фазы 2 (static files) и 3 (pgvector indexed)
+реализуются по мере роста объёма product knowledge.
+
+**Приоритет:** низкий. Реализовать когда inline перестанет умещаться.
+
+---
+
+### 🟡 17.2 — TruthMode: частично реализовано
+
+**Что реализовано:** retrieval scoring + threshold gating + STRICT pre-execution gate.
+Production-grade implicit truth proxy для Telegram-scale.
+
+**Что НЕ реализовано:**
+- Post-generation factual verification
+- Contradiction detection
+- Memory-vs-context separation
+- Time-awareness (устаревшие факты в памяти)
+
+**Позиция:** `truth_check` как отдельный LLM-pass нецелесообразен при текущих
+constraints (latency, cost). Следующий уровень — contradiction detection.
+
+**Приоритет:** низкий. После стабилизации safety.
 
 ---
 
 ### 🟡 13.4 — Classifier теряет контекст на follow-up
 
-**Симптом:** короткое сообщение `«Вот, нашла»` → CONVERSATION вместо правильного intent.
-**Частично закрыт:** history context добавлен для сообщений ≤ 8 слов (последние 4 хода, макс 150 символов на ход).
-**Осталось:** asyncio stress tests — без них нет уверенности при concurrent запросах.
+**Симптом:** короткое сообщение «Вот, нашла» → CONVERSATION вместо правильного intent.
+**Частично закрыт:** history context добавлен для сообщений ≤ 8 слов.
+**Осталось:** asyncio stress tests при concurrent запросах.
 **Файл:** `cognition/intent_engine.py` → `_llm_pre_classify`
-**Статус:** 🟡 частично закрыт
 
 ---
 
-### 🔴 19.x — Global formatting contract
+### 🟢 13.7 — Грузинский i18n fallback (быстро закрыть)
 
-**Суть:** паттерн нумерации и шаблонных открытий потенциально кросс-слойный. Фикс 18.3 закрыл extraction. Уровень 2 — global formatting rule — нужен только если паттерн всплывёт снова.
-
-**Правило:** реализовывать только по факту повторного появления, не превентивно.
-
-**Статус:** 🔴 спроектировано, не реализовано. Низкий приоритет пока 18.3 держит.
+**Симптом:** вопрос на грузинском → «уточните вопрос» вместо «технический сбой».
+**Файл:** `i18n/strings.py`, ключ `search_unavailable`, lang `ka`.
+**Приоритет:** высокий по простоте. Одна строка.
 
 ---
 
 ### 🔴 21.1 — Email уведомления (Brevo) — opt-in
 
-**Суть:** `event_notifier.py` умеет слать письма через Brevo, но email пользователя неоткуда брать —
-Telegram Bot API не передаёт email даже если пользователь регистрировался через него.
+**Суть:** `event_notifier.py` умеет слать письма, но email неоткуда брать.
+Telegram Bot API не передаёт email.
 
 **Решение (спроектировано):**
-- пользователь вводит email вручную через команду (`/settings` или отдельный флоу)
-- в Supabase таблица `user_notifications` с полями:
-  ```
-  user_id
-  email
-  notify_balance_exhausted: bool  (default: false)
-  notify_balance_credited: bool   (default: false)
-  ```
-- оба флага по умолчанию выключены — строгий opt-in, не opt-out
-- `event_notifier.py` проверяет флаги перед отправкой
+- Пользователь вводит email через `/settings`
+- Supabase таблица `user_notifications`: `user_id`, `email`, `notify_balance_exhausted`, `notify_balance_credited`
+- Оба флага по умолчанию выключены (strict opt-in)
+- Слать: DENY (баланс 0), подтверждение пополнения
+- НЕ слать: safety_block, system_error — только в логи/Sentry
+- Текст писем переписать в голосе Сэёны
 
-**Что слать:**
-- `notify_balance_exhausted` → письмо когда EPK вернул DENY (баланс = 0), пользователь офлайн
-- `notify_balance_credited` → подтверждение пополнения (опционально, многих раздражает)
-
-**Текст писем:** переписать в голосе Сэёны — текущие шаблоны корпоративные, диссонируют с характером бота.
-
-**Что НЕ слать пользователю:** safety_block, system_error — это внутренние события, только в логи / Sentry.
-
-**Файлы:** `notifications/email_service.py`, `notifications/event_notifier.py`
-**Статус:** 🔴 спроектировано, не реализовано. Низкий приоритет — требует UI для сбора email.
+**Приоритет:** низкий. Требует UI для сбора email.
 
 ---
 
-### 🟢 13.7 — Грузинский i18n fallback
+## АРХИТЕКТУРНЫЕ ПРИНЦИПЫ ЗАФИКСИРОВАННЫЕ В АУДИТЕ
 
-**Симптом:** вопрос на грузинском → `«уточните вопрос»` вместо `«технический сбой»`.
-**Файл:** `i18n/strings.py`, ключ `search_unavailable`, lang `ka`.
-**Статус:** 🟢 быстрое закрытие, одна строка
+### Fast path должен быть детерминированным, не лингвистическим
 
----
+Если есть LLM который решает задачу универсально — не писать языковые словари.
+`_REVISE_SIGNALS` удалены именно по этой причине: они были параллельной
+языковой системой с более узким scope чем LLM judge.
 
-## ГОЛОСОВЫЕ СООБЩЕНИЯ — СТАТУС (май 2026)
+Если fast path нужен — он проверяет структурные инварианты, служебные флаги,
+технические маркеры. Не текст на конкретном языке.
 
-Голосовой pipeline работает стабильно. Production-ready.
-Лимит: 5 минут. Голос линейный → поведение предсказуемое. Vision ветвистая → нестабильная. Это архитектурная разница, не баг.
+### Fail-open с полной observability лучше чем молчаливый ALLOW
 
----
+`SAFETY_UNAVAILABLE` как явный статус важнее чем fail-open сам по себе.
+Разница между «проверен и безопасен» и «не удалось проверить» должна быть
+видна в метриках, логах, и обрабатываться coordinator явно.
 
-## ЗАКРЫТЫЕ ЗАДАЧИ (полная история)
+### Контракт до кода
 
-| # | Закрыт | Суть | Ключевое решение |
-|---|--------|------|-----------------|
-| 13.1 | май 2026 | tool intents → «сервис недоступен» | compound = синтезатор, не агент; tool_choice убран |
-| 13.5 | май 2026 | описательный запрос → поиск по сырому тексту | `_understand_query()` в `classify()` — KNOWN_ENTITY vs DESCRIPTIVE |
-| 13.6 | май 2026 | бот отвечал на каждое фото альбома отдельно | Redis-backed `MediaGroupAggregator`, debounce, Lua atomicity |
-| 13.6.1 | май 2026 | lock bug, смешение партий, lang хардкод | `_LUA_FLUSH` атомарный DEL, `MediaGroupItem.lang`, `input_type` в OrchestratorRequest |
-| 17.1 | май 2026 | CoT infinite loop | `reasoning_engine.py`: QUESTION → mode=DIRECT |
-| 17.3 | май 2026 | шаблонные ответы, «Изображения представляют собой» | history-aware variation в `prompt_engine`, `detect_repetitive_opening` в `analysis`, расширены patterns в `correction` |
-| 18.1 | май 2026 | synthesis шаблон: запреты вместо target pattern | target pattern в `_GROUP_SYNTHESIS_SYSTEM_TEMPLATE`, убраны `Part N:` лейблы |
-| 18.2 | май 2026 | caption+фото → нарратив вместо ответа на вопрос | `_vision_image_context` → `retrieved_context` в `update_handler.py` |
-| 18.3 | май 2026 | нумерация «Первое/Второе изображение» | constraint в `_GROUP_EXTRACTION_SYSTEM` — запрет ordinal labels |
-| 18.4 | май 2026 | нет лимита на количество фото → деградация | `_MAX_GROUP_IMAGES=6` guardrail + `too_many_images` i18n |
-| 20.1 | май 2026 | memory contamination → «Из контекста можно сделать вывод» | similarity score propagation + score filter 0.75 в update_handler |
-| 20.2 | май 2026 | /clear и /reset_memory отсутствовали | две команды с разной семантикой (Mode A / Mode B), двухшаговое подтверждение для Mode B |
-| 8.1 | май 2026 | мёртвые DENY-check в update_handler | ветки удалены, заменены комментарием |
+Перед реализацией любого нового компонента — сначала зафиксировать в
+architecture.md: что делает, что не делает, уровни, вердикты, действия coordinator.
+safety_agent §21 — пример правильного контракта.
 
 ---
 
 ## CI (planned)
 
-coverage floor 75%, asyncio stress tests (13.4), integration tests compound pipeline, retrieval quality regression, mypy.
+Coverage floor 75%, asyncio stress tests (13.4), integration tests compound pipeline,
+retrieval quality regression, mypy strict mode.
 
 ---
 
-## СЛЕДУЮЩИЙ ШАГ (сессия 4)
+## СЛЕДУЮЩИЙ ШАГ
 
-**Деплой сессии 3 — файлы для замены:**
-1. `memory/supabase_store.py`
-2. `retrieval/retrieval_engine.py`
-3. `retrieval/cache/query_cache.py`
-4. `transport/telegram/update_handler.py`
-5. `transport/telegram/webhook.py`
-6. `i18n/strings.py`
+Приоритет реализации открытых задач:
 
-**Тестирование после деплоя:**
-1. Новый вопрос в старом чате → не должно быть «Из контекста можно сделать вывод»
-2. `/clear` → подтверждение, следующий вопрос без старой истории, память сохранена
-3. `/reset_memory` → предупреждение, `/reset_memory confirm` → удаление, следующий вопрос без старой памяти
-4. `/reset_memory` без confirm → только предупреждение, ничего не удаляется
-5. Вопрос на грузинском → правильный fallback (13.7 — быстро закрыть)
-6. CoT артефакты — мониторить, вероятно исчезнут после устранения retrieval триггера
-
-**После стабилизации:**
-- contradiction detection (17.2 следующий уровень)
-- memory-vs-context separation (17.2 следующий уровень)
-- asyncio stress tests (13.4)
-- CI coverage floor 75%
+1. **SAFETY-4** — Safety Lite для FAST/DEGRADED
+2. **SAFETY-6** — REVISE loop в coordinator
+3. **SAFETY-5** — Safety Extended для HEAVY
+4. **§44 + §47** — multi-intent + verbatim return (совместно)
+5. **§35** — history-after-EPK
+6. **§20** — source_credibility call site B
