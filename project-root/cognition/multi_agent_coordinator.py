@@ -9,7 +9,6 @@ import agents.compound_agent as compound_agent
 import agents.creative_agent as creative_agent
 import agents.deep_agent as deep_agent
 import agents.fast_agent as fast_agent
-from agents.consensus_engine import ConsensusResult, resolve
 from agents.fast_agent import AgentResult
 from agents.safety_agent import SafetyInput, SafetyResult, SafetyVerdict
 from agents.safety_agent import check_async as safety_check
