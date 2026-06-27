@@ -2,6 +2,12 @@ import logging
 
 import httpx
 from app.settings import settings
+from events.event_bus import event_bus
+from events.event_types import (
+    AuthFailedEvent,
+    BalanceExhaustedEvent,
+    RequestDeniedEvent,
+)
 from fastapi import APIRouter, Header, HTTPException, Request, status
 from lingua import Language, LanguageDetectorBuilder
 from observability.metrics import gauge, increment
@@ -10,8 +16,6 @@ from transport.telegram.auth_middleware import verify_update, verify_webhook_sec
 from transport.telegram.callback_handler import CallbackAction, parse_callback
 from transport.telegram.message_router import UpdateType, classify_update, extract_text
 from transport.telegram.update_handler import handle_message
-from events.event_bus import event_bus
-from events.event_types import AuthFailedEvent, BalanceExhaustedEvent, RequestDeniedEvent
 
 # Build detector once at import time (expensive operation)
 _detector = (
