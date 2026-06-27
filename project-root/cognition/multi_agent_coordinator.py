@@ -359,31 +359,36 @@ async def coordinate(
 
         # safety_agent: LAST before Consensus.
         # Position-based selection is deterministic — primary is always first.
+        # _safety_result initialised to None — explicit pattern, no locals() (§21 rule 4).
+        _safety_result: SafetyResult | None = None
         if candidates:
             safety_candidate = candidates[0]
-            safety: SafetyResult = await safety_check(SafetyInput(
+            _safety_result = await safety_check(SafetyInput(
                 reasoning_plan=reasoning_plan,
                 draft_response=safety_candidate.text,
                 user_message=user_message,
             ))
-            if safety.verdict == SafetyVerdict.BLOCK:
+            if _safety_result.verdict == SafetyVerdict.BLOCK:
                 logger.warning("safety_agent BLOCK before consensus",
-                               extra={"reason": safety.reason})
+                               extra={"reason": _safety_result.reason})
                 return CoordinationResult(
                     text="", model="", input_tokens=0, output_tokens=0,
                     blocked=True, block_reason="safety_block",
-                    safety_agent_input_tokens=safety.input_tokens,
-                    safety_agent_output_tokens=safety.output_tokens,
+                    safety_agent_input_tokens=_safety_result.input_tokens,
+                    safety_agent_output_tokens=_safety_result.output_tokens,
                 )
+            if _safety_result.verdict == SafetyVerdict.SAFETY_UNAVAILABLE:
+                # Judge unavailable — fail-open with full observability (§21 contract).
+                # Metric already incremented inside _llm_judge.
+                logger.warning("safety_agent UNAVAILABLE before consensus — proceeding fail-open")
 
         if candidates:
             consensus: ConsensusResult = await resolve(candidates)
             if consensus.text:
                 _total_tool_calls = sum(getattr(r, "tool_calls", 0) for r in candidates)
-                # BUG-O4 fix: "safety" in dir() does not reliably check local variable
-                # existence — use locals() instead.
-                _safety_in  = safety.input_tokens  if "safety" in locals() else 0  # type: ignore[name-defined]
-                _safety_out = safety.output_tokens if "safety" in locals() else 0  # type: ignore[name-defined]
+                # BUG-O4 fix: explicit _safety_result variable — locals() forbidden (§21 rule 4).
+                _safety_in  = _safety_result.input_tokens  if _safety_result is not None else 0
+                _safety_out = _safety_result.output_tokens if _safety_result is not None else 0
                 return CoordinationResult(
                     text=consensus.text,
                     model=consensus.model,
@@ -441,29 +446,33 @@ async def coordinate(
             else:
                 logger.info("MATH verifier passed")
 
-        # HEAVY path: safety_agent mandatory (§21, §22)
-        # DEGRADED/NONE-depth/default-GENERAL: safety_agent skipped
+        # HEAVY path: safety_agent mandatory (§21).
+        # DEGRADED / NONE-depth / default-GENERAL: safety_agent skipped (Safety Lite — planned).
+        # _sa_result initialised to None — explicit pattern, no locals() (§21 rule 4).
+        _sa_result: SafetyResult | None = None
         is_heavy = (tier == Tier.HEAVY)
         if is_heavy:
-            safety = await safety_check(SafetyInput(
+            _sa_result = await safety_check(SafetyInput(
                 reasoning_plan=reasoning_plan,
                 draft_response=primary_result.text,
                 user_message=user_message,
             ))
-            if safety.verdict == SafetyVerdict.BLOCK:
+            if _sa_result.verdict == SafetyVerdict.BLOCK:
                 logger.warning("safety_agent BLOCK on HEAVY path",
-                               extra={"reason": safety.reason})
+                               extra={"reason": _sa_result.reason})
                 return CoordinationResult(
                     text="", model="", input_tokens=0, output_tokens=0,
                     blocked=True, block_reason="safety_block",
-                    safety_agent_input_tokens=safety.input_tokens,
-                    safety_agent_output_tokens=safety.output_tokens,
+                    safety_agent_input_tokens=_sa_result.input_tokens,
+                    safety_agent_output_tokens=_sa_result.output_tokens,
                 )
+            if _sa_result.verdict == SafetyVerdict.SAFETY_UNAVAILABLE:
+                # Judge unavailable — fail-open with full observability (§21 contract).
+                logger.warning("safety_agent UNAVAILABLE on HEAVY path — proceeding fail-open")
 
-        # BUG-O4 fix: use is_heavy bool instead of "safety" in dir() — dir() does
-        # not reliably reflect local variable existence in async functions.
-        _sa_in  = safety.input_tokens  if is_heavy else 0
-        _sa_out = safety.output_tokens if is_heavy else 0
+        # BUG-O4 fix: explicit _sa_result variable — locals() / is_heavy bool forbidden (§21 rule 4).
+        _sa_in  = _sa_result.input_tokens  if _sa_result is not None else 0
+        _sa_out = _sa_result.output_tokens if _sa_result is not None else 0
         return CoordinationResult(
             text=primary_result.text,
             model=primary_result.model,
