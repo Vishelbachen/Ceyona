@@ -706,7 +706,7 @@ async def handle_message(
             model=result.model or "",
             response_text=result.text or "",
             response_truncated=len(result.text or "") >= 4096,
-            cost_usd=result.usage.llm_cost_usd,
+            llm_cost_usd=result.usage.llm_cost_usd,  # BUG-2 fix: was cost_usd (wrong field name → TypeError)
             was_degraded_mode=str(result.epk_decision) == "DEGRADED_MODE",
             safety_blocked=result.deny_reason == "safety_block",
             user_id=user_id,
