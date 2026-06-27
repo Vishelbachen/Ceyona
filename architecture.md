@@ -1,5 +1,5 @@
 # CEYONA — CANONICAL ARCHITECTURE
-Version: 8.4 — Response-First Edition
+Version: 8.5 — Safety Contract Edition
 Status: Active Source of Truth
 Supersedes: architecture.md (all previous versions)
 
@@ -640,13 +640,16 @@ Search provider results (Tavily / SerpAPI / SearXNG)
 Provider selection is internal to search.py (three-tier fallback chain — see §28).
 source_credibility filters results regardless of which provider produced them.
 
-**Call site B — retrieval/retrieval_engine.py (reserved)**:
+**Call site B — retrieval/retrieval_engine.py (planned, not in production):**
 ```
 pgvector similarity_search results → source_credibility.score_documents()
-    Currently pass-through (MemoryRecord has no source_url yet)
-    Will activate when MemoryRecord gains source_url field
+    Currently pass-through (MemoryRecord.source_url field exists but not populated)
+    Will activate when source_url is propagated consistently through retrieval pipeline
 → cross_encoder.rerank()
 ```
+> **Status:** `MemoryRecord.source_url` field is defined in `supabase_store.py` and
+> propagated by `vector_memory.py` via `metadata["source_url"]`. Token rates per model
+> in `cost_model.py` to be audited and corrected before activation. Planned implementation.
 
 source_credibility DOES actively block and filter — it is enforcement, not merely advisory.
 It is NOT in the retrieval pipeline between query_preprocessor and reranker.
@@ -676,12 +679,93 @@ works best on normalized (post-Multilingual) text. Both verdicts are logged inde
 Neither blocks execution.
 Model unavailability → pass-through for both passes.
 
-**safety_agent (post-reasoning semantic validation — SOLE BLOCKING AUTHORITY):**
-Runs inside coordinator after primary reasoning. Only layer that can block on safety grounds.
-
 These are NOT duplicates: Safety Layer observes input, safety_agent enforces output.
 
-→ Model assignments, activation rules per EPK path: `models.md §1, §7`
+---
+
+### 21.1 safety_agent — SOLE BLOCKING AUTHORITY
+
+**Назначение:** универсальный финальный валидатор каждого ответа. Не модератор
+входящих сообщений. Не дублирует Safety Layer. Цель — поймать вредоносный или
+некачественный контент, который возник в процессе reasoning или синтеза, — до выдачи
+пользователю.
+
+**Контракт:** каждый ответ проходит post-check. Глубина проверки зависит от пайплайна.
+Исключений нет.
+
+**Когда вызывается:**
+```
+После любого primary reasoning — на всех EPK-путях, где генерируется ответ.
+DENY-путь не генерирует ответ → safety_agent не вызывается (нечего проверять).
+SAFETY_UNAVAILABLE — отдельный статус, не ALLOW. Coordinator решает что делать.
+```
+
+**Уровни проверки (зависят от пайплайна):**
+
+| Путь | Уровень | Обоснование |
+|---|---|---|
+| FAST / DEGRADED | **Safety Lite** | Короткий ответ, отсутствие reasoning chain. Нет объекта для глубокой семантической проверки. Облегчённый промпт, тот же safeguard-20b. |
+| GENERAL | **Safety Standard** | Полноценный semantic judge. reasoning_plan + draft_response. |
+| HEAVY | **Safety Extended** | Расширенная проверка: reasoning_plan проверяется отдельно от draft_response. |
+
+**Архитектурное обоснование Safety Lite на FAST/DEGRADED:**
+safety_agent задуман как валидатор результатов сложного reasoning. На FAST-пути
+reasoning chain отсутствует по определению — агент генерирует прямой ответ без
+многошаговых цепочек. Объектом проверки safety_agent (reasoning_plan) служит
+именно такой контент. Safety Lite сохраняет контракт (каждый ответ проходит
+post-check), но калибрует глубину под фактическую сложность пайплайна.
+
+> **Текущая реализация (июнь 2026):** Safety Standard реализован на ALLOW + HEAVY путях
+> (consensus + HEAVY). Safety Lite для FAST/DEGRADED и Safety Extended для HEAVY —
+> **planned, not implemented**. При переходе к Safety Lite на FAST/DEGRADED
+> coordinator вызывает safety_check_lite() с упрощённым промптом.
+> При переходе к Safety Extended coordinator вызывает safety_check_extended()
+> с раздельной проверкой reasoning_plan и draft_response.
+
+**Вердикты:**
+
+| Verdict | Значение | Действие coordinator |
+|---|---|---|
+| `ALLOW` | Проверен, безопасен | Передаёт в synthesizer |
+| `REVISE` | Требует доработки | Coordinator может повторить генерацию или отправить с пометкой |
+| `BLOCK` | Вредоносный контент | Coordinator блокирует, orchestrator рендерит deny |
+| `SAFETY_UNAVAILABLE` | Модель недоступна | Coordinator логирует, увеличивает счётчик `safety_agent.judge_unavailable`, пропускает с записью в аудит. **Не эквивалентно ALLOW.** |
+
+**Критические правила:**
+
+1. `check()` (synchronous) из async контекста → **`RuntimeError`**, не warning, не ALLOW.
+   Сообщение: `"check() is synchronous only. Use await check_async() inside async code."`
+
+2. `except Exception` в `_llm_judge` → возвращать `SAFETY_UNAVAILABLE`, не `ALLOW`.
+   Observability обязательна: `increment("safety_agent.judge_unavailable")`.
+   Сервис не падает, но статус честно отражает что проверка не была выполнена.
+
+3. `_REVISE_SIGNALS` (fast path) — строки должны быть мультиязычными или отсутствовать.
+   Текущие английские строки не работают для RU/AR ответов.
+   > **Planned fix:** либо расширить до мультиязычного набора, либо убрать fast path
+   > и полагаться исключительно на LLM judge.
+
+4. `_safety_result: SafetyResult | None = None` — обязательный паттерн в coordinator.
+   `locals()` и `"safety" in dir()` запрещены для проверки существования переменной.
+
+**Что НЕ делает safety_agent:**
+- Не фильтрует входящие запросы (это Safety Layer)
+- Не влияет на EPK или routing
+- Не синтезирует ответы
+- Не является единственным safety-слоем (это последний, но не единственный)
+
+**Потенциал (planned):**
+safety_agent как полноценный Response Validator способен проверять:
+- соответствие ответа найденным источникам (hallucination detection)
+- непротиворечивость reasoning и итогового ответа
+- соответствие политике продукта
+- отсутствие утечек внутренних инструкций
+- корректность формата ответа
+
+Текущая реализация использует минимальный subset этих возможностей.
+Расширение — следующий эволюционный шаг агента.
+
+→ Model assignments: `models.md §1, §7`
 
 ---
 
@@ -982,7 +1066,21 @@ Other non-Latin (Cyrillic, CJK, Hangul, Devanagari, Georgian, Hebrew, Thai, Gree
 
 `memory/conversation_history.py` is the per-user turn store (Supabase table `conversation_history`).
 
-**Lifecycle position:** loaded at "Conversation History Load" step in §4 lifecycle, before EPK.
+**Lifecycle position:** loaded at «Conversation History Load» step in §4 lifecycle, before EPK.
+
+> **Архитектурный долг (planned fix):** история загружается до EPK, поэтому тип пути
+> (FAST / GENERAL / HEAVY / DEGRADED) неизвестен на момент выбора бюджета.
+> Система использует консервативное значение по умолчанию (`GENERAL_HISTORY_BUDGET`),
+> что приводит к избыточной загрузке на DEGRADED-пути.
+>
+> Правильный порядок:
+> ```
+> Safety Gates → Feature Extraction → EPK (pre-check, без истории)
+>     → History Load (с бюджетом под EPK-решение)
+>     → Retrieval → Full pipeline
+> ```
+> Требует двухфазного EPK (pre-check до истории, final после retrieval) или
+> conservative estimate на первом проходе. Planned implementation.
 
 **Token budgets (tier is unknown at load time — EPK runs after retrieval):**
 
@@ -1227,6 +1325,12 @@ Telegram Update (photo with media_group_id)
 
 ## 44. MULTI-INTENT DECOMPOSITION
 
+> **Status: planned, not implemented.**
+> Текущая реализация: `classify()` возвращает один `IntentResult`.
+> `asyncio.gather` для параллельных tool-intents в orchestrator отсутствует.
+> Архитектурный контракт ниже описывает целевое состояние системы.
+> Реализуется после завершения текущих фиксов safety_agent и EPK.
+
 ### 44.1 Принцип
 
 Один пользовательский запрос может содержать несколько независимых интентов.
@@ -1366,6 +1470,13 @@ PERSONA_PATCH_{MODEL} — компенсация известных слабос
 
 ## 47. VERBATIM RETURN POLICY
 
+> **Status: planned, not implemented.**
+> Текущая реализация: `synthesize()` вызывается на всех путях без исключений.
+> Tool output для WEATHER/MAPS вставляется в `retrieved_context` и проходит
+> через coordinator → synthesize как обычно. LLM всегда синтезирует ответ.
+> Архитектурный контракт ниже описывает целевое состояние.
+> Реализуется совместно с §44 multi-intent decomposition.
+
 ### 47.1 Определение
 
 Verbatim return — путь исполнения при котором tool output возвращается пользователю
@@ -1434,12 +1545,12 @@ Intent.SERVICE detected
 
 Реализация масштабируется по мере роста объёма знаний:
 
-**Фаза 1 — Inline (текущая реализация):**
+**Фаза 1 — Inline (текущая реализация ✅):**
 Product knowledge встроено напрямую в `_BASE_PROMPTS[Intent.SERVICE]`
 в `cognition/intent_engine.py`.
 Применимо пока знаний мало (< ~20 фактов, умещаются в 1–2 абзаца).
 
-**Фаза 2 — Static files:**
+**Фаза 2 — Static files (planned):**
 При росте продукта (тарифы, модели, лимиты, FAQ) — выделить в статические файлы:
 ```
 docs/product/
@@ -1452,11 +1563,14 @@ docs/product/
 Router выбирает нужный файл(ы) по теме запроса.
 Файлы читаются при старте — не при каждом запросе.
 
-**Фаза 3 — Indexed (при масштабировании):**
+**Фаза 3 — Indexed (planned, при масштабировании):**
 Если знаний становится много (сотни записей) — индексировать в pgvector
 как отдельную коллекцию (`source_type = "product"`).
 `similarity_search` по product-коллекции вместо полного файла.
 Отделено от пользовательской памяти на уровне `source_type` фильтра.
+
+> Все три фазы обязательны к реализации. Фазы 2 и 3 реализуются последовательно
+> по мере роста объёма product knowledge.
 
 ### 48.4 Правила Product Knowledge
 
