@@ -46,15 +46,16 @@ class SafetyResult:
 # It receives reasoning_plan + draft_response — the full LLM output context —
 # and asks gpt-oss-safeguard-20b to judge whether the CONTENT is harmful.
 #
-# Why LLM-judge, not string matching (architecture.md §21):
-#   String matching catches only literal phrases.
-#   Paraphrasing, synonyms, or non-English bypass it completely.
-#   LLM-judge understands semantic intent regardless of phrasing.
+# Why LLM-judge only, no fast path (architecture.md §21):
+#   The LLM judge covers ALLOW / REVISE / BLOCK semantically across all languages.
+#   A keyword fast path would require per-language signal lists — a linguistic
+#   crutch that grows unbounded and conflicts with the LLM verdict.
+#   Fast path was removed: language-agnostic semantic classification is
+#   delegated entirely to the LLM judge. (audit.md SAFETY-3)
 #
 # Cost tradeoff (acknowledged, per architecture decisions):
 #   LLM call adds latency and tokens. Acceptable because:
 #   - safety_agent runs post-reasoning, not on every message
-#   - Only runs on ALLOW / HEAVY_REQUIRED paths (not DEGRADED / DENY)
 #   - gpt-oss-safeguard-20b returns in ~1 token — max_tokens=5
 
 _SAFETY_JUDGE_SYSTEM = (
@@ -75,13 +76,6 @@ _SAFETY_JUDGE_SYSTEM = (
     "Reply with exactly one word: SAFE, REVISE, or BLOCK."
 )
 
-_REVISE_SIGNALS: list[str] = [
-    "i cannot verify this is safe",
-    "this may cause harm",
-    "consult a professional",
-    "not medical advice",
-    "not legal advice",
-]
 
 
 async def _llm_judge(combined: str) -> tuple[SafetyVerdict, int, int]:
@@ -142,7 +136,7 @@ def check(inp: SafetyInput) -> SafetyResult:
     MUST NOT be called from async context — raises RuntimeError immediately.
     Use await check_async() in all async code (coordinator, orchestrator).
 
-    Fast path: _REVISE_SIGNALS string check (see module-level note on multilingual gap).
+    Fast path: none — LLM judge handles all verdicts across all languages (audit.md SAFETY-3).
     Semantic path: LLM judge via new event loop — only valid outside running event loop.
 
     Returns:
@@ -167,20 +161,10 @@ def check(inp: SafetyInput) -> SafetyResult:
             raise
         # get_running_loop() raised "no running event loop" — safe to continue.
 
-    combined = f"{inp.reasoning_plan} {inp.draft_response}".lower()
+    combined = f"{inp.reasoning_plan} {inp.draft_response}"
 
-    # Fast path: catch obvious revision triggers without LLM call.
-    # NOTE: _REVISE_SIGNALS are English-only — does not cover RU/AR responses.
-    # Planned fix: extend to multilingual or remove in favour of LLM judge only (§21).
-    for signal in _REVISE_SIGNALS:
-        if signal in combined:
-            logger.info("safety_agent REVISE (fast path)", extra={"signal": signal})
-            return SafetyResult(
-                verdict=SafetyVerdict.REVISE,
-                reason=f"response requires revision: {signal}",
-            )
-
-    # Semantic path: LLM judge — new event loop (non-async context only).
+    # No fast path — LLM judge handles ALLOW/REVISE/BLOCK across all languages.
+    # See audit.md SAFETY-3 for rationale.
     try:
         loop = asyncio.new_event_loop()
         try:
@@ -221,7 +205,7 @@ async def check_async(inp: SafetyInput) -> SafetyResult:
     """
     Async entry point — preferred for all coordinator/orchestrator paths.
 
-    Fast path: _REVISE_SIGNALS string check (English-only — see §21 planned fix).
+    Fast path: none — LLM judge handles all verdicts across all languages (audit.md SAFETY-3).
     Semantic path: LLM judge (gpt-oss-safeguard-20b).
 
     Returns:
@@ -230,19 +214,10 @@ async def check_async(inp: SafetyInput) -> SafetyResult:
       BLOCK              → coordinator blocks, orchestrator renders deny message
       SAFETY_UNAVAILABLE → LLM judge failed; coordinator handles per §21 contract
     """
-    combined = f"{inp.reasoning_plan} {inp.draft_response}".lower()
+    combined = f"{inp.reasoning_plan} {inp.draft_response}"
 
-    # Fast path: revision signals.
-    # NOTE: English-only — planned fix in §21.
-    for signal in _REVISE_SIGNALS:
-        if signal in combined:
-            logger.info("safety_agent REVISE (fast path)", extra={"signal": signal})
-            return SafetyResult(
-                verdict=SafetyVerdict.REVISE,
-                reason=f"response requires revision: {signal}",
-            )
-
-    # Semantic path: LLM judge.
+    # No fast path — LLM judge handles ALLOW/REVISE/BLOCK across all languages.
+    # See audit.md SAFETY-3 for rationale.
     verdict, in_tok, out_tok = await _llm_judge(combined)
 
     if verdict == SafetyVerdict.BLOCK:
