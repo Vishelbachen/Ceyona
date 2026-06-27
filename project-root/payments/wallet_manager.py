@@ -1,5 +1,7 @@
 import logging
 
+from events.event_bus import event_bus
+from events.event_types import BalanceCreditedEvent
 from payments.access_controller import AccessController
 from payments.pricing_engine import nano_to_usd
 from payments.ton_client import TonTransaction, ton_client
@@ -116,6 +118,22 @@ class WalletManager:
                     "user_id": user_id,
                     "amount_usd": amount_usd,
                 })
+
+                # Publish balance.credited event — triggers email notification
+                # via EventBus → event_dispatcher → event_notifier.on_balance_credited()
+                # Non-blocking: event_bus.publish() wraps handlers in asyncio.create_task()
+                try:
+                    new_balance = (await self._access.get_balance(user_id)).balance_usd
+                    await event_bus.publish(BalanceCreditedEvent(
+                        user_id=user_id,
+                        payload={
+                            "amount_usd": amount_usd,
+                            "new_balance_usd": new_balance,
+                            "tx_hash": tx.tx_hash,
+                        },
+                    ))
+                except Exception as exc:
+                    logger.warning("BalanceCreditedEvent publish failed", extra={"error": str(exc)})
             else:
                 logger.error("Credit failed for verified transaction", extra={
                     "tx_hash": tx.tx_hash,
