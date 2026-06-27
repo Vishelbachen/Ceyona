@@ -76,6 +76,22 @@ _SAFETY_JUDGE_SYSTEM = (
     "Reply with exactly one word: SAFE, REVISE, or BLOCK."
 )
 
+# Safety Lite prompt — FAST/DEGRADED paths (architecture.md §21, audit.md SAFETY-4).
+# Scope: BLOCK-level only. Short direct responses have no reasoning chain,
+# so REVISE semantics (medical/legal disclaimers) are not applicable here.
+# Same model (gpt-oss-safeguard-20b), max_tokens=3 — minimal overhead.
+_SAFETY_LITE_SYSTEM = (
+    "You are a safety filter for short AI responses. "
+    "Classify the response as SAFE or BLOCK.\n\n"
+    "BLOCK only if the response contains:\n"
+    "- Step-by-step instructions to harm a person\n"
+    "- Synthesis routes for weapons, drugs, or dangerous substances\n"
+    "- Working exploit code or malware implementation\n"
+    "- Sexual content involving minors\n\n"
+    "SAFE — everything else.\n"
+    "Default to SAFE. Reply with exactly one word: SAFE or BLOCK."
+)
+
 
 
 async def _llm_judge(combined: str) -> tuple[SafetyVerdict, int, int]:
@@ -127,6 +143,85 @@ async def _llm_judge(combined: str) -> tuple[SafetyVerdict, int, int]:
             extra={"error": str(exc), "event": "safety_judge_signal_lost"},
         )
         return SafetyVerdict.SAFETY_UNAVAILABLE, 0, 0
+
+
+async def _llm_judge_lite(draft_response: str) -> tuple[SafetyVerdict, int, int]:
+    """
+    Lite variant of _llm_judge for FAST/DEGRADED paths (architecture.md §21, SAFETY-4).
+
+    Scope: BLOCK only — no REVISE (short responses have no reasoning chain).
+    Same model (gpt-oss-safeguard-20b), max_tokens=3 — minimal overhead.
+    Returns (verdict, input_tokens, output_tokens).
+    On exception: returns (SAFETY_UNAVAILABLE, 0, 0) — same contract as _llm_judge.
+    """
+    try:
+        from llm.groq_client import groq_client
+
+        response = await groq_client.complete(
+            model="openai/gpt-oss-safeguard-20b",
+            messages=[
+                {"role": "system", "content": _SAFETY_LITE_SYSTEM},
+                {"role": "user",   "content": draft_response[:2000]},
+            ],
+            max_tokens=3,
+            temperature=0.0,
+        )
+        verdict_text = response.text.strip().upper()
+        in_tok  = response.input_tokens
+        out_tok = response.output_tokens
+
+        if "BLOCK" in verdict_text:
+            return SafetyVerdict.BLOCK, in_tok, out_tok
+        return SafetyVerdict.ALLOW, in_tok, out_tok
+
+    except Exception as exc:
+        try:
+            from infra.metrics import increment
+            increment("safety_agent.judge_unavailable")
+        except Exception:
+            pass
+
+        logger.error(
+            "safety_agent: Lite LLM judge unavailable — returning SAFETY_UNAVAILABLE",
+            extra={"error": str(exc), "event": "safety_judge_lite_signal_lost"},
+        )
+        return SafetyVerdict.SAFETY_UNAVAILABLE, 0, 0
+
+
+async def check_async_lite(inp: SafetyInput) -> SafetyResult:
+    """
+    Safety Lite — async entry point for FAST/DEGRADED paths (architecture.md §21, SAFETY-4).
+
+    Scope: BLOCK-level only. No REVISE — short direct responses have no reasoning chain,
+    so medical/legal disclaimer semantics do not apply.
+
+    Uses _SAFETY_LITE_SYSTEM prompt, max_tokens=3, same model (gpt-oss-safeguard-20b).
+    Only draft_response is checked — reasoning_plan is empty on FAST paths.
+
+    Returns:
+      ALLOW              → pass through to synthesizer
+      BLOCK              → coordinator blocks, orchestrator renders deny
+      SAFETY_UNAVAILABLE → judge failed; coordinator handles per §21 contract
+    """
+    verdict, in_tok, out_tok = await _llm_judge_lite(inp.draft_response)
+
+    if verdict == SafetyVerdict.BLOCK:
+        logger.warning("safety_agent BLOCK (Lite)", extra={"verdict": "BLOCK"})
+        return SafetyResult(
+            verdict=SafetyVerdict.BLOCK,
+            reason="unsafe content (Lite LLM judge)",
+            input_tokens=in_tok,
+            output_tokens=out_tok,
+        )
+    if verdict == SafetyVerdict.SAFETY_UNAVAILABLE:
+        logger.warning("safety_agent UNAVAILABLE (Lite)", extra={"verdict": "SAFETY_UNAVAILABLE"})
+        return SafetyResult(verdict=SafetyVerdict.SAFETY_UNAVAILABLE)
+
+    return SafetyResult(
+        verdict=SafetyVerdict.ALLOW,
+        input_tokens=in_tok,
+        output_tokens=out_tok,
+    )
 
 
 def check(inp: SafetyInput) -> SafetyResult:
