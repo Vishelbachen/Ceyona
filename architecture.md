@@ -757,7 +757,7 @@ safety_agent
 | Verdict | Значение | Действие coordinator |
 |---|---|---|
 | `ALLOW` | Проверен, безопасен | Передаёт результат в synthesizer без изменений |
-| `REVISE` | Требует доработки | **Текущее:** передаёт в synthesizer с флагом (revision loop не реализован). **Planned:** повторная генерация с revision hint или отдельный revision pass |
+| `REVISE` | Требует доработки | Повторный вызов primary agent с `revision hint` содержащим `SafetyResult.reason`. Max 1 retry. Tool outputs и context reused (не новый pipeline). Если второй pass снова REVISE → pass-through с флагом (не BLOCK). Revision tokens биллируются отдельно (`revision_input_tokens` / `revision_output_tokens` в `UsageEntry`). Реализовано: SAFETY-6. |
 | `BLOCK` | Вредоносный контент | Блокирует результат, orchestrator рендерит deny-сообщение пользователю |
 | `SAFETY_UNAVAILABLE` | Модель недоступна | Логирует, увеличивает `safety_agent.judge_unavailable`, пропускает ответ с записью в аудит. **Не эквивалентно ALLOW.** Стратегия: fail-open с полной observability |
 
