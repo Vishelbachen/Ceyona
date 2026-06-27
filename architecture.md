@@ -252,6 +252,7 @@ User Input
 → EPK Policy Resolution  [SOLE policy authority — inside orchestrator]
 → analysis.py (pre-reasoning hints) [IMPLEMENTED ✅ — see §27]
 → Intent Classification  [возвращает list[IntentResult] — см. §44]
+→ Product Knowledge Injection  [Intent.SERVICE only — см. §48; skipped for all other intents]
 → Multi-Intent Decomposition  [tool-intents параллельно, non-tool последовательно]
 → Execution Plan (via multi_agent_coordinator)
 → Model Resolution (via model_router + preferred_model hint — см. §45)
@@ -1397,3 +1398,114 @@ synthesizer при verbatim return — не вызывается.
 Verbatim return: cost = 0 LLM tokens.
 EPK оценивает стоимость до исполнения — если verbatim path ожидаем,
 estimated_output = 0 для tool-only запросов.
+
+---
+
+## 48. PRODUCT KNOWLEDGE LAYER
+
+### 48.1 Назначение
+
+Product Knowledge Layer — источник знаний бота о самом себе: команды, биллинг,
+тарифы, лимиты, модели, настройки аккаунта.
+
+Это принципиально отличается от всех других источников данных в системе:
+- **RAG / pgvector** — знания пользователя (его история, его память)
+- **Web Search** — внешние данные из интернета
+- **Retrieved Context** — найденные факты из внешних источников
+- **Product Knowledge** — внутренние факты о самой платформе Ceyona
+
+Ни один из существующих источников не предназначен для этого.
+Product Knowledge — отдельная сущность с собственным lifecycle.
+
+### 48.2 Активация
+
+Product Knowledge активируется исключительно на `Intent.SERVICE` пути.
+Для всех остальных интентов — не вызывается, не загружается, не инжектируется.
+
+```
+Intent.SERVICE detected
+    → Product Knowledge Router → select relevant section(s)
+    → inject as system prompt context
+    → LLM answers from product knowledge only
+    → no web search, no RAG, no external retrieval
+```
+
+### 48.3 Эволюция реализации
+
+Реализация масштабируется по мере роста объёма знаний:
+
+**Фаза 1 — Inline (текущая реализация):**
+Product knowledge встроено напрямую в `_BASE_PROMPTS[Intent.SERVICE]`
+в `cognition/intent_engine.py`.
+Применимо пока знаний мало (< ~20 фактов, умещаются в 1–2 абзаца).
+
+**Фаза 2 — Static files:**
+При росте продукта (тарифы, модели, лимиты, FAQ) — выделить в статические файлы:
+```
+docs/product/
+    billing.md     — пополнение, списание, TON, тарифы
+    commands.md    — полный список команд и их поведение
+    models.md      — доступные модели для пользователя (не models.md архитектурный)
+    limits.md      — лимиты запросов, размеры файлов, TTS лимиты
+    account.md     — история, настройки, память, сброс
+```
+Router выбирает нужный файл(ы) по теме запроса.
+Файлы читаются при старте — не при каждом запросе.
+
+**Фаза 3 — Indexed (при масштабировании):**
+Если знаний становится много (сотни записей) — индексировать в pgvector
+как отдельную коллекцию (`source_type = "product"`).
+`similarity_search` по product-коллекции вместо полного файла.
+Отделено от пользовательской памяти на уровне `source_type` фильтра.
+
+### 48.4 Правила Product Knowledge
+
+**Что входит в Product Knowledge:**
+- команды бота и их поведение
+- процесс пополнения баланса (TON, memo, адрес)
+- тарифная сетка и списание
+- лимиты платформы
+- политика памяти (что хранится, что удаляется)
+- технические возможности (голос, фото, языки)
+
+**Что НЕ входит:**
+- архитектурные детали (модели, оркестратор, EPK) — это не пользовательское знание
+- pricing LLM-моделей в USD — это `economic.md`, не Product Knowledge
+- внутренние баги и audit items
+
+**TruthMode для Product Knowledge:**
+`TruthMode.STRICT` — LLM отвечает только на основе инжектированного контекста.
+Не дополняет из training data, не изобретает политики.
+Если знания о конкретном вопросе нет в инжектированном контексте →
+LLM сообщает об этом явно, не изобретает ответ.
+
+> **Реализация (Фаза 1):** `TruthMode.STRICT` активен с первой реализации.
+> Inline product knowledge в system prompt + STRICT = LLM не дополняет из training data.
+> При переходе на Фазу 2 (static files) STRICT остаётся — меняется только источник контекста.
+
+### 48.5 Authority
+
+Product Knowledge Router (когда будет выделен) — execution-only node.
+
+Он MAY:
+- выбирать релевантные секции по теме запроса
+- инжектировать выбранный контекст в system prompt
+
+Он MUST NOT:
+- влиять на EPK
+- изменять routing
+- выбирать модели
+- создавать политику
+- отвечать пользователю напрямую (синтез принадлежит LLM)
+
+### 48.6 Разграничение с моделями данных
+
+| Источник | Кто владеет | Для кого |
+|---|---|---|
+| `memory/` (pgvector) | Пользователь | Его собственные данные |
+| `external/search.py` | Интернет | Внешние факты |
+| `docs/product/` (будущее) | Платформа Ceyona | Факты о сервисе |
+| `economic.md` | Архитектура | Стоимость для EPK |
+| `models.md` | Архитектура | Модели для роутинга |
+
+Product Knowledge — единственный источник где платформа говорит о себе пользователю.
