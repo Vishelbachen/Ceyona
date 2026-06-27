@@ -527,6 +527,13 @@ usage = {
     "safety_agent_input_tokens":       int,   # safety_agent LLM judge input tokens ($0.075/1M)
     "safety_agent_output_tokens":      int,   # safety_agent LLM judge output tokens ($0.30/1M)
 
+    # ── SAFETY-6 Revision pass (Groq, default 0) ─────────────────────────────
+    # Populated when safety_agent returns REVISE and revision loop fires (max 1 pass).
+    # Billed at primary model rates for the tier that executed.
+    # economic.md §2: separate Groq call — MUST be billed.
+    "revision_input_tokens":  int,   # REVISE loop input tokens (primary model, same tier rates)
+    "revision_output_tokens": int,   # REVISE loop output tokens
+
     # ── Multilingual preprocessor (Groq, default 0) ──────────────────────────
     # On ALLOW/DEGRADED: billed via actual_multilingual_cost() in webhook.py.
     # On HEAVY: already included in result.usage.cost_usd by _run_heavy().
