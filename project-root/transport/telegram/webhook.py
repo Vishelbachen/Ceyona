@@ -13,7 +13,7 @@ from lingua import Language, LanguageDetectorBuilder
 from observability.metrics import gauge, increment
 from observability.tracing import trace
 from transport.telegram.auth_middleware import verify_update, verify_webhook_secret
-from transport.telegram.callback_handler import CallbackAction, parse_callback
+from transport.telegram.callback_handler import dispatch_callback, parse_callback
 from transport.telegram.message_router import UpdateType, classify_update, extract_text
 from transport.telegram.update_handler import handle_message
 
@@ -678,49 +678,14 @@ async def telegram_webhook(
 
     elif update_type == UpdateType.CALLBACK_QUERY:
         ctx = parse_callback(update, user_id)
-
-        if ctx.action == CallbackAction.BALANCE:
-            bal_text = f"💰 Balance: ${user_balance:.2f}"
-            await _answer_callback(ctx.callback_query_id, bal_text)
-        elif ctx.action == CallbackAction.TOPUP:
-            # Acknowledge the button press immediately (removes spinner)
-            await _answer_callback(ctx.callback_query_id)
-            # Send TON wallet address as a message the user can act on
-            import secrets
-
-            from app.settings import settings as _s
-            wallet = _s.ton_wallet
-            if wallet:
-                # Generate a random suffix to prevent memo-guessing attacks:
-                # attacker knowing someone's Telegram ID cannot credit their account
-                # by sending TON with just the ID as memo.
-                _memo_suffix = secrets.token_hex(4)  # e.g. "a3f9c2b1"
-                _memo = f"{user_id}_{_memo_suffix}"
-                topup_text = (
-                    f"💳 *Top up your balance*\n\n"
-                    f"1️⃣ Send TON to this address:\n"
-                    f"`{wallet}`\n\n"
-                    f"2️⃣ In the comment/memo field, paste this exactly:\n"
-                    f"`{_memo}`\n\n"
-                    f"⚠️ *The comment is required.* Without it we cannot credit your account.\n\n"
-                    f"💰 Current balance: ${user_balance:.4f}"
-                )
-            else:
-                topup_text = get_system_message("topup_unavailable", lang)
-            if chat_id:
-                await _send_message(chat_id, topup_text)
-        elif ctx.action == CallbackAction.HELP:
-            await _answer_callback(
-                ctx.callback_query_id,
-                get_system_message("help_display", lang),
-            )
-        elif ctx.action == CallbackAction.CANCEL:
-            await _answer_callback(
-                ctx.callback_query_id,
-                get_system_message("cancelled", lang),
-            )
-        else:
-            await _answer_callback(ctx.callback_query_id)
+        await dispatch_callback(
+            ctx=ctx,
+            chat_id=chat_id,
+            user_balance=user_balance,
+            lang=lang,
+            send_message=_send_message,
+            answer_callback=_answer_callback,
+        )
 
     return {"ok": True}
 
