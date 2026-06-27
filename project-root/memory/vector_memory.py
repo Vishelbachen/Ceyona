@@ -2,7 +2,7 @@ import logging
 from dataclasses import dataclass
 
 from events.event_bus import event_bus
-from events.event_types import EventName, BaseEvent
+from events.event_types import BaseEvent, EventName
 from llm.hf_client import BGE_LARGE, BGE_SMALL, hf_client
 from memory.supabase_store import MemoryEntry, MemoryRecord, SupabaseStore
 
