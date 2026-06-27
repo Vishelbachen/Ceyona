@@ -11,6 +11,11 @@ from core.execution.orchestrator import (
     UsageRecord,
     run,
 )
+from events.event_bus import event_bus
+from events.event_types import (
+    RequestCompletedEvent,
+    UpdateReceivedEvent,
+)
 from transport.telegram.message_router import (
     UpdateType,
     extract_media_group_id,
@@ -88,6 +93,20 @@ async def handle_message(
                                # (not raw user text). Prevents CoT reasoning on vision pipeline path.
                                # Set explicitly by callers on album path; auto-detected on single photo path.
 ) -> OrchestratorResult:
+
+    # ── update.received event ─────────────────────────────────────────────────
+    # Fire-and-forget: non-blocking, wrapped in asyncio.create_task() by event_bus.
+    try:
+        await event_bus.publish(UpdateReceivedEvent(
+            user_id=user_id,
+            payload={
+                "update_type": update_type.value if hasattr(update_type, "value") else str(update_type),
+                "input_type": input_type,
+                "request_id": request_id,
+            },
+        ))
+    except Exception as _ev_exc:
+        logger.debug("UpdateReceivedEvent publish failed", extra={"error": str(_ev_exc)})
 
     # ── photo handling ────────────────────────────────────────────────────────
     if has_photo(update):
@@ -766,5 +785,23 @@ async def handle_message(
             multilingual_output_tokens=_ml_output_tokens,
             multilingual_model=_ml_model,
         )
+
+    # ── request.completed event ───────────────────────────────────────────────
+    # Fired for every request — denied or allowed. Non-blocking.
+    try:
+        await event_bus.publish(RequestCompletedEvent(
+            user_id=user_id,
+            payload={
+                "intent":         result.intent or str(result.epk_decision),
+                "tier":           result.tier.value if result.tier else "",
+                "model":          result.model or "",
+                "total_cost_usd": result.usage.llm_cost_usd,
+                "denied":         result.denied,
+                "deny_reason":    result.deny_reason or "",
+                "request_id":     request_id,
+            },
+        ))
+    except Exception as _ev_exc:
+        logger.debug("RequestCompletedEvent publish failed", extra={"error": str(_ev_exc)})
 
     return result
