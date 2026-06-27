@@ -597,6 +597,34 @@ async def _run_degraded(
             epk_decision=epk_decision,
         )
 
+    # ── Safety Lite (architecture.md §21, SAFETY-4) ───────────────────────────
+    # FAST/DEGRADED path: BLOCK-scope only. No reasoning chain on FAST — REVISE
+    # semantics (medical/legal disclaimers) do not apply. Same model, lighter prompt.
+    from agents.safety_agent import SafetyInput, SafetyVerdict
+    from agents.safety_agent import check_async_lite as _safety_lite
+
+    _lite_result = await _safety_lite(SafetyInput(
+        reasoning_plan="",  # no reasoning chain on FAST/DEGRADED path
+        draft_response=coordination.text,
+        user_message=request.user_message,
+    ))
+
+    if _lite_result.verdict == SafetyVerdict.BLOCK:
+        logger.warning("safety_agent Lite BLOCK on DEGRADED path",
+                       extra={"reason": _lite_result.reason})
+        return _denied_result(
+            reason="safety_block",
+            lang=lang,
+            tier=tier,
+            input_tokens=request.input_tokens,
+            embedding_tokens=request.embedding_tokens,
+            rerank_tokens=request.rerank_tokens,
+            embedding_type=request.embedding_type,
+            epk_decision=epk_decision,
+        )
+    if _lite_result.verdict == SafetyVerdict.SAFETY_UNAVAILABLE:
+        logger.warning("safety_agent Lite UNAVAILABLE on DEGRADED — proceeding fail-open")
+
     _billing_tier = coordination.actual_tier or tier
     cost = actual_cost(
         input_tokens=coordination.input_tokens,
@@ -606,6 +634,16 @@ async def _run_degraded(
         tier=_billing_tier,
         embedding_type=request.embedding_type,
     )
+
+    # Bill Safety Lite tokens (economic.md §2: every model call MUST be billed).
+    from core.kernel.cost_model import actual_safety_cost as _actual_safety_cost
+    _lite_cost = _actual_safety_cost(
+        pass1_tokens=0,
+        pass2_tokens=0,
+        safeguard_tokens=_lite_result.input_tokens,
+        safeguard_output_tokens=_lite_result.output_tokens,
+    )
+    cost += _lite_cost
 
     synthesis = synthesize(SynthesisInput(
         raw_text=coordination.text,
@@ -635,6 +673,8 @@ async def _run_degraded(
         tool_used=bool(intent_result.tool_name),
         tool_calls=coordination.tool_calls,
         resolved_model="",  # DEGRADED_MODE: no preferred_model — FAST tier is always gpt-oss-20b
+        safety_agent_input_tokens=_lite_result.input_tokens,
+        safety_agent_output_tokens=_lite_result.output_tokens,
         compound_breakdown=getattr(coordination, "usage_breakdown", []),
     )
 
