@@ -10,6 +10,8 @@ from transport.telegram.auth_middleware import verify_update, verify_webhook_sec
 from transport.telegram.callback_handler import CallbackAction, parse_callback
 from transport.telegram.message_router import UpdateType, classify_update, extract_text
 from transport.telegram.update_handler import handle_message
+from events.event_bus import event_bus
+from events.event_types import BalanceExhaustedEvent, RequestDeniedEvent
 
 # Build detector once at import time (expensive operation)
 _detector = (
@@ -602,9 +604,29 @@ async def telegram_webhook(
             except Exception as exc:
                 logger.error("Billing failed", extra={"error": str(exc)})
 
-        # Track denied/allowed outcomes
+        # Track denied/allowed outcomes + publish domain events
         if result.denied:
             increment(f"webhook.denied.{result.deny_reason or 'unknown'}")
+            # Publish domain event — non-blocking, fire-and-forget via asyncio.create_task()
+            try:
+                if result.deny_reason == "insufficient_balance":
+                    await event_bus.publish(BalanceExhaustedEvent(
+                        user_id=user_id,
+                        payload={
+                            "deny_reason": result.deny_reason,
+                            "intent": result.intent or str(result.epk_decision),
+                        },
+                    ))
+                else:
+                    await event_bus.publish(RequestDeniedEvent(
+                        user_id=user_id,
+                        payload={
+                            "deny_reason": result.deny_reason or "unknown",
+                            "intent": result.intent or str(result.epk_decision),
+                        },
+                    ))
+            except Exception as _ev_exc:
+                logger.debug("Deny event publish failed", extra={"error": str(_ev_exc)})
         else:
             increment("webhook.allowed")
         logger.info("Request complete", extra={
