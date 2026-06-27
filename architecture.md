@@ -722,14 +722,44 @@ post-check), но калибрует глубину под фактическу�
 > При переходе к Safety Extended coordinator вызывает safety_check_extended()
 > с раздельной проверкой reasoning_plan и draft_response.
 
-**Вердикты:**
+**Профили — один агент, не три компонента:**
+Safety Lite / Standard / Extended — это профили проверки одного и того же `safety_agent`.
+Агент выбирает профиль на основе `RoutingProfile` / характеристик пайплайна.
+Это НЕ три отдельных модуля, НЕ три отдельных класса.
+
+```
+safety_agent
+    ├── Lite      (FAST / DEGRADED path)
+    ├── Standard  (GENERAL path)
+    └── Extended  (HEAVY path)
+```
+
+**Что валидирует safety_agent (текущая реализация):**
+- безопасность контента (BLOCK-level: harm, weapons, CSAM, exploit code)
+- необходимость доработки (REVISE-level: unverified medical claims, legal conclusions)
+
+**Что валидирует safety_agent (planned — Response Validator):**
+- соответствие ответа retrieved context (hallucination detection)
+- непротиворечивость reasoning_plan и draft_response
+- соответствие политике продукта
+- отсутствие ложных утверждений о возможностях сервиса
+- отсутствие утечек внутренних инструкций
+- корректность финального ответа
+
+**Что НЕ делает safety_agent:**
+- не фильтрует входящие запросы (это Safety Layer Pass 1/2)
+- не влияет на EPK, routing или TruthMode
+- не синтезирует ответы
+- не принимает решения о маршрутизации
+
+**Вердикты и обязательные действия coordinator:**
 
 | Verdict | Значение | Действие coordinator |
 |---|---|---|
-| `ALLOW` | Проверен, безопасен | Передаёт в synthesizer |
-| `REVISE` | Требует доработки | Coordinator может повторить генерацию или отправить с пометкой |
-| `BLOCK` | Вредоносный контент | Coordinator блокирует, orchestrator рендерит deny |
-| `SAFETY_UNAVAILABLE` | Модель недоступна | Coordinator логирует, увеличивает счётчик `safety_agent.judge_unavailable`, пропускает с записью в аудит. **Не эквивалентно ALLOW.** |
+| `ALLOW` | Проверен, безопасен | Передаёт результат в synthesizer без изменений |
+| `REVISE` | Требует доработки | **Текущее:** передаёт в synthesizer с флагом (revision loop не реализован). **Planned:** повторная генерация с revision hint или отдельный revision pass |
+| `BLOCK` | Вредоносный контент | Блокирует результат, orchestrator рендерит deny-сообщение пользователю |
+| `SAFETY_UNAVAILABLE` | Модель недоступна | Логирует, увеличивает `safety_agent.judge_unavailable`, пропускает ответ с записью в аудит. **Не эквивалентно ALLOW.** Стратегия: fail-open с полной observability |
 
 **Критические правила:**
 
@@ -747,23 +777,6 @@ post-check), но калибрует глубину под фактическу�
 
 4. `_safety_result: SafetyResult | None = None` — обязательный паттерн в coordinator.
    `locals()` и `"safety" in dir()` запрещены для проверки существования переменной.
-
-**Что НЕ делает safety_agent:**
-- Не фильтрует входящие запросы (это Safety Layer)
-- Не влияет на EPK или routing
-- Не синтезирует ответы
-- Не является единственным safety-слоем (это последний, но не единственный)
-
-**Потенциал (planned):**
-safety_agent как полноценный Response Validator способен проверять:
-- соответствие ответа найденным источникам (hallucination detection)
-- непротиворечивость reasoning и итогового ответа
-- соответствие политике продукта
-- отсутствие утечек внутренних инструкций
-- корректность формата ответа
-
-Текущая реализация использует минимальный subset этих возможностей.
-Расширение — следующий эволюционный шаг агента.
 
 → Model assignments: `models.md §1, §7`
 
