@@ -28,6 +28,8 @@ from contracts.shared_types import (
 from core.kernel.cost_model import actual_cost, estimate_cost, estimate_output_tokens
 from core.kernel.decision_matrix import select_tier
 from core.kernel.execution_policy_kernel import EPKInput, evaluate
+from events.event_bus import event_bus
+from events.event_types import EPKDecisionEvent, EventName
 from i18n.t import t
 from llm.heavy_input_shaper import ShaperInput, shape
 from llm.long_context_transformer import transform as _lc_transform
@@ -1082,6 +1084,27 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
         })
         increment(f"epk.decision.{epk_out.decision.value.lower()}")
         gauge("epk.last_estimated_cost", estimated)
+
+        # Publish EPK decision event — non-blocking, fire-and-forget.
+        _epk_event_name = {
+            EPKDecision.ALLOW:          EventName.EPK_ALLOW,
+            EPKDecision.DENY:           EventName.EPK_DENY,
+            EPKDecision.DEGRADED_MODE:  EventName.EPK_DEGRADE,
+            EPKDecision.HEAVY_REQUIRED: EventName.EPK_ALLOW,  # HEAVY is an ALLOW variant
+        }.get(epk_out.decision, EventName.EPK_ALLOW)
+        try:
+            await event_bus.publish(EPKDecisionEvent(
+                name=_epk_event_name,
+                user_id=None,  # user_id not propagated to orchestrator — enriched upstream
+                payload={
+                    "decision":       epk_out.decision.value,
+                    "estimated_cost": estimated,
+                    "user_balance":   request.user_balance,
+                    "request_id":     request.request_id,
+                },
+            ))
+        except Exception as _epk_ev_exc:
+            logger.debug("EPKDecisionEvent publish failed", extra={"error": str(_epk_ev_exc)})
 
         if epk_out.decision == EPKDecision.DENY:
             return _denied_result(
