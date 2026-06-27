@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 
 from contracts.shared_types import Tier
+from events.event_bus import event_bus
+from events.event_types import LLMCalledEvent, LLMFallbackEvent
 from llm.groq_client import LLMResponse, groq_client
 from llm.model_router import (
     get_reasoning_effort,
@@ -153,6 +155,24 @@ async def complete_with_fallback(
                             "actual_tier": current_tier,
                             "model": model,
                         })
+                        try:
+                            await event_bus.publish(LLMFallbackEvent(payload={
+                                "requested_tier": tier.value,
+                                "actual_tier":    current_tier.value,
+                                "model":          model,
+                            }))
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            await event_bus.publish(LLMCalledEvent(payload={
+                                "tier":          current_tier.value,
+                                "model":         model,
+                                "input_tokens":  response.input_tokens,
+                                "output_tokens": response.output_tokens,
+                            }))
+                        except Exception:
+                            pass
                     from dataclasses import replace
                     return replace(response, actual_tier=current_tier)
                 except Exception as exc:
