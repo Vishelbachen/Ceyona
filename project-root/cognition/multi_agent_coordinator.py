@@ -15,6 +15,8 @@ from agents.safety_agent import check_async as safety_check
 from cognition.intent_engine import Intent
 from cognition.reasoning_engine import ReasoningMode, ReasoningStrategy
 from contracts.shared_types import DomainHint, ReasoningDepth, RoutingProfile, Tier
+from events.event_bus import event_bus
+from events.event_types import SafetyBlockEvent
 from i18n.t import t as _t
 
 logger = logging.getLogger(__name__)
@@ -443,6 +445,19 @@ async def coordinate(
             if _safety_result.verdict == SafetyVerdict.BLOCK:
                 logger.warning("safety_agent BLOCK before consensus",
                                extra={"reason": _safety_result.reason})
+                # Publish safety.block event — triggers event_notifier.on_safety_block()
+                # user_id not available in coordinator — webhook will add it via context.
+                # Non-blocking: wrapped in asyncio.create_task() by event_bus.
+                try:
+                    await event_bus.publish(SafetyBlockEvent(
+                        user_id=None,   # enriched by update_handler via CoordinationResult.block_reason
+                        payload={
+                            "reason": _safety_result.reason or "safety_block",
+                            "tier": tier.value if tier else "",
+                        },
+                    ))
+                except Exception as _pub_exc:
+                    logger.warning("SafetyBlockEvent publish failed", extra={"error": str(_pub_exc)})
                 return CoordinationResult(
                     text="", model="", blocked=True, block_reason="safety_block",
                     metrics=AgentCallMetrics(
