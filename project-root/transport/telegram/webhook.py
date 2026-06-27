@@ -474,7 +474,7 @@ async def telegram_webhook(
                 # On HEAVY path _run_heavy() already billed these — guard against double-billing.
                 _ml_cost = 0.0
                 if result.multilingual_input_tokens or result.multilingual_output_tokens:
-                    from contracts.orchestrator import EPKDecision as _EPKDecision
+                    from contracts.shared_types import EPKDecision as _EPKDecision
 
                     # _run_heavy() bakes multilingual cost into llm_cost_usd — skip to avoid double-billing
                     if result.epk_decision != _EPKDecision.HEAVY_REQUIRED:
