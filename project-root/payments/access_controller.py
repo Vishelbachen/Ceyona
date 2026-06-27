@@ -2,6 +2,8 @@ import logging
 from dataclasses import dataclass
 
 from core.kernel.policy_registry import RUNTIME
+from events.event_bus import event_bus
+from events.event_types import BalanceDeductedEvent
 from supabase import Client
 
 logger = logging.getLogger(__name__)
@@ -113,6 +115,17 @@ class AccessController:
                 "amount_usd": amount_usd,
                 "new_balance": new_balance,
             })
+            # Publish balance.deducted event — non-blocking, fire-and-forget.
+            try:
+                await event_bus.publish(BalanceDeductedEvent(
+                    user_id=user_id,
+                    payload={
+                        "amount_usd": amount_usd,
+                        "new_balance_usd": new_balance,
+                    },
+                ))
+            except Exception as _ev_exc:
+                logger.debug("BalanceDeductedEvent publish failed", extra={"error": str(_ev_exc)})
             return True
         except Exception as exc:
             logger.error("deduct failed", extra={
