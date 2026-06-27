@@ -38,6 +38,8 @@ class UsageEntry:
     safety_safeguard_output_tokens: int = 0   # gpt-oss-safeguard-20b output tokens ($0.30/1M)
     safety_agent_input_tokens: int = 0        # safety_agent LLM judge input tokens ($0.075/1M)
     safety_agent_output_tokens: int = 0       # safety_agent LLM judge output tokens ($0.30/1M)
+    revision_input_tokens: int = 0            # SAFETY-6 REVISE loop input tokens (primary model rates)
+    revision_output_tokens: int = 0           # SAFETY-6 REVISE loop output tokens
     multilingual_input_tokens: int = 0        # multilingual_preprocessor LLM call input tokens
     multilingual_output_tokens: int = 0       # multilingual_preprocessor LLM call output tokens
     multilingual_model: str = ""              # "allam-2-7b" | "qwen/qwen3.6-27b" | "passthrough"
@@ -111,6 +113,10 @@ class UsageMeter:
             extended_payload["safety_agent_input_tokens"] = entry.safety_agent_input_tokens
         if entry.safety_agent_output_tokens:
             extended_payload["safety_agent_output_tokens"] = entry.safety_agent_output_tokens
+        if entry.revision_input_tokens:
+            extended_payload["revision_input_tokens"] = entry.revision_input_tokens
+        if entry.revision_output_tokens:
+            extended_payload["revision_output_tokens"] = entry.revision_output_tokens
         if entry.multilingual_input_tokens:
             extended_payload["multilingual_input_tokens"] = entry.multilingual_input_tokens
         if entry.multilingual_output_tokens:
@@ -153,6 +159,8 @@ class UsageMeter:
                     "ADD COLUMN IF NOT EXISTS safety_safeguard_output_tokens BIGINT DEFAULT 0, "
                     "ADD COLUMN IF NOT EXISTS safety_agent_input_tokens BIGINT DEFAULT 0, "
                     "ADD COLUMN IF NOT EXISTS safety_agent_output_tokens BIGINT DEFAULT 0, "
+                    "ADD COLUMN IF NOT EXISTS revision_input_tokens BIGINT DEFAULT 0, "
+                    "ADD COLUMN IF NOT EXISTS revision_output_tokens BIGINT DEFAULT 0, "
                     "ADD COLUMN IF NOT EXISTS multilingual_input_tokens BIGINT DEFAULT 0, "
                     "ADD COLUMN IF NOT EXISTS multilingual_output_tokens BIGINT DEFAULT 0, "
                     "ADD COLUMN IF NOT EXISTS lc_transformer_input_tokens BIGINT DEFAULT 0, "
