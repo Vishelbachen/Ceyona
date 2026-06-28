@@ -26,8 +26,9 @@ logger = logging.getLogger(__name__)
 
 # ── Types ─────────────────────────────────────────────────────────────────────
 
-SendFn   = Callable[[int, str], Awaitable[None]]
-AnswerFn = Callable[[str, str], Awaitable[None]]
+SendFn         = Callable[[int, str], Awaitable[None]]
+SendWithTopupFn = Callable[[int, str, str], Awaitable[None]]
+AnswerFn       = Callable[[str, str], Awaitable[None]]
 
 
 class CallbackAction(str, Enum):
@@ -78,12 +79,13 @@ def parse_callback(update: dict, user_id: int) -> CallbackContext:
 # ── Dispatcher ────────────────────────────────────────────────────────────────
 
 async def dispatch_callback(
-    ctx:          CallbackContext,
-    chat_id:      int | None,
-    user_balance: float,
-    lang:         str,
-    send_message: SendFn,
-    answer_callback: AnswerFn,
+    ctx:                   CallbackContext,
+    chat_id:               int | None,
+    user_balance:          float,
+    lang:                  str,
+    send_message:          SendFn,
+    send_message_with_topup: SendWithTopupFn,
+    answer_callback:       AnswerFn,
 ) -> None:
     """
     Execute the side effects for a parsed callback action.
@@ -91,18 +93,23 @@ async def dispatch_callback(
     All TON/billing/i18n logic lives here — never in webhook.py.
 
     Args:
-        ctx:             Parsed CallbackContext from parse_callback()
-        chat_id:         Telegram chat_id to send follow-up messages to
-        user_balance:    Current user balance in USD (fetched upstream in webhook)
-        lang:            Detected UI language code
-        send_message:    Async fn(chat_id, text) — webhook._send_message
-        answer_callback: Async fn(callback_query_id, text) — webhook._answer_callback
+        ctx:                     Parsed CallbackContext from parse_callback()
+        chat_id:                 Telegram chat_id to send follow-up messages to
+        user_balance:            Current user balance in USD (fetched upstream in webhook)
+        lang:                    Detected UI language code
+        send_message:            Async fn(chat_id, text) — webhook._send_message
+        send_message_with_topup: Async fn(chat_id, text, lang) — webhook._send_message_with_topup
+        answer_callback:         Async fn(callback_query_id, text) — webhook._answer_callback
     """
     from i18n.t import get_system_message
 
     if ctx.action == CallbackAction.BALANCE:
-        bal_text = f"💰 Balance: ${user_balance:.2f}"
-        await answer_callback(ctx.callback_query_id, bal_text)
+        # Acknowledge immediately to remove Telegram spinner, then send a
+        # proper chat message with the Top Up button so the user can act on it.
+        await answer_callback(ctx.callback_query_id, "")
+        if chat_id:
+            bal_text = f"💰 Balance: ${user_balance:.4f}"
+            await send_message_with_topup(chat_id, bal_text, lang)
 
     elif ctx.action == CallbackAction.TOPUP:
         # Acknowledge immediately — removes Telegram spinner
