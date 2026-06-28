@@ -10,7 +10,6 @@ from infra.env_validator import validate
 from observability.logger import setup_logging
 from observability.sentry import init_sentry
 from security.auth import verify_token
-from security.origin_guard import is_allowed_origin
 
 logger = logging.getLogger(__name__)
 
@@ -225,6 +224,7 @@ app = FastAPI(
 # not browsers, CORS does not apply to webhook calls. This middleware exists
 # for future web clients hitting the admin/diagnostic endpoints.
 from app.settings import settings as _settings  # noqa: E402
+
 _origins = [o.strip() for o in _settings.allowed_origins.split(',') if o.strip()]
 app.add_middleware(
     CORSMiddleware,
