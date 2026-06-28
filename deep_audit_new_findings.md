@@ -5,50 +5,21 @@
 
 ## НОВЫЕ БАГИ (не задокументированы нигде)
 
-### BUG-1: `contracts/orchestrator.py` не существует, но импортируется
-**Файл:** `transport/telegram/webhook.py`, строка 477
+### ~~BUG-1: `contracts/orchestrator.py` не существует, но импортируется~~ — ЗАКРЫТО
 
-```python
-from contracts.orchestrator import EPKDecision as _EPKDecision
-```
-
-**Факт:** `contracts/orchestrator.py` не существует. Файл `contracts/` содержит только:
-`context_contracts.py`, `retrieval_contracts.py`, `shared_types.py`.
-
-`EPKDecision` находится в `contracts/shared_types.py`.
-
-**Когда крашит:** этот импорт находится внутри блока billing в `webhook.py` и срабатывает только когда `result.multilingual_input_tokens > 0` на не-HEAVY пути. Т.е. при каждом запросе с многоязычной нормализацией (нелатинский текст) → `ImportError` → billing падает → деньги не списываются.
-
-**Исправление:** заменить на `from contracts.shared_types import EPKDecision as _EPKDecision`
+**Исправлено:** импорт заменён на `from contracts.shared_types import EPKDecision as _EPKDecision`. Комментарий `# BUG-1 fix` присутствует в коде.
 
 ---
 
-### BUG-2: `ReflectionInput` вызывается с неверным именем поля
-**Файл:** `transport/telegram/update_handler.py`, строка ~709
+### ~~BUG-2: `ReflectionInput` вызывается с неверным именем поля~~ — ЗАКРЫТО
 
-```python
-ref_input = ReflectionInput(
-    ...
-    cost_usd=result.usage.llm_cost_usd,   # ← НЕВЕРНО
-    ...
-)
-```
-
-**Факт:** поле в `meta/reflection.py` называется `llm_cost_usd: float`, а не `cost_usd`. Это `TypeError` при каждом запросе в meta side-channel. Поскольку вся reflection обёрнута в `try/except`, он молча глотается и логируется как "Meta layer failed (non-critical)".
-
-**Эффект:** reflection никогда не работает. `logger.info("Reflection", ...)` никогда не вызывается.
+**Исправлено:** поле переименовано в `llm_cost_usd=result.usage.llm_cost_usd` в `update_handler.py`. Reflection работает.
 
 ---
 
-### BUG-3: `/providers` endpoint не имеет `@app.get` декоратора
-**Файл:** `app/main.py`, строка 395
+### ~~BUG-3: `/providers` endpoint не имеет `@app.get` декоратора~~ — ЗАКРЫТО
 
-```python
-async def providers(request: Request):  # ← нет @app.get("/providers")
-    ...
-```
-
-Функция определена, но не зарегистрирована как FastAPI route. GET `/providers` вернёт 404. Судя по размеру (200+ строк с проверками Redis, Supabase, Groq, Telegram и т.д.) — это должен был быть полноценный diagnostic endpoint.
+**Исправлено:** декоратор `@app.get("/providers")` добавлен в `app/main.py`. Endpoint доступен.
 
 ---
 
@@ -188,7 +159,7 @@ GPT и архитектура правы: должен быть отдельны
 ### `app/main.py` — 3 незарегистрированных факта
 1. **Wallet poller** запускается как фоновая задача (`asyncio.create_task`) каждые 10 секунд. В architecture.md не упомянут.
 2. **MediaGroup callback** (`_on_group_ready`) строит синтетический update `{"_voice_transcript": ...}` и передаёт его в `handle_message` с `input_type="image_group"`. Это обходной путь для обработки альбомов через тот же pipeline что и голосовые сообщения.
-3. **5 HTTP endpoints**: `/`, `/health`, `/metrics`, `/models`, `/routing`, `/debug`. `/providers` — зарегистрирован, но без decorator (см. BUG-3).
+3. **5 HTTP endpoints**: `/`, `/health`, `/metrics`, `/models`, `/routing`, `/debug`, `/providers`. ~~`/providers` был без decorator (BUG-3)~~ — **ЗАКРЫТО**.
 
 ### `llm/fallback_handler.py` — billing gotcha задокументирована в коде
 ```python
@@ -206,11 +177,11 @@ GPT и архитектура правы: должен быть отдельны
 ## ИТОГ: ПОЛНАЯ КАРТА ПРОБЛЕМ
 
 ### Критические (runtime errors)
-1. **BUG-1**: `from contracts.orchestrator import EPKDecision` → `ImportError` → billing падает при многоязычных запросах
-2. **BUG-2**: `cost_usd=` вместо `llm_cost_usd=` в ReflectionInput → TypeError → reflection никогда не работает
+1. ~~**BUG-1**: `from contracts.orchestrator import EPKDecision` → `ImportError` → billing падает при многоязычных запросах~~ — **ЗАКРЫТО**
+2. ~~**BUG-2**: `cost_usd=` вместо `llm_cost_usd=` в ReflectionInput → TypeError → reflection никогда не работает~~ — **ЗАКРЫТО**
 
 ### Серьёзные (функциональность отсутствует)
-3. **BUG-3**: `/providers` endpoint без `@app.get` декоратора → 404 всегда
+3. ~~**BUG-3**: `/providers` endpoint без `@app.get` декоратора → 404 всегда~~ — **ЗАКРЫТО**
 4. ~~**ARCH-3**: `events/` — bootstrapped, но `publish()` не вызывается~~ → **ЧАСТИЧНО ЗАКРЫТО** (июнь 2026): balance/llm события публикуются. Open: `SafetyBlockEvent`, `RequestCompletedEvent`
 5. ~~**ARCH-4**: `notifications/` — написан, но не подключён~~ → **ЧАСТИЧНО ЗАКРЫТО** (июнь 2026): `on_balance_credited` и `on_balance_exhausted` работают. Open: `on_safety_block` (зависит от ARCH-3), `on_system_error`
 
