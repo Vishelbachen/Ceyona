@@ -3,6 +3,7 @@ import logging
 from datetime import timezone
 
 from events.event_types import BaseEvent
+from infra import redis_keys
 from redis.asyncio import Redis
 
 logger = logging.getLogger(__name__)
@@ -84,3 +85,17 @@ class EventStore:
         except Exception as exc:
             logger.warning("EventStore.read_user failed", extra={"error": str(exc)})
             return []
+
+    async def clear_low_balance_warning(self, user_id: int) -> None:
+        """
+        Reset the 24 h dedup flag after a successful top-up.
+        Called by event_dispatcher on BALANCE_CREDITED.
+        Dispatcher knows nothing about Redis or key formats.
+        """
+        try:
+            await self._redis.delete(redis_keys.low_balance_warning(user_id))
+        except Exception as exc:
+            logger.warning(
+                "EventStore.clear_low_balance_warning failed",
+                extra={"user_id": user_id, "error": str(exc)},
+            )
