@@ -45,30 +45,112 @@ class AgentPlan:
 
 # ─── RESULT CONTRACT ──────────────────────────────────────────────────────────
 
-@dataclass
+@dataclass(frozen=True)
 class AgentCallMetrics:
     """
-    Token accounting for all LLM calls inside coordinate().
+    Universal token contract for any single LLM call inside the orchestrator.
 
-    Three slots — primary, revision, safety — each tracks input+output tokens
-    for one logical call type. Orchestrator unpacks these into flat fields on
-    OrchestratorResult so the boundary toward webhook/usage_meter stays stable.
+    Rule (ChatGPT / architecture decision):
+      Any component that has its own prompt + its own completion is an agent.
+      Agents live inside orchestrator. AgentCallMetrics is their billing contract.
+      No exceptions: multilingual, reflection, safety, correction, analysis,
+      summarizer, planner — all qualify if they make an independent LLM call.
 
-    revision slot: populated only when REVISE loop fires (max 1 pass).
-    safety slot:   populated only on HEAVY path and consensus path.
-    primary slot:  always populated (includes MATH extra tokens).
+    frozen=True: immutable after creation. Transport layer MUST NOT mutate
+    OrchestratorResult to add tokens post-facto — that is an architectural
+    violation (orchestrator must return a fully populated result).
 
     economic.md §2: every model call MUST be billed — no zero-slot exceptions.
     """
-    # primary agent tokens (includes MATH verify+correct extras, summed here)
-    primary_input_tokens: int = 0
-    primary_output_tokens: int = 0
-    # revision pass tokens (SAFETY-6 REVISE loop — max 1 retry)
-    revision_input_tokens: int = 0
-    revision_output_tokens: int = 0
-    # safety_agent LLM judge tokens (gpt-oss-safeguard-20b)
-    safety_input_tokens: int = 0
-    safety_output_tokens: int = 0
+    model: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    latency_ms: int = 0
+    cost_usd: float = 0.0
+    retries: int = 0
+
+
+@dataclass(frozen=True)
+class CoordinationMetrics:
+    """
+    Aggregates AgentCallMetrics for all LLM-agents in the pipeline.
+
+    Slots use dict[str, AgentCallMetrics] for maximum extensibility —
+    adding a new agent (Planner, Critic, Summarizer) requires zero
+    changes to this dataclass. Orchestrator unpacks into flat fields
+    on OrchestratorResult for billing/webhook stability.
+
+    Naming convention for well-known slots:
+      primary      — main reasoning agent (fast/deep/creative/compound)
+      consensus    — gpt-oss-120b consensus arbitration
+      safety       — safety_agent LLM judge (gpt-oss-safeguard-20b)
+      revision     — SAFETY-6 REVISE loop (max 1 retry, primary model)
+      reflection   — meta/reflection async side-channel
+      multilingual — multilingual_preprocessor LLM call (allam-2-7b | qwen3.6-27b)
+      lc_transformer — long_context_transformer (qwen3.6-27b, HEAVY pre-shaper)
+    """
+    agents: dict = None  # dict[str, AgentCallMetrics]
+
+    def __post_init__(self):
+        # frozen=True requires object.__setattr__ for post-init defaults
+        if self.agents is None:
+            object.__setattr__(self, "agents", {})
+
+    def get(self, name: str) -> AgentCallMetrics:
+        """Return metrics for a named agent slot, or empty metrics if absent."""
+        return self.agents.get(name, AgentCallMetrics())
+
+    @property
+    def primary(self) -> AgentCallMetrics:
+        return self.get("primary")
+
+    @property
+    def safety(self) -> AgentCallMetrics:
+        return self.get("safety")
+
+    @property
+    def revision(self) -> AgentCallMetrics:
+        return self.get("revision")
+
+    @property
+    def multilingual(self) -> AgentCallMetrics:
+        return self.get("multilingual")
+
+    @property
+    def lc_transformer(self) -> AgentCallMetrics:
+        return self.get("lc_transformer")
+
+    # ── convenience: sum all input/output tokens across all agents ──────────
+    @property
+    def total_input_tokens(self) -> int:
+        return sum(m.input_tokens for m in self.agents.values())
+
+    @property
+    def total_output_tokens(self) -> int:
+        return sum(m.output_tokens for m in self.agents.values())
+
+    def with_agent(self, name: str, metrics: AgentCallMetrics) -> "CoordinationMetrics":
+        """Return a new CoordinationMetrics with the named agent slot set."""
+        new_agents = dict(self.agents)
+        new_agents[name] = metrics
+        return CoordinationMetrics(agents=new_agents)
+
+
+def _make_agent_metrics(
+    model: str = "",
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    latency_ms: int = 0,
+    retries: int = 0,
+) -> AgentCallMetrics:
+    """Helper: construct AgentCallMetrics from raw token counts."""
+    return AgentCallMetrics(
+        model=model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        latency_ms=latency_ms,
+        retries=retries,
+    )
 
 
 @dataclass
@@ -77,36 +159,55 @@ class CoordinationResult:
     model: str
     blocked: bool = False
     block_reason: str = ""
-    actual_tier: str = ""  # tier that actually executed (may be lower than requested on cascade)
-    tool_calls: int = 0   # total compound tool calls executed — flows to billing
-    metrics: AgentCallMetrics = field(default_factory=AgentCallMetrics)
-    # Per-model token breakdown from compound AI system — flows to OrchestratorResult.compound_breakdown.
+    actual_tier: str = ""
+    tool_calls: int = 0
+    coordination_metrics: CoordinationMetrics = field(default_factory=CoordinationMetrics)
     usage_breakdown: list = field(default_factory=list)
 
-    # ── convenience properties — orchestrator reads these, not metrics directly ──
+    # ── convenience properties ─────────────────────────────────────────────────
     @property
     def input_tokens(self) -> int:
-        return self.metrics.primary_input_tokens
+        return self.coordination_metrics.primary.input_tokens
 
     @property
     def output_tokens(self) -> int:
-        return self.metrics.primary_output_tokens
+        return self.coordination_metrics.primary.output_tokens
 
     @property
     def safety_agent_input_tokens(self) -> int:
-        return self.metrics.safety_input_tokens
+        return self.coordination_metrics.safety.input_tokens
 
     @property
     def safety_agent_output_tokens(self) -> int:
-        return self.metrics.safety_output_tokens
+        return self.coordination_metrics.safety.output_tokens
 
     @property
     def revision_input_tokens(self) -> int:
-        return self.metrics.revision_input_tokens
+        return self.coordination_metrics.revision.input_tokens
 
     @property
     def revision_output_tokens(self) -> int:
-        return self.metrics.revision_output_tokens
+        return self.coordination_metrics.revision.output_tokens
+
+    @property
+    def multilingual_input_tokens(self) -> int:
+        return self.coordination_metrics.multilingual.input_tokens
+
+    @property
+    def multilingual_output_tokens(self) -> int:
+        return self.coordination_metrics.multilingual.output_tokens
+
+    @property
+    def multilingual_model(self) -> str:
+        return self.coordination_metrics.multilingual.model
+
+    @property
+    def lc_transformer_input_tokens(self) -> int:
+        return self.coordination_metrics.lc_transformer.input_tokens
+
+    @property
+    def lc_transformer_output_tokens(self) -> int:
+        return self.coordination_metrics.lc_transformer.output_tokens
 
 
 # ─── PLAN SELECTION ───────────────────────────────────────────────────────────
@@ -460,23 +561,30 @@ async def coordinate(
                     logger.warning("SafetyBlockEvent publish failed", extra={"error": str(_pub_exc)})
                 return CoordinationResult(
                     text="", model="", blocked=True, block_reason="safety_block",
-                    metrics=AgentCallMetrics(
-                        primary_input_tokens=primary_result.input_tokens,
-                        primary_output_tokens=primary_result.output_tokens,
-                        safety_input_tokens=_safety_result.input_tokens,
-                        safety_output_tokens=_safety_result.output_tokens,
-                    ),
+                    coordination_metrics=CoordinationMetrics(agents={
+                        "primary": _make_agent_metrics(
+                            model=getattr(primary_result, "model", ""),
+                            input_tokens=primary_result.input_tokens,
+                            output_tokens=primary_result.output_tokens,
+                        ),
+                        "safety": _make_agent_metrics(
+                            model="openai/gpt-oss-safeguard-20b",
+                            input_tokens=_safety_result.input_tokens,
+                            output_tokens=_safety_result.output_tokens,
+                        ),
+                    }),
                 )
 
-            # ── REVISE loop — HEAVY path (SAFETY-6) ──────────────────────────
-            # Max 1 retry. reasoning_plan not re-run — revision pass only.
-            # If second pass returns REVISE again → pass-through (audit.md §SAFETY-6).
-            if _sa_result.verdict == SafetyVerdict.REVISE:
-                logger.info("safety_agent REVISE on HEAVY path — attempting revision pass")
+            # ── REVISE loop (SAFETY-6) ───────────────────────────────────────
+            # Max 1 retry. Fix: was referencing _sa_result (undefined) — use _safety_result.
+            _rev_in  = 0
+            _rev_out = 0
+            if _safety_result is not None and _safety_result.verdict == SafetyVerdict.REVISE:
+                logger.info("safety_agent REVISE on consensus path — attempting revision pass")
                 _rev_messages = _build_revision_messages(
                     messages=messages,
                     draft=primary_result.text,
-                    reason=_sa_result.reason,
+                    reason=_safety_result.reason,
                 )
                 _rev_result = await _run_agent(
                     plan.primary, _rev_messages, temperature, lang=lang, tier=tier,
@@ -484,31 +592,107 @@ async def coordinate(
                 _rev_in  = _rev_result.input_tokens
                 _rev_out = _rev_result.output_tokens
                 if _agent_succeeded(_rev_result):
-                    logger.info("Revision pass succeeded on HEAVY path")
+                    logger.info("Revision pass succeeded on consensus path")
                     primary_result = _rev_result
                 else:
-                    logger.warning("Revision pass failed on HEAVY path — using original draft")
+                    logger.warning("Revision pass failed — using original draft")
 
-            if _sa_result.verdict == SafetyVerdict.SAFETY_UNAVAILABLE:
-                # Judge unavailable — fail-open with full observability (§21 contract).
-                logger.warning("safety_agent UNAVAILABLE on HEAVY path — proceeding fail-open")
+            if _safety_result is not None and _safety_result.verdict == SafetyVerdict.SAFETY_UNAVAILABLE:
+                logger.warning("safety_agent UNAVAILABLE on consensus path — proceeding fail-open")
 
-        # BUG-O4 fix: explicit _sa_result variable — locals() / is_heavy bool forbidden (§21 rule 4).
-        _sa_in  = _sa_result.input_tokens  if _sa_result is not None else 0
-        _sa_out = _sa_result.output_tokens if _sa_result is not None else 0
+        _sa_in  = _safety_result.input_tokens  if _safety_result is not None else 0
+        _sa_out = _safety_result.output_tokens if _safety_result is not None else 0
+        _math_extra_in  = 0
+        _math_extra_out = 0
+        _agents_dict: dict = {
+            "primary": _make_agent_metrics(
+                model=primary_result.model,
+                input_tokens=primary_result.input_tokens + _math_extra_in,
+                output_tokens=primary_result.output_tokens + _math_extra_out,
+            ),
+        }
+        if _sa_in or _sa_out:
+            _agents_dict["safety"] = _make_agent_metrics(
+                model="openai/gpt-oss-safeguard-20b",
+                input_tokens=_sa_in,
+                output_tokens=_sa_out,
+            )
+        if _rev_in or _rev_out:
+            _agents_dict["revision"] = _make_agent_metrics(
+                model=primary_result.model,
+                input_tokens=_rev_in,
+                output_tokens=_rev_out,
+            )
         return CoordinationResult(
             text=primary_result.text,
             model=primary_result.model,
             actual_tier=primary_result.actual_tier,
             tool_calls=getattr(primary_result, "tool_calls", 0),
-            metrics=AgentCallMetrics(
-                primary_input_tokens=primary_result.input_tokens + _math_extra_in,
-                primary_output_tokens=primary_result.output_tokens + _math_extra_out,
-                revision_input_tokens=_rev_in,
-                revision_output_tokens=_rev_out,
-                safety_input_tokens=_sa_in,
-                safety_output_tokens=_sa_out,
-            ),
+            coordination_metrics=CoordinationMetrics(agents=_agents_dict),
+            usage_breakdown=getattr(primary_result, "usage_breakdown", []),
+        )
+
+    # ── non-consensus path (HEAVY or simple ALLOW without validators) ────────
+    # safety_agent runs here — architecture §21: every path has post-check.
+    if not plan.use_consensus and _agent_succeeded(primary_result):
+        _sa_result_nc: SafetyResult | None = None
+        _rev_in_nc  = 0
+        _rev_out_nc = 0
+
+        _sa_result_nc = await safety_check(SafetyInput(
+            reasoning_plan=reasoning_plan,
+            draft_response=primary_result.text,
+            user_message=user_message,
+        ))
+
+        if _sa_result_nc.verdict == SafetyVerdict.BLOCK:
+            logger.warning("safety_agent BLOCK on non-consensus path",
+                           extra={"reason": _sa_result_nc.reason})
+            try:
+                await event_bus.publish(SafetyBlockEvent(
+                    user_id=None,
+                    payload={"reason": _sa_result_nc.reason or "safety_block", "tier": tier.value if tier else ""},
+                ))
+            except Exception as _pub_exc:
+                logger.warning("SafetyBlockEvent publish failed", extra={"error": str(_pub_exc)})
+            return CoordinationResult(
+                text="", model="", blocked=True, block_reason="safety_block",
+                coordination_metrics=CoordinationMetrics(agents={
+                    "primary": _make_agent_metrics(model=primary_result.model, input_tokens=primary_result.input_tokens, output_tokens=primary_result.output_tokens),
+                    "safety": _make_agent_metrics(model="openai/gpt-oss-safeguard-20b", input_tokens=_sa_result_nc.input_tokens, output_tokens=_sa_result_nc.output_tokens),
+                }),
+            )
+
+        if _sa_result_nc.verdict == SafetyVerdict.REVISE:
+            logger.info("safety_agent REVISE on non-consensus — revision pass")
+            _rev_r = await _run_agent(
+                plan.primary,
+                _build_revision_messages(messages=messages, draft=primary_result.text, reason=_sa_result_nc.reason),
+                temperature, lang=lang, tier=tier,
+            )
+            _rev_in_nc  = _rev_r.input_tokens
+            _rev_out_nc = _rev_r.output_tokens
+            if _agent_succeeded(_rev_r):
+                primary_result = _rev_r
+
+        if _sa_result_nc.verdict == SafetyVerdict.SAFETY_UNAVAILABLE:
+            logger.warning("safety_agent UNAVAILABLE on non-consensus — fail-open")
+
+        _nc_sa_in  = _sa_result_nc.input_tokens  if _sa_result_nc else 0
+        _nc_sa_out = _sa_result_nc.output_tokens if _sa_result_nc else 0
+        _nc_agents: dict = {
+            "primary": _make_agent_metrics(model=primary_result.model, input_tokens=primary_result.input_tokens, output_tokens=primary_result.output_tokens),
+        }
+        if _nc_sa_in or _nc_sa_out:
+            _nc_agents["safety"] = _make_agent_metrics(model="openai/gpt-oss-safeguard-20b", input_tokens=_nc_sa_in, output_tokens=_nc_sa_out)
+        if _rev_in_nc or _rev_out_nc:
+            _nc_agents["revision"] = _make_agent_metrics(model=primary_result.model, input_tokens=_rev_in_nc, output_tokens=_rev_out_nc)
+        return CoordinationResult(
+            text=primary_result.text,
+            model=primary_result.model,
+            actual_tier=getattr(primary_result, "actual_tier", ""),
+            tool_calls=getattr(primary_result, "tool_calls", 0),
+            coordination_metrics=CoordinationMetrics(agents=_nc_agents),
             usage_breakdown=getattr(primary_result, "usage_breakdown", []),
         )
 
@@ -537,11 +721,14 @@ async def coordinate(
                 model=fallback_result.model,
                 actual_tier=fallback_result.actual_tier,
                 tool_calls=getattr(fallback_result, "tool_calls", 0),
-                metrics=AgentCallMetrics(
-                    # primary tokens included per BUG-O5 — may be 0 on network error
-                    primary_input_tokens=fallback_result.input_tokens + _failed_primary_in,
-                    primary_output_tokens=fallback_result.output_tokens + _failed_primary_out,
-                ),
+                coordination_metrics=CoordinationMetrics(agents={
+                    "primary": _make_agent_metrics(
+                        model=fallback_result.model,
+                        # BUG-O5: include failed primary tokens
+                        input_tokens=fallback_result.input_tokens + _failed_primary_in,
+                        output_tokens=fallback_result.output_tokens + _failed_primary_out,
+                    ),
+                }),
                 usage_breakdown=getattr(fallback_result, "usage_breakdown", []),
             )
 
@@ -561,10 +748,10 @@ async def coordinate(
         return CoordinationResult(
             text=fallback_text,
             model="rule-based-fallback",
-            metrics=AgentCallMetrics(),
+            coordination_metrics=CoordinationMetrics(),
         )
 
     return CoordinationResult(
         text="", model="", blocked=True, block_reason="no_response",
-        metrics=AgentCallMetrics(),
+        coordination_metrics=CoordinationMetrics(),
     )
