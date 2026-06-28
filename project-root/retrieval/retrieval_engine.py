@@ -8,9 +8,11 @@ from contracts.retrieval_contracts import (
     RetrievedDocument,
 )
 from retrieval.dense.bge_engine import bge_engine
+from retrieval.fusion.hybrid_scorer import FusedResult, reciprocal_rank_fusion
 from retrieval.query_preprocessor import extract_query_profile, preprocess
 from retrieval.reranker.cross_encoder import cross_encoder
 from retrieval.source_credibility import source_credibility
+from retrieval.sparse.bm25_engine import BM25Engine
 
 logger = logging.getLogger(__name__)
 
@@ -90,15 +92,26 @@ async def retrieve(
 
     embedding_tokens = dense_result.tokens_used
 
-    # ── memory similarity search via pgvector ─────────────────────────────────
+    # ── hybrid retrieval: pgvector (dense) + BM25 (sparse) ──────────────────
+    # Two independent searches run against the user's full memory corpus.
+    # Results are fused via Reciprocal Rank Fusion, then passed to the reranker.
+    # BM25 corpus limit is intentionally higher than pgvector top_k so sparse
+    # retrieval has enough documents to find lexically relevant matches that
+    # dense search may miss (exact names, codes, rare terms).
+    _BM25_CORPUS_LIMIT = 200
+
     candidates: list[tuple[str, float]] = []
+    dense_candidates: list[tuple[str, float]] = []
+    sparse_candidates: list[tuple[str, float]] = []
 
     effective_user_id = user_id or getattr(query, "user_id", None)
 
     if supabase is not None and effective_user_id is not None and dense_result.embedding:
+        from memory.supabase_store import SupabaseStore
+        store = SupabaseStore(supabase)
+
+        # ── dense: pgvector similarity search ────────────────────────────────
         try:
-            from memory.supabase_store import SupabaseStore
-            store = SupabaseStore(supabase)
             records = await store.similarity_search(
                 embedding=dense_result.embedding,
                 user_id=str(effective_user_id),
@@ -106,23 +119,62 @@ async def retrieve(
                 threshold=0.7,
             )
             scored_records = source_credibility.score_memory_records(records)
-            candidates = [(r.content, r.similarity) for r in scored_records]
+            dense_candidates = [(r.content, r.similarity) for r in scored_records]
             logger.info(
                 "pgvector similarity search completed",
-                extra={
-                    "user_id": str(effective_user_id),
-                    "candidates": len(candidates),
-                },
+                extra={"user_id": str(effective_user_id), "candidates": len(dense_candidates)},
             )
         except Exception as exc:
             logger.error(
-                "pgvector similarity search failed — continuing without memory",
+                "pgvector similarity search failed — continuing without dense candidates",
                 extra={"error": str(exc)},
             )
+
+        # ── sparse: BM25 over full user memory corpus ─────────────────────────
+        try:
+            all_records = await store.fetch_by_user(
+                user_id=str(effective_user_id),
+                limit=_BM25_CORPUS_LIMIT,
+            )
+            if all_records:
+                bm25 = BM25Engine()
+                corpus = [r.content for r in all_records]
+                bm25.index(corpus)
+                bm25_results = bm25.search(clean_query, top_k=query.top_k)
+                sparse_candidates = [(r.content, r.score) for r in bm25_results]
+                logger.info(
+                    "BM25 sparse search completed",
+                    extra={"corpus_size": len(corpus), "hits": len(sparse_candidates)},
+                )
+        except Exception as exc:
+            logger.error(
+                "BM25 sparse search failed — continuing without sparse candidates",
+                extra={"error": str(exc)},
+            )
+
+        # ── fusion: RRF combines dense + sparse ───────────────────────────────
+        if dense_candidates or sparse_candidates:
+            fused = reciprocal_rank_fusion(
+                sparse_results=sparse_candidates,
+                dense_results=dense_candidates,
+                query=clean_query,
+                lang=profile.lang,
+            )
+            candidates = [(r.content, r.score) for r in fused]
+            logger.info(
+                "RRF fusion completed",
+                extra={
+                    "dense": len(dense_candidates),
+                    "sparse": len(sparse_candidates),
+                    "fused": len(candidates),
+                },
+            )
+        else:
             candidates = []
+
     else:
         logger.debug(
-            "pgvector skipped",
+            "hybrid retrieval skipped",
             extra={
                 "has_supabase": supabase is not None,
                 "has_user_id": effective_user_id is not None,
@@ -130,17 +182,17 @@ async def retrieve(
             },
         )
 
-    # ── credibility weighting for memory documents ───────────────────────────
+    # ── credibility weighting ────────────────────────────────────────────────
     pre_credibility_count = len(candidates)
     candidates = source_credibility.score_documents(candidates)
     if len(candidates) != pre_credibility_count:
         logger.info(
-            "source_credibility filtered memory candidates",
+            "source_credibility filtered candidates",
             extra={"before": pre_credibility_count, "after": len(candidates)},
         )
     else:
         logger.debug(
-            "source_credibility pass-through for tuple candidates",
+            "source_credibility pass-through",
             extra={"candidates": len(candidates)},
         )
 
