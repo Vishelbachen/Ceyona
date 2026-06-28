@@ -41,13 +41,16 @@ def setup_dispatcher(bus: EventBus, store: EventStore) -> None:
     bus.subscribe_all(_log_handler)
     bus.subscribe_all(_store_handler)
 
-    # ── balance.credited → email notification ────────────────────────────────
+    # ── balance.credited → email notification + clear dedup flag ────────────
     async def _on_balance_credited(event: BaseEvent) -> None:
         await event_notifier.on_balance_credited(
             user_id=event.user_id,
             amount_usd=event.payload.get("amount_usd", 0.0),
             new_balance_usd=event.payload.get("new_balance_usd", 0.0),
         )
+        # Clear the 24 h low-balance warning dedup flag so the user gets a
+        # fresh warning if their balance drops again after this top-up.
+        await store.clear_low_balance_warning(event.user_id)
 
     bus.subscribe(EventName.BALANCE_CREDITED, _on_balance_credited)
 
