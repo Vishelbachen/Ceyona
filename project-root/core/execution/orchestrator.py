@@ -727,7 +727,7 @@ async def _run_degraded(
         conversation_history=request.conversation_history,
     ))
 
-    from cognition.multi_agent_coordinator import AgentCallMetrics as _ACM
+    from cognition.multi_agent_coordinator import AgentCallMetrics as _ACM, CoordinationMetrics as _CM
     _degraded_metrics = coordination.coordination_metrics.with_agent(
         "safety",
         _ACM(
@@ -1017,6 +1017,7 @@ class _InternalRequest:
     analysis_report: object = None
     skip_web_search: bool = False
     is_vision: bool = False
+    vision_context: str = ""    # VQ-03: anchored image descriptions — passed from OrchestratorRequest
 
 
 async def _run_pipeline(request: _InternalRequest) -> OrchestratorResult:
@@ -1589,6 +1590,7 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             analysis_report=_analysis_report,
             skip_web_search=request.skip_web_search,
             is_vision=request.is_vision,
+            vision_context=request.vision_context,
         )
 
         result = await _run_pipeline(_internal)
