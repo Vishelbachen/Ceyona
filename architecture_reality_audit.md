@@ -33,6 +33,8 @@ architecture.md описывает **32 файла** по имени (с пол�
 ### `notifications/event_notifier.py` + `notifications/email_service.py`
 `EventNotifier.on_balance_credited()`, `on_safety_block()` etc. **Нигде не вызываются** в продуктивном коде (только в тестах `test_coverage_gap3/4.py`). Синглтон `event_notifier` создан, но не подключён ни к wallet_manager, ни к safety_gate, ни к orchestrator.
 
+> **UPDATE (июнь 2026):** Частично подключено. `event_dispatcher.py` теперь вызывает `event_notifier.on_balance_credited()` через `BALANCE_CREDITED` подписку, и `on_safety_block()` через `SAFETY_BLOCK`. `wallet_manager` публикует `BalanceCreditedEvent` в EventBus. `notifications/` больше не полностью зомби — email уведомления при пополнении баланса работают.
+
 ---
 
 ## КАТЕГОРИЯ 2 — ЗОМБИ-ПОДСИСТЕМА: events/
@@ -51,7 +53,17 @@ architecture.md описывает **32 файла** по имени (с пол�
 2. `event_store` кладётся в `app.state["event_store"]` ✅
 3. **Но `event_bus.publish()` не вызывается НИГДЕ.** Ни в `update_handler`, ни в `orchestrator`, ни в `webhook`, ни в `usage_meter`.
 
-Итог: шина работает, store подключён, но ни одного события не публикуется. Вся подсистема — dead end. В architecture.md не упомянута вообще.
+Итог: шина работает, store подключён.
+
+> **UPDATE (июнь 2026):** Подсистема частично активирована:
+> - `wallet_manager.py` публикует `BalanceCreditedEvent` ✅
+> - `webhook.py` публикует `BalanceExhaustedEvent` и `RequestDeniedEvent` ✅  
+> - `llm/fallback_handler.py` публикует `LLMFallbackEvent`, `LLMCalledEvent` ✅
+> - `event_dispatcher` подписан на `BALANCE_CREDITED` → email + `store.clear_low_balance_warning()` ✅
+> - `event_dispatcher` подписан на `BALANCE_EXHAUSTED` → email ✅
+> - `event_dispatcher` подписан на `SAFETY_BLOCK` → log ✅
+> 
+> Не публикуются (open): `SafetyBlockEvent` из coordinator/safety_agent, `RequestCompletedEvent` из update_handler. Подсистема больше не dead end, но покрытие неполное.
 
 ---
 
@@ -124,7 +136,7 @@ GPT правильно указал: файл содержит `CallbackAction`,
 |---|---|
 | Реально мёртвые | `context/context_models.py`, `context/serializer.py`, `retrieval/sparse/bm25_engine.py`, `retrieval/fusion/hybrid_scorer.py` |
 | Зомби (bootstrapped, но не используется) | `events/` (весь слой), `notifications/` (весь слой), `security/origin_guard.py` |
-| Живые, нет контракта в архитектуре | `i18n/` (оба файла), `transport/telegram/update_handler.py`, `transport/telegram/auth_middleware.py`, `transport/telegram/message_router.py`, `transport/telegram/callback_handler.py`, `llm/groq_client.py`, `llm/hf_client.py`, `llm/fallback_handler.py`, `app/main.py`, `app/settings.py`, `security/auth.py`, `security/rate_limiter.py`, `security/encryption.py`, `payments/pricing_engine.py`, `payments/ton_client.py`, `external/web_tools.py` |
+| Живые, нет контракта в архитектуре | `i18n/` (оба файла), `transport/telegram/update_handler.py`, `transport/telegram/auth_middleware.py`, `transport/telegram/message_router.py`, `transport/telegram/callback_handler.py`, `llm/groq_client.py`, `llm/hf_client.py`, `llm/fallback_handler.py`, `app/main.py`, `app/settings.py`, `security/auth.py`, `security/rate_limiter.py`, `security/encryption.py`, `payments/pricing_engine.py`, `payments/ton_client.py`, `external/web_tools.py`, **`infra/redis_keys.py` (новый, июнь 2026)** |
 | Описаны концептуально, не привязаны к файлам | `core/kernel/execution_policy_kernel.py`, `core/kernel/decision_matrix.py`, `core/kernel/policy_registry.py`, `cognition/reasoning_engine.py`, `cognition/response_synthesizer.py` |
 | Полностью задокументированы | остальные ~32 файла |
 
@@ -137,10 +149,12 @@ GPT правильно указал: файл содержит `CallbackAction`,
 - `retrieval/sparse/bm25_engine.py`, `retrieval/fusion/hybrid_scorer.py` → пометить как `# planned, not wired`
 
 **Приоритет 2 — Подключить или явно закрыть зомби:**
-- `events/` — либо начать publish в update_handler (при успешном ответе, при billing событиях), либо удалить всю подсистему
-- `notifications/` — либо подключить к wallet_manager (on_balance_credited) и safety_gate (on_safety_block), либо удалить
+- `events/` — ~~либо начать publish в update_handler (при успешном ответе, при billing событиях), либо удалить всю подсистему~~ **Частично закрыто (июнь 2026):** `BalanceCreditedEvent`, `BalanceExhaustedEvent`, `RequestDeniedEvent`, `LLMFallbackEvent` публикуются. Остаётся: `SafetyBlockEvent` из coordinator, `RequestCompletedEvent` из update_handler.
+- `notifications/` — ~~либо подключить к wallet_manager (on_balance_credited) и safety_gate (on_safety_block), либо удалить~~ **Частично закрыто (июнь 2026):** `on_balance_credited` и `on_balance_exhausted` подключены через EventBus. Остаётся: `on_safety_block` вызывается из dispatcher, но `SafetyBlockEvent` не публикуется из coordinator.
 
 **Приоритет 3 — Задокументировать в architecture.md:**
+
+> **UPDATE (июнь 2026):** Добавлен `infra/redis_keys.py` — canonical Redis key registry. Canonical rule: все новые Redis-ключи добавляются сюда; старые мигрируются при касании модуля. Не описан в architecture.md — добавить в §infra или §26 (bootstrap/infra layer).
 - §N: `i18n/` — контракт локализации, ownership `t.py`
 - §N: `transport/telegram/update_handler.py` — это main request handler, центральнее чем webhook
 - §N: `llm/groq_client.py`, `llm/hf_client.py`, `llm/fallback_handler.py` — LLM client layer
