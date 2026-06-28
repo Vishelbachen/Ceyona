@@ -205,6 +205,15 @@ async def check_async_lite(inp: SafetyInput) -> SafetyResult:
     """
     verdict, in_tok, out_tok = await _llm_judge_lite(inp.draft_response)
 
+    # Architectural invariant: _llm_judge_lite uses _SAFETY_LITE_SYSTEM which
+    # only classifies SAFE or BLOCK. REVISE is structurally impossible here.
+    # If this fires — someone replaced _llm_judge_lite with the full judge,
+    # violating the Lite contract (architecture.md §21, SAFETY-4).
+    assert verdict != SafetyVerdict.REVISE, (
+        "Lite judge returned REVISE — architectural invariant violated (§21). "
+        "check_async_lite must use _llm_judge_lite with _SAFETY_LITE_SYSTEM only."
+    )
+
     if verdict == SafetyVerdict.BLOCK:
         logger.warning("safety_agent BLOCK (Lite)", extra={"verdict": "BLOCK"})
         return SafetyResult(
