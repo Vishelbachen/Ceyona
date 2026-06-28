@@ -101,17 +101,22 @@ async def _send_message_with_topup(chat_id: int, text: str, lang: str = "en") ->
         ]]
     }
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        await client.post(
-            f"{_TELEGRAM_API}/sendMessage",
-            json={
-                "chat_id": chat_id,
-                "text": text,
-                "parse_mode": "Markdown",
-                "reply_markup": keyboard,
-            },
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.post(
+                f"{_TELEGRAM_API}/sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "text": text,
+                    "parse_mode": "Markdown",
+                    "reply_markup": keyboard,
+                },
+            )
+    except Exception as exc:
+        logger.warning(
+            "_send_message_with_topup failed",
+            extra={"chat_id": chat_id, "error": repr(exc)},
         )
-
 
 
 async def _send_voice(chat_id: int, audio_bytes: bytes, caption: str = "") -> bool:
@@ -136,12 +141,15 @@ async def _send_voice(chat_id: int, audio_bytes: bytes, caption: str = "") -> bo
 
 
 async def _answer_callback(callback_query_id: str, text: str = "") -> None:
-    async with httpx.AsyncClient() as client:
-        await client.post(
-            f"{_TELEGRAM_API}/answerCallbackQuery",
-            json={"callback_query_id": callback_query_id, "text": text},
-            timeout=5.0,
-        )
+    try:
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                f"{_TELEGRAM_API}/answerCallbackQuery",
+                json={"callback_query_id": callback_query_id, "text": text},
+                timeout=5.0,
+            )
+    except Exception as exc:
+        logger.warning("_answer_callback failed", extra={"error": repr(exc)})
 
 
 def _get_chat_id(update: dict) -> int | None:
@@ -357,57 +365,69 @@ async def telegram_webhook(
     # ── bot commands — handled BEFORE Safety Gate ────────────────────────────
     # /balance, /start, /help etc. are system commands, not user content.
     # They must never be routed through the Safety Gate.
+    # The entire block is wrapped in try/except: if _send_message_with_topup or
+    # _send_message raises (network error, Telegram timeout), we log and return
+    # cleanly instead of letting the exception propagate to FastAPI and causing
+    # Telegram to retry the update indefinitely.
     if update_type in (UpdateType.MESSAGE, UpdateType.EDITED_MESSAGE) and chat_id:
         raw_text = extract_text(update).strip()
-        if raw_text.startswith("/balance"):
-            bal_text = f"💰 Balance: ${user_balance:.4f}"
-            await _send_message_with_topup(chat_id, bal_text, lang)
-            return {"ok": True}
-        if raw_text.startswith("/start"):
-            await _send_message(chat_id, get_system_message("help_display", lang))
-            return {"ok": True}
-        if raw_text.startswith("/help"):
-            await _send_message(chat_id, get_system_message("help_display", lang))
-            return {"ok": True}
-
-        # ── /clear — Mode A: session reset (conversation history only) ────────
-        # Clears conversation_history from Supabase.
-        # Long-term memory (SupabaseStore) is intentionally preserved —
-        # the user wants a fresh dialogue, not to lose personalisation.
-        # Cache is not touched: it is infrastructure, not user identity.
-        if raw_text.startswith("/clear"):
-            if supabase is not None:
-                from memory.conversation_history import ConversationHistory
-                history_store = ConversationHistory(supabase)
-                await history_store.clear(user_id)
-            await _send_message(chat_id, get_system_message("session_cleared", lang))
-            return {"ok": True}
-
-        # ── /reset_memory — Mode B: full memory wipe (irreversible) ──────────
-        # Two-step confirmation: first call shows warning, second with "confirm"
-        # executes the wipe. Both conversation_history and long-term memory
-        # (SupabaseStore) are deleted. QueryCache is also cleared — it is the
-        # only user-scoped cache (keyed by user_id hash).
-        # EmbeddingCache and RerankCache are NOT touched: they are global
-        # infrastructure caches with no user identity, not memory layers.
-        if raw_text.startswith("/reset_memory"):
-            confirmed = "confirm" in raw_text
-            if not confirmed:
-                await _send_message(chat_id, get_system_message("memory_reset_confirm", lang))
+        try:
+            if raw_text.startswith("/balance"):
+                bal_text = f"💰 Balance: ${user_balance:.4f}"
+                await _send_message_with_topup(chat_id, bal_text, lang)
                 return {"ok": True}
-            # Confirmed — execute full wipe
-            if supabase is not None:
-                from memory.conversation_history import ConversationHistory
-                from memory.supabase_store import SupabaseStore
-                await ConversationHistory(supabase).clear(user_id)
-                await SupabaseStore(supabase).delete_by_user(str(user_id))
-            # QueryCache: clear user-scoped retrieval cache from Redis
-            if request.app.state.redis is not None:
-                from retrieval.cache.query_cache import QueryCache
-                qcache = QueryCache(request.app.state.redis)
-                await qcache.delete_by_user(str(user_id))
-            logger.info("Full memory reset executed", extra={"user_id": user_id})
-            await _send_message(chat_id, get_system_message("memory_reset_done", lang))
+            if raw_text.startswith("/start"):
+                await _send_message(chat_id, get_system_message("help_display", lang))
+                return {"ok": True}
+            if raw_text.startswith("/help"):
+                await _send_message(chat_id, get_system_message("help_display", lang))
+                return {"ok": True}
+
+            # ── /clear — Mode A: session reset (conversation history only) ────────
+            # Clears conversation_history from Supabase.
+            # Long-term memory (SupabaseStore) is intentionally preserved —
+            # the user wants a fresh dialogue, not to lose personalisation.
+            # Cache is not touched: it is infrastructure, not user identity.
+            if raw_text.startswith("/clear"):
+                if supabase is not None:
+                    from memory.conversation_history import ConversationHistory
+                    history_store = ConversationHistory(supabase)
+                    await history_store.clear(user_id)
+                await _send_message(chat_id, get_system_message("session_cleared", lang))
+                return {"ok": True}
+
+            # ── /reset_memory — Mode B: full memory wipe (irreversible) ──────────
+            # Two-step confirmation: first call shows warning, second with "confirm"
+            # executes the wipe. Both conversation_history and long-term memory
+            # (SupabaseStore) are deleted. QueryCache is also cleared — it is the
+            # only user-scoped cache (keyed by user_id hash).
+            # EmbeddingCache and RerankCache are NOT touched: they are global
+            # infrastructure caches with no user identity, not memory layers.
+            if raw_text.startswith("/reset_memory"):
+                confirmed = "confirm" in raw_text
+                if not confirmed:
+                    await _send_message(chat_id, get_system_message("memory_reset_confirm", lang))
+                    return {"ok": True}
+                # Confirmed — execute full wipe
+                if supabase is not None:
+                    from memory.conversation_history import ConversationHistory
+                    from memory.supabase_store import SupabaseStore
+                    await ConversationHistory(supabase).clear(user_id)
+                    await SupabaseStore(supabase).delete_by_user(str(user_id))
+                # QueryCache: clear user-scoped retrieval cache from Redis
+                if request.app.state.redis is not None:
+                    from retrieval.cache.query_cache import QueryCache
+                    qcache = QueryCache(request.app.state.redis)
+                    await qcache.delete_by_user(str(user_id))
+                logger.info("Full memory reset executed", extra={"user_id": user_id})
+                await _send_message(chat_id, get_system_message("memory_reset_done", lang))
+                return {"ok": True}
+
+        except Exception as exc:
+            logger.error(
+                "Command handler failed",
+                extra={"cmd": raw_text[:30], "error": repr(exc)},
+            )
             return {"ok": True}
 
     # ── message handling ──────────────────────────────────────────────────────
@@ -684,6 +704,7 @@ async def telegram_webhook(
             user_balance=user_balance,
             lang=lang,
             send_message=_send_message,
+            send_message_with_topup=_send_message_with_topup,
             answer_callback=_answer_callback,
         )
 
