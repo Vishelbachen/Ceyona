@@ -90,31 +90,33 @@ Architecture.md §4 описывает их как "META Side-channel (reflectio
 
 ---
 
-### ARCH-3: `events/` — полная зомби-подсистема (подтверждено глубоко)
+### ~~ARCH-3: `events/` — полная зомби-подсистема~~ — ЧАСТИЧНО ЗАКРЫТО (июнь 2026)
 
 EventStore хранит события в Redis с TTL 30 дней, EventReplay может воспроизводить их по user_id и по имени события. Инфраструктура для audit trail, debug replay, и user event history полностью построена.
 
-Но `event_bus.publish()` не вызывается ни разу. Полная карта событий которые должны были публиковаться:
-
-| Событие | Где должно было вызываться |
+| Событие | Статус |
 |---|---|
-| balance_credited | `payments/wallet_manager.py` при successful TopUp |
-| balance_exhausted | `webhook.py` при `deny_reason == "insufficient_balance"` |
-| safety_block | `cognition/multi_agent_coordinator.py` при BLOCK verdict |
-| request_completed | `transport/telegram/update_handler.py` в конце handle_message |
-| request_denied | `webhook.py` при `result.denied == True` |
+| `balance_credited` | ✅ `wallet_manager.py` публикует `BalanceCreditedEvent` |
+| `balance_exhausted` | ✅ `webhook.py` публикует `BalanceExhaustedEvent` при `insufficient_balance` |
+| `request_denied` | ✅ `webhook.py` публикует `RequestDeniedEvent` при других deny_reason |
+| `llm_called` / `llm_fallback` | ✅ `llm/fallback_handler.py` публикует оба события |
+| `safety_block` | 🔴 **OPEN** — `coordinator` не публикует `SafetyBlockEvent` при BLOCK вердикте |
+| `request_completed` | 🔴 **OPEN** — `update_handler.py` не публикует `RequestCompletedEvent` в конце pipeline |
 
-`events/event_types.py` содержит `EPKDecisionEvent`, `SafetyEvent` и др. — типы определены, но никогда не создаются.
+`event_dispatcher` подписан на все активные события и маршрутизирует их в `EventStore` + `EventNotifier`.
 
 ---
 
-### ARCH-4: `notifications/event_notifier.py` — события без триггера
+### ~~ARCH-4: `notifications/event_notifier.py` — события без триггера~~ — ЧАСТИЧНО ЗАКРЫТО (июнь 2026)
 
-`EventNotifier` имеет методы: `on_balance_credited`, `on_balance_exhausted`, `on_safety_block`, `on_system_error`. Все написаны корректно (логирование + опциональный email).
+`EventNotifier` имеет методы: `on_balance_credited`, `on_balance_exhausted`, `on_safety_block`, `on_system_error`.
 
-Но: `event_notifier` (singleton) **нигде не вызывается** в продуктивном коде. `wallet_manager.process_incoming()` успешно кредитует баланс → не уведомляет. `safety_agent` блокирует ответ → не уведомляет.
-
-Это связано с events/: `event_notifier` должен был вызываться из обработчиков событий EventBus, но EventBus не получает publish.
+| Метод | Статус |
+|---|---|
+| `on_balance_credited` | ✅ Вызывается из `event_dispatcher` при `BALANCE_CREDITED` → email уведомление |
+| `on_balance_exhausted` | ✅ Вызывается из `event_dispatcher` при `BALANCE_EXHAUSTED` → email уведомление |
+| `on_safety_block` | 🔴 **OPEN** — handler в dispatcher зарегистрирован, но `SafetyBlockEvent` не публикуется из coordinator (см. ARCH-3) |
+| `on_system_error` | 🔴 **OPEN** — нигде не вызывается |
 
 ---
 
@@ -163,6 +165,7 @@ GPT и архитектура правы: должен быть отдельны
 | `retrieval/fusion/hybrid_scorer.py` | Dense+sparse fusion | ❌ Не подключён |
 | `external/web_tools.py` | Tool dispatcher (weather/search/maps/translate) | ✅ Orchestrator |
 | `ceyona-worker/worker.js` | Cloudflare Worker: Telegram→HF relay | ✅ Деплой |
+| `infra/redis_keys.py` | Canonical Redis key registry (ключи + TTL константы) | ✅ Добавлен июнь 2026 |
 
 ---
 
@@ -208,8 +211,8 @@ GPT и архитектура правы: должен быть отдельны
 
 ### Серьёзные (функциональность отсутствует)
 3. **BUG-3**: `/providers` endpoint без `@app.get` декоратора → 404 всегда
-4. **ARCH-3**: `events/` — bootstrapped, но `publish()` не вызывается → аудит trail отсутствует, event replay бесполезен
-5. **ARCH-4**: `notifications/` — написан, но не подключён → нет email уведомлений при пополнении/исчерпании баланса
+4. ~~**ARCH-3**: `events/` — bootstrapped, но `publish()` не вызывается~~ → **ЧАСТИЧНО ЗАКРЫТО** (июнь 2026): balance/llm события публикуются. Open: `SafetyBlockEvent`, `RequestCompletedEvent`
+5. ~~**ARCH-4**: `notifications/` — написан, но не подключён~~ → **ЧАСТИЧНО ЗАКРЫТО** (июнь 2026): `on_balance_credited` и `on_balance_exhausted` работают. Open: `on_safety_block` (зависит от ARCH-3), `on_system_error`
 
 ### Мёртвый код (занимает место, вводит в заблуждение)
 6. `security/auth.py` — JWT не используется
