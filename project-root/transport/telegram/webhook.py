@@ -481,7 +481,7 @@ async def telegram_webhook(
                 )
 
                 # Compute actual multilingual_preprocessor cost (economic.md §2).
-                # Runs in update_handler BEFORE orchestrator — not included in
+                # Runs inside orchestrator.run() pipeline — not included in
                 # result.usage.llm_cost_usd on ALLOW/DEGRADED paths (only on HEAVY).
                 # model: "allam-2-7b" ($0.075/$0.30) | "qwen/qwen3.6-27b" ($0.60/$3.00) | "passthrough" ($0)
                 # On HEAVY path _run_heavy() already billed these — guard against double-billing.
