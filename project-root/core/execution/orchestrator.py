@@ -727,7 +727,7 @@ async def _run_degraded(
         conversation_history=request.conversation_history,
     ))
 
-    from cognition.multi_agent_coordinator import AgentCallMetrics as _ACM, CoordinationMetrics as _CM
+    from cognition.multi_agent_coordinator import AgentCallMetrics as _ACM
     _degraded_metrics = coordination.coordination_metrics.with_agent(
         "safety",
         _ACM(
