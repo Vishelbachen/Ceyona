@@ -3,10 +3,14 @@ import logging
 from contextlib import asynccontextmanager
 
 from app.bootstrap import bootstrap, shutdown
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from infra.env_validator import validate
 from observability.logger import setup_logging
 from observability.sentry import init_sentry
+from security.auth import verify_token
+from security.origin_guard import is_allowed_origin
 
 logger = logging.getLogger(__name__)
 
@@ -215,6 +219,43 @@ app = FastAPI(
     redoc_url=None,
 )
 
+# ── CORS ──────────────────────────────────────────────────────────────────────
+# origin_guard.py owns the allowed-origins logic.
+# For the Telegram bot, allowed_origins defaults to '*' — Telegram servers are
+# not browsers, CORS does not apply to webhook calls. This middleware exists
+# for future web clients hitting the admin/diagnostic endpoints.
+from app.settings import settings as _settings  # noqa: E402
+_origins = [o.strip() for o in _settings.allowed_origins.split(',') if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_origins,
+    allow_credentials=True,
+    allow_methods=['*'],
+    allow_headers=['*'],
+)
+
+# ── JWT dependency for admin routes ───────────────────────────────────────────
+_bearer = HTTPBearer(auto_error=False)
+
+
+async def require_admin(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+) -> int:
+    """
+    FastAPI dependency: validate Bearer JWT for administrative endpoints.
+    Usage: add `_: int = Depends(require_admin)` to any admin route.
+
+    Protected: /metrics, /models, /providers, /routing, /debug
+    NOT protected: /health (monitoring must stay open), /webhook (Telegram)
+    """
+    if credentials is None:
+        raise HTTPException(status_code=401, detail="Authorization header required")
+    user_id = verify_token(credentials.credentials)
+    if user_id is None:
+        raise HTTPException(status_code=403, detail="Invalid or expired token")
+    return user_id
+
+
 from transport.telegram.webhook import router as telegram_router  # noqa: E402
 
 app.include_router(telegram_router)
@@ -228,7 +269,7 @@ async def health(request: Request):
 
 
 @app.get("/metrics")
-async def metrics() -> dict:
+async def metrics(_: int = Depends(require_admin)) -> dict:
     """
     Observability snapshot endpoint.
 
@@ -241,7 +282,7 @@ async def metrics() -> dict:
 
 
 @app.get("/models")
-async def models():
+async def models(_: int = Depends(require_admin)):
     """
     Full model availability check across all 20 models used by Ceyona.
 
@@ -329,7 +370,7 @@ async def models():
 
 
 @app.get("/routing")
-async def routing():
+async def routing(_: int = Depends(require_admin)):
     """
     Current model routing table — which model handles each role.
 
@@ -393,7 +434,7 @@ async def routing():
 
 
 @app.get("/providers")
-async def providers(request: Request):
+async def providers(request: Request, _: int = Depends(require_admin)):
     from app.settings import settings
     from llm.groq_client import groq_client
 
@@ -574,7 +615,7 @@ async def providers(request: Request):
 
 
 @app.get("/debug")
-async def debug() -> dict:
+async def debug(_: int = Depends(require_admin)) -> dict:
     """
     Live functional checks for every external integration.
 
