@@ -85,9 +85,10 @@ async def _send_message(chat_id: int, text: str) -> None:
 
 
 async def _send_message_with_topup(chat_id: int, text: str, lang: str = "en") -> None:
-    """Send message with an inline 'Top Up' button linking to TON wallet."""
+    """Send message with an inline 'Top Up' button via Apps Script proxy."""
     if not text:
         return
+    import json as _json
     from i18n.t import t as _t
 
     topup_label = _t("topup_button", lang)
@@ -101,20 +102,47 @@ async def _send_message_with_topup(chat_id: int, text: str, lang: str = "en") ->
         ]]
     }
 
+    async def _attempt(txt: str, parse_mode: str | None) -> tuple[int, str]:
+        params: dict = {
+            "chat_id": chat_id,
+            "text": txt,
+            "reply_markup": keyboard,
+        }
+        if parse_mode:
+            params["parse_mode"] = parse_mode
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            resp = await client.get(
+                _APPS_SCRIPT_URL,
+                params={"method": "sendMessage", "params": _json.dumps(params)},
+            )
+            return resp.status_code, resp.text
+
+    # Attempt 1: with Markdown
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            await client.post(
-                f"{_TELEGRAM_API}/sendMessage",
-                json={
-                    "chat_id": chat_id,
-                    "text": text,
-                    "parse_mode": "Markdown",
-                    "reply_markup": keyboard,
-                },
+        status, body = await _attempt(text, "Markdown")
+        if status == 200:
+            return
+        logger.error(
+            "_send_message_with_topup failed — retrying without Markdown",
+            extra={"chat_id": chat_id, "status": status, "body": body[:200]},
+        )
+    except Exception as exc:
+        logger.error(
+            "_send_message_with_topup network error — retrying without Markdown",
+            extra={"chat_id": chat_id, "error": repr(exc)},
+        )
+
+    # Attempt 2: plain text
+    try:
+        status, body = await _attempt(text, None)
+        if status != 200:
+            logger.error(
+                "_send_message_with_topup retry also failed",
+                extra={"chat_id": chat_id, "status": status, "body": body[:200]},
             )
     except Exception as exc:
-        logger.warning(
-            "_send_message_with_topup failed",
+        logger.error(
+            "_send_message_with_topup retry exception",
             extra={"chat_id": chat_id, "error": repr(exc)},
         )
 
@@ -141,12 +169,13 @@ async def _send_voice(chat_id: int, audio_bytes: bytes, caption: str = "") -> bo
 
 
 async def _answer_callback(callback_query_id: str, text: str = "") -> None:
+    import json as _json
+    params: dict = {"callback_query_id": callback_query_id, "text": text}
     try:
-        async with httpx.AsyncClient() as client:
-            await client.post(
-                f"{_TELEGRAM_API}/answerCallbackQuery",
-                json={"callback_query_id": callback_query_id, "text": text},
-                timeout=5.0,
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            await client.get(
+                _APPS_SCRIPT_URL,
+                params={"method": "answerCallbackQuery", "params": _json.dumps(params)},
             )
     except Exception as exc:
         logger.warning("_answer_callback failed", extra={"error": repr(exc)})
