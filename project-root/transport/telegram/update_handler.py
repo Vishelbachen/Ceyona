@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import traceback
 
@@ -96,7 +95,8 @@ async def handle_message(
         # ── album: buffer in aggregator ───────────────────────────────────────
         if group_id and redis is not None:
             from transport.telegram.media_group_aggregator import (
-                MediaGroupAggregator, MediaGroupItem,
+                MediaGroupAggregator,
+                MediaGroupItem,
             )
             scoped_group_id = f"{user_id}:{group_id}"
             aggregator: MediaGroupAggregator | None = getattr(app_state, "media_group_aggregator", None)
@@ -181,7 +181,11 @@ async def handle_message(
         if voice_file_id:
             try:
                 from app.settings import settings
-                from external.speech_to_text import download_telegram_voice, is_silent, transcribe
+                from external.speech_to_text import (
+                    download_telegram_voice,
+                    is_silent,
+                    transcribe,
+                )
 
                 audio_bytes, filename = await download_telegram_voice(
                     file_id=voice_file_id, bot_token=settings.bot_token,
