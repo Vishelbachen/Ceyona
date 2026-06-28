@@ -12,14 +12,17 @@ logger = logging.getLogger(__name__)
 
 async def _log_handler(event: BaseEvent) -> None:
     """Structured log for every event — observability only."""
+    # NOTE: "name" is a reserved field in Python's LogRecord (it stores the
+    # logger name). Passing extra={"name": ...} raises
+    # "Attempt to overwrite 'name' in LogRecord". Use "event_name" instead.
     logger.info(
         "event",
         extra={
-            "event_id":  event.event_id,
-            "name":      event.name,
-            "user_id":   event.user_id,
-            "payload":   event.payload,
-            "timestamp": event.timestamp.isoformat(),
+            "event_id":   event.event_id,
+            "event_name": event.name,
+            "user_id":    event.user_id,
+            "payload":    event.payload,
+            "timestamp":  event.timestamp.isoformat(),
         },
     )
 
