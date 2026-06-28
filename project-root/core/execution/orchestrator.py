@@ -1222,8 +1222,9 @@ def _classify_complexity_internal(text: str) -> Complexity:
 async def _run_safety_gate_pass1(text: str, request_id: str = "") -> int:
     """Safety Gate Pass 1 — NON-BLOCKING observability. Returns tokens_used."""
     try:
-        from security.safety_gate import check_pass1
         import asyncio
+
+        from security.safety_gate import check_pass1
         gate1 = await asyncio.wait_for(check_pass1(text), timeout=8.0)
         return gate1.tokens_used
     except asyncio.TimeoutError:
@@ -1236,8 +1237,9 @@ async def _run_safety_gate_pass1(text: str, request_id: str = "") -> int:
 async def _run_safety_gate_pass2(text: str, request_id: str = "") -> tuple[int, int, int]:
     """Safety Gate Pass 2 — NON-BLOCKING observability. Returns (pass2_tokens, safeguard_in, safeguard_out)."""
     try:
-        from security.safety_gate import check_pass2
         import asyncio
+
+        from security.safety_gate import check_pass2
         gate2 = await asyncio.wait_for(check_pass2(text), timeout=12.0)
         return gate2.tokens_used, gate2.safeguard_tokens_used, gate2.safeguard_output_tokens_used
     except asyncio.TimeoutError:
@@ -1253,7 +1255,8 @@ async def _run_multilingual(text: str, lang: str) -> tuple[str, int, int, str]:
     Returns (normalized_text, input_tokens, output_tokens, model_used).
     """
     try:
-        from llm.multilingual_preprocessor import PreprocessorInput, preprocess as ml_preprocess
+        from llm.multilingual_preprocessor import PreprocessorInput
+        from llm.multilingual_preprocessor import preprocess as ml_preprocess
         ml_result = await ml_preprocess(PreprocessorInput(text=text, lang=lang))
         if ml_result.was_normalized:
             logger.info("Multilingual normalization applied", extra={
