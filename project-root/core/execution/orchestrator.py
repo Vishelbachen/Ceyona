@@ -128,6 +128,30 @@ class UsageRecord:
                          # Never read this field as "full cost" — use UsageEntry.raw_cost_usd.
 
 
+@dataclass(frozen=True)
+class PipelineMetrics:
+    """
+    Token metrics for pipeline stages that run outside coordinator:
+    Safety Gates (Pass 1/2) and multilingual normalization.
+
+    These are not coordinator-managed agents — they run before EPK,
+    before coordinator is called. Kept separate from CoordinationMetrics
+    so the boundary of coordinator authority stays explicit.
+
+    Architecture decision (Jun 2026):
+      CoordinationMetrics owns: primary, safety_agent, revision, lc_transformer.
+      PipelineMetrics owns: safety_gate_pass1, safety_gate_pass2, multilingual.
+      OrchestratorResult carries both — webhook/billing reads from both.
+    """
+    safety_pass1_tokens: int = 0              # llama-prompt-guard-2-22m input tokens
+    safety_pass2_tokens: int = 0              # llama-prompt-guard-2-86m input tokens
+    safety_safeguard_tokens: int = 0          # gpt-oss-safeguard-20b input (pass2)
+    safety_safeguard_output_tokens: int = 0   # gpt-oss-safeguard-20b output (pass2)
+    multilingual_input_tokens: int = 0        # multilingual_preprocessor LLM input
+    multilingual_output_tokens: int = 0       # multilingual_preprocessor LLM output
+    multilingual_model: str = ""              # "allam-2-7b" | "qwen/qwen3.6-27b" | "passthrough"
+
+
 @dataclass
 class OrchestratorResult:
     text: str
@@ -144,23 +168,19 @@ class OrchestratorResult:
     tts_audio_bytes: bytes = b""
     audio_seconds: float = 0.0
     tts_characters: int = 0
-    tts_model: str = ""               # TTS model used: "canopylabs/orpheus-v1-english" | "canopylabs/orpheus-arabic-saudi"
-                                      # Required for billing: English=$22/1M chars, Arabic=$40/1M chars
+    tts_model: str = ""       # TTS model used: "canopylabs/orpheus-v1-english" | "canopylabs/orpheus-arabic-saudi"
+                              # Required for billing: English=$22/1M chars, Arabic=$40/1M chars
     tool_calls: int = 0
     resolved_model: str = ""  # preferred_model resolved at routing time (models.md §25.3)
-    safety_pass1_tokens: int = 0              # GateResult.tokens_used from check_pass1() — for actual_safety_cost()
-    safety_pass2_tokens: int = 0              # GateResult.tokens_used from check_pass2()
-    safety_safeguard_tokens: int = 0          # gpt-oss-safeguard-20b input tokens (included in pass2 call)
-    safety_safeguard_output_tokens: int = 0   # gpt-oss-safeguard-20b output tokens ($0.30/1M)
-    safety_agent_input_tokens: int = 0        # gpt-oss-safeguard-20b input tokens from safety_agent LLM judge
-    safety_agent_output_tokens: int = 0       # gpt-oss-safeguard-20b output tokens from safety_agent LLM judge
-    revision_input_tokens: int = 0            # SAFETY-6 REVISE loop input tokens (primary model, max 1 pass)
-    revision_output_tokens: int = 0           # SAFETY-6 REVISE loop output tokens
-    multilingual_input_tokens: int = 0        # multilingual_preprocessor LLM call input tokens
-    multilingual_output_tokens: int = 0       # multilingual_preprocessor LLM call output tokens
-    multilingual_model: str = ""              # model used: "allam-2-7b" | "qwen/qwen3.6-27b" | "passthrough"
-    lc_transformer_input_tokens: int = 0      # long_context_transformer input tokens (qwen3.6-27b, $0.60/1M)
-    lc_transformer_output_tokens: int = 0     # long_context_transformer output tokens ($3.00/1M)
+
+    # ── Structured metrics (Variant B — Jun 2026) ─────────────────────────────
+    # agent_metrics: all coordinator-managed LLM agents (safety_agent, revision,
+    #   primary, lc_transformer). Single source of truth inside coordinator.
+    # pipeline_metrics: pipeline stages before coordinator (safety gates, multilingual).
+    # webhook.py and usage_meter.py read from these — no flat token fields.
+    agent_metrics: object = None   # CoordinationMetrics — imported lazily to avoid circular
+    pipeline_metrics: object = None  # PipelineMetrics
+
     # Per-model token breakdown for compound AI systems (groq/compound, groq/compound-mini).
     # Populated from LLMResponse.usage_breakdown when compound_agent returns a result.
     # Used in webhook.py to call actual_compound_cost_from_breakdown() for exact billing.
@@ -170,7 +190,68 @@ class OrchestratorResult:
 
     def __post_init__(self):
         if self.compound_breakdown is None:
-            object.__setattr__(self, "compound_breakdown", [])
+            self.compound_breakdown = []
+        if self.agent_metrics is None:
+            from cognition.multi_agent_coordinator import CoordinationMetrics
+            self.agent_metrics = CoordinationMetrics()
+        if self.pipeline_metrics is None:
+            self.pipeline_metrics = PipelineMetrics()
+
+    # ── Convenience accessors (read-only facade over structured metrics) ───────
+    # These properties let webhook/usage_meter access tokens without knowing
+    # whether they came from coordinator or pipeline stage. Zero boilerplate.
+
+    @property
+    def safety_pass1_tokens(self) -> int:
+        return self.pipeline_metrics.safety_pass1_tokens
+
+    @property
+    def safety_pass2_tokens(self) -> int:
+        return self.pipeline_metrics.safety_pass2_tokens
+
+    @property
+    def safety_safeguard_tokens(self) -> int:
+        return self.pipeline_metrics.safety_safeguard_tokens
+
+    @property
+    def safety_safeguard_output_tokens(self) -> int:
+        return self.pipeline_metrics.safety_safeguard_output_tokens
+
+    @property
+    def safety_agent_input_tokens(self) -> int:
+        return self.agent_metrics.safety.input_tokens
+
+    @property
+    def safety_agent_output_tokens(self) -> int:
+        return self.agent_metrics.safety.output_tokens
+
+    @property
+    def revision_input_tokens(self) -> int:
+        return self.agent_metrics.revision.input_tokens
+
+    @property
+    def revision_output_tokens(self) -> int:
+        return self.agent_metrics.revision.output_tokens
+
+    @property
+    def multilingual_input_tokens(self) -> int:
+        return self.pipeline_metrics.multilingual_input_tokens
+
+    @property
+    def multilingual_output_tokens(self) -> int:
+        return self.pipeline_metrics.multilingual_output_tokens
+
+    @property
+    def multilingual_model(self) -> str:
+        return self.pipeline_metrics.multilingual_model
+
+    @property
+    def lc_transformer_input_tokens(self) -> int:
+        return self.agent_metrics.lc_transformer.input_tokens
+
+    @property
+    def lc_transformer_output_tokens(self) -> int:
+        return self.agent_metrics.lc_transformer.output_tokens
 
 
 # ─── INTERNAL HELPERS ─────────────────────────────────────────────────────────
@@ -530,10 +611,7 @@ async def _run_allow(
         tool_used=bool(intent_result.tool_name),
         tool_calls=coordination.tool_calls,
         resolved_model=intent_result.routing.preferred_model or "",
-        safety_agent_input_tokens=coordination.coordination_metrics.safety.input_tokens,
-        safety_agent_output_tokens=coordination.coordination_metrics.safety.output_tokens,
-        revision_input_tokens=coordination.coordination_metrics.revision.input_tokens,
-        revision_output_tokens=coordination.coordination_metrics.revision.output_tokens,
+        agent_metrics=coordination.coordination_metrics,
         compound_breakdown=getattr(coordination, "usage_breakdown", []),
     )
 
@@ -649,6 +727,16 @@ async def _run_degraded(
         conversation_history=request.conversation_history,
     ))
 
+    from cognition.multi_agent_coordinator import AgentCallMetrics as _ACM, CoordinationMetrics as _CM
+    _degraded_metrics = coordination.coordination_metrics.with_agent(
+        "safety",
+        _ACM(
+            model="openai/gpt-oss-safeguard-20b",
+            input_tokens=_lite_result.input_tokens,
+            output_tokens=_lite_result.output_tokens,
+        ),
+    )
+
     return OrchestratorResult(
         text=synthesis.text,
         tier=tier,
@@ -668,8 +756,7 @@ async def _run_degraded(
         tool_used=bool(intent_result.tool_name),
         tool_calls=coordination.tool_calls,
         resolved_model="",  # DEGRADED_MODE: no preferred_model — FAST tier is always gpt-oss-20b
-        safety_agent_input_tokens=_lite_result.input_tokens,
-        safety_agent_output_tokens=_lite_result.output_tokens,
+        agent_metrics=_degraded_metrics,
         compound_breakdown=getattr(coordination, "usage_breakdown", []),
     )
 
@@ -864,6 +951,18 @@ async def _run_heavy(
         conversation_history=request.conversation_history,
     ))
 
+    from cognition.multi_agent_coordinator import AgentCallMetrics as _ACM
+    _heavy_metrics = coordination.coordination_metrics
+    if _lc_in_tok:
+        _heavy_metrics = _heavy_metrics.with_agent(
+            "lc_transformer",
+            _ACM(
+                model="qwen/qwen3.6-27b",
+                input_tokens=_lc_in_tok,
+                output_tokens=_lc_out_tok,
+            ),
+        )
+
     return OrchestratorResult(
         text=synthesis.text,
         tier=tier,
@@ -883,21 +982,14 @@ async def _run_heavy(
         tool_used=bool(intent_result.tool_name),
         tool_calls=coordination.tool_calls,
         resolved_model=intent_result.routing.preferred_model or "",
-        safety_agent_input_tokens=coordination.coordination_metrics.safety.input_tokens,
-        safety_agent_output_tokens=coordination.coordination_metrics.safety.output_tokens,
-        revision_input_tokens=coordination.coordination_metrics.revision.input_tokens,
-        revision_output_tokens=coordination.coordination_metrics.revision.output_tokens,
-        lc_transformer_input_tokens=_lc_in_tok,
-        lc_transformer_output_tokens=_lc_out_tok,
+        agent_metrics=_heavy_metrics,
         compound_breakdown=getattr(coordination, "usage_breakdown", []),
     )
 
 
-# ─── MAIN PIPELINE ────────────────────────────────────────────────────────────
-
-
-# ─── INTERNAL REQUEST (pipeline-stage contract) ───────────────────────────────
-# Used internally after orchestrator.run() has populated all pipeline data.
+# ─── PIPELINE DATA CONTRACTS ─────────────────────────────────────────────────
+# Internal data contract used between pipeline stages inside orchestrator.
+# Not visible to the transport layer.
 # Transport-facing OrchestratorRequest is minimal; _InternalRequest is rich.
 
 @dataclass
@@ -1511,18 +1603,16 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             )
 
         # ── Wire pipeline billing fields onto result ──────────────────────────
-        if (_safety_pass1_tokens or _safety_pass2_tokens or _safety_safeguard_tokens
-                or _safety_safeguard_out_tokens or _ml_input_tokens or _ml_output_tokens):
-            from dataclasses import replace as _replace
-            result = _replace(result,
-                safety_pass1_tokens=_safety_pass1_tokens,
-                safety_pass2_tokens=_safety_pass2_tokens,
-                safety_safeguard_tokens=_safety_safeguard_tokens,
-                safety_safeguard_output_tokens=_safety_safeguard_out_tokens,
-                multilingual_input_tokens=_ml_input_tokens,
-                multilingual_output_tokens=_ml_output_tokens,
-                multilingual_model=_ml_model,
-            )
+        _pm = PipelineMetrics(
+            safety_pass1_tokens=_safety_pass1_tokens,
+            safety_pass2_tokens=_safety_pass2_tokens,
+            safety_safeguard_tokens=_safety_safeguard_tokens,
+            safety_safeguard_output_tokens=_safety_safeguard_out_tokens,
+            multilingual_input_tokens=_ml_input_tokens,
+            multilingual_output_tokens=_ml_output_tokens,
+            multilingual_model=_ml_model,
+        )
+        result.pipeline_metrics = _pm
 
         gauge("orchestrator.last_latency_ms",
               round((__import__("time").perf_counter() - _run_start) * 1000, 2))
