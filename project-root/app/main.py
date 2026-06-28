@@ -187,7 +187,7 @@ async def lifespan(app: FastAPI):
         if not ok:
             logger.warning("Webhook registration returned ok=False — will retry on next restart")
     except Exception as exc:
-        logger.warning("Webhook registration failed — app continues", extra={"error": str(exc)})
+        logger.warning("Webhook registration failed — app continues", extra={"error": repr(exc) or type(exc).__name__})
 
     # ── background wallet poller ──────────────────────────
     wallet_task = asyncio.create_task(
@@ -392,6 +392,7 @@ async def routing():
 
 
 
+@app.get("/providers")
 async def providers(request: Request):
     from app.settings import settings
     from llm.groq_client import groq_client
