@@ -86,42 +86,31 @@ _LIVE_DATA_UNAVAILABLE = "live_data_unavailable"
 
 @dataclass
 class OrchestratorRequest:
+    """
+    Minimal contract from transport to orchestrator.
+
+    Transport passes only what it knows from the Telegram update.
+    All pipeline logic (Safety Gates, multilingual, analysis, history,
+    retrieval) runs inside orchestrator.run().
+
+    Architecture decision (Jun 2026):
+      Transport: parse → auth → TTS → send.
+      Orchestrator: everything else including history load/save.
+    """
     user_message: str
     user_balance: float
-    input_tokens: int
-    complexity: Complexity
-    system_prompt: str = ""
-    retrieved_context: str = ""
-    conversation_history: list[dict] | None = None
-    embedding_tokens: int = 0
-    rerank_tokens: int = 0
-    embedding_type: str = "large"
+    user_id: int = 0
     lang: str = "en"
-    has_code_block: bool = False
-    has_json_shape: bool = False
-    context_size: int = 0
-    # Pre-computed intent from vision_handler (§15 ingress adapter).
-    # Set ONLY on the vision pipeline path — never from transport logic.
-    vision_intent: IntentResult | None = None
     supabase: object = None
+    redis: object = None
     hf_client: object = None
-    # Input type tag — used by update_handler to skip history load for
-    # request types where conversation history is irrelevant or actively
-    # harmful (e.g. media group albums).
-    # Values: "text" (default), "image_group", "voice", "image"
-    input_type: str = "text"
-    # request_id for log correlation across pipeline stages.
-    # Format: "{update_id}:{user_id}" — set by webhook, propagated through pipeline.
+    input_type: str = "text"   # "text" | "image_group" | "voice" | "image"
     request_id: str = ""
-    # analysis_report: pre-reasoning structural hints from meta/analysis.py (§4 lifecycle).
-    # Non-binding — passed to intent_engine.classify() for confidence adjustment only.
-    analysis_report: object = None  # meta.analysis.AnalysisReport | None
-    # skip_web_search: True on the vision pipeline path.
-    # Vision descriptions are NOT valid search queries.
-    skip_web_search: bool = False
-    # is_vision: True when the request originates from the vision pipeline.
-    # Forces CONVERSATION intent + LOW complexity to prevent CoT artefacts.
+    # Vision pipeline fields — set only on vision path (§15)
+    vision_intent: object = None   # IntentResult | None
     is_vision: bool = False
+    skip_web_search: bool = False
+    vision_context: str = ""       # VQ-03: anchored image descriptions for grounding
 
 
 @dataclass
@@ -906,7 +895,39 @@ async def _run_heavy(
 
 # ─── MAIN PIPELINE ────────────────────────────────────────────────────────────
 
-async def run(request: OrchestratorRequest) -> OrchestratorResult:
+
+# ─── INTERNAL REQUEST (pipeline-stage contract) ───────────────────────────────
+# Used internally after orchestrator.run() has populated all pipeline data.
+# Transport-facing OrchestratorRequest is minimal; _InternalRequest is rich.
+
+@dataclass
+class _InternalRequest:
+    """Internal request populated after Safety Gates, multilingual, history, retrieval."""
+    user_message: str
+    user_balance: float
+    input_tokens: int
+    complexity: Complexity
+    system_prompt: str = ""
+    retrieved_context: str = ""
+    conversation_history: list[dict] | None = None
+    embedding_tokens: int = 0
+    rerank_tokens: int = 0
+    embedding_type: str = "large"
+    lang: str = "en"
+    has_code_block: bool = False
+    has_json_shape: bool = False
+    context_size: int = 0
+    vision_intent: object = None
+    supabase: object = None
+    hf_client: object = None
+    input_type: str = "text"
+    request_id: str = ""
+    analysis_report: object = None
+    skip_web_search: bool = False
+    is_vision: bool = False
+
+
+async def _run_pipeline(request: _InternalRequest) -> OrchestratorResult:
     lang = request.lang or "en"
 
     _rid = request.request_id or ""
@@ -918,9 +939,6 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
         "lang": lang,
         "balance": request.user_balance,
     })
-
-    increment("orchestrator.requests")
-    _run_start = __import__("time").perf_counter()
 
     try:
         # ── intent ───────────────────────────────────────────────────────────
@@ -996,7 +1014,11 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             request=request,
             intent_result=intent_result,
             profile=profile,
-            retrieved_context=_retrieved_context,
+            retrieved_context=(
+                f"{request.vision_context}\n\n{_retrieved_context}".strip()
+                if request.vision_context and _retrieved_context
+                else request.vision_context or _retrieved_context
+            ),
             tool_output=tool_output,
         )
         if clarification_key:
@@ -1147,9 +1169,7 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
         return await _run_allow(request, intent_result, messages, tier, epk_out.decision, lang)
 
     except Exception as exc:
-        logger.error("Orchestrator crashed", extra={"error": str(exc)}, exc_info=True)
-        increment("orchestrator.errors")
-        gauge("orchestrator.last_latency_ms", round((__import__("time").perf_counter() - _run_start) * 1000, 2))
+        logger.error("Pipeline crashed", extra={"error": str(exc)}, exc_info=True)
         synthesis = synthesize(SynthesisInput(
             raw_text="",
             intent=None,
@@ -1167,4 +1187,360 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
             denied=True,
             deny_reason="internal_error",
             lang=lang,
+        )
+# ─── INTERNAL HELPERS for orchestrator pipeline ──────────────────────────────
+
+def _estimate_tokens(text: str) -> int:
+    return max(1, len(text) // 4)
+
+
+def _estimate_history_tokens(history: list[dict] | None) -> int:
+    if not history:
+        return 0
+    return sum(_estimate_tokens(t.get("content", "")) for t in history)
+
+
+def _classify_complexity_internal(text: str) -> Complexity:
+    """
+    Classify message complexity for EPK cost estimation.
+    Moved from update_handler to orchestrator — orchestration decision.
+    """
+    stripped = text.strip()
+    length = len(stripped)
+    has_code = "```" in stripped
+    has_json = "{" in stripped and "}" in stripped and ":" in stripped
+
+    if has_code and has_json:
+        return Complexity.CRITICAL
+    elif has_code or has_json:
+        return Complexity.HIGH
+    elif length > 800:
+        return Complexity.MEDIUM
+    return Complexity.LOW
+
+
+async def _run_safety_gate_pass1(text: str, request_id: str = "") -> int:
+    """Safety Gate Pass 1 — NON-BLOCKING observability. Returns tokens_used."""
+    try:
+        from security.safety_gate import check_pass1
+        import asyncio
+        gate1 = await asyncio.wait_for(check_pass1(text), timeout=8.0)
+        return gate1.tokens_used
+    except asyncio.TimeoutError:
+        logger.warning("Safety Gate Pass 1 timeout", extra={"request_id": request_id})
+    except Exception as exc:
+        logger.error("Safety Gate Pass 1 crashed", extra={"error": str(exc)})
+    return 0
+
+
+async def _run_safety_gate_pass2(text: str, request_id: str = "") -> tuple[int, int, int]:
+    """Safety Gate Pass 2 — NON-BLOCKING observability. Returns (pass2_tokens, safeguard_in, safeguard_out)."""
+    try:
+        from security.safety_gate import check_pass2
+        import asyncio
+        gate2 = await asyncio.wait_for(check_pass2(text), timeout=12.0)
+        return gate2.tokens_used, gate2.safeguard_tokens_used, gate2.safeguard_output_tokens_used
+    except asyncio.TimeoutError:
+        logger.warning("Safety Gate Pass 2 timeout", extra={"request_id": request_id})
+    except Exception as exc:
+        logger.error("Safety Gate Pass 2 crashed", extra={"error": str(exc)})
+    return 0, 0, 0
+
+
+async def _run_multilingual(text: str, lang: str) -> tuple[str, int, int, str]:
+    """
+    Multilingual normalization — LLM agent, lives in orchestrator (§34).
+    Returns (normalized_text, input_tokens, output_tokens, model_used).
+    """
+    try:
+        from llm.multilingual_preprocessor import PreprocessorInput, preprocess as ml_preprocess
+        ml_result = await ml_preprocess(PreprocessorInput(text=text, lang=lang))
+        if ml_result.was_normalized:
+            logger.info("Multilingual normalization applied", extra={
+                "model": ml_result.model_used, "lang": lang,
+            })
+            return ml_result.text, ml_result.input_tokens, ml_result.output_tokens, ml_result.model_used
+        return text, ml_result.input_tokens, ml_result.output_tokens, ml_result.model_used
+    except Exception as exc:
+        logger.warning("Multilingual preprocessor failed (non-critical)", extra={"error": str(exc)})
+    return text, 0, 0, "passthrough"
+
+
+async def _load_history(
+    supabase, user_id: int, complexity: Complexity, message_tokens: int, input_type: str
+) -> tuple[list[dict] | None, object]:
+    """
+    Load conversation history. Returns (history, history_store).
+    Orchestrator owns history: load here, save after response.
+    """
+    if supabase is None or input_type == "image_group":
+        return None, None
+
+    from memory.conversation_history import (
+        FAST_HISTORY_BUDGET,
+        GENERAL_HISTORY_BUDGET,
+        ConversationHistory,
+    )
+    budget = (
+        FAST_HISTORY_BUDGET
+        if complexity == Complexity.LOW and message_tokens < 300
+        else GENERAL_HISTORY_BUDGET
+    )
+    try:
+        store = ConversationHistory(supabase)
+        history = await store.get_history(user_id, token_budget=budget)
+        logger.info("History loaded", extra={
+            "user_id": user_id, "turns": len(history), "budget": budget,
+        })
+        return history, store
+    except Exception as exc:
+        logger.error("History load failed", extra={"error": str(exc)})
+    return None, None
+
+
+async def _run_retrieval(
+    supabase, redis, hf_client, text: str, user_id: int
+) -> tuple[str, int, int]:
+    """
+    pgvector + reranker retrieval. Returns (retrieved_context, embedding_tokens, rerank_tokens).
+    """
+    if supabase is None:
+        logger.warning("Retrieval skipped — Supabase unavailable")
+        return "", 0, 0
+
+    if redis is None:
+        logger.warning("Retrieval: Redis unavailable — running without cache")
+
+    try:
+        from contracts.retrieval_contracts import RetrievalQuery
+        from memory.supabase_store import SupabaseStore
+        from retrieval.retrieval_engine import RetrievalEngine
+
+        engine_kwargs: dict = {"supabase_store": SupabaseStore(supabase)}
+        if redis is not None:
+            from retrieval.cache.embedding_cache import EmbeddingCache
+            from retrieval.cache.query_cache import QueryCache
+            from retrieval.cache.rerank_cache import RerankCache
+            engine_kwargs["query_cache"]     = QueryCache(redis)
+            engine_kwargs["embedding_cache"] = EmbeddingCache(redis)
+            engine_kwargs["rerank_cache"]    = RerankCache(redis)
+
+        engine = RetrievalEngine(**engine_kwargs)
+        retrieval_result = await engine.retrieve(RetrievalQuery(
+            text=text,
+            user_id=str(user_id),
+            top_k=5,
+        ))
+
+        if retrieval_result.documents:
+            _MIN_SCORE = 0.75
+            relevant = [d for d in retrieval_result.documents if d.content and d.score >= _MIN_SCORE]
+            context = "\n\n".join(d.content for d in relevant) if relevant else ""
+            logger.info("Retrieval done", extra={
+                "docs": len(retrieval_result.documents),
+                "relevant": len(relevant),
+                "emb_tokens": retrieval_result.embedding_tokens,
+                "rerank_tokens": retrieval_result.rerank_tokens,
+            })
+            return context, retrieval_result.embedding_tokens, retrieval_result.rerank_tokens
+
+    except Exception as exc:
+        logger.warning("Retrieval failed", extra={"error": str(exc)})
+
+    return "", 0, 0
+
+
+async def _save_history(
+    history_store, user_id: int, user_message: str, response_text: str,
+    vision_caption: str = "",
+) -> None:
+    """Save conversation turn. Orchestrator owns history lifecycle."""
+    if history_store is None:
+        return
+    try:
+        _msg = vision_caption if vision_caption.strip() else user_message
+        await history_store.append(user_id, "user", _msg)
+        if response_text:
+            await history_store.append(user_id, "assistant", response_text)
+    except Exception as exc:
+        logger.error("History save failed", extra={"error": str(exc)})
+
+
+# ─── MAIN PIPELINE ────────────────────────────────────────────────────────────
+
+async def run(request: OrchestratorRequest) -> OrchestratorResult:
+    """
+    Full pipeline entry point. Orchestrator owns everything except
+    transport I/O (Telegram parsing, ASR, TTS, send).
+
+    Pipeline (architecture.md §4):
+      Safety Gate Pass 1  [NON-BLOCKING observability]
+      Feature Extraction  [complexity classification]
+      Multilingual        [LLM normalization — agent, billed]
+      Safety Gate Pass 2  [NON-BLOCKING observability]
+      History load
+      Retrieval
+      EPK
+      → _run_allow / _run_degraded / _run_heavy
+      History save
+    """
+    lang = request.lang or "en"
+    _rid = request.request_id or ""
+
+    logger.info("Orchestrator start", extra={
+        "request_id": _rid,
+        "message_len": len(request.user_message),
+        "lang": lang,
+        "balance": request.user_balance,
+    })
+
+    increment("orchestrator.requests")
+    _run_start = __import__("time").perf_counter()
+
+    # Pipeline state — populated as stages run
+    _safety_pass1_tokens         = 0
+    _safety_pass2_tokens         = 0
+    _safety_safeguard_tokens     = 0
+    _safety_safeguard_out_tokens = 0
+    _ml_input_tokens             = 0
+    _ml_output_tokens            = 0
+    _ml_model                    = "passthrough"
+    _history_store               = None
+    _conversation_history: list[dict] | None = None
+    _retrieved_context           = ""
+    _embedding_tokens            = 0
+    _rerank_tokens               = 0
+    _embedding_type              = "large"
+
+    try:
+        text = request.user_message
+
+        # ── Safety Gate Pass 1 — NON-BLOCKING (architecture §21) ─────────────
+        _safety_pass1_tokens = await _run_safety_gate_pass1(text, _rid)
+
+        # ── Feature Extraction ────────────────────────────────────────────────
+        complexity = _classify_complexity_internal(text)
+        _message_tokens = _estimate_tokens(text)
+
+        logger.debug("Complexity", extra={"complexity": complexity, "length": len(text)})
+
+        # ── Multilingual normalization (LLM agent — §34) ──────────────────────
+        text, _ml_input_tokens, _ml_output_tokens, _ml_model = await _run_multilingual(text, lang)
+
+        # ── Safety Gate Pass 2 — NON-BLOCKING (architecture §21) ─────────────
+        _safety_pass2_tokens, _safety_safeguard_tokens, _safety_safeguard_out_tokens = (
+            await _run_safety_gate_pass2(text, _rid)
+        )
+
+        # ── meta/analysis.py — pre-reasoning hints (§4) ──────────────────────
+        _analysis_report = None
+        try:
+            from meta.analysis import analyse as _analyse
+            _analysis_report = _analyse(text, lightweight=False)
+        except Exception as exc:
+            logger.warning("analysis.py failed (non-critical)", extra={"error": str(exc)})
+
+        # ── History load (orchestrator owns history lifecycle) ────────────────
+        _conversation_history, _history_store = await _load_history(
+            supabase=request.supabase,
+            user_id=request.user_id,
+            complexity=complexity,
+            message_tokens=_message_tokens,
+            input_type=request.input_type,
+        )
+
+        # ── Token estimation ──────────────────────────────────────────────────
+        _history_tokens = _estimate_history_tokens(_conversation_history)
+        input_tokens    = _message_tokens + _history_tokens
+
+        logger.info("Pipeline ready", extra={
+            "request_id":    _rid,
+            "input_tokens":  input_tokens,
+            "complexity":    complexity,
+            "history_turns": len(_conversation_history) if _conversation_history else 0,
+        })
+
+        # ── Retrieval ─────────────────────────────────────────────────────────
+        _retrieved_context, _embedding_tokens, _rerank_tokens = await _run_retrieval(
+            supabase=request.supabase,
+            redis=request.redis,
+            hf_client=request.hf_client,
+            text=text,
+            user_id=request.user_id,
+        )
+
+        # ── Build internal request for execution paths ─────────────────────────
+        # Execution paths still use the rich internal request shape.
+        # We construct it here now that all pipeline data is available.
+        _internal = _InternalRequest(
+            user_message=text,
+            user_balance=request.user_balance,
+            input_tokens=input_tokens,
+            complexity=complexity,
+            retrieved_context=_retrieved_context,
+            conversation_history=_conversation_history,
+            embedding_tokens=_embedding_tokens,
+            rerank_tokens=_rerank_tokens,
+            embedding_type=_embedding_type,
+            lang=lang,
+            has_code_block="```" in text,
+            has_json_shape="{" in text and "}" in text and ":" in text,
+            context_size=input_tokens,
+            vision_intent=request.vision_intent,
+            supabase=request.supabase,
+            hf_client=request.hf_client,
+            input_type=request.input_type,
+            request_id=_rid,
+            analysis_report=_analysis_report,
+            skip_web_search=request.skip_web_search,
+            is_vision=request.is_vision,
+        )
+
+        result = await _run_pipeline(_internal)
+
+        # ── History save ──────────────────────────────────────────────────────
+        if not result.denied:
+            await _save_history(
+                history_store=_history_store,
+                user_id=request.user_id,
+                user_message=text,
+                response_text=result.text,
+            )
+
+        # ── Wire pipeline billing fields onto result ──────────────────────────
+        if (_safety_pass1_tokens or _safety_pass2_tokens or _safety_safeguard_tokens
+                or _safety_safeguard_out_tokens or _ml_input_tokens or _ml_output_tokens):
+            from dataclasses import replace as _replace
+            result = _replace(result,
+                safety_pass1_tokens=_safety_pass1_tokens,
+                safety_pass2_tokens=_safety_pass2_tokens,
+                safety_safeguard_tokens=_safety_safeguard_tokens,
+                safety_safeguard_output_tokens=_safety_safeguard_out_tokens,
+                multilingual_input_tokens=_ml_input_tokens,
+                multilingual_output_tokens=_ml_output_tokens,
+                multilingual_model=_ml_model,
+            )
+
+        gauge("orchestrator.last_latency_ms",
+              round((__import__("time").perf_counter() - _run_start) * 1000, 2))
+        return result
+
+    except Exception as exc:
+        logger.error("Orchestrator crashed", extra={"error": str(exc)}, exc_info=True)
+        increment("orchestrator.errors")
+        gauge("orchestrator.last_latency_ms",
+              round((__import__("time").perf_counter() - _run_start) * 1000, 2))
+        synthesis = synthesize(SynthesisInput(
+            raw_text="", intent=None, tier=Tier.FAST,
+            denied=True, deny_reason="default_deny", lang=lang,
+        ))
+        return OrchestratorResult(
+            text=synthesis.text, tier=Tier.FAST, model="",
+            epk_decision=EPKDecision.DENY,
+            usage=UsageRecord(
+                input_tokens=0, output_tokens=0,
+                embedding_tokens=0, rerank_tokens=0,
+                tier=Tier.FAST, embedding_type="large", llm_cost_usd=0.0,
+            ),
+            denied=True, deny_reason="internal_error", lang=lang,
         )
