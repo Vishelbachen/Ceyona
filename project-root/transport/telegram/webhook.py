@@ -89,6 +89,7 @@ async def _send_message_with_topup(chat_id: int, text: str, lang: str = "en") ->
     if not text:
         return
     import json as _json
+
     from i18n.t import t as _t
 
     topup_label = _t("topup_button", lang)
