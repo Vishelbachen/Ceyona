@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import logging
 
-from context.context_models import ContextChunk
 from contracts.retrieval_contracts import (
     RetrievalQuery,
     RetrievalResult,
     RetrievedDocument,
 )
+from context.context_models import ContextChunk
 from retrieval.dense.bge_engine import bge_engine
-from retrieval.fusion.hybrid_scorer import reciprocal_rank_fusion
+from retrieval.fusion.hybrid_scorer import FusedResult, reciprocal_rank_fusion
 from retrieval.query_preprocessor import extract_query_profile, preprocess
 from retrieval.reranker.cross_encoder import cross_encoder
 from retrieval.source_credibility import source_credibility
@@ -130,6 +130,9 @@ async def retrieve(
                         "mem_type": r.mem_type,
                         "source_url": r.source_url or "",
                     },
+                    retrieval={
+                        "similarity": round(r.similarity, 4),
+                    },
                 )
                 for r in scored_records
             ]
@@ -159,7 +162,7 @@ async def retrieve(
                         content=r.content,
                         score=r.score,
                         source="bm25",
-                        metadata={"bm25_score": round(r.score, 4)},
+                        retrieval={"bm25_score": round(r.score, 4)},
                     )
                     for r in bm25_results
                 ]
@@ -183,9 +186,13 @@ async def retrieve(
                 query=clean_query,
                 lang=profile.lang,
             )
-            # Preserve provenance: merge RRF metadata back into ContextChunks.
-            _chunk_meta: dict[str, dict] = {
+            # Preserve provenance: split document metadata from retrieval metadata.
+            _doc_meta: dict[str, dict] = {
                 c.content: c.metadata
+                for c in (*dense_candidates, *sparse_candidates)
+            }
+            _ret_meta: dict[str, dict] = {
+                c.content: c.retrieval
                 for c in (*dense_candidates, *sparse_candidates)
             }
             candidates = [
@@ -193,9 +200,13 @@ async def retrieve(
                     content=r.content,
                     score=r.score,
                     source=r.source,  # "hybrid"
-                    metadata={
-                        **_chunk_meta.get(r.content, {}),
-                        **r.metadata,  # rrf_score, geo_score, dense_rank, sparse_rank
+                    metadata=_doc_meta.get(r.content, {}),
+                    retrieval={
+                        **_ret_meta.get(r.content, {}),  # similarity / bm25_score
+                        "rrf_score": round(r.metadata.get("rrf_score", r.score), 6),
+                        "geo_score": round(r.metadata.get("geo_score", 0.0), 3),
+                        "dense_rank": r.metadata.get("dense_rank"),
+                        "sparse_rank": r.metadata.get("sparse_rank"),
                     },
                 )
                 for r in fused
@@ -259,7 +270,8 @@ async def retrieve(
         top = []
 
     # Convert ContextChunks → RetrievedDocument for the external contract.
-    # Provenance metadata from ContextChunk is preserved in document.metadata.
+    # Document metadata and retrieval metadata are kept separate under
+    # 'doc' and 'retrieval' keys so callers can distinguish them.
     documents = [
         RetrievedDocument(
             content=content,
@@ -267,10 +279,14 @@ async def retrieve(
             source=_chunk_index.get(content, ContextChunk(content=content, score=score)).source,
             source_url=_chunk_index.get(content, ContextChunk(content=content, score=score)).metadata.get("source_url", ""),
             metadata={
-                **_chunk_index.get(content, ContextChunk(content=content, score=score)).metadata,
-                "query_kind": profile.query_kind,
-                "query_location": profile.location,
-                "query_lang": profile.lang,
+                "doc": _chunk_index.get(content, ContextChunk(content=content, score=score)).metadata,
+                "retrieval": {
+                    **_chunk_index.get(content, ContextChunk(content=content, score=score)).retrieval,
+                    "rerank_score": round(score, 4),
+                    "query_kind": profile.query_kind,
+                    "query_location": profile.location,
+                    "query_lang": profile.lang,
+                },
             },
         )
         for content, score in top
