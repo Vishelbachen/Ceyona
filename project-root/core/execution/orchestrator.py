@@ -1429,12 +1429,26 @@ async def _run_retrieval(
         ))
 
         if retrieval_result.documents:
+            from context.assembler import assemble
+            from context.serializer import to_prompt_string
+            from contracts.context_contracts import ContextRequest
+
             _MIN_SCORE = 0.75
-            relevant = [d for d in retrieval_result.documents if d.content and d.score >= _MIN_SCORE]
-            context = "\n\n".join(d.content for d in relevant) if relevant else ""
+            relevant = [
+                d for d in retrieval_result.documents
+                if d.content and d.score >= _MIN_SCORE
+            ]
+
+            # assemble() applies char-budget truncation and separators.
+            # to_prompt_string() converts AssembledContext → str for the prompt.
+            assembled = assemble(ContextRequest(documents=relevant))
+            context = to_prompt_string(assembled)
+
             logger.info("Retrieval done", extra={
                 "docs": len(retrieval_result.documents),
                 "relevant": len(relevant),
+                "assembled_chars": assembled.document_count,
+                "truncated": assembled.truncated,
                 "emb_tokens": retrieval_result.embedding_tokens,
                 "rerank_tokens": retrieval_result.rerank_tokens,
             })
