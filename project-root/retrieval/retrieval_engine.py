@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import logging
 
+from context.context_models import ContextChunk
 from contracts.retrieval_contracts import (
     RetrievalQuery,
     RetrievalResult,
     RetrievedDocument,
 )
-from context.context_models import ContextChunk
 from retrieval.dense.bge_engine import bge_engine
-from retrieval.fusion.hybrid_scorer import FusedResult, reciprocal_rank_fusion
+from retrieval.fusion.hybrid_scorer import reciprocal_rank_fusion
 from retrieval.query_preprocessor import extract_query_profile, preprocess
 from retrieval.reranker.cross_encoder import cross_encoder
 from retrieval.source_credibility import source_credibility
