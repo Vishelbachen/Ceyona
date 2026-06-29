@@ -19,10 +19,10 @@ architecture.md описывает **32 файла** по имени (с пол�
 Код существует, нигде не импортируется, роль поглощена другим файлом.
 
 ### `context/context_models.py`
-Определяет `ContextChunk` и `ContextBlock`. **Нигде не импортируется** в продуктивном коде. Те же концепции живут в `contracts/context_contracts.py`. Подтверждено: GPT прав, это мёртвый файл.
+~~Определяет `ContextChunk` и `ContextBlock`. **Нигде не импортируется** в продуктивном коде.~~ **ЗАКРЫТО (июнь 2026):** `ContextChunk` — внутренний тип retrieval pipeline (dense→BM25→RRF→reranker). `ContextBlock` — выход `assembler.assemble_chunks()`. Двухуровневые метаданные: `metadata` (документ) и `retrieval` (процесс) разделены явными полями.
 
 ### `context/serializer.py`
-`to_prompt_string()` и `to_dict()`. **Нигде не импортируется.** Конвертация `AssembledContext → str` делается инлайн в `prompt_engine.py`. Мёртвый файл.
+~~`to_prompt_string()` и `to_dict()`. **Нигде не импортируется.**~~ **ЗАКРЫТО (июнь 2026):** `to_prompt_string()` вызывается в `orchestrator.py`. Добавлены `block_to_prompt_string(ContextBlock)` и `block_to_dict(ContextBlock)` для полного провенанс-вывода.
 
 ### `retrieval/sparse/bm25_engine.py`
 `BM25Engine` **нигде не импортируется** — ни в `retrieval_engine.py`, ни в `hybrid_scorer.py`, ни в bootstrap. Задуман для sparse retrieval, но retrieval_engine использует только dense (BGE) + reranker.
@@ -77,7 +77,9 @@ architecture.md описывает **32 файла** по имени (с пол�
 - `security/auth.py` — используется в `webhook.py`, `update_handler.py`, `vision_handler.py` (проверка Telegram токена). **Живой, не задокументирован.**
 - `security/rate_limiter.py` — подключён в `webhook.py` и `bootstrap.py`. **Живой, не задокументирован.**
 - `security/encryption.py` — используется в `app/main.py`, `settings.py`, `env_validator.py`. **Живой, не задокументирован.**
-- `security/origin_guard.py` — **мёртвый или только в __init__ re-export.** Нигде не вызывается.
+- ~~`security/origin_guard.py` — **мёртвый**.~~ **ЗАКРЫТО (июнь 2026):** `CORSMiddleware` подключён в `main.py`, `allowed_origins` из settings.
+- ~~`security/auth.py` — JWT нигде не вызывается.~~ **ЗАКРЫТО (июнь 2026):** `verify_token` используется в `require_admin` Depends. Защищены `/metrics`, `/models`, `/providers`, `/routing`, `/debug`. `/health` и `/webhook` открыты.
+- `security/encryption.py` — Fernet не используется. **OPEN** (отложено осознанно — требует key versioning и фоновой миграции).
 
 ### `transport/telegram/` — роль расплылась
 architecture.md описывает только `media_group_aggregator` (§42) и `vision_handler` (§15).
@@ -136,7 +138,7 @@ GPT правильно указал: файл содержит `CallbackAction`,
 |---|---|
 | Реально мёртвые | `context/context_models.py`, `context/serializer.py`, `retrieval/sparse/bm25_engine.py`, `retrieval/fusion/hybrid_scorer.py` |
 | Зомби (bootstrapped, но не используется) | `events/` (весь слой), `notifications/` (весь слой), `security/origin_guard.py` |
-| Живые, нет контракта в архитектуре | `i18n/` (оба файла), `transport/telegram/update_handler.py`, `transport/telegram/auth_middleware.py`, `transport/telegram/message_router.py`, `transport/telegram/callback_handler.py`, `llm/groq_client.py`, `llm/hf_client.py`, `llm/fallback_handler.py`, `app/main.py`, `app/settings.py`, `security/auth.py`, `security/rate_limiter.py`, `security/encryption.py`, `payments/pricing_engine.py`, `payments/ton_client.py`, `external/web_tools.py`, **`infra/redis_keys.py` (новый, июнь 2026)** |
+| Живые, нет контракта в архитектуре | `i18n/` (оба файла), `transport/telegram/update_handler.py`, `transport/telegram/auth_middleware.py`, `transport/telegram/message_router.py`, `transport/telegram/callback_handler.py`, `llm/groq_client.py`, `llm/hf_client.py`, `llm/fallback_handler.py`, `app/main.py`, `app/settings.py`, `security/rate_limiter.py`, `payments/pricing_engine.py`, `payments/ton_client.py`, `external/web_tools.py`, **`infra/redis_keys.py`** (июнь 2026), **`context/context_models.py`**, **`context/serializer.py`**, **`retrieval/sparse/bm25_engine.py`**, **`retrieval/fusion/hybrid_scorer.py`**, **`security/auth.py`**, **`security/origin_guard.py`** — все подключены июнь 2026 |
 | Описаны концептуально, не привязаны к файлам | `core/kernel/execution_policy_kernel.py`, `core/kernel/decision_matrix.py`, `core/kernel/policy_registry.py`, `cognition/reasoning_engine.py`, `cognition/response_synthesizer.py` |
 | Полностью задокументированы | остальные ~32 файла |
 
@@ -144,9 +146,11 @@ GPT правильно указал: файл содержит `CallbackAction`,
 
 ## ЧТО ДЕЛАТЬ
 
-**Приоритет 1 — Удалить или формально пометить мёртвые:**
-- `context/context_models.py`, `context/serializer.py` → удалить
-- `retrieval/sparse/bm25_engine.py`, `retrieval/fusion/hybrid_scorer.py` → пометить как `# planned, not wired`
+**Приоритет 1 — ~~Удалить или формально пометить мёртвые~~ — ЗАКРЫТО (июнь 2026):**
+> Все файлы из первоначального списка мёртвого кода подключены: `context_models.py`, `serializer.py`, `bm25_engine.py`, `hybrid_scorer.py`, `auth.py` (`verify_token`), `origin_guard.py` (CORS). Остаётся `encryption.py` — отложено осознанно.
+
+**Приоритет 1 (остаток):**
+- `security/encryption.py` — Fernet шифрование `MemoryEntry.content`. Отложено: требует версионирования ключей и фоновой миграции Supabase.
 
 **Приоритет 2 — Подключить или явно закрыть зомби:**
 - `events/` — ~~либо начать publish в update_handler (при успешном ответе, при billing событиях), либо удалить всю подсистему~~ **Частично закрыто (июнь 2026):** `BalanceCreditedEvent`, `BalanceExhaustedEvent`, `RequestDeniedEvent`, `LLMFallbackEvent` публикуются. Остаётся: `SafetyBlockEvent` из coordinator, `RequestCompletedEvent` из update_handler.
