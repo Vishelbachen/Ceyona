@@ -20,7 +20,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - uses: actions/cache@v5
+      - uses: actions/cache@v6
         with:
           path: ~/.cache/pip
           key: lint-${{ runner.os }}-${{ hashFiles('project-root/pyproject.toml') }}
@@ -53,7 +53,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - uses: actions/cache@v5
+      - uses: actions/cache@v6
         with:
           path: ~/.cache/pip
           key: arch-${{ runner.os }}-${{ hashFiles('project-root/pyproject.toml') }}
@@ -164,7 +164,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - uses: actions/cache@v5
+      - uses: actions/cache@v6
         with:
           path: ~/.cache/pip
           key: test-${{ runner.os }}-${{ hashFiles('project-root/pyproject.toml') }}
@@ -217,7 +217,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - uses: actions/cache@v5
+      - uses: actions/cache@v6
         with:
           path: ~/.cache/pip
           key: sec-${{ runner.os }}-${{ hashFiles('project-root/pyproject.toml') }}
