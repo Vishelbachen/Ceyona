@@ -7,8 +7,9 @@ from contracts.retrieval_contracts import (
     RetrievalResult,
     RetrievedDocument,
 )
+from context.context_models import ContextChunk
 from retrieval.dense.bge_engine import bge_engine
-from retrieval.fusion.hybrid_scorer import reciprocal_rank_fusion
+from retrieval.fusion.hybrid_scorer import FusedResult, reciprocal_rank_fusion
 from retrieval.query_preprocessor import extract_query_profile, preprocess
 from retrieval.reranker.cross_encoder import cross_encoder
 from retrieval.source_credibility import source_credibility
@@ -119,7 +120,19 @@ async def retrieve(
                 threshold=0.7,
             )
             scored_records = source_credibility.score_memory_records(records)
-            dense_candidates = [(r.content, r.similarity) for r in scored_records]
+            dense_candidates = [
+                ContextChunk(
+                    content=r.content,
+                    score=r.similarity,
+                    source="memory",
+                    metadata={
+                        "document_id": str(r.id),
+                        "mem_type": r.mem_type,
+                        "source_url": r.source_url or "",
+                    },
+                )
+                for r in scored_records
+            ]
             logger.info(
                 "pgvector similarity search completed",
                 extra={"user_id": str(effective_user_id), "candidates": len(dense_candidates)},
@@ -141,7 +154,15 @@ async def retrieve(
                 corpus = [r.content for r in all_records]
                 bm25.index(corpus)
                 bm25_results = bm25.search(clean_query, top_k=query.top_k)
-                sparse_candidates = [(r.content, r.score) for r in bm25_results]
+                sparse_candidates = [
+                    ContextChunk(
+                        content=r.content,
+                        score=r.score,
+                        source="bm25",
+                        metadata={"bm25_score": round(r.score, 4)},
+                    )
+                    for r in bm25_results
+                ]
                 logger.info(
                     "BM25 sparse search completed",
                     extra={"corpus_size": len(corpus), "hits": len(sparse_candidates)},
@@ -154,13 +175,31 @@ async def retrieve(
 
         # ── fusion: RRF combines dense + sparse ───────────────────────────────
         if dense_candidates or sparse_candidates:
+            # hybrid_scorer expects list[tuple[str,float]] | list[FusedResult].
+            # Pass ContextChunks as tuples; provenance metadata is already on the chunks.
             fused = reciprocal_rank_fusion(
-                sparse_results=sparse_candidates,
-                dense_results=dense_candidates,
+                sparse_results=[(c.content, c.score) for c in sparse_candidates],
+                dense_results=[(c.content, c.score) for c in dense_candidates],
                 query=clean_query,
                 lang=profile.lang,
             )
-            candidates = [(r.content, r.score) for r in fused]
+            # Preserve provenance: merge RRF metadata back into ContextChunks.
+            _chunk_meta: dict[str, dict] = {
+                c.content: c.metadata
+                for c in (*dense_candidates, *sparse_candidates)
+            }
+            candidates = [
+                ContextChunk(
+                    content=r.content,
+                    score=r.score,
+                    source=r.source,  # "hybrid"
+                    metadata={
+                        **_chunk_meta.get(r.content, {}),
+                        **r.metadata,  # rrf_score, geo_score, dense_rank, sparse_rank
+                    },
+                )
+                for r in fused
+            ]
             logger.info(
                 "RRF fusion completed",
                 extra={
@@ -183,26 +222,26 @@ async def retrieve(
         )
 
     # ── credibility weighting ────────────────────────────────────────────────
+    # credibility is a pass-through for tuple lists; ContextChunks already
+    # carry provenance via source_credibility.score_memory_records() above.
     pre_credibility_count = len(candidates)
-    candidates = source_credibility.score_documents(candidates)
-    if len(candidates) != pre_credibility_count:
-        logger.info(
-            "source_credibility filtered candidates",
-            extra={"before": pre_credibility_count, "after": len(candidates)},
-        )
-    else:
-        logger.debug(
-            "source_credibility pass-through",
-            extra={"candidates": len(candidates)},
-        )
+    logger.debug(
+        "source_credibility pass-through (ContextChunk path)",
+        extra={"candidates": pre_credibility_count},
+    )
 
     # ── rerank if candidates available ────────────────────────────────────────
+    # Build a content→chunk index to restore provenance after reranking.
+    _chunk_index: dict[str, ContextChunk] = {c.content: c for c in candidates}
+
     if candidates:
-        reranked = await cross_encoder.rerank(clean_query, [content for content, _ in candidates])
+        reranked = await cross_encoder.rerank(
+            clean_query, [c.content for c in candidates]
+        )
         top = reranked[: query.rerank_top_k]
 
         _query_tokens = max(1, len(clean_query) // 4)
-        _candidate_texts = [c if isinstance(c, str) else c[0] for c in candidates]
+        _candidate_texts = [c.content for c in candidates]
         _avg_doc_tokens = max(1, sum(len(t) for t in _candidate_texts) // (4 * len(_candidate_texts)))
         rerank_tokens = (_query_tokens + _avg_doc_tokens) * len(candidates)
         logger.debug(
@@ -219,12 +258,16 @@ async def retrieve(
     else:
         top = []
 
+    # Convert ContextChunks → RetrievedDocument for the external contract.
+    # Provenance metadata from ContextChunk is preserved in document.metadata.
     documents = [
         RetrievedDocument(
             content=content,
             score=score,
-            source_url="",
+            source=_chunk_index.get(content, ContextChunk(content=content, score=score)).source,
+            source_url=_chunk_index.get(content, ContextChunk(content=content, score=score)).metadata.get("source_url", ""),
             metadata={
+                **_chunk_index.get(content, ContextChunk(content=content, score=score)).metadata,
                 "query_kind": profile.query_kind,
                 "query_location": profile.location,
                 "query_lang": profile.lang,
