@@ -23,19 +23,16 @@
 
 ---
 
-### BUG-4: `security/encryption.py` и `security/auth.py` — мёртвый код
-Оба файла упоминаются в `app/settings.py` и `infra/env_validator.py` как проверка наличия env vars (`encryption_key`, `jwt_secret`), но сами функции:
-- `encrypt()` / `decrypt()` — **нигде не вызываются**
-- `create_token()` / `verify_token()` — **нигде не вызываются**
+### ~~BUG-4: `security/encryption.py` и `security/auth.py` — мёртвый код~~ — ЧАСТИЧНО ЗАКРЫТО (июнь 2026)
 
-`security/auth.py` с JWT создан для чего-то (возможно, планировался REST API с авторизацией), но Telegram bot не использует JWT вообще — аутентификация идёт через Telegram update signature в `auth_middleware.py`.
-
-`encryption.py` — Fernet шифрование, но никакие данные не шифруются. Возможно, планировалось шифровать webhook payload или данные пользователей в Supabase.
+- `verify_token()` / `create_token()` — **ЗАКРЫТО**: `verify_token` используется в `require_admin` dependency в `app/main.py`. Защищены `/metrics`, `/models`, `/providers`, `/routing`, `/debug`.
+- `encrypt()` / `decrypt()` — **OPEN**: обдуманно отложено. Fernet шифрование `MemoryEntry.content` требует версионирования ключей и фоновой миграции. Отдельная задача.
 
 ---
 
-### BUG-5: `security/origin_guard.py` — мёртвый код
-`is_allowed_origin()` проверяет `settings.allowed_origins`, но нигде не вызывается. CORS настройка через `allowed_origins` env var существует, но FastAPI CORS middleware с ней не подключён нигде в `main.py`.
+### ~~BUG-5: `security/origin_guard.py` — мёртвый код~~ — ЗАКРЫТО (июнь 2026)
+
+`CORSMiddleware` подключён в `app/main.py`. `allowed_origins` берётся из `settings.allowed_origins` через `origin_guard`-логику. Для бота по умолчанию `*` — Telegram серверы не браузер, CORS им не нужен. Middleware готов для будущих веб-клиентов.
 
 ---
 
@@ -91,6 +88,16 @@ EventStore хранит события в Redis с TTL 30 дней, EventReplay 
 
 ---
 
+### ARCH-5-NEW: `ContextChunk` — двухуровневые метаданные (июнь 2026)
+
+`ContextChunk` теперь имеет два явных поля вместо одного плоского `metadata`:
+- `metadata` — атрибуты документа (`document_id`, `mem_type`, `source_url`). Стабильны, задаются при индексации.
+- `retrieval` — атрибуты процесса (`bm25_score`, `rrf_score`, `dense_rank`, `sparse_rank`, `rerank_score`). Заполняются во время pipeline.
+
+На выходе pipeline `RetrievedDocument.metadata` содержит `{"doc": {...}, "retrieval": {...}}` — структура сохранена для внешнего контракта.
+
+---
+
 ### ARCH-5: `transport/telegram/callback_handler.py` — контракт есть, dispatch — в webhook
 
 `callback_handler.py` правильно определяет `CallbackAction` enum и `parse_callback()`. Но весь if/elif dispatch по `ctx.action` (BALANCE, TOPUP, HELP, CANCEL) живёт прямо в `webhook.py` (строки ~380-430).
@@ -115,9 +122,9 @@ GPT и архитектура правы: должен быть отдельны
 | `llm/groq_client.py` | AsyncGroq wrapper, ToolCallResponse, context truncation | ✅ Всё через него |
 | `llm/fallback_handler.py` | Tier cascade, 413 truncation, per-model params | ✅ |
 | `llm/hf_client.py` | HuggingFace Inference API client (embeddings, reranker) | ✅ |
-| `security/auth.py` | JWT create/verify | ❌ Нигде не вызывается |
-| `security/encryption.py` | Fernet encrypt/decrypt | ❌ Нигде не вызывается |
-| `security/origin_guard.py` | CORS origin check | ❌ Нигде не вызывается |
+| `security/auth.py` | JWT create/verify | ✅ `verify_token` в `require_admin` dependency (июнь 2026) |
+| `security/encryption.py` | Fernet encrypt/decrypt | ⏸ OPEN — отложено осознанно |
+| `security/origin_guard.py` | CORS origin check | ✅ `CORSMiddleware` в `main.py` (июнь 2026) |
 | `security/rate_limiter.py` | Redis sliding window rate limiter | ✅ |
 | `payments/pricing_engine.py` | TON/USD price, vision_cost(), apply_margin() | ✅ |
 | `payments/ton_client.py` | TON blockchain transactions | ✅ (via wallet_manager) |
@@ -130,10 +137,10 @@ GPT и архитектура правы: должен быть отдельны
 | `events/` (все 5 файлов) | Redis event bus + store + replay | ❌ publish не вызывается |
 | `notifications/` (оба файла) | Email + event notifications | ❌ не вызывается |
 | `context/assembler.py` | resolve_truth_mode + assemble context | ✅ |
-| `context/context_models.py` | ContextChunk, ContextBlock | ❌ Мёртвый |
-| `context/serializer.py` | to_prompt_string() | ❌ Мёртвый |
-| `retrieval/sparse/bm25_engine.py` | BM25 sparse retrieval | ❌ Не подключён |
-| `retrieval/fusion/hybrid_scorer.py` | Dense+sparse fusion | ❌ Не подключён |
+| `context/context_models.py` | ContextChunk (внутренний тип retrieval), ContextBlock (выход assembler) | ✅ Подключён (июнь 2026) |
+| `context/serializer.py` | `to_prompt_string()`, `block_to_prompt_string()`, `block_to_dict()` | ✅ Подключён (июнь 2026) |
+| `retrieval/sparse/bm25_engine.py` | BM25 sparse retrieval | ✅ Подключён (июнь 2026) |
+| `retrieval/fusion/hybrid_scorer.py` | RRF fusion dense+sparse | ✅ Подключён (июнь 2026) |
 | `external/web_tools.py` | Tool dispatcher (weather/search/maps/translate) | ✅ Orchestrator |
 | `ceyona-worker/worker.js` | Cloudflare Worker: Telegram→HF relay | ✅ Деплой |
 | `infra/redis_keys.py` | Canonical Redis key registry (ключи + TTL константы) | ✅ Добавлен июнь 2026 |
@@ -186,13 +193,13 @@ GPT и архитектура правы: должен быть отдельны
 5. ~~**ARCH-4**: `notifications/` — написан, но не подключён~~ → **ЧАСТИЧНО ЗАКРЫТО** (июнь 2026): `on_balance_credited` и `on_balance_exhausted` работают. Open: `on_safety_block` (зависит от ARCH-3), `on_system_error`
 
 ### Мёртвый код (занимает место, вводит в заблуждение)
-6. `security/auth.py` — JWT не используется
-7. `security/encryption.py` — Fernet не используется
-8. `security/origin_guard.py` — CORS guard не вызывается
-9. `context/context_models.py` — ContextChunk/ContextBlock не импортируются
-10. `context/serializer.py` — to_prompt_string() не вызывается
-11. `retrieval/sparse/bm25_engine.py` — BM25 не подключён к retrieval_engine
-12. `retrieval/fusion/hybrid_scorer.py` — hybrid scoring не подключён
+6. ~~`security/auth.py` — JWT не используется~~ — **ЗАКРЫТО**: `verify_token` используется в `require_admin` в `main.py`
+7. `security/encryption.py` — Fernet не используется — **OPEN** (отложено осознанно, требует key versioning)
+8. ~~`security/origin_guard.py` — CORS guard не вызывается~~ — **ЗАКРЫТО**: `CORSMiddleware` подключён в `main.py`
+9. ~~`context/context_models.py` — ContextChunk/ContextBlock не импортируются~~ — **ЗАКРЫТО**: `ContextChunk` — внутренний тип retrieval pipeline; `ContextBlock` — выход `assemble_chunks()`
+10. ~~`context/serializer.py` — to_prompt_string() не вызывается~~ — **ЗАКРЫТО**: `to_prompt_string()` вызывается в `orchestrator.py`; добавлены `block_to_prompt_string()` и `block_to_dict()`
+11. ~~`retrieval/sparse/bm25_engine.py` — BM25 не подключён к retrieval_engine~~ — **ЗАКРЫТО**: BM25 запускается параллельно с pgvector в `retrieval_engine.py`
+12. ~~`retrieval/fusion/hybrid_scorer.py` — hybrid scoring не подключён~~ — **ЗАКРЫТО**: `reciprocal_rank_fusion()` вызывается в `retrieval_engine.py` после параллельных dense+sparse поисков
 
 ### Документационные пробелы (код работает, но не описан)
 13. `i18n/` — самый используемый слой проекта, отсутствует в architecture.md
