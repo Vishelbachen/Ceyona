@@ -78,6 +78,8 @@ Version: актуально на июнь 2026
 
 ### ✅ сессия 4 (июнь 2026) — Billing audit
 
+*Номера BUG-O# соответствуют порядку обнаружения в `audit_orchestrator_billing.md` (BUG-O1…BUG-O5). BUG-O4 исправлен позже, в сессии 5 — см. ниже.*
+
 | # | Суть | Ключевое решение |
 |---|------|-----------------|
 | BUG-O1 | safety_agent токены не биллировались | `actual_safety_cost()` добавлен в `_run_allow()` |
@@ -90,12 +92,13 @@ Version: актуально на июнь 2026
 
 | # | Суть | Ключевое решение |
 |---|------|-----------------|
-| BUG-O4 | `locals()` в coordinator — хрупкая проверка существования safety переменной | `_safety_result: SafetyResult \| None = None` — явный паттерн |
+| BUG-O4 | `locals()` в coordinator — хрупкая проверка существования safety переменной *(найден раньше остальных в `audit_orchestrator_billing.md`, но исправлен только в этой сессии)* | `_safety_result: SafetyResult \| None = None` — явный паттерн |
 | SAFETY-1 | `check()` из async контекста → молчаливый ALLOW | `RuntimeError` вместо warning+ALLOW |
 | SAFETY-2 | `_llm_judge` except → ALLOW (невидимая дыра) | `SAFETY_UNAVAILABLE` вердикт + `increment("safety_agent.judge_unavailable")` |
 | SAFETY-3 | `_REVISE_SIGNALS` — английские строки в мультиязычной системе | **Удалены полностью.** Fast path был языковым костылём. LLM judge покрывает REVISE семантически на всех языках без словарей. |
 | ARCH-1 | architecture.md §21 не содержал полного контракта safety_agent | Переписан: уровни проверки, таблица вердиктов с действиями coordinator, профили одного агента |
 | ARCH-2 | §20, §35, §44, §47, §48.3 расходились с реальностью | Статусы planned/not implemented зафиксированы явно |
+
 
 ### ✅ сессия 6 (июнь 2026) — SAFETY-6 + AgentCallMetrics
 
