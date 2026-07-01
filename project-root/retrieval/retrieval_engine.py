@@ -8,10 +8,10 @@ from contracts.retrieval_contracts import (
     RetrievedDocument,
 )
 from retrieval.dense.bge_engine import bge_engine
-from retrieval.fusion.hybrid_scorer import FusedResult, reciprocal_rank_fusion
-from retrieval.retrieval_models import RetrievalMetadata, ScoredCandidate
+from retrieval.fusion.hybrid_scorer import reciprocal_rank_fusion
 from retrieval.query_preprocessor import extract_query_profile, preprocess
 from retrieval.reranker.cross_encoder import cross_encoder
+from retrieval.retrieval_models import RetrievalMetadata, ScoredCandidate
 from retrieval.source_credibility import source_credibility
 from retrieval.sparse.bm25_engine import BM25Engine
 
