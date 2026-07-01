@@ -24,11 +24,11 @@ architecture.md описывает **32 файла** по имени (с пол�
 ### `context/serializer.py`
 ~~`to_prompt_string()` и `to_dict()`. **Нигде не импортируется.**~~ **ЗАКРЫТО (июнь 2026):** `to_prompt_string()` вызывается в `orchestrator.py`. Добавлены `block_to_prompt_string(ContextBlock)` и `block_to_dict(ContextBlock)` для полного провенанс-вывода.
 
-### `retrieval/sparse/bm25_engine.py`
-`BM25Engine` **нигде не импортируется** — ни в `retrieval_engine.py`, ни в `hybrid_scorer.py`, ни в bootstrap. Задуман для sparse retrieval, но retrieval_engine использует только dense (BGE) + reranker.
+### ~~`retrieval/sparse/bm25_engine.py`~~ — ЗАКРЫТО (июнь 2026)
+Подключён в `retrieval_engine.py`. BM25 запускается параллельно с pgvector — независимый sparse поиск по полному корпусу памяти пользователя (лимит 200 записей).
 
-### `retrieval/fusion/hybrid_scorer.py`
-`HybridScorer` **нигде не импортируется.** Hybrid fusion (dense + sparse) не реализован в production pipeline. Нет упоминания в architecture.md.
+### ~~`retrieval/fusion/hybrid_scorer.py`~~ — ЗАКРЫТО (июнь 2026)
+`reciprocal_rank_fusion()` вызывается в `retrieval_engine.py` после параллельных dense+sparse поисков. Настоящий hybrid: два независимых поиска → RRF → reranker.
 
 ### `notifications/event_notifier.py` + `notifications/email_service.py`
 `EventNotifier.on_balance_credited()`, `on_safety_block()` etc. **Нигде не вызываются** в продуктивном коде (только в тестах `test_coverage_gap3/4.py`). Синглтон `event_notifier` создан, но не подключён ни к wallet_manager, ни к safety_gate, ни к orchestrator.
@@ -136,9 +136,9 @@ GPT правильно указал: файл содержит `CallbackAction`,
 
 | Статус | Файлы |
 |---|---|
-| Реально мёртвые | `context/context_models.py`, `context/serializer.py`, `retrieval/sparse/bm25_engine.py`, `retrieval/fusion/hybrid_scorer.py` |
-| Зомби (bootstrapped, но не используется) | `events/` (весь слой), `notifications/` (весь слой), `security/origin_guard.py` |
-| Живые, нет контракта в архитектуре | `i18n/` (оба файла), `transport/telegram/update_handler.py`, `transport/telegram/auth_middleware.py`, `transport/telegram/message_router.py`, `transport/telegram/callback_handler.py`, `llm/groq_client.py`, `llm/hf_client.py`, `llm/fallback_handler.py`, `app/main.py`, `app/settings.py`, `security/rate_limiter.py`, `payments/pricing_engine.py`, `payments/ton_client.py`, `external/web_tools.py`, **`infra/redis_keys.py`** (июнь 2026), **`context/context_models.py`**, **`context/serializer.py`**, **`retrieval/sparse/bm25_engine.py`**, **`retrieval/fusion/hybrid_scorer.py`**, **`security/auth.py`**, **`security/origin_guard.py`** — все подключены июнь 2026 |
+| ~~Реально мёртвые~~ → все подключены | ~~`context/context_models.py`~~, ~~`context/serializer.py`~~, ~~`retrieval/sparse/bm25_engine.py`~~, ~~`retrieval/fusion/hybrid_scorer.py`~~ — **ЗАКРЫТО июнь 2026** |
+| Зомби → частично закрыты | `events/` — частично активирован (4 из 6 событий); `notifications/` — частично (2 из 4 методов); ~~`security/origin_guard.py`~~ — ЗАКРЫТО |
+| Живые, нет контракта в архитектуре | `i18n/t.py`, `i18n/strings.py`, `transport/telegram/update_handler.py`, `transport/telegram/auth_middleware.py`, `transport/telegram/message_router.py`, `transport/telegram/callback_handler.py`, `llm/groq_client.py`, `llm/hf_client.py`, `llm/fallback_handler.py`, `app/main.py`, `app/settings.py`, `security/rate_limiter.py`, `payments/pricing_engine.py`, `payments/ton_client.py`, `external/web_tools.py`, `infra/redis_keys.py`, `infra/config_loader.py` (planned/unused), `context/context_models.py`, `context/serializer.py`, `context/context_mapper.py`, `retrieval/retrieval_models.py`, `retrieval/sparse/bm25_engine.py`, `retrieval/fusion/hybrid_scorer.py`, `security/auth.py`, `security/origin_guard.py` |
 | Описаны концептуально, не привязаны к файлам | `core/kernel/execution_policy_kernel.py`, `core/kernel/decision_matrix.py`, `core/kernel/policy_registry.py`, `cognition/reasoning_engine.py`, `cognition/response_synthesizer.py` |
 | Полностью задокументированы | остальные ~32 файла |
 
@@ -151,6 +151,23 @@ GPT правильно указал: файл содержит `CallbackAction`,
 
 **Приоритет 1 (остаток):**
 - `security/encryption.py` — Fernet шифрование `MemoryEntry.content`. Отложено: требует версионирования ключей и фоновой миграции Supabase.
+- `infra/config_loader.py` — **planned/unused**. Текущее содержимое: `getattr(settings, key, default)` — обёртка без ценности. Нигде не импортируется. Потенциальная роль: единый сервис конфигурации с `get_int()`, `get_bool()`, `require()`, валидацией. Реализовывать только при реальной потребности. `/debug`, `/health` — runtime diagnostics, не их ответственность.
+
+**Retrieval pipeline — июнь 2026 (новое):**
+Полная цепочка:
+```
+pgvector (dense)  ─┐
+                   ├→ RRF (hybrid_scorer) → reranker → RetrievedDocument
+BM25 (sparse)     ─┘
+       ↓
+context_mapper.to_context_chunks() → ContextChunk → assembler → ContextBlock → serializer → prompt
+```
+Ключевые архитектурные решения:
+- `ScoredCandidate` + `RetrievalMetadata` — внутренний тип retrieval слоя (retrieval_models.py)
+- `RetrievalMetadata` типизирована (не dict): `dense_score`, `sparse_score`, `rrf_score`, `geo_score`, `dense_rank`, `sparse_rank`, `rerank_score`
+- `context_mapper.py` — единственная точка пересечения retrieval и context слоёв
+- `ContextChunk.metadata` (документ) и `ContextChunk.retrieval` (процесс) — разделены явными полями
+- `RetrievedDocument.metadata` на выходе: `{"doc": {...}, "retrieval": {...}}` — структура для оркестратора
 
 **Приоритет 2 — Подключить или явно закрыть зомби:**
 - `events/` — ~~либо начать publish в update_handler (при успешном ответе, при billing событиях), либо удалить всю подсистему~~ **Частично закрыто (июнь 2026):** `BalanceCreditedEvent`, `BalanceExhaustedEvent`, `RequestDeniedEvent`, `LLMFallbackEvent` публикуются. Остаётся: `SafetyBlockEvent` из coordinator, `RequestCompletedEvent` из update_handler.
