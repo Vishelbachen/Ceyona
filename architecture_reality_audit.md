@@ -169,6 +169,10 @@ context_mapper.to_context_chunks() → ContextChunk → assembler → ContextBlo
 - `ContextChunk.metadata` (документ) и `ContextChunk.retrieval` (процесс) — разделены явными полями
 - `RetrievedDocument.metadata` на выходе: `{"doc": {...}, "retrieval": {...}}` — структура для оркестратора
 
+**ARCH-1 — ЗАКРЫТО (июнь 2026):** `core/execution/__init__.py` стал публичным фасадом пакета.
+`update_handler.py` теперь импортирует `from core.execution import ...` — публичный API, не внутренности.
+Типы остались у владельца (оркестратор). `contracts/orchestrator.py` не создавался — это было бы искусственным раздвоением ответственности.
+
 **Приоритет 2 — Подключить или явно закрыть зомби:**
 - `events/` — ~~либо начать publish в update_handler (при успешном ответе, при billing событиях), либо удалить всю подсистему~~ **Частично закрыто (июнь 2026):** `BalanceCreditedEvent`, `BalanceExhaustedEvent`, `RequestDeniedEvent`, `LLMFallbackEvent` публикуются. Остаётся: `SafetyBlockEvent` из coordinator, `RequestCompletedEvent` из update_handler.
 - `notifications/` — ~~либо подключить к wallet_manager (on_balance_credited) и safety_gate (on_safety_block), либо удалить~~ **Частично закрыто (июнь 2026):** `on_balance_credited` и `on_balance_exhausted` подключены через EventBus. Остаётся: `on_safety_block` вызывается из dispatcher, но `SafetyBlockEvent` не публикуется из coordinator.
