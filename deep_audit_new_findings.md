@@ -95,17 +95,17 @@ EventStore хранит события в Redis с TTL 30 дней, EventReplay 
 
 ---
 
-### ARCH-5-NEW: `ContextChunk` — двухуровневые метаданные (июнь 2026)
+### ~~ARCH-5: `ContextChunk` — двухуровневые метаданные~~ — ЗАКРЫТО (июнь 2026)
 
 `ContextChunk` теперь имеет два явных поля вместо одного плоского `metadata`:
 - `metadata` — атрибуты документа (`document_id`, `mem_type`, `source_url`). Стабильны, задаются при индексации.
 - `retrieval` — атрибуты процесса (`bm25_score`, `rrf_score`, `dense_rank`, `sparse_rank`, `rerank_score`). Заполняются во время pipeline.
 
-На выходе pipeline `RetrievedDocument.metadata` содержит `{"doc": {...}, "retrieval": {...}}` — структура сохранена для внешнего контракта.
+На выходе pipeline `RetrievedDocument.metadata` содержит `{"doc": {...}, "retrieval": {...}}` — структура сохранена для внешнего контракта. Реализовано и подключено — двухуровневая модель метаданных используется всей retrieval pipeline (см. ARCH-6).
 
 ---
 
-### ARCH-6: Retrieval pipeline — полная архитектура (июнь 2026)
+### ~~ARCH-6: Retrieval pipeline — полная архитектура~~ — ЗАКРЫТО (июнь 2026)
 
 Реализован настоящий hybrid retrieval с чёткими границами между слоями.
 
@@ -153,11 +153,13 @@ query
 
 ---
 
-### ARCH-5: `transport/telegram/callback_handler.py` — контракт есть, dispatch — в webhook
+### ~~ARCH-8: `transport/telegram/callback_handler.py` — контракт есть, dispatch был в webhook~~ — ЗАКРЫТО (июнь 2026)
 
-`callback_handler.py` правильно определяет `CallbackAction` enum и `parse_callback()`. Но весь if/elif dispatch по `ctx.action` (BALANCE, TOPUP, HELP, CANCEL) живёт прямо в `webhook.py` (строки ~380-430).
+*(было пронумеровано как ARCH-5 — дублировало номер ARCH-5 «ContextChunk» выше; исправлено на следующий свободный номер по порядку в файле, ARCH-8)*
 
-GPT и архитектура правы: должен быть отдельный `dispatch_callback(ctx)`, который маршрутизирует в `balance_handler`, `topup_handler` и т.д. Сейчас `webhook.py` знает про "topup", "balance" — нарушение Single Responsibility.
+`callback_handler.py` правильно определяет `CallbackAction` enum и `parse_callback()`. Раньше весь if/elif dispatch по `ctx.action` (BALANCE, TOPUP, HELP, CANCEL) жил прямо в `webhook.py` (строки ~380-430) — нарушение Single Responsibility, `webhook.py` знал про "topup", "balance" и т.д.
+
+**Исправлено:** `callback_handler.py` теперь владеет обеими частями — `parse_callback()` и `dispatch_callback()`. Вся billing/TOPUP/BALANCE логика и выбор i18n-строк переехали внутрь него. `webhook.py` (строки ~711–721) только вызывает `parse_callback()` → `dispatch_callback()` и ничего не знает о конкретных действиях.
 
 ---
 
@@ -280,8 +282,11 @@ GPT и архитектура правы: должен быть отдельны
 
 ### Новые открытые (июнь 2026)
 - ~~ARCH-1~~ — **ЗАКРЫТО**: `core/execution/__init__.py` публичный фасад
+- ~~ARCH-5~~ — **ЗАКРЫТО**: `ContextChunk` двухуровневые метаданные (`metadata` / `retrieval`)
+- ~~ARCH-6~~ — **ЗАКРЫТО**: retrieval pipeline (dense + sparse → RRF → rerank → context)
+- **ARCH-7** — `infra/config_loader.py` — planned/unused, зафиксировано осознанно, OPEN
+- ~~ARCH-8~~ — **ЗАКРЫТО**: `callback_handler.py` теперь владеет и parse, и dispatch callback-логики (ранее ошибочно пронумерован как ARCH-5, см. секцию выше)
 
-- `infra/config_loader.py` — planned/unused, зафиксировано осознанно
 - `security/encryption.py` — Fernet отложен (key versioning + миграция)
 - `retrieval/retrieval_models.py` — активирован, не задокументирован в architecture.md
 - `context/context_mapper.py` — новый файл, не задокументирован в architecture.md
