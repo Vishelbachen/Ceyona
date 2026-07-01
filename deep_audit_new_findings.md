@@ -98,6 +98,54 @@ EventStore хранит события в Redis с TTL 30 дней, EventReplay 
 
 ---
 
+### ARCH-6: Retrieval pipeline — полная архитектура (июнь 2026)
+
+Реализован настоящий hybrid retrieval с чёткими границами между слоями.
+
+**Цепочка:**
+```
+query
+  ├─ pgvector similarity_search()  → ScoredCandidate(source='memory',  retrieval=RetrievalMetadata(dense_score=...))
+  └─ BM25Engine.search()           → ScoredCandidate(source='bm25',    retrieval=RetrievalMetadata(sparse_score=...))
+         ↓
+  reciprocal_rank_fusion()         → ScoredCandidate(source='hybrid',  retrieval=RetrievalMetadata(rrf_score, dense_rank, sparse_rank, ...))
+         ↓
+  cross_encoder.rerank()           → (content, rerank_score)
+         ↓
+  RetrievedDocument(metadata={"doc":{...}, "retrieval":{rerank_score, query_kind, ...}})
+         ↓  [context layer boundary — context_mapper.py]
+  to_context_chunks()              → ContextChunk(content, score, source, metadata)
+         ↓
+  assemble_chunks()                → ContextBlock(chunks, total_chars, truncated)
+         ↓
+  block_to_prompt_string()         → str → prompt
+```
+
+**Ключевые архитектурные решения:**
+
+| Решение | Обоснование |
+|---|---|
+| `ScoredCandidate` не смешивается с `ContextChunk` | Retrieval знает как нашли; context знает как подать в LLM |
+| `RetrievalMetadata` — dataclass, не dict | Typo-safe; IDE подсказывает; соответствует стилю `RoutingProfile`, `AgentCallMetrics` |
+| `context_mapper.py` — единственная точка пересечения слоёв | Все остальные context-файлы не знают про `retrieval/` |
+| `ContextChunk.metadata` vs `ContextChunk.retrieval` | metadata = документ (стабильно); retrieval = процесс (pipeline-only) |
+| BM25 corpus limit = 200, pgvector top_k = 5 | BM25 видит всю память пользователя; оба поиска независимы |
+| `retrieval_models.py` активирован | Был quasi-мёртвым (только тесты); теперь `ScoredCandidate` + `RetrievalMetadata` — основные типы pipeline |
+
+---
+
+### ARCH-7: `infra/config_loader.py` — planned/unused (июнь 2026)
+
+Файл существует с содержимым `getattr(settings, key, default)`. Нигде не импортируется в продуктивном коде.
+
+**Решение:** зафиксировать как `planned/unused`, не удалять и не реализовывать без реальной потребности.
+
+**Когда станет нужен:** появление логики вроде `get_int()`, `get_bool()`, `require()`, multi-source fallback (ENV → Secrets → default). Простой `getattr` — не повод для существования отдельного модуля.
+
+**Что НЕ его ответственность:** `/debug`, `/health`, `/providers`, `/routing`, `/models` — это runtime diagnostics, не конфигурация. `main.py` правильно их содержит.
+
+---
+
 ### ARCH-5: `transport/telegram/callback_handler.py` — контракт есть, dispatch — в webhook
 
 `callback_handler.py` правильно определяет `CallbackAction` enum и `parse_callback()`. Но весь if/elif dispatch по `ctx.action` (BALANCE, TOPUP, HELP, CANCEL) живёт прямо в `webhook.py` (строки ~380-430).
@@ -144,6 +192,9 @@ GPT и архитектура правы: должен быть отдельны
 | `external/web_tools.py` | Tool dispatcher (weather/search/maps/translate) | ✅ Orchestrator |
 | `ceyona-worker/worker.js` | Cloudflare Worker: Telegram→HF relay | ✅ Деплой |
 | `infra/redis_keys.py` | Canonical Redis key registry (ключи + TTL константы) | ✅ Добавлен июнь 2026 |
+| `infra/config_loader.py` | `getattr(settings, key, default)` — обёртка без ценности | ⏸ planned/unused — нигде не импортируется |
+| `retrieval/retrieval_models.py` | `QueryVector`, `RetrievalMetadata`, `ScoredCandidate` | ✅ Активирован июнь 2026 |
+| `context/context_mapper.py` | Граница retrieval→context: `to_context_chunks()` | ✅ Новый файл июнь 2026 |
 
 ---
 
@@ -211,3 +262,17 @@ GPT и архитектура правы: должен быть отдельны
 19. `observability/` — 4 файла, используются везде, нет раздела в architecture.md
 20. `meta/reflection.py` + `memory_audit.py` — output уходит только в логи, persistence не реализована
 21. `ceyona-worker/worker.js` — Cloudflare Worker упомянут в §29, но без deployment contract
+
+### Закрыто в июне 2026
+- ~~6~~ `security/auth.py` — `verify_token` в `require_admin`
+- ~~8~~ `security/origin_guard.py` — CORS middleware
+- ~~9~~ `context/context_models.py` — `ContextChunk`/`ContextBlock` внутри retrieval+context pipeline
+- ~~10~~ `context/serializer.py` — `to_prompt_string`, `block_to_prompt_string`, `block_to_dict`
+- ~~11~~ `retrieval/sparse/bm25_engine.py` — параллельный sparse поиск
+- ~~12~~ `retrieval/fusion/hybrid_scorer.py` — RRF fusion
+
+### Новые открытые (июнь 2026)
+- `infra/config_loader.py` — planned/unused, зафиксировано осознанно
+- `security/encryption.py` — Fernet отложен (key versioning + миграция)
+- `retrieval/retrieval_models.py` — активирован, не задокументирован в architecture.md
+- `context/context_mapper.py` — новый файл, не задокументирован в architecture.md
