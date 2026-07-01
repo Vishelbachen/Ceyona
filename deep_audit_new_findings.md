@@ -38,11 +38,18 @@
 
 ## АРХИТЕКТУРНЫЕ РАСХОЖДЕНИЯ
 
-### ARCH-1: `OrchestratorResult` определён в `core/execution/orchestrator.py`, а не в `contracts/`
+### ~~ARCH-1: `OrchestratorResult` определён в `core/execution/orchestrator.py`, а не в `contracts/`~~ — ЗАКРЫТО (июнь 2026)
 
-`update_handler.py` и `webhook.py` импортируют `OrchestratorResult`, `OrchestratorRequest`, `UsageRecord` напрямую из `core.execution.orchestrator`. По принципу Single Policy Authority (architecture.md §2.1) и по смыслу contracts layer — эти типы должны жить в `contracts/orchestrator.py`. Тогда `transport` не импортировал бы из `core.execution` напрямую.
+**Решение:** `core/execution/__init__.py` — публичный фасад пакета.
 
-Текущий importlinter (`canonical_layer_order`) это не запрещает (transport → core.execution разрешён по слоям), но архитектурно неправильно: контракт между слоями должен жить в `contracts/`, а не внутри `core/execution/`.
+**Почему не `contracts/orchestrator.py`:** типы принадлежат оркестратору — это его вход и выход. Перенос в `contracts/` создал бы второй центр ответственности и немедленно сломался бы на `CoordinationMetrics` (circular dependency). Проблема была не в том что transport импортирует из `core.execution` — проблема была в том что он импортировал из `core.execution.orchestrator` (внутренняя реализация). Правило: **transport не должен импортировать внутренности core. Публичный API — можно.**
+
+**Что сделано:**
+- `core/execution/__init__.py` реэкспортирует `run`, `OrchestratorRequest`, `OrchestratorResult`, `UsageRecord` с явным `__all__`
+- `update_handler.py`: `from core.execution import ...` вместо `from core.execution.orchestrator import ...`
+- Внутренние символы (`PipelineMetrics`, `_run_heavy`, `CoordinationMetrics`, хелперы) **не** реэкспортируются
+
+**Ценность фасада:** если завтра `orchestrator.py` разобьётся на `runner.py` + `request.py` + `result.py` — ни один внешний импорт не изменится.
 
 ---
 
@@ -272,6 +279,8 @@ GPT и архитектура правы: должен быть отдельны
 - ~~12~~ `retrieval/fusion/hybrid_scorer.py` — RRF fusion
 
 ### Новые открытые (июнь 2026)
+- ~~ARCH-1~~ — **ЗАКРЫТО**: `core/execution/__init__.py` публичный фасад
+
 - `infra/config_loader.py` — planned/unused, зафиксировано осознанно
 - `security/encryption.py` — Fernet отложен (key versioning + миграция)
 - `retrieval/retrieval_models.py` — активирован, не задокументирован в architecture.md
