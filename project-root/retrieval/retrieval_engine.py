@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import logging
 
-from context.context_models import ContextChunk
 from contracts.retrieval_contracts import (
     RetrievalQuery,
     RetrievalResult,
     RetrievedDocument,
 )
 from retrieval.dense.bge_engine import bge_engine
-from retrieval.fusion.hybrid_scorer import reciprocal_rank_fusion
+from retrieval.fusion.hybrid_scorer import FusedResult, reciprocal_rank_fusion
+from retrieval.retrieval_models import RetrievalMetadata, ScoredCandidate
 from retrieval.query_preprocessor import extract_query_profile, preprocess
 from retrieval.reranker.cross_encoder import cross_encoder
 from retrieval.source_credibility import source_credibility
@@ -121,7 +121,7 @@ async def retrieve(
             )
             scored_records = source_credibility.score_memory_records(records)
             dense_candidates = [
-                ContextChunk(
+                ScoredCandidate(
                     content=r.content,
                     score=r.similarity,
                     source="memory",
@@ -130,9 +130,7 @@ async def retrieve(
                         "mem_type": r.mem_type,
                         "source_url": r.source_url or "",
                     },
-                    retrieval={
-                        "similarity": round(r.similarity, 4),
-                    },
+                    retrieval=RetrievalMetadata(dense_score=round(r.similarity, 4)),
                 )
                 for r in scored_records
             ]
@@ -158,11 +156,11 @@ async def retrieve(
                 bm25.index(corpus)
                 bm25_results = bm25.search(clean_query, top_k=query.top_k)
                 sparse_candidates = [
-                    ContextChunk(
+                    ScoredCandidate(
                         content=r.content,
                         score=r.score,
                         source="bm25",
-                        retrieval={"bm25_score": round(r.score, 4)},
+                        retrieval=RetrievalMetadata(sparse_score=round(r.score, 4)),
                     )
                     for r in bm25_results
                 ]
@@ -179,35 +177,32 @@ async def retrieve(
         # ── fusion: RRF combines dense + sparse ───────────────────────────────
         if dense_candidates or sparse_candidates:
             # hybrid_scorer expects list[tuple[str,float]] | list[FusedResult].
-            # Pass ContextChunks as tuples; provenance metadata is already on the chunks.
+            # Pass ScoredCandidates as tuples; provenance is in RetrievalMetadata.
             fused = reciprocal_rank_fusion(
                 sparse_results=[(c.content, c.score) for c in sparse_candidates],
                 dense_results=[(c.content, c.score) for c in dense_candidates],
                 query=clean_query,
                 lang=profile.lang,
             )
-            # Preserve provenance: split document metadata from retrieval metadata.
-            _doc_meta: dict[str, dict] = {
-                c.content: c.metadata
-                for c in (*dense_candidates, *sparse_candidates)
-            }
-            _ret_meta: dict[str, dict] = {
-                c.content: c.retrieval
+            # Preserve provenance: merge per-source scores into RetrievalMetadata.
+            _prior: dict[str, ScoredCandidate] = {
+                c.content: c
                 for c in (*dense_candidates, *sparse_candidates)
             }
             candidates = [
-                ContextChunk(
+                ScoredCandidate(
                     content=r.content,
                     score=r.score,
                     source=r.source,  # "hybrid"
-                    metadata=_doc_meta.get(r.content, {}),
-                    retrieval={
-                        **_ret_meta.get(r.content, {}),  # similarity / bm25_score
-                        "rrf_score": round(r.metadata.get("rrf_score", r.score), 6),
-                        "geo_score": round(r.metadata.get("geo_score", 0.0), 3),
-                        "dense_rank": r.metadata.get("dense_rank"),
-                        "sparse_rank": r.metadata.get("sparse_rank"),
-                    },
+                    metadata=_prior[r.content].metadata if r.content in _prior else {},
+                    retrieval=RetrievalMetadata(
+                        dense_score=_prior[r.content].retrieval.dense_score if r.content in _prior else None,
+                        sparse_score=_prior[r.content].retrieval.sparse_score if r.content in _prior else None,
+                        rrf_score=round(r.metadata.get("rrf_score", r.score), 6),
+                        geo_score=round(r.metadata.get("geo_score", 0.0), 3),
+                        dense_rank=r.metadata.get("dense_rank"),
+                        sparse_rank=r.metadata.get("sparse_rank"),
+                    ),
                 )
                 for r in fused
             ]
@@ -233,26 +228,26 @@ async def retrieve(
         )
 
     # ── credibility weighting ────────────────────────────────────────────────
-    # credibility is a pass-through for tuple lists; ContextChunks already
+    # credibility is a pass-through for tuple lists; ScoredCandidates already
     # carry provenance via source_credibility.score_memory_records() above.
     pre_credibility_count = len(candidates)
     logger.debug(
-        "source_credibility pass-through (ContextChunk path)",
+        "source_credibility pass-through (ScoredCandidate path)",
         extra={"candidates": pre_credibility_count},
     )
 
     # ── rerank if candidates available ────────────────────────────────────────
-    # Build a content→chunk index to restore provenance after reranking.
-    _chunk_index: dict[str, ContextChunk] = {c.content: c for c in candidates}
+    # Build a content→candidate index to restore provenance after reranking.
+    _cand_index: dict[str, ScoredCandidate] = {c.content: c for c in candidates}
 
     if candidates:
         reranked = await cross_encoder.rerank(
-            clean_query, [c.content for c in candidates]
+            clean_query, [c.content for c in candidates]  # ScoredCandidate
         )
         top = reranked[: query.rerank_top_k]
 
         _query_tokens = max(1, len(clean_query) // 4)
-        _candidate_texts = [c.content for c in candidates]
+        _candidate_texts = [c.content for c in candidates]  # ScoredCandidate
         _avg_doc_tokens = max(1, sum(len(t) for t in _candidate_texts) // (4 * len(_candidate_texts)))
         rerank_tokens = (_query_tokens + _avg_doc_tokens) * len(candidates)
         logger.debug(
@@ -269,19 +264,25 @@ async def retrieve(
     else:
         top = []
 
-    # Convert ContextChunks → RetrievedDocument for the external contract.
-    # Document metadata and retrieval metadata are kept separate under
-    # 'doc' and 'retrieval' keys so callers can distinguish them.
+    # Convert ScoredCandidates → RetrievedDocument for the external contract.
+    # context_mapper.to_context_chunks() handles the retrieval→context conversion
+    # when the context layer needs ContextChunks, use context_mapper.to_context_chunks().
+    # Here we go directly to RetrievedDocument for the orchestrator contract.
     documents = [
         RetrievedDocument(
             content=content,
             score=score,
-            source=_chunk_index.get(content, ContextChunk(content=content, score=score)).source,
-            source_url=_chunk_index.get(content, ContextChunk(content=content, score=score)).metadata.get("source_url", ""),
+            source=_cand_index[content].source if content in _cand_index else "hybrid",
+            source_url=_cand_index[content].metadata.get("source_url", "") if content in _cand_index else "",
             metadata={
-                "doc": _chunk_index.get(content, ContextChunk(content=content, score=score)).metadata,
+                "doc": _cand_index[content].metadata if content in _cand_index else {},
                 "retrieval": {
-                    **_chunk_index.get(content, ContextChunk(content=content, score=score)).retrieval,
+                    "dense_score": _cand_index[content].retrieval.dense_score if content in _cand_index else None,
+                    "sparse_score": _cand_index[content].retrieval.sparse_score if content in _cand_index else None,
+                    "rrf_score": _cand_index[content].retrieval.rrf_score if content in _cand_index else None,
+                    "geo_score": _cand_index[content].retrieval.geo_score if content in _cand_index else None,
+                    "dense_rank": _cand_index[content].retrieval.dense_rank if content in _cand_index else None,
+                    "sparse_rank": _cand_index[content].retrieval.sparse_rank if content in _cand_index else None,
                     "rerank_score": round(score, 4),
                     "query_kind": profile.query_kind,
                     "query_location": profile.location,
