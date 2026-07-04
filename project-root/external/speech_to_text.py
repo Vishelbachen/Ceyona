@@ -238,9 +238,10 @@ async def download_telegram_voice(
     Returns (audio_bytes, filename).
     Raises RuntimeError on download failure.
 
-    Two-step process:
-      1. getFile → get file_path
-      2. download from file.telegram.org/{bot_token}/{file_path}
+    Two-step process, routed through the Cloudflare Worker's /tg/ proxy so
+    HF Spaces never connects to api.telegram.org directly:
+      1. getFile  → {TELEGRAM_PROXY_URL}/tg/bot{token}/getFile → file_path
+      2. download → {TELEGRAM_PROXY_URL}/tg/file/bot{token}/{file_path}
 
     Retries up to `retries` times on network-level errors (ConnectError,
     RemoteProtocolError, etc.) and 429/5xx HTTP errors — these occur on
@@ -251,19 +252,18 @@ async def download_telegram_voice(
 
     _RETRYABLE_STATUS = {429, 500, 502, 503}
 
-    # Route through Cloudflare Worker proxy when available (HF Spaces blocks direct access)
-    # Route through Apps Script (HF blocks direct Cloudflare Worker calls for file downloads)
-    _apps_script_url = settings.apps_script_url
+    base = settings.telegram_proxy_url.rstrip("/")
+    if base:
+        get_file_url = f"{base}/tg/bot{bot_token}/getFile"
+    else:
+        get_file_url = f"https://api.telegram.org/bot{bot_token}/getFile"
 
     for attempt in range(retries + 1):
         try:
             async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-                # Steps 1+2: getFile + download via Apps Script (returns base64)
+                # Step 1: getFile → file_path
                 try:
-                    r = await client.get(
-                        _apps_script_url,
-                        params={"action": "getfile", "file_id": file_id},
-                    )
+                    r = await client.get(get_file_url, params={"file_id": file_id})
                 except Exception as exc:
                     raise RuntimeError(
                         f"getFile network error: {type(exc).__name__}: {exc or 'no message'}"
@@ -276,15 +276,17 @@ async def download_telegram_voice(
 
                 result = r.json()
                 if not result.get("ok"):
-                    raise RuntimeError(f"getFile failed: {result.get('error', 'unknown')}")
+                    raise RuntimeError(f"getFile failed: {result.get('description', 'unknown')}")
 
-                import base64 as _base64
-                file_bytes = _base64.b64decode(result["data"])
-                file_path = result["file_path"]
+                file_path = result["result"]["file_path"]
+                if base:
+                    file_url = f"{base}/tg/file/bot{bot_token}/{file_path}"
+                else:
+                    file_url = f"https://api.telegram.org/file/bot{bot_token}/{file_path}"
 
-                # Step 2: already downloaded
+                # Step 2: download the actual file bytes
                 try:
-                    r2 = type('FakeResp', (), {'content': file_bytes, 'status_code': 200})()
+                    r2 = await client.get(file_url)
                 except Exception as exc:
                     raise RuntimeError(
                         f"Voice download network error: {type(exc).__name__}: {exc or 'no message'}"
@@ -309,8 +311,7 @@ async def download_telegram_voice(
                 continue
             raise
 
-        filename = file_path.split("/")[-1] or "voice.ogg"
-        return r2.content, filename
+    raise RuntimeError("download_telegram_voice: exhausted retries")
 
 
 # ─── HELPERS ──────────────────────────────────────────────────────────────────
