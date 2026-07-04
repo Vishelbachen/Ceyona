@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,16 @@ BATCH_SIZE = 10
 # и больше не подхватывается poller'ом (чтобы битый апдейт не крутился
 # в цикле retry вечно, забирая ресурсы у нормальных апдейтов).
 MAX_ATTEMPTS = 3
+
+
+def _now_iso() -> str:
+    """
+    PostgREST не выполняет SQL-функции вроде now() из JSON-тела запроса —
+    это интерпретировалось бы как буквальная строка "now()" и упало бы на
+    типе timestamptz (или дало неверное значение). Настоящее время нужно
+    сгенерировать на стороне клиента.
+    """
+    return datetime.now(timezone.utc).isoformat()
 
 
 async def _claim_batch(supabase) -> list[dict]:
@@ -69,7 +80,7 @@ async def _claim_batch(supabase) -> list[dict]:
 
     claimed = (
         supabase.table("pending_updates")
-        .update({"status": "processing", "claimed_at": "now()"})
+        .update({"status": "processing", "claimed_at": _now_iso()})
         .in_("id", ids)
         .eq("status", "pending")  # защита от гонки, см. docstring выше
         .execute()
@@ -82,7 +93,7 @@ async def _mark_done(supabase, row_id: int) -> None:
     try:
         supabase.table("pending_updates").update({
             "status": "done",
-            "completed_at": "now()",
+            "completed_at": _now_iso(),
         }).eq("id", row_id).execute()
     except Exception as exc:
         logger.error("queue_consumer: failed to mark row done", extra={"row_id": row_id, "error": str(exc)})
@@ -95,7 +106,7 @@ async def _mark_failed(supabase, row_id: int, attempts: int, error: str) -> None
             "status": next_status,
             "attempts": attempts + 1,
             "last_error": error[:2000],
-            "completed_at": "now()" if next_status == "failed" else None,
+            "completed_at": _now_iso() if next_status == "failed" else None,
         }).eq("id", row_id).execute()
     except Exception as exc:
         logger.error("queue_consumer: failed to mark row failed", extra={"row_id": row_id, "error": str(exc)})
