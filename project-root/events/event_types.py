@@ -50,6 +50,9 @@ class EventName(str, Enum):
     REQUEST_COMPLETED    = "request.completed"
     REQUEST_DENIED       = "request.denied"
 
+    # outbound transport (Cloudflare Worker → Telegram proxy)
+    SEND_TO_TELEGRAM_FAILED = "send_to_telegram.failed"
+
 
 # ─── BASE EVENT ───────────────────────────────────────────────────────────────
 
@@ -170,3 +173,20 @@ class RequestDeniedEvent(BaseEvent):
         intent      — classified intent or epk_decision string (str)
     """
     name: EventName = EventName.REQUEST_DENIED
+
+
+@dataclass
+class SendToTelegramFailedEvent(BaseEvent):
+    """Fired when every retry of an outbound Cloudflare Worker → Telegram
+    call (sendMessage/sendVoice/answerCallbackQuery) has been exhausted
+    without a response — the user never received their reply.
+
+    user_id here is the Telegram chat_id (may be None for callback-only
+    failures where chat_id wasn't resolved).
+
+    payload keys:
+        path     — which Telegram method failed, e.g. "/sendMessage" (str)
+        attempts — total attempts made, including the first (int)
+        error    — repr() of the last exception (str)
+    """
+    name: EventName = EventName.SEND_TO_TELEGRAM_FAILED
