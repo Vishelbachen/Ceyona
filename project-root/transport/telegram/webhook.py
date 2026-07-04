@@ -125,7 +125,13 @@ async def _post_via_worker(
         except (httpx.TimeoutException, httpx.TransportError) as exc:
             elapsed = _time.monotonic() - started
             last_exc = exc
-            logger.error(
+            is_final_attempt = attempt == attempts
+            # WARNING for attempts that will still be retried (expected,
+            # part of the plan) — ERROR only once every attempt is exhausted
+            # and the caller is truly out of options. Keeps Sentry's noise
+            # proportional to "needs a human" rather than "retry in progress".
+            log_fn = logger.error if is_final_attempt else logger.warning
+            log_fn(
                 "_post_via_worker connection failure",
                 extra={
                     "chat_id": chat_id,
@@ -136,7 +142,7 @@ async def _post_via_worker(
                     "error": repr(exc),
                 },
             )
-            if attempt <= len(_RETRY_BACKOFF_S):
+            if not is_final_attempt:
                 await asyncio.sleep(_RETRY_BACKOFF_S[attempt - 1])
 
     # All attempts exhausted — surface it as a domain event, not just a log line.
