@@ -367,6 +367,25 @@ async def telegram_webhook(
         logger.error("Failed to parse update JSON", extra={"error": str(exc)})
         return {"ok": True}
 
+    return await process_update(update, request.app.state)
+
+
+async def process_update(update: dict, app_state) -> dict:
+    """
+    Транспортно-независимая обработка одного Telegram update.
+
+    Раньше вся эта логика жила прямо в HTTP-роуте telegram_webhook() и была
+    завязана на FastAPI Request (request.app.state.*). Теперь она вынесена
+    отдельно, чтобы её мог вызывать не только HTTP-роут, но и фоновый
+    consumer очереди (см. queue/consumer.py), который вычитывает апдейты
+    из Supabase (pending_updates) вместо того, чтобы ждать их через HTTP —
+    это убирает зависимость от синхронного forward со стороны Cloudflare
+    Worker и связанный с ним риск таймаута.
+
+    app_state — тот же объект, что обычно доступен как request.app.state
+    (со свойствами .supabase, .hf_client, .redis), передаётся явно, чтобы
+    эта функция не зависела от наличия HTTP-запроса.
+    """
     update_type = classify_update(update)
 
     if update_type == UpdateType.UNKNOWN:
@@ -388,8 +407,8 @@ async def telegram_webhook(
     logger.info("chat_id resolved", extra={"chat_id": chat_id, "update_keys": list(update.keys())})
     user_id = auth.user_id
     lang = _detect_lang(update)
-    supabase = request.app.state.supabase
-    hf_client = request.app.state.hf_client
+    supabase = app_state.supabase
+    hf_client = app_state.hf_client
 
     # Fix §10.4: generate request_id for full pipeline log correlation.
     # Format: "{update_id}:{user_id}" — unique per Telegram update.
@@ -470,9 +489,9 @@ async def telegram_webhook(
                     await ConversationHistory(supabase).clear(user_id)
                     await SupabaseStore(supabase).delete_by_user(str(user_id))
                 # QueryCache: clear user-scoped retrieval cache from Redis
-                if request.app.state.redis is not None:
+                if app_state.redis is not None:
                     from retrieval.cache.query_cache import QueryCache
-                    qcache = QueryCache(request.app.state.redis)
+                    qcache = QueryCache(app_state.redis)
                     await qcache.delete_by_user(str(user_id))
                 logger.info("Full memory reset executed", extra={"user_id": user_id})
                 await _send_message(chat_id, get_system_message("memory_reset_done", lang))
@@ -499,10 +518,10 @@ async def telegram_webhook(
                     user_balance=user_balance,
                     lang=lang,
                     supabase=supabase,
-                    redis=request.app.state.redis,
+                    redis=app_state.redis,
                     hf_client=hf_client,
                     request_id=request_id,
-                    app_state=request.app.state,
+                    app_state=app_state,
                 )
         except Exception as exc:
             logger.error("handle_message crashed", extra={"error": str(exc)})
@@ -733,7 +752,7 @@ async def telegram_webhook(
                 ac2 = AccessController(supabase)
                 fresh_balance = await ac2.get_balance(user_id)
                 if 0 < fresh_balance.balance_usd < 0.05:
-                    _redis = request.app.state.redis
+                    _redis = app_state.redis
                     if _redis is not None:
                         _sent = await _redis.set(
                             redis_keys.low_balance_warning(user_id),
