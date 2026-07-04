@@ -71,4 +71,17 @@ def setup_dispatcher(bus: EventBus, store: EventStore) -> None:
 
     bus.subscribe(EventName.SAFETY_BLOCK, _on_safety_block)
 
+    # ── send_to_telegram.failed → admin email alert (opt-in) ─────────────────
+    async def _on_send_to_telegram_failed(event: BaseEvent) -> None:
+        from app.settings import settings
+        await event_notifier.on_send_to_telegram_failed(
+            chat_id=event.user_id,
+            path=event.payload.get("path", "unknown"),
+            attempts=event.payload.get("attempts", 0),
+            error=event.payload.get("error", ""),
+            to_email=settings.admin_alert_email or None,
+        )
+
+    bus.subscribe(EventName.SEND_TO_TELEGRAM_FAILED, _on_send_to_telegram_failed)
+
     logger.info("EventDispatcher: handlers registered")
