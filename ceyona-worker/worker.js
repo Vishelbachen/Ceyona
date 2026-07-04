@@ -6,10 +6,12 @@
  *   GET|POST /tg/*     — обратный прокси: HF Space → api.telegram.org
  *
  * Переменные окружения (Workers Secrets):
- *   HF_WEBHOOK_URL     — URL HF Space, например https://your-space.hf.space
- *   WEBHOOK_SECRET     — секрет для проверки запросов от Telegram (опционально)
- *   FORWARD_TIMEOUT    — таймаут одной попытки в мс (по умолчанию 45000)
- *   HF_TOKEN           — токен HF (опционально)
+ *   HF_WEBHOOK_URL          — URL HF Space, например https://your-space.hf.space
+ *   WEBHOOK_SECRET          — секрет для проверки запросов от Telegram (опционально)
+ *   FORWARD_TIMEOUT         — таймаут одной попытки forwarding в мс (по умолчанию 45000)
+ *   TELEGRAM_PROXY_TIMEOUT  — таймаут исходящего запроса к api.telegram.org в /tg/*
+ *                             в мс (по умолчанию 10000)
+ *   HF_TOKEN                — токен HF (опционально)
  */
 
 const TELEGRAM_API_BASE = "https://api.telegram.org";
@@ -115,23 +117,43 @@ async function handleTelegramProxy(request, env, path, url) {
   const body = request.method !== "GET" ? await request.arrayBuffer() : undefined;
   const contentType = request.headers.get("content-type") || "application/json";
 
+  // Явный таймаут — без него зависший fetch к Telegram может висеть
+  // неопределённо долго, а вызывающая сторона (HF) увидит только свой
+  // собственный httpx-таймаут без понимания, что произошло на стороне Worker.
+  const proxyTimeout = parseInt(env.TELEGRAM_PROXY_TIMEOUT || "10000");
+
+  const startedAt = Date.now();
   try {
     const resp = await fetch(targetUrl, {
       method: request.method,
       headers: { "Content-Type": contentType },
       body,
+      signal: AbortSignal.timeout(proxyTimeout),
     });
+
+    console.log(`Telegram proxy ok: path=${tgPath}, status=${resp.status}, elapsed_ms=${Date.now() - startedAt}`);
 
     return new Response(resp.body, {
       status: resp.status,
       headers: { "Content-Type": resp.headers.get("content-type") || "application/json" },
     });
   } catch (err) {
-    console.error(`Telegram proxy failed: ${err}`);
-    return new Response(JSON.stringify({ ok: false, error: "upstream failed" }), {
-      status: 502,
-      headers: { "Content-Type": "application/json" },
-    });
+    const elapsed = Date.now() - startedAt;
+    const isTimeout = err.name === "TimeoutError" || err.name === "AbortError";
+    console.error(
+      `Telegram proxy failed: path=${tgPath}, elapsed_ms=${elapsed}, timeout=${isTimeout}, error=${err}`
+    );
+    return new Response(
+      JSON.stringify({
+        ok: false,
+        error: isTimeout ? "upstream timeout" : "upstream failed",
+        elapsed_ms: elapsed,
+      }),
+      {
+        status: isTimeout ? 504 : 502,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
   }
 }
 
