@@ -52,7 +52,6 @@ class Settings(BaseSettings):
     # the worker's /tg/ proxy instead of api.telegram.org directly.
     telegram_proxy_url: str = Field("", description="Cloudflare Worker base URL for Telegram API proxy")
     webhook_secret: str = Field("", description="Secret token for Telegram webhook verification (set in HF and Cloudflare)")
-    apps_script_url: str = Field("", description="Google Apps Script URL for sending Telegram messages (HF blocks direct CF calls)")
 
     # ─── RUNTIME ────────────────────────────────────────
     debug: bool = Field(False, description="Debug mode")
