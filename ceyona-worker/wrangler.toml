@@ -4,3 +4,4 @@ compatibility_date = "2026-01-01"
 
 [vars]
 FORWARD_TIMEOUT = "20000"
+TELEGRAM_PROXY_TIMEOUT = "10000"
