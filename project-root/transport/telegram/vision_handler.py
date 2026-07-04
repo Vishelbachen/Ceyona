@@ -105,33 +105,22 @@ def _telegram_file_url(file_path: str) -> str:
 
 
 
-async def _download_image_via_apps_script(file_id: str, *, retries: int = 2) -> bytes | None:
-    """Download image via Apps Script proxy (HF blocks direct Cloudflare Worker calls)."""
-    import base64 as _base64
-    _RETRYABLE_STATUS = {429, 500, 502, 503}
-    apps_url = settings.apps_script_url
+async def _download_image_via_worker(file_id: str, *, retries: int = 2) -> bytes | None:
+    """Download image via the Cloudflare Worker's /tg/ proxy (getFile + file download)."""
     for attempt in range(retries + 1):
-        try:
-            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-                r = await client.get(apps_url, params={"action": "getfile", "file_id": file_id})
-                if r.status_code in _RETRYABLE_STATUS:
-                    await asyncio.sleep(0.5 * (attempt + 1))
-                    continue
-                if r.status_code != 200:
-                    logger.error("getFile HTTP error via Apps Script", extra={"status": r.status_code})
-                    return None
-                result = r.json()
-                if not result.get("ok"):
-                    logger.error("getFile failed via Apps Script", extra={"error": result.get("error")})
-                    return None
-                return _base64.b64decode(result["data"])
-        except Exception as exc:
+        file_url = await _get_file_url(file_id, retries=0)
+        if not file_url:
             if attempt < retries:
-                logger.warning("getFile via Apps Script retrying", extra={"error": str(exc), "attempt": attempt + 1})
                 await asyncio.sleep(0.5 * (attempt + 1))
                 continue
-            logger.error("getFile via Apps Script failed", extra={"error": str(exc)})
             return None
+        raw = await _download_image(file_url, retries=0)
+        if raw is not None:
+            return raw
+        if attempt < retries:
+            await asyncio.sleep(0.5 * (attempt + 1))
+            continue
+        return None
     return None
 
 async def _get_file_url(file_id: str, *, retries: int = 2) -> str | None:
@@ -349,7 +338,7 @@ async def handle_vision(
     })
 
     # ── download ──────────────────────────────────────────────────────────────
-    image_bytes = await _download_image_via_apps_script(file_id)
+    image_bytes = await _download_image_via_worker(file_id)
     if not image_bytes:
         return VisionResult(text=err_text, needs_pipeline=False)
 
@@ -771,7 +760,7 @@ async def handle_vision_group(
 
     async def _fetch(fid: str) -> bytes | None:
         async with _sem:
-            raw = await _download_image_via_apps_script(fid)
+            raw = await _download_image_via_worker(fid)
             if not raw:
                 return None
             return _resize_image_if_needed(raw)
