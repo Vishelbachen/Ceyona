@@ -109,3 +109,9 @@ async def shutdown(state: dict) -> None:
     redis_pubsub = state.get("redis_pubsub")
     if redis_pubsub:
         await redis_pubsub.aclose()
+
+    # Persistent outbound client used for all Telegram calls via the
+    # Cloudflare Worker proxy (see transport/telegram/webhook.py). Closing
+    # it releases the pooled keep-alive connections cleanly on shutdown.
+    from transport.telegram.webhook import aclose_telegram_client
+    await aclose_telegram_client()
