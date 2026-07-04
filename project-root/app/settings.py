@@ -53,6 +53,12 @@ class Settings(BaseSettings):
     telegram_proxy_url: str = Field("", description="Cloudflare Worker base URL for Telegram API proxy")
     webhook_secret: str = Field("", description="Secret token for Telegram webhook verification (set in HF and Cloudflare)")
 
+    # Optional — if unset, outbound-delivery-failure alerts are logged only
+    # (see events/event_types.py:SendToTelegramFailedEvent). Set this to get
+    # an email the moment a user's reply fails to send after all retries,
+    # instead of finding out by reading container logs after the fact.
+    admin_alert_email: str = Field("", description="Email to notify on system-level delivery failures")
+
     # ─── RUNTIME ────────────────────────────────────────
     debug: bool = Field(False, description="Debug mode")
     environment: str = Field("production", description="Environment name")
