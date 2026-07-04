@@ -1,9 +1,11 @@
 /**
  * Ceyona Webhook Worker
  *
- * Два маршрута:
+ * Два HTTP-маршрута + один Cron Trigger:
  *   POST /webhook      — принимает update от Telegram, пересылает на HF Space
  *   GET|POST /tg/*     — обратный прокси: HF Space → api.telegram.org
+ *   scheduled()        — Cron: периодический keep-alive пинг HF Space
+ *                         (снижает вероятность холодного старта, не устраняет)
  *
  * Переменные окружения (Workers Secrets):
  *   HF_WEBHOOK_URL          — URL HF Space, например https://your-space.hf.space
@@ -12,16 +14,24 @@
  *   TELEGRAM_PROXY_TIMEOUT  — таймаут исходящего запроса к api.telegram.org в /tg/*
  *                             в мс (по умолчанию 10000)
  *   HF_TOKEN                — токен HF (опционально)
+ *
+ * Cron Trigger (расписание раз в 10 минут) настраивается отдельно
+ * в wrangler.toml под ключом [triggers].
  */
 
 const TELEGRAM_API_BASE = "https://api.telegram.org";
 
-// Количество попыток и начальная пауза между ними
-const MAX_RETRIES = 1;
-const RETRY_BASE_DELAY_MS = 3000; // 3s → 6s → 12s
+// Количество попыток и начальная пауза между ними.
+// HF Space на бесплатном тарифе может "спать" после длительного простоя
+// (официально Hugging Face не публикует точное время холодного старта —
+// оно зависит от размера образа и зависимостей приложения) и не успевать
+// ответить с первой попытки. MAX_RETRIES=1 означало, что при таймауте
+// на первой попытке апдейт просто терялся без единого повтора.
+const MAX_RETRIES = 2;
+const RETRY_BASE_DELAY_MS = 3000; // 3s → 6s
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname;
 
@@ -32,7 +42,7 @@ export default {
 
     // ── Входящий webhook от Telegram → пересылаем на HF Space ────────────────
     if (path === "/webhook" && request.method === "POST") {
-      return handleWebhook(request, env);
+      return handleWebhook(request, env, ctx);
     }
 
     // ── Исходящий прокси HF Space → Telegram API ─────────────────────────────
@@ -42,9 +52,38 @@ export default {
 
     return new Response("Not Found", { status: 404 });
   },
+
+  // ── Cron Trigger: периодический keep-alive пинг HF Space ──────────────────
+  // Настраивается в wrangler.toml через [triggers] crons = ["*/10 * * * *"]
+  // (пример: раз в 10 минут). Это НЕ гарантирует, что Space никогда не
+  // заснёт — HF управляет этим на своей стороне — но резко снижает шанс
+  // холодного старта именно в момент, когда приходит реальное сообщение
+  // от пользователя. Worker всё равно должен уметь пережить cold start
+  // (см. wake-up пинг + retry в forwardToHF) — cron лишь смягчает частоту,
+  // а не устраняет саму возможность.
+  async scheduled(event, env, ctx) {
+    const hfBase = (env.HF_WEBHOOK_URL || "").replace(/\/$/, "");
+    if (!hfBase) {
+      console.error("Cron keep-alive skipped: HF_WEBHOOK_URL not set");
+      return;
+    }
+    ctx.waitUntil(
+      (async () => {
+        try {
+          const resp = await fetch(hfBase + "/health", {
+            method: "GET",
+            signal: AbortSignal.timeout(10000),
+          });
+          console.log(`Cron keep-alive ping: status=${resp.status}`);
+        } catch (err) {
+          console.error(`Cron keep-alive ping failed: error=${err}`);
+        }
+      })()
+    );
+  },
 };
 
-async function handleWebhook(request, env) {
+async function handleWebhook(request, env, ctx) {
   const secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token");
 
   if (env.WEBHOOK_SECRET && secret !== env.WEBHOOK_SECRET) {
@@ -61,9 +100,25 @@ async function handleWebhook(request, env) {
   if (secret) headers["X-Telegram-Bot-Api-Secret-Token"] = secret;
   if (env.HF_TOKEN) headers["Authorization"] = `Bearer ${env.HF_TOKEN}`;
 
+  // ── Отвечаем Telegram НЕМЕДЛЕННО ──────────────────────────────────────────
+  // Telegram ждёт ответ на webhook ограниченное время (обычно порядка секунд,
+  // до ~60s), после чего сам считает доставку неуспешной и повторяет апдейт.
+  // При MAX_RETRIES=2 и FORWARD_TIMEOUT=45000 весь цикл форвардинга может
+  // занимать почти 100 секунд — если ждать его синхронно, Telegram успеет
+  // решить, что мы не ответили, и продублирует апдейт, что приведёт к двойной
+  // обработке одного сообщения. Поэтому подтверждаем webhook сразу, а сам
+  // форвардинг (с прогревом и ретраями) выполняем в фоне через ctx.waitUntil.
+  ctx.waitUntil(forwardToHF(hfBase, hfUrl, body, headers, timeout));
+
+  return Response.json({ ok: true });
+}
+
+async function forwardToHF(hfBase, hfUrl, body, headers, timeout) {
   // ── Wake-up: будим Space коротким GET перед основным запросом ────────────
-  // HF Space после сна отвечает на первый запрос с задержкой 20-40s.
-  // Этот GET запускает прогрев; основной POST пойдёт, когда Space уже живой.
+  // Если Space "спал", этот GET запускает прогрев; основной POST пойдёт,
+  // когда Space уже отвечает (или после отдельного keep-alive пинга, см.
+  // scheduled() ниже, который снижает саму вероятность того, что Space
+  // вообще успеет заснуть).
   try {
     await fetch(hfBase + "/health", {
       method: "GET",
@@ -86,16 +141,14 @@ async function handleWebhook(request, env) {
       });
 
       console.log(`Forwarded to HF, attempt=${attempt}, status=${resp.status}`);
-
-      // Всегда отвечаем Telegram OK — он не должен делать повторы сам
-      return Response.json({ ok: true });
+      return;
 
     } catch (err) {
       lastError = err;
       console.error(`Forward to HF failed: attempt=${attempt}/${MAX_RETRIES}, error=${err}`);
 
       if (attempt < MAX_RETRIES) {
-        // Экспоненциальная пауза: 3s, 6s, 12s …
+        // Экспоненциальная пауза: 3s, 6s …
         const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
         console.log(`Retrying in ${delay}ms...`);
         await sleep(delay);
@@ -103,9 +156,8 @@ async function handleWebhook(request, env) {
     }
   }
 
-  // Все попытки исчерпаны — логируем, но всё равно говорим Telegram OK
+  // Все попытки исчерпаны — апдейт потерян, логируем для диагностики.
   console.error(`All ${MAX_RETRIES} attempts failed. Last error: ${lastError}`);
-  return Response.json({ ok: true });
 }
 
 async function handleTelegramProxy(request, env, path, url) {
