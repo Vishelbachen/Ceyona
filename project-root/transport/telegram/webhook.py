@@ -31,9 +31,6 @@ router = APIRouter()
 
 _TELEGRAM_API = settings.telegram_proxy_url.rstrip("/") + "/tg/bot" + settings.bot_token
 
-# Apps Script proxy URL for sending messages (HF blocks direct Cloudflare Worker calls)
-_APPS_SCRIPT_URL = settings.apps_script_url
-
 # Webhook secret is now a standalone secret (WEBHOOK_SECRET env var),
 # independent of the bot token. Set the same value in HF Space secrets
 # and Cloudflare Worker secrets.
@@ -46,16 +43,15 @@ async def _send_message(chat_id: int, text: str) -> None:
         return
 
     async def _attempt(txt: str, parse_mode: str | None) -> tuple[int, str]:
-        """Send message via Apps Script → Telegram API."""
-        payload: dict = {"method": "sendMessage", "params": {"chat_id": chat_id, "text": txt}}
+        """Send message via Cloudflare Worker proxy → Telegram API."""
+        payload: dict = {"chat_id": chat_id, "text": txt}
         if parse_mode:
-            payload["params"]["parse_mode"] = parse_mode
+            payload["parse_mode"] = parse_mode
         async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
             logger.info("_attempt sending")
-            import json as _json
-            resp = await client.get(
-                _APPS_SCRIPT_URL,
-                params={"method": payload["method"], "params": _json.dumps(payload["params"])},
+            resp = await client.post(
+                f"{_TELEGRAM_API}/sendMessage",
+                json=payload,
             )
             logger.info("_attempt response", extra={"status": resp.status_code, "body": resp.text[:200]})
             return resp.status_code, resp.text
