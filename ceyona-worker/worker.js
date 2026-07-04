@@ -2,33 +2,33 @@
  * Ceyona Webhook Worker
  *
  * Два HTTP-маршрута + один Cron Trigger:
- *   POST /webhook      — принимает update от Telegram, пересылает на HF Space
+ *   POST /webhook      — принимает update от Telegram, кладёт его в очередь
+ *                         Supabase (pending_updates) и сразу отвечает 200 OK.
+ *                         Worker НЕ ждёт HF Space и не форвардит запрос напрямую —
+ *                         обработку забирает async-consumer на стороне HF (poll).
+ *                         Это убирает риск упереться в 30s wall-time лимит Worker'а
+ *                         из-за медленного/холодного HF Space (см. ARCH: push-queue).
  *   GET|POST /tg/*     — обратный прокси: HF Space → api.telegram.org
  *   scheduled()        — Cron: периодический keep-alive пинг HF Space
  *                         (снижает вероятность холодного старта, не устраняет)
  *
  * Переменные окружения (Workers Secrets):
  *   HF_WEBHOOK_URL          — URL HF Space, например https://your-space.hf.space
+ *                             (используется только для keep-alive пинга /health)
  *   WEBHOOK_SECRET          — секрет для проверки запросов от Telegram (опционально)
- *   FORWARD_TIMEOUT         — таймаут одной попытки forwarding в мс (по умолчанию 45000)
  *   TELEGRAM_PROXY_TIMEOUT  — таймаут исходящего запроса к api.telegram.org в /tg/*
  *                             в мс (по умолчанию 10000)
- *   HF_TOKEN                — токен HF (опционально)
+ *   HF_TOKEN                — токен HF (опционально, используется в /tg/* и cron)
+ *   SUPABASE_URL            — URL проекта Supabase, например https://xxx.supabase.co
+ *   SUPABASE_SERVICE_ROLE_KEY — service role key (полный доступ, RLS bypass) —
+ *                             нужен, т.к. таблица pending_updates закрыта RLS
+ *                             для anon-ключа
  *
  * Cron Trigger (расписание раз в 10 минут) настраивается отдельно
  * в wrangler.toml под ключом [triggers].
  */
 
 const TELEGRAM_API_BASE = "https://api.telegram.org";
-
-// Количество попыток и начальная пауза между ними.
-// HF Space на бесплатном тарифе может "спать" после длительного простоя
-// (официально Hugging Face не публикует точное время холодного старта —
-// оно зависит от размера образа и зависимостей приложения) и не успевать
-// ответить с первой попытки. MAX_RETRIES=1 означало, что при таймауте
-// на первой попытке апдейт просто терялся без единого повтора.
-const MAX_RETRIES = 2;
-const RETRY_BASE_DELAY_MS = 3000; // 3s → 6s
 
 export default {
   async fetch(request, env, ctx) {
@@ -57,10 +57,10 @@ export default {
   // Настраивается в wrangler.toml через [triggers] crons = ["*/10 * * * *"]
   // (пример: раз в 10 минут). Это НЕ гарантирует, что Space никогда не
   // заснёт — HF управляет этим на своей стороне — но резко снижает шанс
-  // холодного старта именно в момент, когда приходит реальное сообщение
-  // от пользователя. Worker всё равно должен уметь пережить cold start
-  // (см. wake-up пинг + retry в forwardToHF) — cron лишь смягчает частоту,
-  // а не устраняет саму возможность.
+  // холодного старта к моменту, когда HF-consumer пойдёт вычитывать очередь.
+  // С push-queue архитектурой (см. handleWebhook/enqueueUpdate) Worker уже
+  // не зависит от того, ответит ли HF вовремя — но чем реже HF спит, тем
+  // быстрее пользователь получает ответ, поэтому cron остаётся полезным.
   async scheduled(event, env, ctx) {
     const hfBase = (env.HF_WEBHOOK_URL || "").replace(/\/$/, "");
     if (!hfBase) {
@@ -90,74 +90,68 @@ async function handleWebhook(request, env, ctx) {
     return new Response("Forbidden", { status: 403 });
   }
 
-  // Читаем тело один раз — оно понадобится при каждой попытке
-  const body = await request.arrayBuffer();
-  const timeout = parseInt(env.FORWARD_TIMEOUT || "45000");
-  const hfBase = env.HF_WEBHOOK_URL.replace(/\/$/, "");
-  const hfUrl = hfBase + "/webhook";
+  let update;
+  try {
+    update = await request.json();
+  } catch (err) {
+    console.error(`Failed to parse Telegram update JSON: error=${err}`);
+    // Отвечаем 200, чтобы Telegram не долбил нас повторами битого тела.
+    return Response.json({ ok: true });
+  }
 
-  const headers = { "Content-Type": "application/json" };
-  if (secret) headers["X-Telegram-Bot-Api-Secret-Token"] = secret;
-  if (env.HF_TOKEN) headers["Authorization"] = `Bearer ${env.HF_TOKEN}`;
-
-  // ── Отвечаем Telegram НЕМЕДЛЕННО ──────────────────────────────────────────
-  // Telegram ждёт ответ на webhook ограниченное время (обычно порядка секунд,
-  // до ~60s), после чего сам считает доставку неуспешной и повторяет апдейт.
-  // При MAX_RETRIES=2 и FORWARD_TIMEOUT=45000 весь цикл форвардинга может
-  // занимать почти 100 секунд — если ждать его синхронно, Telegram успеет
-  // решить, что мы не ответили, и продублирует апдейт, что приведёт к двойной
-  // обработке одного сообщения. Поэтому подтверждаем webhook сразу, а сам
-  // форвардинг (с прогревом и ретраями) выполняем в фоне через ctx.waitUntil.
-  ctx.waitUntil(forwardToHF(hfBase, hfUrl, body, headers, timeout));
+  // ── Кладём апдейт в очередь Supabase и сразу отвечаем ────────────────────
+  // Worker больше НЕ ждёт HF Space: ни forward, ни retry, ни wake-up пинга.
+  // INSERT в Supabase — это единственная операция на критическом пути,
+  // и она занимает обычно 50-200ms, что несравнимо с холодным стартом HF
+  // (который мог доходить до 20-30s и упирался в лимит воркера).
+  // update_id уникален (constraint в БД) — если Telegram продублирует
+  // апдейт, повторный INSERT просто будет молча проигнорирован (upsert
+  // с ignoreDuplicates), а не упадёт с ошибкой.
+  ctx.waitUntil(enqueueUpdate(env, update));
 
   return Response.json({ ok: true });
 }
 
-async function forwardToHF(hfBase, hfUrl, body, headers, timeout) {
-  // ── Wake-up: будим Space коротким GET перед основным запросом ────────────
-  // Если Space "спал", этот GET запускает прогрев; основной POST пойдёт,
-  // когда Space уже отвечает (или после отдельного keep-alive пинга, см.
-  // scheduled() ниже, который снижает саму вероятность того, что Space
-  // вообще успеет заснуть).
+async function enqueueUpdate(env, update) {
+  const supabaseUrl = (env.SUPABASE_URL || "").replace(/\/$/, "");
+  const serviceKey = env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!supabaseUrl || !serviceKey) {
+    console.error("enqueueUpdate skipped: SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY not set");
+    return;
+  }
+
+  const insertTimeout = parseInt(env.SUPABASE_INSERT_TIMEOUT || "8000");
+
   try {
-    await fetch(hfBase + "/health", {
-      method: "GET",
-      signal: AbortSignal.timeout(5000), // не ждём долго — это только пинг
+    const resp = await fetch(`${supabaseUrl}/rest/v1/pending_updates`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": serviceKey,
+        "Authorization": `Bearer ${serviceKey}`,
+        // on_conflict + resolution=ignore-duplicates → безопасный upsert:
+        // если update_id уже существует (дубль от Telegram), просто
+        // ничего не делаем, вместо ошибки 409.
+        "Prefer": "resolution=ignore-duplicates,return=minimal",
+      },
+      body: JSON.stringify({
+        update_id: update.update_id,
+        payload: update,
+      }),
+      signal: AbortSignal.timeout(insertTimeout),
     });
-  } catch (_) {
-    // Игнорируем — Space мог ещё не встать, это нормально
-  }
 
-  // ── Retry loop ───────────────────────────────────────────────────────────
-  let lastError;
-
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      const resp = await fetch(hfUrl, {
-        method: "POST",
-        headers,
-        body,
-        signal: AbortSignal.timeout(timeout),
-      });
-
-      console.log(`Forwarded to HF, attempt=${attempt}, status=${resp.status}`);
+    if (!resp.ok && resp.status !== 409) {
+      const bodyText = await resp.text().catch(() => "");
+      console.error(`enqueueUpdate failed: status=${resp.status}, body=${bodyText.slice(0, 300)}`);
       return;
-
-    } catch (err) {
-      lastError = err;
-      console.error(`Forward to HF failed: attempt=${attempt}/${MAX_RETRIES}, error=${err}`);
-
-      if (attempt < MAX_RETRIES) {
-        // Экспоненциальная пауза: 3s, 6s …
-        const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
-        console.log(`Retrying in ${delay}ms...`);
-        await sleep(delay);
-      }
     }
-  }
 
-  // Все попытки исчерпаны — апдейт потерян, логируем для диагностики.
-  console.error(`All ${MAX_RETRIES} attempts failed. Last error: ${lastError}`);
+    console.log(`Enqueued update_id=${update.update_id}, status=${resp.status}`);
+  } catch (err) {
+    console.error(`enqueueUpdate error: update_id=${update.update_id}, error=${err}`);
+  }
 }
 
 async function handleTelegramProxy(request, env, path, url) {
@@ -207,8 +201,4 @@ async function handleTelegramProxy(request, env, path, url) {
       }
     );
   }
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
