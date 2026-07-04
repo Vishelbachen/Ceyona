@@ -44,17 +44,70 @@ async def _send_message(chat_id: int, text: str) -> None:
 
     async def _attempt(txt: str, parse_mode: str | None) -> tuple[int, str]:
         """Send message via Cloudflare Worker proxy → Telegram API."""
+        import time as _time
+
         payload: dict = {"chat_id": chat_id, "text": txt}
         if parse_mode:
             payload["parse_mode"] = parse_mode
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-            logger.info("_attempt sending")
-            resp = await client.post(
-                f"{_TELEGRAM_API}/sendMessage",
-                json=payload,
+
+        url = f"{_TELEGRAM_API}/sendMessage"
+        started = _time.monotonic()
+        logger.info("_attempt sending", extra={"chat_id": chat_id, "url": url})
+
+        try:
+            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+                resp = await client.post(url, json=payload)
+        except httpx.TimeoutException as exc:
+            elapsed = _time.monotonic() - started
+            logger.error(
+                "_attempt timeout",
+                extra={
+                    "chat_id": chat_id,
+                    "elapsed_s": round(elapsed, 2),
+                    "exc_type": type(exc).__name__,
+                    "error": repr(exc),
+                    "url": url,
+                },
             )
-            logger.info("_attempt response", extra={"status": resp.status_code, "body": resp.text[:200]})
-            return resp.status_code, resp.text
+            raise
+        except httpx.HTTPError as exc:
+            elapsed = _time.monotonic() - started
+            logger.error(
+                "_attempt http error",
+                extra={
+                    "chat_id": chat_id,
+                    "elapsed_s": round(elapsed, 2),
+                    "exc_type": type(exc).__name__,
+                    "error": repr(exc),
+                    "url": url,
+                },
+            )
+            raise
+        except Exception as exc:
+            elapsed = _time.monotonic() - started
+            logger.error(
+                "_attempt unexpected error",
+                extra={
+                    "chat_id": chat_id,
+                    "elapsed_s": round(elapsed, 2),
+                    "exc_type": type(exc).__name__,
+                    "error": repr(exc),
+                    "url": url,
+                },
+            )
+            raise
+
+        elapsed = _time.monotonic() - started
+        logger.info(
+            "_attempt response",
+            extra={
+                "chat_id": chat_id,
+                "elapsed_s": round(elapsed, 2),
+                "status": resp.status_code,
+                "body": resp.text[:200],
+            },
+        )
+        return resp.status_code, resp.text
 
     # Attempt 1: with Markdown
     try:
@@ -66,7 +119,10 @@ async def _send_message(chat_id: int, text: str) -> None:
             extra={"chat_id": chat_id, "status": status, "body": body[:200]},
         )
     except Exception as exc:
-        logger.error("sendMessage network error — retrying without Markdown", extra={"chat_id": chat_id, "error": repr(exc)})
+        logger.error(
+            "sendMessage attempt 1 failed — retrying without Markdown",
+            extra={"chat_id": chat_id, "exc_type": type(exc).__name__, "error": repr(exc)},
+        )
 
     # Attempt 2: plain text, no parse_mode
     try:
@@ -77,7 +133,10 @@ async def _send_message(chat_id: int, text: str) -> None:
                 extra={"chat_id": chat_id, "status": status, "body": body[:200]},
             )
     except Exception as exc:
-        logger.error("sendMessage retry exception", extra={"chat_id": chat_id, "error": repr(exc)})
+        logger.error(
+            "sendMessage attempt 2 failed",
+            extra={"chat_id": chat_id, "exc_type": type(exc).__name__, "error": repr(exc)},
+        )
 
 
 async def _send_message_with_topup(chat_id: int, text: str, lang: str = "en") -> None:
