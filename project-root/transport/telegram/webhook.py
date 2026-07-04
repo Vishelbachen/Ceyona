@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import time as _time
 
 import httpx
 from app.settings import settings
@@ -7,6 +9,7 @@ from events.event_types import (
     AuthFailedEvent,
     BalanceExhaustedEvent,
     RequestDeniedEvent,
+    SendToTelegramFailedEvent,
 )
 from fastapi import APIRouter, Header, HTTPException, Request, status
 from lingua import Language, LanguageDetectorBuilder
@@ -36,106 +39,151 @@ _TELEGRAM_API = settings.telegram_proxy_url.rstrip("/") + "/tg/bot" + settings.b
 # and Cloudflare Worker secrets.
 _WEBHOOK_SECRET = settings.webhook_secret
 
+# ─── Persistent outbound client ─────────────────────────────────────────────
+# Single module-level client, reused for the lifetime of the process — same
+# pattern already used by groq_client/hf_client (see llm/groq_client.py,
+# llm/hf_client.py). A fresh `async with httpx.AsyncClient()` per call means a
+# brand-new DNS resolution + TCP + TLS handshake every single time, which is
+# exactly the phase that intermittently stalls on HF Space's egress network
+# (see incident 2026-07-04: ConnectTimeout to the Cloudflare Worker proxy
+# while every other outbound host in the same window succeeded). A pooled,
+# keep-alive client means most calls reuse an already-established connection
+# instead of repeating DNS+connect every time.
+#
+# limits: modest pool, since traffic to this one Worker host is not high
+# volume — this is about connection reuse, not throughput.
+_client = httpx.AsyncClient(
+    timeout=httpx.Timeout(15.0, connect=10.0),
+    limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+    follow_redirects=True,
+)
+
+
+async def aclose_telegram_client() -> None:
+    """Call from app shutdown to release the pooled connections cleanly."""
+    await _client.aclose()
+
+
+# ─── Shared retry-with-backoff wrapper ──────────────────────────────────────
+# Every outbound Telegram call (_send_message, _send_message_with_topup,
+# _send_voice, _answer_callback) used to hand-roll its own try/except around
+# a throwaway httpx.AsyncClient, with retry logic duplicated (or missing
+# entirely) per function. One helper, one retry policy, one place to fix.
+_RETRY_BACKOFF_S = (1.0, 3.0, 7.0)  # 3 retries → 4 attempts total
+
+
+async def _post_via_worker(
+    path: str,
+    *,
+    chat_id: int | None = None,
+    json: dict | None = None,
+    data: dict | None = None,
+    files: dict | None = None,
+    timeout: float | None = None,
+) -> httpx.Response | None:
+    """
+    POST to the Cloudflare Worker's Telegram proxy (/tg/bot<token>/<path>),
+    retrying with backoff on connection-level failures. Returns the response
+    (any status code) on success, or None if every attempt failed to even
+    connect. Never raises — callers get None and decide what to do.
+
+    On final exhaustion, publishes SendToTelegramFailedEvent so the failure
+    is visible without anyone having to go read container logs — see
+    notifications/event_notifier.py, which alerts over email/SMTP, a network
+    path independent of the Worker this function is calling.
+    """
+    url = f"{_TELEGRAM_API}{path}"
+    kwargs: dict = {}
+    if json is not None:
+        kwargs["json"] = json
+    if data is not None:
+        kwargs["data"] = data
+    if files is not None:
+        kwargs["files"] = files
+    if timeout is not None:
+        kwargs["timeout"] = timeout
+
+    last_exc: Exception | None = None
+    attempts = len(_RETRY_BACKOFF_S) + 1
+
+    for attempt in range(1, attempts + 1):
+        started = _time.monotonic()
+        try:
+            resp = await _client.post(url, **kwargs)
+            elapsed = _time.monotonic() - started
+            logger.info(
+                "_post_via_worker response",
+                extra={
+                    "chat_id": chat_id,
+                    "path": path,
+                    "attempt": attempt,
+                    "elapsed_s": round(elapsed, 2),
+                    "status": resp.status_code,
+                },
+            )
+            return resp
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            elapsed = _time.monotonic() - started
+            last_exc = exc
+            logger.error(
+                "_post_via_worker connection failure",
+                extra={
+                    "chat_id": chat_id,
+                    "path": path,
+                    "attempt": attempt,
+                    "elapsed_s": round(elapsed, 2),
+                    "exc_type": type(exc).__name__,
+                    "error": repr(exc),
+                },
+            )
+            if attempt <= len(_RETRY_BACKOFF_S):
+                await asyncio.sleep(_RETRY_BACKOFF_S[attempt - 1])
+
+    # All attempts exhausted — surface it as a domain event, not just a log line.
+    try:
+        await event_bus.publish(SendToTelegramFailedEvent(
+            user_id=chat_id,
+            payload={
+                "path": path,
+                "attempts": attempts,
+                "error": repr(last_exc),
+            },
+        ))
+    except Exception:
+        pass
+    return None
+
 
 async def _send_message(chat_id: int, text: str) -> None:
     logger.info("_send_message called", extra={"chat_id": chat_id, "text_len": len(text) if text else 0})
     if not text:
         return
 
-    async def _attempt(txt: str, parse_mode: str | None) -> tuple[int, str]:
-        """Send message via Cloudflare Worker proxy → Telegram API."""
-        import time as _time
-
-        payload: dict = {"chat_id": chat_id, "text": txt}
-        if parse_mode:
-            payload["parse_mode"] = parse_mode
-
-        url = f"{_TELEGRAM_API}/sendMessage"
-        started = _time.monotonic()
-        logger.info("_attempt sending", extra={"chat_id": chat_id, "url": url})
-
-        try:
-            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-                resp = await client.post(url, json=payload)
-        except httpx.TimeoutException as exc:
-            elapsed = _time.monotonic() - started
-            logger.error(
-                "_attempt timeout",
-                extra={
-                    "chat_id": chat_id,
-                    "elapsed_s": round(elapsed, 2),
-                    "exc_type": type(exc).__name__,
-                    "error": repr(exc),
-                    "url": url,
-                },
-            )
-            raise
-        except httpx.HTTPError as exc:
-            elapsed = _time.monotonic() - started
-            logger.error(
-                "_attempt http error",
-                extra={
-                    "chat_id": chat_id,
-                    "elapsed_s": round(elapsed, 2),
-                    "exc_type": type(exc).__name__,
-                    "error": repr(exc),
-                    "url": url,
-                },
-            )
-            raise
-        except Exception as exc:
-            elapsed = _time.monotonic() - started
-            logger.error(
-                "_attempt unexpected error",
-                extra={
-                    "chat_id": chat_id,
-                    "elapsed_s": round(elapsed, 2),
-                    "exc_type": type(exc).__name__,
-                    "error": repr(exc),
-                    "url": url,
-                },
-            )
-            raise
-
-        elapsed = _time.monotonic() - started
-        logger.info(
-            "_attempt response",
-            extra={
-                "chat_id": chat_id,
-                "elapsed_s": round(elapsed, 2),
-                "status": resp.status_code,
-                "body": resp.text[:200],
-            },
-        )
-        return resp.status_code, resp.text
-
     # Attempt 1: with Markdown
-    try:
-        status, body = await _attempt(text, "Markdown")
-        if status == 200:
-            return
+    resp = await _post_via_worker(
+        "/sendMessage",
+        chat_id=chat_id,
+        json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
+    )
+    if resp is not None and resp.status_code == 200:
+        return
+    if resp is not None:
         logger.error(
             "sendMessage failed — retrying without Markdown",
-            extra={"chat_id": chat_id, "status": status, "body": body[:200]},
-        )
-    except Exception as exc:
-        logger.error(
-            "sendMessage attempt 1 failed — retrying without Markdown",
-            extra={"chat_id": chat_id, "exc_type": type(exc).__name__, "error": repr(exc)},
+            extra={"chat_id": chat_id, "status": resp.status_code, "body": resp.text[:200]},
         )
 
-    # Attempt 2: plain text, no parse_mode
-    try:
-        status, body = await _attempt(text, None)
-        if status != 200:
-            logger.error(
-                "sendMessage retry also failed",
-                extra={"chat_id": chat_id, "status": status, "body": body[:200]},
-            )
-    except Exception as exc:
+    # Attempt 2: plain text, no parse_mode (handles Markdown-parse errors;
+    # connection-level failures were already retried inside _post_via_worker)
+    resp = await _post_via_worker(
+        "/sendMessage",
+        chat_id=chat_id,
+        json={"chat_id": chat_id, "text": text},
+    )
+    if resp is not None and resp.status_code != 200:
         logger.error(
-            "sendMessage attempt 2 failed",
-            extra={"chat_id": chat_id, "exc_type": type(exc).__name__, "error": repr(exc)},
+            "sendMessage retry also failed",
+            extra={"chat_id": chat_id, "status": resp.status_code, "body": resp.text[:200]},
         )
 
 
@@ -156,22 +204,16 @@ async def _send_message_with_topup(chat_id: int, text: str, lang: str = "en") ->
         ]]
     }
 
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            await client.post(
-                f"{_TELEGRAM_API}/sendMessage",
-                json={
-                    "chat_id": chat_id,
-                    "text": text,
-                    "parse_mode": "Markdown",
-                    "reply_markup": keyboard,
-                },
-            )
-    except Exception as exc:
-        logger.warning(
-            "_send_message_with_topup failed",
-            extra={"chat_id": chat_id, "error": repr(exc)},
-        )
+    await _post_via_worker(
+        "/sendMessage",
+        chat_id=chat_id,
+        json={
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": "Markdown",
+            "reply_markup": keyboard,
+        },
+    )
 
 
 async def _send_voice(chat_id: int, audio_bytes: bytes, caption: str = "") -> bool:
@@ -180,31 +222,23 @@ async def _send_voice(chat_id: int, audio_bytes: bytes, caption: str = "") -> bo
     Returns True on success, False on failure.
     Falls back gracefully — caller sends text if this returns False.
     """
-    try:
-        import io
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{_TELEGRAM_API}/sendVoice",
-                data={"chat_id": chat_id, "caption": caption},
-                files={"voice": ("voice.ogg", io.BytesIO(audio_bytes), "audio/ogg")},
-                timeout=30.0,
-            )
-            return response.status_code == 200
-    except Exception as exc:
-        logger.warning("_send_voice failed", extra={"error": str(exc)})
-        return False
+    import io
+    resp = await _post_via_worker(
+        "/sendVoice",
+        chat_id=chat_id,
+        data={"chat_id": chat_id, "caption": caption},
+        files={"voice": ("voice.ogg", io.BytesIO(audio_bytes), "audio/ogg")},
+        timeout=30.0,
+    )
+    return resp is not None and resp.status_code == 200
 
 
 async def _answer_callback(callback_query_id: str, text: str = "") -> None:
-    try:
-        async with httpx.AsyncClient() as client:
-            await client.post(
-                f"{_TELEGRAM_API}/answerCallbackQuery",
-                json={"callback_query_id": callback_query_id, "text": text},
-                timeout=5.0,
-            )
-    except Exception as exc:
-        logger.warning("_answer_callback failed", extra={"error": repr(exc)})
+    await _post_via_worker(
+        "/answerCallbackQuery",
+        json={"callback_query_id": callback_query_id, "text": text},
+        timeout=5.0,
+    )
 
 
 def _get_chat_id(update: dict) -> int | None:
