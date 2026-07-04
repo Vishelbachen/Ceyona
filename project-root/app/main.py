@@ -198,14 +198,28 @@ async def lifespan(app: FastAPI):
         name="wallet_poller",
     )
 
+    # ── background queue consumer (Telegram updates from pending_updates) ──
+    # См. transport/telegram/queue_consumer.py — заменяет прежний
+    # синхронный forward Cloudflare Worker → HF на push-queue архитектуру.
+    from transport.telegram.queue_consumer import queue_consumer_loop
+    queue_task = asyncio.create_task(
+        queue_consumer_loop(app.state),
+        name="telegram_queue_consumer",
+    )
+
     yield
 
     # ── graceful shutdown ─────────────────────────────────
     wallet_task.cancel()
+    queue_task.cancel()
     try:
         await wallet_task
     except asyncio.CancelledError:
         logger.info("Wallet poller stopped")
+    try:
+        await queue_task
+    except asyncio.CancelledError:
+        logger.info("Telegram queue consumer stopped")
 
     await shutdown(state)
 
