@@ -932,10 +932,11 @@ Provider MUST NOT alter orchestration, redefine TruthMode, or mutate EPK.
 **Deployment topology:**
 - **HuggingFace Spaces** — primary runtime host (FastAPI app, Python workers)
 - **Cloudflare Worker** (`ceyona-webhook`) — webhook relay layer: receives Telegram updates,
-  forwards to HF Space, proxies outgoing Telegram API calls (`/tg/*` route).
-  Required because HF Spaces blocks direct access to `api.telegram.org`.
-- **Google Apps Script** (`Код.gs`) — fallback Telegram API proxy for file downloads.
-  Used when the Cloudflare Worker proxy is unavailable or blocked.
+  forwards to HF Space, proxies ALL outgoing Telegram API calls including file downloads
+  (`/tg/*` route). Required because HF Spaces blocks direct access to `api.telegram.org`.
+  Google Apps Script (`Код.gs`) was a temporary third-hop workaround for outbound sends
+  and file downloads; it has been removed — `_send_message`, image downloads, and voice
+  downloads all route through the Cloudflare Worker proxy directly.
 - **SearXNG** — self-hosted on HF Spaces (separate Space: `Warren97/ceyona-searxng`),
   used as tertiary search fallback (architecture §28).
 
