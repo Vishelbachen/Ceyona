@@ -79,15 +79,15 @@ class EventNotifier:
         path: str,
         attempts: int,
         error: str,
-        to_email: str | None = None,
     ) -> None:
         """
         Fired when every retry of an outbound Telegram call (via the
         Cloudflare Worker proxy) is exhausted — the user never got their
-        reply. Always logged; emails the admin if ADMIN_ALERT_EMAIL is set
-        (opt-in, see app/settings.py). Email goes through Brevo, a network
-        path independent of the Worker this alert is about — so it still
-        gets through even during a Worker/egress outage.
+        reply. Logged at ERROR, which Sentry's logging integration picks up
+        automatically (see observability/sentry.py) — that is the single
+        alerting channel for this event. No separate email path: Sentry
+        already has its own delivery-failure alert configured, and a second
+        Brevo email would just be the same signal duplicated.
         """
         logger.error("Event: send_to_telegram_failed", extra={
             "chat_id": chat_id,
@@ -95,19 +95,6 @@ class EventNotifier:
             "attempts": attempts,
             "error": error,
         })
-        if to_email:
-            await email_service.send(
-                to_email=to_email,
-                to_name="Admin",
-                subject=f"🔴 Telegram delivery failed ({path})",
-                html_content=(
-                    f"<p>Outbound call to Telegram via the Cloudflare Worker proxy "
-                    f"failed after {attempts} attempts.</p>"
-                    f"<p><strong>chat_id:</strong> {chat_id}<br>"
-                    f"<strong>path:</strong> {path}<br>"
-                    f"<strong>error:</strong> {error}</p>"
-                ),
-            )
 
     # ── system events ────────────────────────────────────
 
