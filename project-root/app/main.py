@@ -45,6 +45,13 @@ async def lifespan(app: FastAPI):
     from llm.hf_client import hf_client
     app.state.hf_client = hf_client
 
+    # ARCH-change 2026-07: outgoing Telegram messages go through Supabase's
+    # `outbox` table instead of a direct HF → Worker HTTP call (see
+    # transport/telegram/webhook.py::_post_via_worker for why). Wire the
+    # module-level handle it needs, once, here.
+    from transport.telegram.webhook import set_outbox_supabase
+    set_outbox_supabase(app.state.supabase)
+
     # ── media group aggregator ────────────────────────────
     from transport.telegram.media_group_aggregator import MediaGroupAggregator
     from transport.telegram.vision_handler import handle_vision_group
