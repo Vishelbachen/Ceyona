@@ -1,31 +1,70 @@
 /**
  * Ceyona Webhook Worker
  *
- * Два HTTP-маршрута + один Cron Trigger:
- *   POST /webhook      — принимает update от Telegram, кладёт его в очередь
+ * ARCH-change 2026-07 (outbox): HF Space больше не делает исходящий вызов
+ * ни к api.telegram.org, ни к этому Worker'у, чтобы ОТПРАВИТЬ ответ
+ * пользователю (см. project-root/transport/telegram/webhook.py::
+ * _post_via_worker) — вместо HTTP-вызова HF пишет строку в таблицу Supabase
+ * `outbox`. Причина: подтверждённый по логам ConnectTimeout именно на
+ * исходящем соединении HF-контейнера наружу (incident 2026-07-04), в то
+ * время как вызовы HF → Supabase в том же окне ни разу не показали такой
+ * ошибки. Теперь единственная исходящая сетевая зависимость HF для отправки
+ * ответа — Supabase INSERT, а сам HTTP-вызов к Telegram выполняет этот
+ * Worker.
+ *
+ * РЕШЕНИЕ (2026-07): полностью событийная схема, БЕЗ cron и БЕЗ
+ * scheduled() — по явному решению не создавать вообще никакого
+ * расписанного Cloudflare-трафика к HF (ни keep-alive пинг, ни
+ * периодический drain). Вместо этого:
+ *
+ *   Supabase Database Webhook (триггер: INSERT в outbox)
+ *     → POST /outbox/drain на этом Worker'е
+ *     → drainOutbox() вычитывает ВСЕ готовые pending-строки
+ *       (не только ту, что вызвала webhook — см. drainOutbox)
+ *     → sendOutboxRow() реально отправляет их в Telegram.
+ *
+ * Настройка Database Webhook — на стороне Supabase (Database → Webhooks),
+ * не в этом файле: событие INSERT на таблице outbox, HTTP POST на
+ * https://<этот-worker>.workers.dev/outbox/drain.
+ *
+ * Известный компромисс: у Supabase Database Webhook нет встроенного
+ * retry на уровне доставки самого HTTP-вызова (если Worker в этот момент
+ * недоступен — событие один раз потеряется). На практике это не страшно:
+ * drainOutbox читает ВСЕ pending-строки с next_retry_at <= now(), а не
+ * только ту, что вызвала текущий webhook, поэтому "потерянная" строка
+ * всё равно уйдёт при следующем реальном сообщении, которое вызовет
+ * drainOutbox заново. Осознанно не добавляем сюда никакого cron —
+ * см. предыдущее обсуждение (abuse-flag risk) и явное решение не рисковать.
+ *
+ * Четыре HTTP-маршрута, без Cron Trigger:
+ *   POST /webhook       — принимает update от Telegram, кладёт его в очередь
  *                         Supabase (pending_updates) и сразу отвечает 200 OK.
  *                         Worker НЕ ждёт HF Space и не форвардит запрос напрямую —
  *                         обработку забирает async-consumer на стороне HF (poll).
- *                         Это убирает риск упереться в 30s wall-time лимит Worker'а
- *                         из-за медленного/холодного HF Space (см. ARCH: push-queue).
- *   GET|POST /tg/*     — обратный прокси: HF Space → api.telegram.org
- *   scheduled()        — Cron: периодический keep-alive пинг HF Space
- *                         (снижает вероятность холодного старта, не устраняет)
+ *   GET|POST /tg/*      — обратный прокси: HF Space → api.telegram.org.
+ *                         Оставлен для register_webhook()/setWebhook (см.
+ *                         webhook.py) — это разовый вызов при старте, а не
+ *                         часть пути отправки сообщений пользователю, так
+ *                         что переносить его в outbox смысла нет.
+ *   POST /outbox/drain  — вызывается Supabase Database Webhook'ом при
+ *                         INSERT в outbox. Запускает drainOutbox().
+ *   GET /outbox/health  — счётчик незадренированных строк outbox, для мониторинга.
  *
  * Переменные окружения (Workers Secrets):
- *   HF_WEBHOOK_URL          — URL HF Space, например https://your-space.hf.space
- *                             (используется только для keep-alive пинга /health)
  *   WEBHOOK_SECRET          — секрет для проверки запросов от Telegram (опционально)
  *   TELEGRAM_PROXY_TIMEOUT  — таймаут исходящего запроса к api.telegram.org в /tg/*
- *                             в мс (по умолчанию 10000)
- *   HF_TOKEN                — токен HF (опционально, используется в /tg/* и cron)
+ *                             и в drainOutbox, в мс (по умолчанию 10000)
+ *   HF_TOKEN                — токен HF (опционально, используется в /tg/*)
+ *   BOT_TOKEN               — токен Telegram-бота, нужен drainOutbox для
+ *                             сборки URL api.telegram.org/bot<token>/...
  *   SUPABASE_URL            — URL проекта Supabase, например https://xxx.supabase.co
  *   SUPABASE_SERVICE_ROLE_KEY — service role key (полный доступ, RLS bypass) —
- *                             нужен, т.к. таблица pending_updates закрыта RLS
- *                             для anon-ключа
- *
- * Cron Trigger (расписание раз в 10 минут) настраивается отдельно
- * в wrangler.toml под ключом [triggers].
+ *                             нужен и для pending_updates, и для outbox,
+ *                             т.к. обе таблицы закрыты RLS для anon-ключа
+ *   OUTBOX_DRAIN_SECRET     — опциональный секрет для защиты /outbox/drain
+ *                             от произвольных вызовов извне (Supabase
+ *                             Database Webhook умеет слать кастомный
+ *                             заголовок — сверьте с этим значением)
  */
 
 const TELEGRAM_API_BASE = "https://api.telegram.org";
@@ -40,6 +79,16 @@ export default {
       return Response.json({ ok: true });
     }
 
+    // ── Outbox monitoring: сколько строк ждут отправки прямо сейчас ──────────
+    if (path === "/outbox/health" && request.method === "GET") {
+      return handleOutboxHealth(env);
+    }
+
+    // ── Вызывается Supabase Database Webhook при INSERT в outbox ─────────────
+    if (path === "/outbox/drain" && request.method === "POST") {
+      return handleOutboxDrain(request, env, ctx);
+    }
+
     // ── Входящий webhook от Telegram → пересылаем на HF Space ────────────────
     if (path === "/webhook" && request.method === "POST") {
       return handleWebhook(request, env, ctx);
@@ -52,36 +101,306 @@ export default {
 
     return new Response("Not Found", { status: 404 });
   },
+};
 
-  // ── Cron Trigger: периодический keep-alive пинг HF Space ──────────────────
-  // Настраивается в wrangler.toml через [triggers] crons = ["*/10 * * * *"]
-  // (пример: раз в 10 минут). Это НЕ гарантирует, что Space никогда не
-  // заснёт — HF управляет этим на своей стороне — но резко снижает шанс
-  // холодного старта к моменту, когда HF-consumer пойдёт вычитывать очередь.
-  // С push-queue архитектурой (см. handleWebhook/enqueueUpdate) Worker уже
-  // не зависит от того, ответит ли HF вовремя — но чем реже HF спит, тем
-  // быстрее пользователь получает ответ, поэтому cron остаётся полезным.
-  async scheduled(event, env, ctx) {
-    const hfBase = (env.HF_WEBHOOK_URL || "").replace(/\/$/, "");
-    if (!hfBase) {
-      console.error("Cron keep-alive skipped: HF_WEBHOOK_URL not set");
+async function handleOutboxDrain(request, env, ctx) {
+  if (env.OUTBOX_DRAIN_SECRET) {
+    const provided = request.headers.get("X-Outbox-Drain-Secret");
+    if (provided !== env.OUTBOX_DRAIN_SECRET) {
+      return new Response("Forbidden", { status: 403 });
+    }
+  }
+  // Отвечаем сразу — сама отправка идёт в фоне через waitUntil, чтобы
+  // Supabase Database Webhook не ждал полного цикла drainOutbox
+  // (который может отправлять несколько сообщений последовательно)
+  // и не считал вызов неудачным по собственному таймауту.
+  ctx.waitUntil(drainOutbox(env));
+  return Response.json({ ok: true });
+}
+
+// ── Outbox drain: HF writes rows, this reads and actually calls Telegram ────
+async function drainOutbox(env) {
+  const supabaseUrl = (env.SUPABASE_URL || "").replace(/\/$/, "");
+  const serviceKey = env.SUPABASE_SERVICE_ROLE_KEY;
+  const botToken = env.BOT_TOKEN;
+
+  if (!supabaseUrl || !serviceKey || !botToken) {
+    console.error("drainOutbox skipped: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY or BOT_TOKEN not set");
+    return;
+  }
+
+  const proxyTimeout = parseInt(env.TELEGRAM_PROXY_TIMEOUT || "10000");
+  const BATCH_SIZE = 20;
+  const nowIso = new Date().toISOString();
+
+  // Claim: read pending rows whose retry delay has elapsed, then flip them
+  // to 'processing' filtered by status='pending' — same claim-then-filter
+  // pattern as HF's own queue_consumer.py::_claim_batch, for the same
+  // reason (concurrent drains — e.g. two Database Webhook deliveries
+  // arriving close together — must not double-send a message).
+  let rows;
+  try {
+    const readResp = await fetch(
+      `${supabaseUrl}/rest/v1/outbox?status=eq.pending&next_retry_at=lte.${encodeURIComponent(nowIso)}&order=created_at.asc&limit=${BATCH_SIZE}`,
+      {
+        headers: {
+          "apikey": serviceKey,
+          "Authorization": `Bearer ${serviceKey}`,
+        },
+        signal: AbortSignal.timeout(8000),
+      }
+    );
+    if (!readResp.ok) {
+      console.error(`drainOutbox: read failed, status=${readResp.status}`);
       return;
     }
-    ctx.waitUntil(
-      (async () => {
-        try {
-          const resp = await fetch(hfBase + "/health", {
-            method: "GET",
-            signal: AbortSignal.timeout(10000),
-          });
-          console.log(`Cron keep-alive ping: status=${resp.status}`);
-        } catch (err) {
-          console.error(`Cron keep-alive ping failed: error=${err}`);
-        }
-      })()
+    rows = await readResp.json();
+  } catch (err) {
+    console.error(`drainOutbox: read error: ${err}`);
+    return;
+  }
+
+  if (!rows || rows.length === 0) return;
+
+  const ids = rows.map((r) => r.id);
+  try {
+    const claimResp = await fetch(
+      `${supabaseUrl}/rest/v1/outbox?id=in.(${ids.join(",")})&status=eq.pending`,
+      {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          "apikey": serviceKey,
+          "Authorization": `Bearer ${serviceKey}`,
+          "Prefer": "return=representation",
+        },
+        body: JSON.stringify({ status: "processing" }),
+        signal: AbortSignal.timeout(8000),
+      }
     );
-  },
-};
+    if (!claimResp.ok) {
+      console.error(`drainOutbox: claim failed, status=${claimResp.status}`);
+      return;
+    }
+    const claimed = await claimResp.json();
+    const claimedIds = new Set(claimed.map((r) => r.id));
+    rows = rows.filter((r) => claimedIds.has(r.id));
+  } catch (err) {
+    console.error(`drainOutbox: claim error: ${err}`);
+    return;
+  }
+
+  console.log(`drainOutbox: claimed batch, count=${rows.length}`);
+
+  await Promise.all(rows.map((row) => sendOutboxRow(row, env, supabaseUrl, serviceKey, botToken, proxyTimeout)));
+}
+
+// Backoff schedule for temporary Telegram errors (429/5xx) — seconds to wait
+// before the next attempt, indexed by (current) retry_count. Mirrors the
+// shape of HF's own _RETRY_BACKOFF_S in webhook.py, adapted to an
+// event-driven Worker: instead of sleeping in-process, we push next_retry_at
+// forward and let the next drainOutbox call (triggered by the next real
+// message, since there's no cron) pick it back up.
+const RETRY_BACKOFF_S = [5, 30, 120, 600, 1800]; // 5s, 30s, 2m, 10m, 30m
+const MAX_RETRIES = RETRY_BACKOFF_S.length;
+
+function isTemporaryStatus(status) {
+  return status === 429 || (status >= 500 && status < 600);
+}
+
+async function sendOutboxRow(row, env, supabaseUrl, serviceKey, botToken, proxyTimeout) {
+  const targetUrl = `${TELEGRAM_API_BASE}/bot${botToken}${row.path}`;
+
+  try {
+    const { resp, bodyText } = await sendToTelegram(targetUrl, row, proxyTimeout);
+
+    if (resp.ok) {
+      console.log(`drainOutbox: sent outbox_id=${row.id}, path=${row.path}, status=${resp.status}`);
+      await markOutboxRow(supabaseUrl, serviceKey, row.id, { status: "sent" });
+      return;
+    }
+
+    // Markdown-parse-error fallback — restores the behavior HF used to do
+    // itself in _send_message before the outbox change (see webhook.py's
+    // comment on the now-dead-on-HF's-side retry). Requires BOTH the HTTP
+    // code and the specific error text, not just "any 400" — a 400 for
+    // "chat not found" or "message is too long" would just fail identically
+    // a second time without parse_mode, wasting a retry (ChatGPT's point,
+    // and a fair one). This check runs BEFORE the temporary-vs-permanent
+    // split below because a Markdown parse error is itself a 400, which
+    // would otherwise fall straight into "permanent failure".
+    const isMarkdownParseError =
+      resp.status === 400 &&
+      row.json_body &&
+      row.json_body.parse_mode === "Markdown" &&
+      /can't parse entities/i.test(bodyText);
+
+    if (isMarkdownParseError) {
+      console.error(`drainOutbox: Markdown parse error outbox_id=${row.id}, retrying without parse_mode`);
+      const plainRow = {
+        ...row,
+        json_body: { ...row.json_body },
+      };
+      delete plainRow.json_body.parse_mode;
+
+      const retry = await sendToTelegram(targetUrl, plainRow, proxyTimeout);
+      if (retry.resp.ok) {
+        console.log(`drainOutbox: sent (no-Markdown retry) outbox_id=${row.id}, status=${retry.resp.status}`);
+        await markOutboxRow(supabaseUrl, serviceKey, row.id, {
+          status: "sent",
+          last_error: "sent without Markdown after parse error",
+        });
+        return;
+      }
+      console.error(`drainOutbox: no-Markdown retry also failed outbox_id=${row.id}, status=${retry.resp.status}, body=${retry.bodyText.slice(0, 300)}`);
+      await markOutboxRow(supabaseUrl, serviceKey, row.id, {
+        status: "failed",
+        last_error: `Markdown retry failed — HTTP ${retry.resp.status}: ${retry.bodyText.slice(0, 500)}`,
+      });
+      return;
+    }
+
+    // Temporary vs. permanent split (per ChatGPT's point, which is correct):
+    // 429/5xx are worth retrying with backoff, since they resolve on their
+    // own with time (rate limit window passes, Telegram's transient issue
+    // clears). 400/401/403/404 etc. won't change on retry — same request,
+    // same result — so they go straight to 'failed' instead of wasting
+    // retry budget on something that cannot succeed.
+    if (isTemporaryStatus(resp.status)) {
+      const nextRetryCount = (row.retry_count || 0) + 1;
+      if (nextRetryCount > MAX_RETRIES) {
+        console.error(`drainOutbox: outbox_id=${row.id} exhausted ${MAX_RETRIES} retries, status=${resp.status}`);
+        await markOutboxRow(supabaseUrl, serviceKey, row.id, {
+          status: "failed",
+          last_error: `Exhausted ${MAX_RETRIES} retries — last HTTP ${resp.status}: ${bodyText.slice(0, 500)}`,
+        });
+        return;
+      }
+      const delaySec = RETRY_BACKOFF_S[nextRetryCount - 1];
+      const nextRetryAt = new Date(Date.now() + delaySec * 1000).toISOString();
+      console.error(
+        `drainOutbox: temporary failure outbox_id=${row.id}, status=${resp.status}, ` +
+        `retry ${nextRetryCount}/${MAX_RETRIES} scheduled in ${delaySec}s`
+      );
+      await markOutboxRow(supabaseUrl, serviceKey, row.id, {
+        status: "pending",
+        retry_count: nextRetryCount,
+        next_retry_at: nextRetryAt,
+        last_error: `HTTP ${resp.status}: ${bodyText.slice(0, 500)}`,
+      });
+      return;
+    }
+
+    // Permanent failure (400 non-Markdown, 401, 403, 404, ...) — no retry.
+    console.error(`drainOutbox: Telegram rejected outbox_id=${row.id}, status=${resp.status}, body=${bodyText.slice(0, 300)}`);
+    await markOutboxRow(supabaseUrl, serviceKey, row.id, {
+      status: "failed",
+      last_error: `HTTP ${resp.status}: ${bodyText.slice(0, 500)}`,
+    });
+  } catch (err) {
+    // Network-level failure (timeout, DNS, connection reset) — treated the
+    // same as a temporary Telegram error: back to 'pending' with backoff,
+    // not an immediate 'failed'. Mirrors HF's own _mark_failed/MAX_ATTEMPTS
+    // shape in queue_consumer.py.
+    const nextRetryCount = (row.retry_count || 0) + 1;
+    if (nextRetryCount > MAX_RETRIES) {
+      console.error(`drainOutbox: outbox_id=${row.id} exhausted ${MAX_RETRIES} retries after network errors, last error=${err}`);
+      await markOutboxRow(supabaseUrl, serviceKey, row.id, {
+        status: "failed",
+        last_error: `Exhausted ${MAX_RETRIES} retries — last error: ${String(err)}`,
+      });
+      return;
+    }
+    const delaySec = RETRY_BACKOFF_S[nextRetryCount - 1];
+    const nextRetryAt = new Date(Date.now() + delaySec * 1000).toISOString();
+    console.error(`drainOutbox: send error outbox_id=${row.id}, error=${err}, retry ${nextRetryCount}/${MAX_RETRIES} in ${delaySec}s`);
+    await markOutboxRow(supabaseUrl, serviceKey, row.id, {
+      status: "pending",
+      retry_count: nextRetryCount,
+      next_retry_at: nextRetryAt,
+      last_error: String(err),
+    });
+  }
+}
+
+async function sendToTelegram(targetUrl, row, proxyTimeout) {
+  let fetchOptions;
+  if (row.files_b64) {
+    // Voice messages: rebuild multipart/form-data from the base64 payload
+    // HF encoded (see webhook.py::_post_via_worker — PostgREST has no
+    // native multipart support, hence base64 over JSON).
+    const form = new FormData();
+    if (row.form_data) {
+      for (const [k, v] of Object.entries(row.form_data)) form.append(k, String(v));
+    }
+    for (const [field, file] of Object.entries(row.files_b64)) {
+      const bytes = Uint8Array.from(atob(file.data_b64), (c) => c.charCodeAt(0));
+      form.append(field, new Blob([bytes], { type: file.content_type }), file.filename);
+    }
+    fetchOptions = { method: "POST", body: form };
+  } else {
+    fetchOptions = {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(row.json_body || row.form_data || {}),
+    };
+  }
+  fetchOptions.signal = AbortSignal.timeout(proxyTimeout);
+
+  const resp = await fetch(targetUrl, fetchOptions);
+  const bodyText = await resp.text().catch(() => "");
+  return { resp, bodyText };
+}
+
+async function markOutboxRow(supabaseUrl, serviceKey, id, fields) {
+  const { status, last_error = null, retry_count, next_retry_at } = fields;
+  const body = {
+    status,
+    last_error,
+    completed_at: status === "sent" || status === "failed" ? new Date().toISOString() : null,
+  };
+  if (retry_count !== undefined) body.retry_count = retry_count;
+  if (next_retry_at !== undefined) body.next_retry_at = next_retry_at;
+
+  try {
+    await fetch(`${supabaseUrl}/rest/v1/outbox?id=eq.${id}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": serviceKey,
+        "Authorization": `Bearer ${serviceKey}`,
+        "Prefer": "return=minimal",
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(8000),
+    });
+  } catch (err) {
+    console.error(`markOutboxRow failed: id=${id}, error=${err}`);
+  }
+}
+
+async function handleOutboxHealth(env) {
+  const supabaseUrl = (env.SUPABASE_URL || "").replace(/\/$/, "");
+  const serviceKey = env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!supabaseUrl || !serviceKey) {
+    return Response.json({ ok: false, error: "not configured" }, { status: 500 });
+  }
+  try {
+    const resp = await fetch(`${supabaseUrl}/rest/v1/outbox?status=eq.pending&select=id`, {
+      headers: {
+        "apikey": serviceKey,
+        "Authorization": `Bearer ${serviceKey}`,
+        "Prefer": "count=exact",
+      },
+      signal: AbortSignal.timeout(8000),
+    });
+    const countHeader = resp.headers.get("content-range"); // "0-9/23"
+    const pendingCount = countHeader ? parseInt(countHeader.split("/")[1]) : null;
+    return Response.json({ ok: true, pending_count: pendingCount });
+  } catch (err) {
+    return Response.json({ ok: false, error: String(err) }, { status: 502 });
+  }
+}
 
 async function handleWebhook(request, env, ctx) {
   const secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token");
