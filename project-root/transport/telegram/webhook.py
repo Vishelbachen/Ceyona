@@ -64,12 +64,40 @@ async def aclose_telegram_client() -> None:
     await _client.aclose()
 
 
+# ─── Outbox Supabase handle ─────────────────────────────────────────────────
+# ARCH-change 2026-07: outgoing Telegram messages are no longer sent via an
+# HTTP call from this module (see _post_via_worker below) — they're written
+# to Supabase's `outbox` table instead. This module-level handle is set once
+# at startup from app.state.supabase (same object process_update() already
+# receives as app_state.supabase), mirroring the _client singleton above.
+# Set via set_outbox_supabase() in app/main.py's startup, right after
+# bootstrap() returns.
+_outbox_supabase = None
+
+
+def set_outbox_supabase(supabase) -> None:
+    global _outbox_supabase
+    _outbox_supabase = supabase
+
+
 # ─── Shared retry-with-backoff wrapper ──────────────────────────────────────
 # Every outbound Telegram call (_send_message, _send_message_with_topup,
 # _send_voice, _answer_callback) used to hand-roll its own try/except around
 # a throwaway httpx.AsyncClient, with retry logic duplicated (or missing
 # entirely) per function. One helper, one retry policy, one place to fix.
 _RETRY_BACKOFF_S = (1.0, 3.0, 7.0)  # 3 retries → 4 attempts total
+
+
+class _FakeResponse:
+    """
+    Minimal stand-in for httpx.Response, returned by _post_via_worker after
+    a successful outbox insert. Callers only ever check .status_code and
+    (on error) .text — see _send_message's `resp.status_code != 200` checks —
+    so this is enough to keep every caller unmodified.
+    """
+    def __init__(self, status_code: int, text: str = "") -> None:
+        self.status_code = status_code
+        self.text = text
 
 
 async def _post_via_worker(
@@ -82,90 +110,112 @@ async def _post_via_worker(
     timeout: float | None = None,
 ) -> httpx.Response | None:
     """
-    POST to the Cloudflare Worker's Telegram proxy (/tg/bot<token>/<path>),
-    retrying with backoff on connection-level failures. Returns the response
-    (any status code) on success, or None if every attempt failed to even
-    connect. Never raises — callers get None and decide what to do.
+    ARCH-change 2026-07: HF no longer makes an outbound HTTP call to the
+    Cloudflare Worker (or to api.telegram.org) at all — not even indirectly.
+    That outbound call was the confirmed failure point (see incident
+    2026-07-04: ConnectTimeout on HF's egress to workers.dev while every
+    other outbound host, including Supabase, succeeded in the same window).
 
-    On final exhaustion, publishes SendToTelegramFailedEvent so the failure
-    is visible without anyone having to go read container logs — see
-    notifications/event_notifier.py, which alerts over email/SMTP, a network
-    path independent of the Worker this function is calling.
+    Instead, this function INSERTs the outgoing message into Supabase's
+    `outbox` table. A separate, always-on process outside HF (the same
+    Cloudflare Worker, repurposed — see ceyona-worker/worker.js outbox
+    poller) reads new `outbox` rows and performs the actual Telegram API
+    call. HF's only outbound dependency for sending a reply is now
+    Supabase, which is already the one host that has never shown a
+    ConnectTimeout in production logs.
+
+    `files` (voice messages) are base64-encoded into the payload column —
+    Supabase REST/PostgREST has no native multipart support, and voice
+    volume is low enough that base64 overhead doesn't matter here.
+
+    Returns a _FakeResponse(200) on successful insert (callers only check
+    .status_code), or None if the insert itself failed (e.g. Supabase is
+    down) — same contract as before, so every caller (_send_message,
+    _send_voice, _answer_callback, …) needs no changes.
     """
-    url = f"{_TELEGRAM_API}{path}"
-    kwargs: dict = {}
+    import base64
+
+    row: dict = {
+        "path": path,
+        "chat_id": chat_id,
+        "status": "pending",
+        "created_at": _now_iso(),
+    }
     if json is not None:
-        kwargs["json"] = json
+        row["json_body"] = json
     if data is not None:
-        kwargs["data"] = data
+        row["form_data"] = data
     if files is not None:
-        kwargs["files"] = files
-    if timeout is not None:
-        kwargs["timeout"] = timeout
+        encoded = {}
+        for field, value in files.items():
+            filename, fileobj, content_type = value
+            raw = fileobj.read() if hasattr(fileobj, "read") else fileobj
+            encoded[field] = {
+                "filename": filename,
+                "content_type": content_type,
+                "data_b64": base64.b64encode(raw).decode("ascii"),
+            }
+        row["files_b64"] = encoded
 
-    last_exc: Exception | None = None
-    attempts = len(_RETRY_BACKOFF_S) + 1
+    if _outbox_supabase is None:
+        logger.error(
+            "_post_via_worker: outbox Supabase client not initialised — "
+            "did app startup call set_outbox_supabase(app.state.supabase)?",
+            extra={"chat_id": chat_id, "path": path},
+        )
+        return None
 
-    for attempt in range(1, attempts + 1):
-        started = _time.monotonic()
-        try:
-            resp = await _client.post(url, **kwargs)
-            elapsed = _time.monotonic() - started
-            logger.info(
-                "_post_via_worker response",
-                extra={
-                    "chat_id": chat_id,
-                    "path": path,
-                    "attempt": attempt,
-                    "elapsed_s": round(elapsed, 2),
-                    "status": resp.status_code,
-                },
-            )
-            return resp
-        except (httpx.TimeoutException, httpx.TransportError) as exc:
-            elapsed = _time.monotonic() - started
-            last_exc = exc
-            is_final_attempt = attempt == attempts
-            # WARNING for attempts that will still be retried (expected,
-            # part of the plan) — ERROR only once every attempt is exhausted
-            # and the caller is truly out of options. Keeps Sentry's noise
-            # proportional to "needs a human" rather than "retry in progress".
-            log_fn = logger.error if is_final_attempt else logger.warning
-            log_fn(
-                "_post_via_worker connection failure",
-                extra={
-                    "chat_id": chat_id,
-                    "path": path,
-                    "attempt": attempt,
-                    "elapsed_s": round(elapsed, 2),
-                    "exc_type": type(exc).__name__,
-                    "error": repr(exc),
-                },
-            )
-            if not is_final_attempt:
-                await asyncio.sleep(_RETRY_BACKOFF_S[attempt - 1])
-
-    # All attempts exhausted — surface it as a domain event, not just a log line.
     try:
-        await event_bus.publish(SendToTelegramFailedEvent(
-            user_id=chat_id,
-            payload={
-                "path": path,
-                "attempts": attempts,
-                "error": repr(last_exc),
-            },
-        ))
-    except Exception:
-        pass
-    return None
+        result = _outbox_supabase.table("outbox").insert(row).execute()
+        if not result.data:
+            raise RuntimeError("outbox insert returned no data")
+        logger.info(
+            "_post_via_worker: enqueued to outbox",
+            extra={"chat_id": chat_id, "path": path, "outbox_id": result.data[0].get("id")},
+        )
+        return _FakeResponse(200)
+    except Exception as exc:
+        logger.error(
+            "_post_via_worker: outbox insert failed",
+            extra={"chat_id": chat_id, "path": path, "error": repr(exc)},
+        )
+        try:
+            await event_bus.publish(SendToTelegramFailedEvent(
+                user_id=chat_id,
+                payload={"path": path, "error": repr(exc)},
+            ))
+        except Exception:
+            pass
+        return None
+
+
+def _now_iso() -> str:
+    """Client-side timestamp — see queue_consumer.py's identical helper for why
+    (PostgREST doesn't evaluate SQL now() from a JSON body)."""
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
 
 
 async def _send_message(chat_id: int, text: str) -> None:
+    """
+    KNOWN BEHAVIOR CHANGE (ARCH-change 2026-07, outbox): the Markdown-parse-
+    error fallback below used to fire for real, because _post_via_worker
+    returned Telegram's actual response (e.g. 400 on bad Markdown), synchronously,
+    to this function. Now _post_via_worker only reports whether the outbox
+    INSERT succeeded — it returns 200 the moment Supabase accepts the row,
+    long before the Worker has actually tried Telegram. So resp.status_code
+    is essentially always 200 here, and the "retry without Markdown" branch
+    below will not trigger anymore. Markdown-parse failures now have to be
+    handled on the Worker side (which does see Telegram's real response) —
+    see ceyona-worker/worker.js's outbox poller. Left the two-attempt shape
+    in place rather than ripping it out, since it's harmless dead code on
+    the HF side and documents the gap for whoever wires up the Worker-side
+    equivalent.
+    """
     logger.info("_send_message called", extra={"chat_id": chat_id, "text_len": len(text) if text else 0})
     if not text:
         return
 
-    # Attempt 1: with Markdown
     resp = await _post_via_worker(
         "/sendMessage",
         chat_id=chat_id,
@@ -175,12 +225,10 @@ async def _send_message(chat_id: int, text: str) -> None:
         return
     if resp is not None:
         logger.error(
-            "sendMessage failed — retrying without Markdown",
+            "sendMessage outbox-insert failed — retrying once",
             extra={"chat_id": chat_id, "status": resp.status_code, "body": resp.text[:200]},
         )
 
-    # Attempt 2: plain text, no parse_mode (handles Markdown-parse errors;
-    # connection-level failures were already retried inside _post_via_worker)
     resp = await _post_via_worker(
         "/sendMessage",
         chat_id=chat_id,
