@@ -36,7 +36,21 @@
  * drainOutbox заново. Осознанно не добавляем сюда никакого cron —
  * см. предыдущее обсуждение (abuse-flag risk) и явное решение не рисковать.
  *
- * Четыре HTTP-маршрута, без Cron Trigger:
+ * ARCH-change 2026-07 (attachments): the identical ConnectError/ConnectTimeout
+ * class was also hitting HF's own getFile/file-download calls for voice and
+ * photo messages (see project-root/external/speech_to_text.py and
+ * transport/telegram/vision_handler.py, prior to this change) — HF's
+ * outbound connection to workers.dev is the unreliable part, regardless of
+ * direction. So the rule from the outbox change now applies symmetrically:
+ * this Worker downloads voice/photo/document attachments itself (via
+ * getFile + file download, both calls it has never shown this failure
+ * class on) and uploads them to Supabase Storage BEFORE the update is
+ * written to pending_updates (see enqueueUpdate/downloadAndStoreAttachment
+ * below). HF then reads the file from Supabase Storage — never from
+ * Telegram directly. Combined with the outbox change, this Worker is now
+ * the ONLY component that ever talks to api.telegram.org; HF only ever
+ * talks to Supabase (pending_updates, outbox, Storage).
+ *
  *   POST /webhook       — принимает update от Telegram, кладёт его в очередь
  *                         Supabase (pending_updates) и сразу отвечает 200 OK.
  *                         Worker НЕ ждёт HF Space и не форвардит запрос напрямую —
@@ -442,6 +456,38 @@ async function enqueueUpdate(env, update) {
 
   const insertTimeout = parseInt(env.SUPABASE_INSERT_TIMEOUT || "8000");
 
+  // ARCH-change 2026-07 (attachments): same reasoning as the outbox change,
+  // applied to the opposite direction. HF's own getFile/file-download calls
+  // (see project-root/external/speech_to_text.py::download_telegram_voice
+  // and transport/telegram/vision_handler.py::_download_image_via_worker)
+  // showed the identical ConnectError/ConnectTimeout as the original
+  // sendMessage incident — HF's outbound connection to workers.dev is the
+  // unreliable part, regardless of direction. So the Worker now downloads
+  // any voice/photo/document attachment itself (it has never shown this
+  // failure class) and uploads it to Supabase Storage BEFORE the update is
+  // enqueued. HF then reads the file from Supabase (stable) instead of
+  // calling Telegram at all for attachments — mirroring outbox's "HF only
+  // ever talks to Supabase" rule, now enforced in both directions.
+  const attachment = extractAttachmentRef(update);
+  if (attachment) {
+    const uploaded = await downloadAndStoreAttachment(env, supabaseUrl, serviceKey, attachment);
+    if (uploaded) {
+      update = {
+        ...update,
+        _attachment: uploaded, // { bucket, path, mime_type, size, file_id, kind }
+      };
+    } else {
+      // Download/upload failed after retries — still enqueue the update
+      // (so the text/caption path and user-facing error message still
+      // work) but WITHOUT _attachment. HF's handlers already have a
+      // graceful "couldn't read attachment" fallback for a missing/failed
+      // download (see vision_handler.py / update_handler.py's existing
+      // error paths) — this preserves that behavior instead of silently
+      // dropping the whole update.
+      console.error(`enqueueUpdate: attachment download/upload failed for update_id=${update.update_id}, kind=${attachment.kind}`);
+    }
+  }
+
   try {
     const resp = await fetch(`${supabaseUrl}/rest/v1/pending_updates`, {
       method: "POST",
@@ -471,6 +517,109 @@ async function enqueueUpdate(env, update) {
   } catch (err) {
     console.error(`enqueueUpdate error: update_id=${update.update_id}, error=${err}`);
   }
+}
+
+// Pull out the one attachment we care about from a Telegram update, if any.
+// Telegram sends photo as an array of sizes — we take the largest, same
+// choice HF's own vision_handler used to make implicitly via file_id.
+function extractAttachmentRef(update) {
+  const msg = update.message || update.edited_message;
+  if (!msg) return null;
+
+  if (msg.voice) {
+    return { kind: "voice", file_id: msg.voice.file_id, mime_type: msg.voice.mime_type || "audio/ogg" };
+  }
+  if (msg.photo && msg.photo.length > 0) {
+    const largest = msg.photo[msg.photo.length - 1];
+    return { kind: "photo", file_id: largest.file_id, mime_type: "image/jpeg" };
+  }
+  if (msg.document) {
+    return { kind: "document", file_id: msg.document.file_id, mime_type: msg.document.mime_type || "application/octet-stream" };
+  }
+  return null;
+}
+
+async function downloadAndStoreAttachment(env, supabaseUrl, serviceKey, attachment) {
+  const botToken = env.BOT_TOKEN;
+  if (!botToken) {
+    console.error("downloadAndStoreAttachment skipped: BOT_TOKEN not set");
+    return null;
+  }
+  const proxyTimeout = parseInt(env.TELEGRAM_PROXY_TIMEOUT || "10000");
+  const RETRIES = 2;
+
+  for (let attempt = 0; attempt <= RETRIES; attempt++) {
+    try {
+      // Step 1: getFile → file_path. Worker calls api.telegram.org directly —
+      // this is the same host Worker already talks to for sendMessage, and
+      // has never shown the ConnectError HF's own calls did.
+      const getFileResp = await fetch(
+        `${TELEGRAM_API_BASE}/bot${botToken}/getFile?file_id=${encodeURIComponent(attachment.file_id)}`,
+        { signal: AbortSignal.timeout(proxyTimeout) }
+      );
+      if (!getFileResp.ok) {
+        throw new Error(`getFile HTTP ${getFileResp.status}`);
+      }
+      const getFileData = await getFileResp.json();
+      const filePath = getFileData?.result?.file_path;
+      if (!filePath) {
+        throw new Error("getFile returned no file_path");
+      }
+
+      // Step 2: download the actual bytes.
+      const fileResp = await fetch(`${TELEGRAM_API_BASE}/file/bot${botToken}/${filePath}`, {
+        signal: AbortSignal.timeout(proxyTimeout),
+      });
+      if (!fileResp.ok) {
+        throw new Error(`file download HTTP ${fileResp.status}`);
+      }
+      const bytes = await fileResp.arrayBuffer();
+
+      // Step 3: upload to Supabase Storage. Bucket layout: voice/, photo/,
+      // document/ — matches the recommendation to keep attachments out of
+      // Postgres rows entirely (pending_updates only ever stores the
+      // pointer: bucket + path + mime_type + size).
+      const bucket = "telegram-attachments";
+      const ext = filePath.split(".").pop() || "bin";
+      const storagePath = `${attachment.kind}/${attachment.file_id}.${ext}`;
+
+      const uploadResp = await fetch(
+        `${supabaseUrl}/storage/v1/object/${bucket}/${storagePath}`,
+        {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${serviceKey}`,
+            "Content-Type": attachment.mime_type,
+            "x-upsert": "true", // retries on the same attempt overwrite cleanly instead of erroring on "already exists"
+          },
+          body: bytes,
+          signal: AbortSignal.timeout(proxyTimeout),
+        }
+      );
+      if (!uploadResp.ok) {
+        const bodyText = await uploadResp.text().catch(() => "");
+        throw new Error(`Storage upload HTTP ${uploadResp.status}: ${bodyText.slice(0, 300)}`);
+      }
+
+      console.log(`downloadAndStoreAttachment: stored kind=${attachment.kind}, file_id=${attachment.file_id}, size=${bytes.byteLength}`);
+      return {
+        bucket,
+        path: storagePath,
+        mime_type: attachment.mime_type,
+        size: bytes.byteLength,
+        file_id: attachment.file_id,
+        kind: attachment.kind,
+      };
+    } catch (err) {
+      const isLastAttempt = attempt === RETRIES;
+      const logFn = isLastAttempt ? console.error : console.warn;
+      logFn(`downloadAndStoreAttachment attempt=${attempt + 1} failed: kind=${attachment.kind}, file_id=${attachment.file_id}, error=${err}`);
+      if (!isLastAttempt) {
+        await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+      }
+    }
+  }
+  return null;
 }
 
 async function handleTelegramProxy(request, env, path, url) {
