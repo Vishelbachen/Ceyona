@@ -53,6 +53,33 @@ class Settings(BaseSettings):
     telegram_proxy_url: str = Field("", description="Cloudflare Worker base URL for Telegram API proxy")
     webhook_secret: str = Field("", description="Secret token for Telegram webhook verification (set in HF and Cloudflare)")
 
+    # ─── ATTACHMENT LAYER (infra/attachment.py) ─────────
+    # Storage bucket used by Worker for all Telegram attachments (voice/photo/document/…).
+    # This is a bucket-housekeeping setting only — NOT a per-model size limit.
+    # Per-model limits (Whisper 25MB, Vision 4MB base64 / 20MB URL, etc.) live inside
+    # the respective handler (speech_to_text.py, vision_handler.py), not here.
+    attachment_bucket: str = Field("telegram-attachments", description="Supabase Storage bucket for Telegram attachments")
+
+    # Default TTL for signed URLs handed to external providers (Groq, etc.).
+    # Short-lived on purpose — these files may contain private user content.
+    attachment_signed_url_ttl_seconds: int = Field(300, description="Signed URL expiry for attachment access by external APIs")
+
+    # Per-provider capability flags — whether the provider's API is confirmed to
+    # accept a fetch-by-URL parameter for this attachment kind. Each flag gates
+    # the URL-first path in its handler; when False, the handler uses attachment.bytes()
+    # instead. Flip to True only after an empirical confirmation call against the
+    # real API (see comments at each handler call site) — do not flip on documentation
+    # alone, since privately-signed URLs may behave differently than public ones.
+    groq_whisper_accepts_signed_url: bool = Field(
+        False, description="Groq Whisper audio.transcriptions accepts url= for a Supabase signed URL (unconfirmed — see speech_to_text.py)"
+    )
+    groq_vision_accepts_signed_url: bool = Field(
+        True, description="Groq vision chat completions accepts image_url pointing to a Supabase signed URL"
+    )
+    groq_whisper_accepts_ogg_opus: bool = Field(
+        True, description="Groq Whisper accepts OGG/Opus directly without local WAV conversion (confirmed via Groq docs: ogg is a supported format; codec-level Opus behavior not yet empirically re-verified against a live Telegram file)"
+    )
+
     # ─── RUNTIME ────────────────────────────────────────
     debug: bool = Field(False, description="Debug mode")
     environment: str = Field("production", description="Environment name")
