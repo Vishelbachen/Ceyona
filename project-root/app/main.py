@@ -804,7 +804,11 @@ async def debug(_: int = Depends(require_admin)) -> dict:
 # (see infra/attachment.py, app/settings.py flags groq_whisper_accepts_ogg_opus,
 # groq_vision_accepts_signed_url, groq_whisper_accepts_signed_url) against the
 # REAL Groq API, using the most recently stored voice/photo in Supabase
-# Storage — not synthetic data.
+# Storage — not synthetic data. Test 4 was added afterward to close a gap
+# noticed once speech_to_text.py's transcribe() was made to use a single
+# request-shape pattern (pure files=, no data=) for both its URL and bytes
+# paths — test 1 had only confirmed the bytes path with files=+data= mixed,
+# so test 4 verifies the pure-files= bytes shape actually used in code now.
 #
 # DELETE THIS ROUTE once the three flags have been confirmed/settled. It exists
 # only to be reachable from a phone browser (no terminal/curl available), so
@@ -974,6 +978,51 @@ async def attachment_tests(request: Request, key: str = "") -> dict:
             results["test3_whisper_signed_url"] = _err(exc)
     else:
         results["test3_whisper_signed_url"] = {"status": "skipped", "reason": "no voice file found"}
+
+    # ── TEST 4: bytes path via pure files= (no data=) ─────────────────────────
+    # Purpose: test 1 (above) confirmed the OGG/Opus codec + filename-extension
+    # fix using files={"file": ...} MIXED with data={"model": ...}. Test 3
+    # separately confirmed that the URL path needs model/url BOTH inside
+    # files= as (None, value) tuples, with no data= at all — mixing files=
+    # and data= there produced "Content-Type isn't multipart/form-data".
+    # speech_to_text.py's transcribe() now uses the pure-files=-no-data=
+    # shape for BOTH the URL path and the bytes path, for consistency — but
+    # that specific combination (bytes/file part alongside (None, value)
+    # parts, still no data=) was never itself tested against the real API;
+    # it was inferred from test 3's finding, not confirmed the way test 1's
+    # mixed shape was. This test closes that gap directly, so the code and
+    # the test suite are checking the same request shape rather than two
+    # similar-but-different ones.
+    if voice_path:
+        try:
+            t0 = time.monotonic()
+            loop = asyncio.get_event_loop()
+            raw = await loop.run_in_executor(
+                None, lambda: supabase.storage.from_(settings.attachment_bucket).download(voice_path)
+            )
+            _forced_name = voice_path.rsplit("/", 1)[-1].rsplit(".", 1)[0] + ".ogg"
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                r = await client.post(
+                    "https://api.groq.com/openai/v1/audio/transcriptions",
+                    headers={"Authorization": f"Bearer {settings.groq_api_key}"},
+                    files={
+                        "model": (None, "whisper-large-v3"),
+                        "file": (_forced_name, raw, "audio/ogg"),
+                    },
+                )
+            if r.status_code == 200:
+                text = r.json().get("text", "")
+                results["test4_whisper_bytes_pure_files"] = _ok(
+                    f"200 in {time.monotonic()-t0:.2f}s, transcript={text[:120]!r}"
+                )
+            else:
+                results["test4_whisper_bytes_pure_files"] = {
+                    "status": "error", "http_status": r.status_code, "body": r.text[:300],
+                }
+        except Exception as exc:
+            results["test4_whisper_bytes_pure_files"] = _err(exc)
+    else:
+        results["test4_whisper_bytes_pure_files"] = {"status": "skipped", "reason": "no voice file found"}
 
     results["_summary"] = {
         "ok": sum(1 for k, v in results.items() if not k.startswith("_") and v.get("status") == "ok"),
