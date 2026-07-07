@@ -230,16 +230,98 @@ async def download_telegram_voice(
     file_id: str,
     bot_token: str,
     *,
+    supabase=None,
+    attachment_ref: dict | None = None,
     retries: int = 2,
 ) -> tuple[bytes, str]:
     """
-    Download a Telegram voice/audio file by file_id.
+    Get the bytes of a Telegram voice/audio message.
+
+    ARCH-change 2026-07 (attachments): this function used to call the
+    Cloudflare Worker's /tg/ proxy directly (getFile + file download) from
+    inside the HF container — and that outbound call showed the exact same
+    ConnectError/ConnectTimeout class as the original sendMessage incident
+    (see architecture_reality.md §1 and §5). The Worker now downloads the
+    attachment itself (at webhook-receive time, before the update is even
+    enqueued — see ceyona-worker/worker.js::downloadAndStoreAttachment) and
+    uploads it to Supabase Storage. This function's job is now just to read
+    those bytes back from Storage — the one outbound call that has never
+    shown this failure class.
+
+    `attachment_ref` is the `_attachment` dict the Worker attached to the
+    update payload: {bucket, path, mime_type, size, file_id, kind}. When
+    present, this function reads straight from Storage and never touches
+    Telegram at all.
+
+    Falls back to the old direct-to-Worker path ONLY if attachment_ref is
+    missing — this happens if the Worker's own download/upload failed after
+    its retries (see worker.js's honest fallback: it still enqueues the
+    update without `_attachment` rather than silently dropping it). This
+    fallback keeps voice messages working (in degraded form, subject to the
+    original ConnectError risk) instead of failing outright in that edge case,
+    but it's expected to be rare — see architecture_reality.md for what to
+    check if it turns out not to be rare.
 
     Returns (audio_bytes, filename).
-    Raises RuntimeError on download failure.
+    Raises RuntimeError on failure.
+    """
+    if attachment_ref and attachment_ref.get("bucket") and attachment_ref.get("path"):
+        try:
+            audio_bytes = await _download_from_storage(
+                supabase, attachment_ref["bucket"], attachment_ref["path"],
+            )
+            filename = attachment_ref["path"].rsplit("/", 1)[-1] or "voice.ogg"
+            logger.info(
+                "download_telegram_voice: read from Supabase Storage",
+                extra={"file_id": file_id, "bucket": attachment_ref["bucket"],
+                       "path": attachment_ref["path"], "size": len(audio_bytes)},
+            )
+            return audio_bytes, filename
+        except Exception as exc:
+            logger.error(
+                "download_telegram_voice: Storage read failed — this should be rare, "
+                "since Supabase is the one outbound call that hasn't shown ConnectError; "
+                "see architecture_reality.md §5 if this recurs",
+                extra={"file_id": file_id, "error": str(exc), "exc_type": type(exc).__name__},
+            )
+            raise RuntimeError(f"Storage read failed: {exc}") from exc
 
-    Two-step process, routed through the Cloudflare Worker's /tg/ proxy so
-    HF Spaces never connects to api.telegram.org directly:
+    logger.warning(
+        "download_telegram_voice: no _attachment on update — falling back to direct "
+        "Worker call (Worker's own download must have failed); this path is subject "
+        "to the original ConnectError risk, see architecture_reality.md §4.1",
+        extra={"file_id": file_id},
+    )
+    return await _download_telegram_voice_via_worker_fallback(
+        file_id=file_id, bot_token=bot_token, retries=retries,
+    )
+
+
+async def _download_from_storage(supabase, bucket: str, path: str) -> bytes:
+    """Thin wrapper so the sync supabase-py Storage call doesn't block the
+    event loop — mirrors how ResilientSupabase's own table() calls are used
+    elsewhere in this codebase (sync client, run via asyncio where needed)."""
+    if supabase is None:
+        raise RuntimeError("download_telegram_voice: supabase client not provided, cannot read from Storage")
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None, lambda: supabase.storage.from_(bucket).download(path)
+    )
+
+
+async def _download_telegram_voice_via_worker_fallback(
+    file_id: str,
+    bot_token: str,
+    *,
+    retries: int = 2,
+) -> tuple[bytes, str]:
+    """
+    FALLBACK ONLY — see download_telegram_voice's docstring for when this
+    path is used. This is the pre-2026-07 implementation, kept as-is (same
+    ConnectError exposure it always had) rather than deleted, since it's
+    still better than nothing when the Worker's own download failed.
+
+    Two-step process, routed through the Cloudflare Worker's /tg/ proxy:
       1. getFile  → {TELEGRAM_PROXY_URL}/tg/bot{token}/getFile → file_path
       2. download → {TELEGRAM_PROXY_URL}/tg/file/bot{token}/{file_path}
 
@@ -304,14 +386,14 @@ async def download_telegram_voice(
             _is_retryable = any(s in str(exc) for s in ("network error", "retryable status"))
             if attempt < retries and _is_retryable:
                 logger.warning(
-                    "download_telegram_voice retrying",
+                    "download_telegram_voice retrying (fallback path)",
                     extra={"attempt": attempt + 1, "error": str(exc), "file_id": file_id},
                 )
                 await asyncio.sleep(0.5 * (attempt + 1))
                 continue
             raise
 
-    raise RuntimeError("download_telegram_voice: exhausted retries")
+    raise RuntimeError("download_telegram_voice: exhausted retries (fallback path)")
 
 
 # ─── HELPERS ──────────────────────────────────────────────────────────────────
