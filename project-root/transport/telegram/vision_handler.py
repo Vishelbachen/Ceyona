@@ -105,8 +105,52 @@ def _telegram_file_url(file_path: str) -> str:
 
 
 
-async def _download_image_via_worker(file_id: str, *, retries: int = 2) -> bytes | None:
-    """Download image via the Cloudflare Worker's /tg/ proxy (getFile + file download)."""
+async def _download_image_via_worker(
+    file_id: str, *, supabase=None, attachment_ref: dict | None = None, retries: int = 2,
+) -> bytes | None:
+    """
+    Get the bytes of a Telegram photo.
+
+    ARCH-change 2026-07 (attachments): this used to call the Cloudflare
+    Worker's /tg/ proxy directly from inside the HF container (getFile +
+    file download) — that outbound call showed the same ConnectError class
+    as the original sendMessage incident (see architecture_reality.md §1,
+    §5). The Worker now downloads photos itself at webhook-receive time and
+    uploads them to Supabase Storage (see ceyona-worker/worker.js::
+    downloadAndStoreAttachment) — this function reads the bytes back from
+    Storage instead, the one outbound call that hasn't shown this failure.
+
+    Falls back to the old direct-to-Worker path only if attachment_ref is
+    missing (Worker's own download/upload failed) — see download_telegram_voice
+    in speech_to_text.py for the identical pattern and reasoning.
+    """
+    if attachment_ref and attachment_ref.get("bucket") and attachment_ref.get("path"):
+        try:
+            if supabase is None:
+                raise RuntimeError("supabase client not provided, cannot read from Storage")
+            loop = asyncio.get_event_loop()
+            image_bytes = await loop.run_in_executor(
+                None,
+                lambda: supabase.storage.from_(attachment_ref["bucket"]).download(attachment_ref["path"]),
+            )
+            logger.info("_download_image_via_worker: read from Supabase Storage", extra={
+                "file_id": file_id, "bucket": attachment_ref["bucket"],
+                "path": attachment_ref["path"], "size": len(image_bytes),
+            })
+            return image_bytes
+        except Exception as exc:
+            logger.error(
+                "_download_image_via_worker: Storage read failed — should be rare, "
+                "see architecture_reality.md §5 if this recurs",
+                extra={"file_id": file_id, "error": str(exc), "exc_type": type(exc).__name__},
+            )
+            return None
+
+    logger.warning(
+        "_download_image_via_worker: no _attachment on update — falling back to direct "
+        "Worker call; subject to the original ConnectError risk, see architecture_reality.md §4.1",
+        extra={"file_id": file_id},
+    )
     for attempt in range(retries + 1):
         file_url = await _get_file_url(file_id, retries=0)
         if not file_url:
@@ -318,6 +362,8 @@ async def handle_vision(
     file_id: str,
     caption: str = "",
     lang: str = "en",
+    supabase=None,
+    attachment_ref: dict | None = None,
 ) -> VisionResult:
     """
     Step 1 — qwen/qwen3.6-27b extracts image content (text or description).
@@ -338,7 +384,7 @@ async def handle_vision(
     })
 
     # ── download ──────────────────────────────────────────────────────────────
-    image_bytes = await _download_image_via_worker(file_id)
+    image_bytes = await _download_image_via_worker(file_id, supabase=supabase, attachment_ref=attachment_ref)
     if not image_bytes:
         return VisionResult(text=err_text, needs_pipeline=False)
 
@@ -714,6 +760,8 @@ async def handle_vision_group(
     file_ids: list[str],
     caption: str = "",
     lang: str = "en",
+    supabase=None,
+    attachment_refs: dict[str, dict] | None = None,
 ) -> VisionResult:
     """
     Process a Telegram media group (album) with adaptive batching.
@@ -726,6 +774,21 @@ async def handle_vision_group(
     caller must NOT inject the text into the pipeline in that case.
 
     Falls back to handle_vision() if the group has only one item.
+
+    KNOWN GAP (2026-07, attachments): unlike the single-photo path in
+    handle_vision(), this multi-image path does NOT yet read from Supabase
+    Storage — attachment_refs, if provided, is threaded through only for the
+    single-item fallback below. Albums (>1 photo) still call
+    _download_image_via_worker() per-image with attachment_ref=None, which
+    falls back to the direct-to-Worker download — still subject to the
+    ConnectError class described in architecture_reality.md. Reason: albums
+    arrive via MediaGroupAggregator (Redis-buffered, one MediaGroupItem per
+    photo — see media_group_aggregator.py), which doesn't currently carry
+    the Worker's per-photo _attachment ref through its serialization. Wiring
+    that through is a reasonable follow-up but wasn't done here to keep this
+    change scoped to the failure actually reproduced in logs (single photo,
+    single voice) — see architecture_reality.md §5 for the pattern to
+    follow if album downloads start showing the same ConnectError.
     """
     from i18n.t import t
     err_text = t("vision_error", lang)
@@ -740,7 +803,9 @@ async def handle_vision_group(
     })
 
     if len(file_ids) == 1:
-        return await handle_vision(file_id=file_ids[0], caption=caption, lang=lang)
+        single_ref = (attachment_refs or {}).get(file_ids[0])
+        return await handle_vision(file_id=file_ids[0], caption=caption, lang=lang,
+                                    supabase=supabase, attachment_ref=single_ref)
 
     # ── image count guardrail ─────────────────────────────────────────────────
     # Llama-4-scout degrades beyond ~6 images per context: attention spreads thin,
@@ -814,81 +879,4 @@ async def handle_vision_group(
                 extra={"batch_index": idx, "error": str(res) if isinstance(res, Exception) else "None"},
             )
             continue
-        # Extend with structured per-image descriptions from this batch.
-        # res.descriptions is list[str] — one clean string per image, no numbering.
-        all_descriptions.extend(res.descriptions)
-        _group_input_tokens  += res.input_tokens
-        _group_output_tokens += res.output_tokens
-
-    if not all_descriptions:
-        logger.error("Vision group: all batches failed", extra={"loaded": loaded})
-        return VisionResult(text=err_text, needs_pipeline=False, failed=True)
-
-    logger.info("[after_extraction] album batches extracted", extra={
-        "batches_total":       len(batches),
-        "descriptions_total":  len(all_descriptions),
-        "descriptions_preview": [d[:80] for d in all_descriptions],
-    })
-
-    # ── merge per-image descriptions ──────────────────────────────────────────
-    # all_descriptions is list[str] — one clean string per image, no numbering.
-    # _merge_descriptions joins with blank lines — no LLM call needed.
-    extracted = await _merge_descriptions(all_descriptions)
-
-    logger.info("[after_synthesis] album descriptions merged", extra={
-        "images_total":    len(all_descriptions),
-        "extracted_len":   len(extracted),
-        "extracted_preview": extracted[:120],
-    })
-
-    # ── routing: caption → classify; no caption → pipeline ───────────────────
-    # Same semantic contract as handle_vision().
-    # extracted = multi-image description generated by LLM → never classify.
-    # caption   = what the user typed with the album      → classify if present.
-    #
-    # No caption = no user intent to classify → intent_result=None, needs_pipeline=True.
-    # Orchestrator handles routing via its own fallback (CONVERSATION default).
-
-    intent_result = None
-    needs_pipeline = True
-    try:
-        from cognition.intent_engine import Intent, classify
-
-        _uncertainty = any(s in extracted.lower() for s in _UNCERTAINTY_SIGNALS)
-
-        if caption.strip():
-            intent_result = await classify(caption.strip(), lang=lang)
-            needs_pipeline = (
-                _uncertainty
-                or intent_result.intent != Intent.CONVERSATION
-            )
-        else:
-            # No caption — album only. No user intent to classify.
-            # Contract: intent_result=None, needs_pipeline=True.
-            # Same semantic contract as handle_vision() no-caption path.
-            intent_result = None
-            needs_pipeline = True
-
-    except Exception as exc:
-        logger.warning("Intent classify failed in vision group", extra={"error": str(exc)})
-        needs_pipeline = True
-
-    logger.info("[final_routing] album routed", extra={
-        "lang":           lang,
-        "images_loaded":  loaded,
-        "images_total":   len(file_ids),
-        "batches":        len(batches),
-        "needs_pipeline": needs_pipeline,
-        "intent":         intent_result.intent.value if intent_result else None,
-        "routing.depth":  intent_result.routing.reasoning_depth if intent_result else None,
-        "routing.truth":  intent_result.routing.truth_mode if intent_result else None,
-    })
-
-    return VisionResult(
-        text=extracted,
-        needs_pipeline=needs_pipeline,
-        intent_result=intent_result if needs_pipeline else None,
-        failed=False,
-        vision_input_tokens=_group_input_tokens,
-        vision_output_tokens=_group_output_tokens,
-    )
+        # Extend with structured per-image descriptions from this batch. 
