@@ -940,12 +940,13 @@ async def attachment_tests(request: Request, key: str = "") -> dict:
         results["test2_vision_signed_url"] = {"status": "skipped", "reason": "no photo file found"}
 
     # ── TEST 3: groq_whisper_accepts_signed_url ───────────────────────────────
-    # NOTE (2026-07, first run): this failed with "Request Content-Type isn't
-    # multipart/form-data" — httpx sends a plain `data=` dict as
-    # application/x-www-form-urlencoded when no `files=` is also given, but
-    # Groq's transcription endpoint requires multipart/form-data even for the
-    # url= form field. Passing an empty `files=[]` forces httpx to build a
-    # multipart body regardless of whether any actual file part exists.
+    # NOTE (2026-07, second run): files=[] still produced urlencoded, not
+    # multipart — httpx treats an empty files argument as falsy and falls
+    # back to the data-only encoding path. A non-empty dummy file part (a
+    # field with empty bytes content) forces httpx's multipart encoder
+    # unconditionally. Groq is expected to ignore/reject the dummy part
+    # itself and use the `url` form field — if it errors specifically on
+    # the dummy part's presence, that's a distinct finding worth noting.
     if voice_path:
         try:
             t0 = time.monotonic()
@@ -955,7 +956,7 @@ async def attachment_tests(request: Request, key: str = "") -> dict:
                     "https://api.groq.com/openai/v1/audio/transcriptions",
                     headers={"Authorization": f"Bearer {settings.groq_api_key}"},
                     data={"model": "whisper-large-v3", "url": url},
-                    files=[],  # forces multipart/form-data Content-Type with no actual file part
+                    files={"_unused": ("", b"", "application/octet-stream")},
                 )
             if r.status_code == 200:
                 text = r.json().get("text", "")
