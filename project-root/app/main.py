@@ -797,3 +797,163 @@ async def debug(_: int = Depends(require_admin)) -> dict:
     }
 
     return results
+
+
+# ─── TEMPORARY: attachment-layer empirical tests (2026-07) ────────────────────
+# Purpose: answer three open questions from the Attachment/signed-URL design
+# (see infra/attachment.py, app/settings.py flags groq_whisper_accepts_ogg_opus,
+# groq_vision_accepts_signed_url, groq_whisper_accepts_signed_url) against the
+# REAL Groq API, using the most recently stored voice/photo in Supabase
+# Storage — not synthetic data.
+#
+# DELETE THIS ROUTE once the three flags have been confirmed/settled. It exists
+# only to be reachable from a phone browser (no terminal/curl available), so
+# it uses a URL query secret (?key=...) instead of the Bearer-JWT admin auth
+# used by /debug — a phone browser can't attach an Authorization header to a
+# plain link tap. Reuses settings.webhook_secret as that shared secret purely
+# for convenience (it's already a secret only you and the Worker know); it has
+# no other relationship to Telegram webhook verification.
+@app.get("/debug/attachment-tests")
+async def attachment_tests(request: Request, key: str = "") -> dict:
+    import time
+    import traceback
+
+    import httpx
+    from app.settings import settings
+
+    if not settings.webhook_secret or key != settings.webhook_secret:
+        raise HTTPException(status_code=403, detail="bad or missing ?key=")
+
+    supabase = request.app.state.supabase
+    results: dict[str, dict] = {}
+
+    def _ok(detail: str = "") -> dict:
+        return {"status": "ok", "detail": detail}
+
+    def _err(exc: Exception) -> dict:
+        return {"status": "error", "error": str(exc), "type": type(exc).__name__,
+                "trace": traceback.format_exc(limit=3)}
+
+    def _find_latest(kind: str) -> str | None:
+        """Return the path of the most recently modified object under {kind}/ in the bucket."""
+        try:
+            entries = supabase.storage.from_(settings.attachment_bucket).list(kind)
+        except Exception:
+            return None
+        if not entries:
+            return None
+        entries = sorted(entries, key=lambda e: e.get("updated_at", e.get("created_at", "")), reverse=True)
+        return f"{kind}/{entries[0]['name']}"
+
+    # ── locate latest voice + photo ───────────────────────────────────────────
+    voice_path = _find_latest("voice")
+    photo_path = _find_latest("photo")
+    results["_found"] = {"voice_path": voice_path, "photo_path": photo_path}
+
+    if not voice_path and not photo_path:
+        results["_summary"] = {"note": "no voice/photo found in bucket — send the bot one of each first"}
+        return results
+
+    async def _signed_url(path: str) -> str:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None, lambda: supabase.storage.from_(settings.attachment_bucket).create_signed_url(path, 300)
+        )
+        url = result.get("signedURL") or result.get("signedUrl") or result.get("signed_url")
+        if url.startswith("/"):
+            url = f"{settings.supabase_url.rstrip('/')}{url}"
+        return url
+
+    # ── TEST 1: groq_whisper_accepts_ogg_opus — raw bytes, no WAV conversion ──
+    if voice_path:
+        try:
+            t0 = time.monotonic()
+            loop = asyncio.get_event_loop()
+            raw = await loop.run_in_executor(
+                None, lambda: supabase.storage.from_(settings.attachment_bucket).download(voice_path)
+            )
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                r = await client.post(
+                    "https://api.groq.com/openai/v1/audio/transcriptions",
+                    headers={"Authorization": f"Bearer {settings.groq_api_key}"},
+                    files={"file": (voice_path.rsplit("/", 1)[-1], raw, "audio/ogg")},
+                    data={"model": "whisper-large-v3"},
+                )
+            if r.status_code == 200:
+                text = r.json().get("text", "")
+                results["test1_whisper_ogg_direct"] = _ok(
+                    f"200 in {time.monotonic()-t0:.2f}s, transcript={text[:120]!r}"
+                )
+            else:
+                results["test1_whisper_ogg_direct"] = {
+                    "status": "error", "http_status": r.status_code, "body": r.text[:300],
+                }
+        except Exception as exc:
+            results["test1_whisper_ogg_direct"] = _err(exc)
+    else:
+        results["test1_whisper_ogg_direct"] = {"status": "skipped", "reason": "no voice file found"}
+
+    # ── TEST 2: groq_vision_accepts_signed_url ────────────────────────────────
+    if photo_path:
+        try:
+            t0 = time.monotonic()
+            url = await _signed_url(photo_path)
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                r = await client.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {settings.groq_api_key}",
+                             "Content-Type": "application/json"},
+                    json={
+                        "model": "qwen/qwen3.6-27b",
+                        "reasoning_effort": "none",
+                        "max_tokens": 200,
+                        "messages": [{"role": "user", "content": [
+                            {"type": "image_url", "image_url": {"url": url}},
+                            {"type": "text", "text": "Describe this image in one sentence."},
+                        ]}],
+                    },
+                )
+            if r.status_code == 200:
+                desc = r.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+                results["test2_vision_signed_url"] = _ok(
+                    f"200 in {time.monotonic()-t0:.2f}s, description={desc[:150]!r}"
+                )
+            else:
+                results["test2_vision_signed_url"] = {
+                    "status": "error", "http_status": r.status_code, "body": r.text[:300],
+                }
+        except Exception as exc:
+            results["test2_vision_signed_url"] = _err(exc)
+    else:
+        results["test2_vision_signed_url"] = {"status": "skipped", "reason": "no photo file found"}
+
+    # ── TEST 3: groq_whisper_accepts_signed_url ───────────────────────────────
+    if voice_path:
+        try:
+            t0 = time.monotonic()
+            url = await _signed_url(voice_path)
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                r = await client.post(
+                    "https://api.groq.com/openai/v1/audio/transcriptions",
+                    headers={"Authorization": f"Bearer {settings.groq_api_key}"},
+                    data={"model": "whisper-large-v3", "url": url},
+                )
+            if r.status_code == 200:
+                text = r.json().get("text", "")
+                results["test3_whisper_signed_url"] = _ok(
+                    f"200 in {time.monotonic()-t0:.2f}s, transcript={text[:120]!r}"
+                )
+            else:
+                results["test3_whisper_signed_url"] = {
+                    "status": "error", "http_status": r.status_code, "body": r.text[:300],
+                }
+        except Exception as exc:
+            results["test3_whisper_signed_url"] = _err(exc)
+    else:
+        results["test3_whisper_signed_url"] = {"status": "skipped", "reason": "no voice file found"}
+
+    results["_summary"] = {
+        "ok": sum(1 for k, v in results.items() if not k.startswith("_") and v.get("status") == "ok"),
+        "error": sum(1 for k, v in results.items() if not k.startswith("_") and v.get("status") == "error"),
+    }
+    return results
