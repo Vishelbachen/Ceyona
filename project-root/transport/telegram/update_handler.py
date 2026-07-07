@@ -119,7 +119,10 @@ async def handle_message(
         # ── single photo: vision handler ──────────────────────────────────────
         try:
             from transport.telegram.vision_handler import handle_vision
-            vision_result = await handle_vision(file_id=file_id, caption=caption, lang=lang)
+            vision_result = await handle_vision(
+                file_id=file_id, caption=caption, lang=lang,
+                supabase=supabase, attachment_ref=update.get("_attachment"),
+            )
         except Exception as exc:
             logger.error(f"Vision handler crashed: {exc!r}\n{traceback.format_exc()}")
             from i18n.t import get_system_message
@@ -189,6 +192,7 @@ async def handle_message(
 
                 audio_bytes, filename = await download_telegram_voice(
                     file_id=voice_file_id, bot_token=settings.bot_token,
+                    supabase=supabase, attachment_ref=update.get("_attachment"),
                 )
 
                 _voice_ext = filename.rsplit(".", 1)[-1].lower()
