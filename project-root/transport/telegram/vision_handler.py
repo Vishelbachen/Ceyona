@@ -879,4 +879,4 @@ async def handle_vision_group(
                 extra={"batch_index": idx, "error": str(res) if isinstance(res, Exception) else "None"},
             )
             continue
-        # Extend with structured per-image descriptions from this batch. 
+        # Extend with structured per-image descriptions from this batch.
