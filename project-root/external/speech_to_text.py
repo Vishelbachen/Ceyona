@@ -48,12 +48,19 @@ _MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024
 # CORRECTION (2026-07): "ogg" was previously missing from this set, based on an
 # incorrect assumption that "Groq Whisper does not accept OGG/Opus" — that claim
 # is not supported by Groq's documentation, which lists ogg without a codec
-# caveat. "ogg"/"oga" are included below so Telegram voice messages (OGG/Opus)
-# skip the WAV conversion path entirely. If a live Telegram OGG/Opus file is
-# ever rejected by Groq in practice, that would mean the Opus codec specifically
-# is the exception (not "ogg" generally) — see _convert_to_wav's docstring for
-# what to do in that case.
-_GROQ_SUPPORTED_EXTENSIONS = {"mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm", "flac", "ogg", "oga"}
+# caveat. CONFIRMED empirically (2026-07, test 1): a real Telegram OGG/Opus voice
+# message, sent to Groq with a renamed ".ogg" filename, transcribed successfully.
+#
+# NB: "oga" (Telegram's own extension for the same OGG/Opus container) is
+# deliberately NOT listed here. OGA is fully supported by this pipeline — same
+# bytes, same codec, zero re-encoding — but that support is a filename
+# normalization step, not a "no conversion needed" format check. This set only
+# answers "can these bytes be sent to Groq as-is, under this filename": for a
+# ".oga" file the answer is "yes, but only after renaming to .ogg", which isn't
+# the same question. The explicit `if ext == "oga"` branch below does that
+# rename *before* this set is consulted, so by the time this set is checked,
+# an original .oga file already presents as "ogg" — see that branch's comment.
+_GROQ_SUPPORTED_EXTENSIONS = {"mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm", "flac", "ogg"}
 
 # VAD silencedetect parameters (ffmpeg).
 # noise: -35dB — captures typical recording noise floor without triggering on whisper.
@@ -187,9 +194,20 @@ async def transcribe(
         import httpx
         from app.settings import settings
 
-        data = {"model": model}
+        # CONFIRMED empirically (2026-07, test 3): Groq's transcription endpoint
+        # strictly validates every multipart field by name and rejects unknown
+        # ones — sending a dummy/placeholder field alongside `data=` produced
+        # "unknown param `_unused`". The fix is not a special case, it's that
+        # this endpoint takes exactly ONE request shape: every field (model,
+        # language, url, file) goes through `files=` as a standard httpx
+        # non-file multipart field (a (None, value) tuple), and `data=` is not
+        # used at all, in either the URL path or the bytes path. Mixing
+        # `files=` and `data=` on the same request is what produced
+        # "Request Content-Type isn't multipart/form-data" in the URL path
+        # (an empty/absent `files=` made httpx fall back to urlencoded).
+        files: dict[str, tuple] = {"model": (None, model)}
         if lang:
-            data["language"] = lang
+            files["language"] = (None, lang)
 
         if audio_url:
             # URL path: Groq fetches the file itself, no local conversion
@@ -197,35 +215,37 @@ async def transcribe(
             # is responsible for only reaching this branch with a file Groq
             # can already read (see its docstring for why WAV conversion,
             # when needed, happens before this call, not after).
-            data["url"] = audio_url
-            files = None
+            files["url"] = (None, audio_url)
         else:
-            # Convert to WAV only if the format isn't one Groq documents as
-            # supported (see _GROQ_SUPPORTED_EXTENSIONS comment above — this
-            # is a real fallback adapter now, not a default path for OGG).
+            # Telegram's own extension for OGG/Opus voice notes is ".oga".
+            # Groq accepts the exact same bytes/codec but only recognizes the
+            # file as OGG if the multipart filename ends in ".ogg" — so this
+            # is purely a rename, done BEFORE the supported-format check below,
+            # not a separate case of "is oga supported". See
+            # _GROQ_SUPPORTED_EXTENSIONS' comment for why "oga" itself is not
+            # in that set.
             ext = filename.rsplit(".", 1)[-1].lower()
+            if ext == "oga":
+                filename = filename.rsplit(".", 1)[0] + ".ogg"
+                ext = "ogg"
+
+            # Convert to WAV only if the (already-normalized) format isn't one
+            # Groq documents as supported (see _GROQ_SUPPORTED_EXTENSIONS
+            # comment above — this is a real fallback adapter now, not a
+            # default path for OGG).
             if ext not in _GROQ_SUPPORTED_EXTENSIONS:
                 logger.info("Converting %s to WAV for Groq compatibility", filename)
                 audio_bytes = await _convert_to_wav(audio_bytes, source_ext=ext)
                 filename = filename.rsplit(".", 1)[0] + ".wav"
-            elif ext == "oga":
-                # CONFIRMED empirically (2026-07): Groq accepts OGG/Opus bytes
-                # directly, but determines the file type from the multipart
-                # filename's extension — and only recognizes ".ogg", not
-                # ".oga" (Telegram's spelling for the same OGG container).
-                # This is a rename only, not a re-encode: same bytes, same
-                # codec, just the extension Groq's API expects to see.
-                filename = filename.rsplit(".", 1)[0] + ".ogg"
 
             # Groq Whisper uses multipart/form-data — not the standard chat completions endpoint
-            files = {"file": (filename, audio_bytes, _mime_type(filename))}
+            files["file"] = (filename, audio_bytes, _mime_type(filename))
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
                 "https://api.groq.com/openai/v1/audio/transcriptions",
                 headers={"Authorization": f"Bearer {settings.groq_api_key}"},
                 files=files,
-                data=data,
             )
 
         if response.status_code != 200:
