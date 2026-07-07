@@ -208,6 +208,14 @@ async def transcribe(
                 logger.info("Converting %s to WAV for Groq compatibility", filename)
                 audio_bytes = await _convert_to_wav(audio_bytes, source_ext=ext)
                 filename = filename.rsplit(".", 1)[0] + ".wav"
+            elif ext == "oga":
+                # CONFIRMED empirically (2026-07): Groq accepts OGG/Opus bytes
+                # directly, but determines the file type from the multipart
+                # filename's extension — and only recognizes ".ogg", not
+                # ".oga" (Telegram's spelling for the same OGG container).
+                # This is a rename only, not a re-encode: same bytes, same
+                # codec, just the extension Groq's API expects to see.
+                filename = filename.rsplit(".", 1)[0] + ".ogg"
 
             # Groq Whisper uses multipart/form-data — not the standard chat completions endpoint
             files = {"file": (filename, audio_bytes, _mime_type(filename))}
