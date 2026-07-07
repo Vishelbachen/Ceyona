@@ -865,6 +865,16 @@ async def attachment_tests(request: Request, key: str = "") -> dict:
         return url
 
     # ── TEST 1: groq_whisper_accepts_ogg_opus — raw bytes, no WAV conversion ──
+    # NOTE (2026-07, first run): this failed with "file must be one of the
+    # following types: [flac mp3 mp4 mpeg mpga m4a ogg opus wav webm]" — not
+    # because the OGG/Opus codec was rejected, but because Groq determines
+    # the type from the filename EXTENSION in the multipart part, and
+    # Telegram voice messages are stored in this bucket with a ".oga"
+    # extension (see voice_path), which isn't in Groq's accepted list even
+    # though ".ogg" is. Forcing the multipart filename's extension to
+    # ".ogg" below (content unchanged — .oga and .ogg are the same OGG
+    # container, Telegram just uses the .oga spelling) isolates the actual
+    # question: does Groq accept the OGG/Opus bytes Telegram produces.
     if voice_path:
         try:
             t0 = time.monotonic()
@@ -872,21 +882,23 @@ async def attachment_tests(request: Request, key: str = "") -> dict:
             raw = await loop.run_in_executor(
                 None, lambda: supabase.storage.from_(settings.attachment_bucket).download(voice_path)
             )
+            _forced_name = voice_path.rsplit("/", 1)[-1].rsplit(".", 1)[0] + ".ogg"
             async with httpx.AsyncClient(timeout=60.0) as client:
                 r = await client.post(
                     "https://api.groq.com/openai/v1/audio/transcriptions",
                     headers={"Authorization": f"Bearer {settings.groq_api_key}"},
-                    files={"file": (voice_path.rsplit("/", 1)[-1], raw, "audio/ogg")},
+                    files={"file": (_forced_name, raw, "audio/ogg")},
                     data={"model": "whisper-large-v3"},
                 )
             if r.status_code == 200:
                 text = r.json().get("text", "")
                 results["test1_whisper_ogg_direct"] = _ok(
-                    f"200 in {time.monotonic()-t0:.2f}s, transcript={text[:120]!r}"
+                    f"200 in {time.monotonic()-t0:.2f}s, renamed {voice_path.rsplit('/', 1)[-1]!r}→{_forced_name!r}, transcript={text[:120]!r}"
                 )
             else:
                 results["test1_whisper_ogg_direct"] = {
                     "status": "error", "http_status": r.status_code, "body": r.text[:300],
+                    "note": f"renamed {voice_path.rsplit('/', 1)[-1]!r}→{_forced_name!r} to isolate codec vs. filename-extension issue",
                 }
         except Exception as exc:
             results["test1_whisper_ogg_direct"] = _err(exc)
@@ -928,6 +940,12 @@ async def attachment_tests(request: Request, key: str = "") -> dict:
         results["test2_vision_signed_url"] = {"status": "skipped", "reason": "no photo file found"}
 
     # ── TEST 3: groq_whisper_accepts_signed_url ───────────────────────────────
+    # NOTE (2026-07, first run): this failed with "Request Content-Type isn't
+    # multipart/form-data" — httpx sends a plain `data=` dict as
+    # application/x-www-form-urlencoded when no `files=` is also given, but
+    # Groq's transcription endpoint requires multipart/form-data even for the
+    # url= form field. Passing an empty `files=[]` forces httpx to build a
+    # multipart body regardless of whether any actual file part exists.
     if voice_path:
         try:
             t0 = time.monotonic()
@@ -937,6 +955,7 @@ async def attachment_tests(request: Request, key: str = "") -> dict:
                     "https://api.groq.com/openai/v1/audio/transcriptions",
                     headers={"Authorization": f"Bearer {settings.groq_api_key}"},
                     data={"model": "whisper-large-v3", "url": url},
+                    files=[],  # forces multipart/form-data Content-Type with no actual file part
                 )
             if r.status_code == 200:
                 text = r.json().get("text", "")
