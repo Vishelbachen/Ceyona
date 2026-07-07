@@ -131,9 +131,23 @@ HF решена — на самом деле она была только сме
 ## 4. Архитектура ПОСЛЕ (текущая, с 2026-07)
 
 ```
-Telegram → Cloudflare Worker (/webhook) → Supabase (pending_updates, очередь)
+Telegram → Cloudflare Worker (/webhook)
+              │
+              ├── скачивает voice/photo/document (getFile + download,
+              │   Worker → api.telegram.org — направление, которое
+              │   никогда не показывало ConnectError)
+              ├── загружает файл в Supabase Storage (bucket
+              │   telegram-attachments/{kind}/{file_id}.{ext})
+              ▼
+          Supabase (pending_updates, очередь; payload._attachment
+                     содержит bucket+path+mime_type, если вложение есть)
                                                     ↓
                                     HF Space (queue_consumer, poll)
+                                                    ↓
+                                    Если есть payload._attachment —
+                                    HF читает файл из Supabase Storage
+                                    (supabase.storage.from_(bucket).download(path)),
+                                    НЕ обращаясь к Telegram вообще.
                                                     ↓
                                     HF генерирует ответ, пишет
                                     строку в Supabase (INSERT INTO outbox)
@@ -157,16 +171,60 @@ Telegram → Cloudflare Worker (/webhook) → Supabase (pending_updates, оче�
                                     При прочих 4xx → сразу failed
 ```
 
-**Единственная исходящая сетевая зависимость HF для отправки ответа теперь —
-Supabase INSERT**, тот самый вызов, который ни разу не показал ConnectTimeout
-в зафиксированном инциденте. Сам HTTP-вызов к Telegram выполняет Worker,
-физически не подверженный тому же классу проблем, что HF-контейнер.
+**Правило теперь соблюдается симметрично и полностью: HF никогда не
+обращается к Telegram напрямую — ни для отправки (outbox), ни для приёма
+файлов (Storage).** Cloudflare Worker — единственный компонент, который
+вообще знает о существовании `api.telegram.org`. HF знает только Supabase:
+`pending_updates`, `outbox`, Storage.
+
+Единственная исходящая сетевая зависимость HF — это Supabase (REST API и
+Storage API), тот самый вызов, который ни разу не показал ConnectTimeout
+в зафиксированном инциденте.
 
 **Важно: cron НЕ используется нигде в этой схеме, ни в каком виде** —
-ни для keepalive-пинга HF, ни для drain'а outbox. Это осознанное решение,
-принятое из-за риска abuse-флага (п.2.1), и оно распространяется и на
-outbox: вместо периодического опроса используется исключительно
-Supabase Database Webhook (событие INSERT → HTTP POST на `/outbox/drain`).
+ни для keepalive-пинга HF, ни для drain'а outbox, ни для скачивания файлов
+(файлы скачиваются синхронно внутри `handleWebhook`, в момент приёма
+апдейта — не по расписанию). Это осознанное решение, принятое из-за риска
+abuse-флага (п.2.1).
+
+### 4.0. История: почему это потребовало второго раунда (voice/photo)
+
+Первый раунд (см. предыдущую версию этого раздела, ниже как история)
+закрыл только `sendMessage`-путь. Через некоторое время после внедрения
+outbox выяснилось по логам HF Space, что **входящие** вложения (voice,
+photo) ловят тот же самый класс ошибки:
+
+```
+2026-07-07 04:44:02 ERROR transport.telegram.vision_handler getFile failed |
+  error='(empty)' exc_type='ConnectError' file_id='AgACAgIAAxk...'
+2026-07-07 04:45:47 WARNING external.speech_to_text download_telegram_voice
+  retrying, attempt=1, error='getFile network error: ConnectError'
+2026-07-07 04:46:18 ERROR transport.telegram.update_handler Voice path crashed |
+  error='getFile network error: ConnectError'
+```
+
+Причина: `download_telegram_voice` (speech_to_text.py) и
+`_download_image_via_worker` (vision_handler.py) делали **свой собственный**
+исходящий HTTP-вызов из HF к Worker'у (`getFile` + скачивание байтов) —
+этот путь не был затронут первым раундом переделки, потому что outbox
+касался только исходящих ОТВЕТОВ, а не входящих ФАЙЛОВ. Тот же класс сбоя
+(`ConnectError`/`ConnectTimeout` на исходящем HF → `workers.dev`), просто
+на другом направлении трафика.
+
+**Решение — симметричное первому:** Worker скачивает вложение сам (при
+приёме апдейта, до записи в `pending_updates`), кладёт в Supabase Storage,
+и обогащает payload полем `_attachment` (bucket/path/mime_type/size).
+HF при обработке читает файл из Storage вместо обращения к Telegram.
+См. `ceyona-worker/supabase_storage_setup.md` для настройки bucket.
+
+**Известный незакрытый край случая:** multi-фото альбомы (Telegram media
+groups, `handle_vision_group` при >1 фото) пока НЕ переведены на чтение из
+Storage — они всё ещё используют старый прямой вызов к Worker'у на
+каждое фото. Причина: альбомы буферизуются через `MediaGroupAggregator`
+(Redis), который на момент этой правки не прокидывает `_attachment`
+через свою сериализацию по каждому фото отдельно. Если albums начнут
+показывать тот же ConnectError — это следующий кандидат на такую же
+переделку, по той же схеме.
 
 ### 4.1. Известные, принятые компромиссы этой схемы
 
@@ -222,6 +280,12 @@ Supabase Database Webhook (событие INSERT → HTTP POST на `/outbox/dra
    финансовым причинам пользователя, не по техническим — это остаётся
    единственным вариантом, устраняющим первопричину полностью, а не
    строящим отказоустойчивость вокруг неё.
+
+4. **Multi-фото альбомы (media groups) не переведены на Storage-чтение**
+   (см. §4.0) — если пользователи часто присылают альбомы из нескольких
+   фото и они начнут молчать/выдавать ошибку так же, как ранее voice/single
+   photo — это будет тем же диагнозом, и чинить нужно тем же способом
+   (прокинуть `_attachment` через `MediaGroupAggregator`/`MediaGroupItem`).
 
 ---
 
