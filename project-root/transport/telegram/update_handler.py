@@ -117,12 +117,35 @@ async def handle_message(
             )
 
         # ── single photo: vision handler ──────────────────────────────────────
+        # Target path: Worker already downloaded the photo into Supabase Storage
+        # and attached {bucket, path, mime_type, size, kind} as `_attachment` on
+        # the update (see ceyona-worker/worker.js::downloadAndStoreAttachment).
+        # Build an Attachment from that and use the new entry point, which never
+        # touches Telegram. Only if `_attachment` is missing (Worker's own
+        # download/upload failed for this update) do we fall back to the legacy
+        # handle_vision(), which still calls the Worker's /tg/ proxy directly —
+        # a migration safety net, not part of the target architecture (see
+        # infra/attachment.py module docstring).
         try:
-            from transport.telegram.vision_handler import handle_vision
-            vision_result = await handle_vision(
-                file_id=file_id, caption=caption, lang=lang,
-                supabase=supabase, attachment_ref=update.get("_attachment"),
-            )
+            from infra.attachment import from_pending_update_ref
+            attachment = from_pending_update_ref(update.get("_attachment"), supabase=supabase)
+
+            if attachment is not None:
+                from transport.telegram.vision_handler import handle_vision_attachment
+                vision_result = await handle_vision_attachment(
+                    attachment, caption=caption, lang=lang,
+                )
+            else:
+                logger.warning(
+                    "No _attachment on photo update — falling back to legacy "
+                    "direct-Worker vision path (see architecture_reality.md §4.1)",
+                    extra={"user_id": user_id, "file_id": file_id[:20]},
+                )
+                from transport.telegram.vision_handler import handle_vision
+                vision_result = await handle_vision(
+                    file_id=file_id, caption=caption, lang=lang,
+                    supabase=supabase, attachment_ref=None,
+                )
         except Exception as exc:
             logger.error(f"Vision handler crashed: {exc!r}\n{traceback.format_exc()}")
             from i18n.t import get_system_message
@@ -184,31 +207,64 @@ async def handle_message(
         if voice_file_id:
             try:
                 from app.settings import settings
-                from external.speech_to_text import (
-                    download_telegram_voice,
-                    is_silent,
-                    transcribe,
-                )
+                from infra.attachment import from_pending_update_ref
 
-                audio_bytes, filename = await download_telegram_voice(
-                    file_id=voice_file_id, bot_token=settings.bot_token,
-                    supabase=supabase, attachment_ref=update.get("_attachment"),
-                )
+                attachment = from_pending_update_ref(update.get("_attachment"), supabase=supabase)
 
-                _voice_ext = filename.rsplit(".", 1)[-1].lower()
-                if await is_silent(audio_bytes, source_ext=_voice_ext):
-                    from i18n.t import get_system_message
-                    return OrchestratorResult(
-                        text=get_system_message("vad_silence", lang),
-                        tier=Tier.FAST, model="",
-                        epk_decision=EPKDecision.DENY,
-                        usage=UsageRecord(input_tokens=0, output_tokens=0, embedding_tokens=0,
-                                          rerank_tokens=0, tier=Tier.FAST, embedding_type="large", llm_cost_usd=0.0),
-                        denied=True, deny_reason="vad_silence", lang=lang,
+                if attachment is not None:
+                    # Target path: transcribe_attachment() owns the full order
+                    # of operations (bytes → VAD → convert-if-needed → URL-or-
+                    # bytes to Groq) — see its docstring in speech_to_text.py.
+                    # VAD-silence is folded into its result as success=False,
+                    # error="silent audio (VAD)" rather than a separate check
+                    # here, since Attachment already downloaded the bytes VAD
+                    # needs — no reason to duplicate that download or the
+                    # is_silent() call at this call site.
+                    from external.speech_to_text import transcribe_attachment
+                    tr = await transcribe_attachment(
+                        attachment, lang=lang if lang != "en" else None,
+                    )
+                    if not tr.success and tr.error == "silent audio (VAD)":
+                        from i18n.t import get_system_message
+                        return OrchestratorResult(
+                            text=get_system_message("vad_silence", lang),
+                            tier=Tier.FAST, model="",
+                            epk_decision=EPKDecision.DENY,
+                            usage=UsageRecord(input_tokens=0, output_tokens=0, embedding_tokens=0,
+                                              rerank_tokens=0, tier=Tier.FAST, embedding_type="large", llm_cost_usd=0.0),
+                            denied=True, deny_reason="vad_silence", lang=lang,
+                        )
+                else:
+                    logger.warning(
+                        "No _attachment on voice update — falling back to legacy "
+                        "direct-Worker voice path (see architecture_reality.md §4.1)",
+                        extra={"user_id": user_id},
+                    )
+                    from external.speech_to_text import (
+                        download_telegram_voice,
+                        is_silent,
+                        transcribe,
                     )
 
-                tr = await transcribe(audio_bytes=audio_bytes, filename=filename,
-                                      lang=lang if lang != "en" else None)
+                    audio_bytes, filename = await download_telegram_voice(
+                        file_id=voice_file_id, bot_token=settings.bot_token,
+                        supabase=supabase, attachment_ref=None,
+                    )
+
+                    _voice_ext = filename.rsplit(".", 1)[-1].lower()
+                    if await is_silent(audio_bytes, source_ext=_voice_ext):
+                        from i18n.t import get_system_message
+                        return OrchestratorResult(
+                            text=get_system_message("vad_silence", lang),
+                            tier=Tier.FAST, model="",
+                            epk_decision=EPKDecision.DENY,
+                            usage=UsageRecord(input_tokens=0, output_tokens=0, embedding_tokens=0,
+                                              rerank_tokens=0, tier=Tier.FAST, embedding_type="large", llm_cost_usd=0.0),
+                            denied=True, deny_reason="vad_silence", lang=lang,
+                        )
+
+                    tr = await transcribe(audio_bytes=audio_bytes, filename=filename,
+                                          lang=lang if lang != "en" else None)
 
                 if not tr.success or not tr.text:
                     from i18n.t import get_system_message
