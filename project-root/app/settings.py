@@ -70,14 +70,24 @@ class Settings(BaseSettings):
     # instead. Flip to True only after an empirical confirmation call against the
     # real API (see comments at each handler call site) — do not flip on documentation
     # alone, since privately-signed URLs may behave differently than public ones.
+    #
+    # STATUS (2026-07): all three flags below are now empirically CONFIRMED (see
+    # architecture_reality.md tests 1-3). They're kept as flags rather than
+    # inlined as constants for one to two more releases, as a rollback switch
+    # in case something about the confirmed behavior turns out to be
+    # environment-specific (e.g. this Groq account/tier only) rather than
+    # general. TODO: if no regression surfaces by ~2026-09, remove these three
+    # flags entirely and hardcode the confirmed behavior in each handler —
+    # a flag that can only ever be set to its default is just a note pretending
+    # to be a setting.
     groq_whisper_accepts_signed_url: bool = Field(
-        False, description="Groq Whisper audio.transcriptions accepts url= for a Supabase signed URL (unconfirmed — see speech_to_text.py)"
+        True, description="Groq Whisper audio.transcriptions accepts url= for a Supabase signed URL — CONFIRMED empirically 2026-07 (test 3), once sent as a pure files= multipart request with no data= (see speech_to_text.py transcribe())"
     )
     groq_vision_accepts_signed_url: bool = Field(
-        True, description="Groq vision chat completions accepts image_url pointing to a Supabase signed URL"
+        True, description="Groq vision chat completions accepts image_url pointing to a Supabase signed URL — CONFIRMED empirically 2026-07 (test 2), reproduced on a second run"
     )
     groq_whisper_accepts_ogg_opus: bool = Field(
-        True, description="Groq Whisper accepts OGG/Opus directly without local WAV conversion (confirmed via Groq docs: ogg is a supported format; codec-level Opus behavior not yet empirically re-verified against a live Telegram file)"
+        True, description="Groq Whisper accepts OGG/Opus directly without local WAV conversion — CONFIRMED empirically 2026-07 (test 1) against a real Telegram voice message (.oga renamed to .ogg, same bytes, no re-encoding); previously only confirmed via Groq docs at the format level, codec-level behavior was unverified until this test"
     )
 
     # ─── RUNTIME ────────────────────────────────────────
