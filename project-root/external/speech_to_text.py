@@ -36,11 +36,24 @@ logger = logging.getLogger(__name__)
 _PRIMARY_MODEL = "whisper-large-v3"
 _TURBO_MODEL   = "whisper-large-v3-turbo"
 
-# Maximum audio file size Groq accepts (25 MB)
+# Maximum audio file size Groq's transcription endpoint accepts when the body
+# is sent directly (25 MB). This is a Groq/Whisper limit, NOT a Storage/bucket
+# limit — Storage may hold larger files; this handler decides what it can
+# send to this specific model. See app/settings.py for the bucket-level
+# housekeeping limit, which is deliberately not tied to this number.
 _MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024
 
-# Formats natively supported by Groq Whisper API
-_GROQ_SUPPORTED_EXTENSIONS = {"mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm", "flac"}
+# Formats Groq's transcription endpoint documents as natively supported:
+# flac, mp3, mp4, mpeg, mpga, m4a, ogg, wav, webm (console.groq.com/docs/speech-to-text).
+# CORRECTION (2026-07): "ogg" was previously missing from this set, based on an
+# incorrect assumption that "Groq Whisper does not accept OGG/Opus" — that claim
+# is not supported by Groq's documentation, which lists ogg without a codec
+# caveat. "ogg"/"oga" are included below so Telegram voice messages (OGG/Opus)
+# skip the WAV conversion path entirely. If a live Telegram OGG/Opus file is
+# ever rejected by Groq in practice, that would mean the Opus codec specifically
+# is the exception (not "ogg" generally) — see _convert_to_wav's docstring for
+# what to do in that case.
+_GROQ_SUPPORTED_EXTENSIONS = {"mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm", "flac", "ogg", "oga"}
 
 # VAD silencedetect parameters (ffmpeg).
 # noise: -35dB — captures typical recording noise floor without triggering on whisper.
@@ -118,37 +131,50 @@ class TranscriptResult:
 
 
 async def transcribe(
-    audio_bytes: bytes,
+    audio_bytes: bytes | None = None,
     filename: str = "voice.ogg",
     lang: str | None = None,
     use_turbo: bool = False,
+    audio_url: str | None = None,
 ) -> TranscriptResult:
     """
-    Transcribe audio bytes using Groq Whisper.
+    Transcribe audio using Groq Whisper — either from local bytes or from a
+    URL Groq fetches itself.
 
     Args:
-        audio_bytes: raw audio content (OGG/MP3/WAV/M4A)
-        filename:    original filename with extension (helps Groq detect format)
+        audio_bytes: raw audio content (OGG/MP3/WAV/M4A/...). Required unless
+                     audio_url is given.
+        filename:    original filename with extension (helps Groq detect
+                     format; also used to decide whether a WAV conversion
+                     fallback is needed in the bytes path).
         lang:        optional ISO 639-1 language hint (e.g. "ru", "ar")
                      None = auto-detect (Whisper handles this well)
         use_turbo:   use whisper-large-v3-turbo instead of primary
                      (faster + cheaper, slightly lower accuracy)
+        audio_url:   if given, sent as Groq's `url=` parameter instead of
+                     uploading bytes — Groq fetches the file itself. Prefer
+                     this over audio_bytes when the caller doesn't need
+                     local bytes for anything else (VAD, conversion). See
+                     transcribe_attachment() for the actual decision logic;
+                     this function just does whichever one it's given.
 
     Returns TranscriptResult.
     On any error: success=False, text="", error=message.
     Never raises — caller (update_handler) handles errors.
 
     Billing note: audio_seconds is estimated from file size when
-    Groq does not return duration directly. Actual billing is per
-    audio hour transcribed — record audio_seconds in UsageEntry.
+    Groq does not return duration directly (bytes path only — a URL-fetched
+    file has no local size to estimate from, so duration is 0.0 unless Groq
+    reports it). Actual billing is per audio hour transcribed — record
+    audio_seconds in UsageEntry.
     """
-    if not audio_bytes:
+    if not audio_url and not audio_bytes:
         return TranscriptResult(
             text="", model_used="", audio_seconds=0.0,
-            success=False, error="empty audio bytes",
+            success=False, error="neither audio_bytes nor audio_url provided",
         )
 
-    if len(audio_bytes) > _MAX_FILE_SIZE_BYTES:
+    if audio_bytes is not None and len(audio_bytes) > _MAX_FILE_SIZE_BYTES:
         return TranscriptResult(
             text="", model_used="", audio_seconds=0.0,
             success=False,
@@ -161,18 +187,30 @@ async def transcribe(
         import httpx
         from app.settings import settings
 
-        # Convert OGG/OGA (Telegram voice) to WAV — Groq Whisper does not accept OGG/Opus
-        ext = filename.rsplit(".", 1)[-1].lower()
-        if ext not in _GROQ_SUPPORTED_EXTENSIONS:
-            logger.info("Converting %s to WAV for Groq compatibility", filename)
-            audio_bytes = await _convert_to_wav(audio_bytes, source_ext=ext)
-            filename = filename.rsplit(".", 1)[0] + ".wav"
-
-        # Groq Whisper uses multipart/form-data — not the standard chat completions endpoint
-        files = {"file": (filename, audio_bytes, _mime_type(filename))}
-        data  = {"model": model}
+        data = {"model": model}
         if lang:
             data["language"] = lang
+
+        if audio_url:
+            # URL path: Groq fetches the file itself, no local conversion
+            # possible or needed here — the caller (transcribe_attachment)
+            # is responsible for only reaching this branch with a file Groq
+            # can already read (see its docstring for why WAV conversion,
+            # when needed, happens before this call, not after).
+            data["url"] = audio_url
+            files = None
+        else:
+            # Convert to WAV only if the format isn't one Groq documents as
+            # supported (see _GROQ_SUPPORTED_EXTENSIONS comment above — this
+            # is a real fallback adapter now, not a default path for OGG).
+            ext = filename.rsplit(".", 1)[-1].lower()
+            if ext not in _GROQ_SUPPORTED_EXTENSIONS:
+                logger.info("Converting %s to WAV for Groq compatibility", filename)
+                audio_bytes = await _convert_to_wav(audio_bytes, source_ext=ext)
+                filename = filename.rsplit(".", 1)[0] + ".wav"
+
+            # Groq Whisper uses multipart/form-data — not the standard chat completions endpoint
+            files = {"file": (filename, audio_bytes, _mime_type(filename))}
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
@@ -195,8 +233,13 @@ async def transcribe(
 
         body = response.json()
         transcript = body.get("text", "").strip()
-        # Groq may return duration in seconds; fall back to size estimate
-        audio_seconds = float(body.get("duration", 0)) or _estimate_duration(len(audio_bytes))
+        # Groq may return duration in seconds; fall back to size estimate.
+        # URL path has no local bytes to estimate from — if Groq doesn't
+        # report duration for a URL-fetched file, audio_seconds is 0.0 and
+        # billing falls back to whatever usage_meter does for that case.
+        audio_seconds = float(body.get("duration", 0)) or (
+            _estimate_duration(len(audio_bytes)) if audio_bytes is not None else 0.0
+        )
 
         if not transcript:
             return TranscriptResult(
@@ -224,6 +267,55 @@ async def transcribe(
             text="", model_used=model, audio_seconds=0.0,
             success=False, error=str(exc),
         )
+
+
+async def transcribe_attachment(
+    attachment,  # infra.attachment.Attachment — typed as untyped to avoid import cycle at module load
+    lang: str | None = None,
+    use_turbo: bool = False,
+) -> TranscriptResult:
+    """
+    Target-architecture entry point: transcribe a voice message given as an
+    Attachment (infra/attachment.py), instead of raw bytes.
+
+    Order of operations, and why it's in this order (not simply "use URL if
+    supported"):
+      1. attachment.bytes() — VAD (is_silent) needs real bytes locally
+         regardless of whether Groq can fetch by URL; there is no way to run
+         ffmpeg's silencedetect against a remote URL without downloading it
+         first, so this download is not optional even in the URL-first case.
+      2. is_silent() on those bytes — unchanged from the pre-Attachment path.
+      3. If a WAV conversion fallback is needed (format not in
+         _GROQ_SUPPORTED_EXTENSIONS — should be rare now that "ogg" is
+         included), it happens here, on the bytes we already have.
+      4. Only now do we decide bytes vs. URL for the actual Groq call:
+         - settings.groq_whisper_accepts_signed_url == True → request a
+           signed URL for this attachment and send audio_url= (skips
+           re-uploading bytes we already hold; saves the multipart body).
+         - otherwise → send the bytes we already downloaded for VAD.
+         Either way, the attachment itself never talks to Telegram — the
+         bytes came from Supabase Storage in step 1.
+
+    This keeps the "URL vs bytes" decision entirely inside this handler,
+    informed by a settings flag — Attachment itself has no opinion on it.
+    """
+    raw = await attachment.bytes()
+
+    _ext = attachment.filename.rsplit(".", 1)[-1].lower() if "." in attachment.filename else "ogg"
+
+    if await is_silent(raw, source_ext=_ext):
+        return TranscriptResult(
+            text="", model_used="", audio_seconds=0.0,
+            success=False, error="silent audio (VAD)",
+        )
+
+    from app.settings import settings
+
+    if settings.groq_whisper_accepts_signed_url:
+        url = await attachment.signed_url()
+        return await transcribe(audio_url=url, lang=lang, use_turbo=use_turbo)
+
+    return await transcribe(audio_bytes=raw, filename=attachment.filename, lang=lang, use_turbo=use_turbo)
 
 
 async def download_telegram_voice(
@@ -401,7 +493,15 @@ async def _download_telegram_voice_via_worker_fallback(
 async def _convert_to_wav(audio_bytes: bytes, source_ext: str = "oga") -> bytes:
     """
     Convert audio bytes to WAV (16kHz mono) using ffmpeg.
-    Required for OGG/Opus files from Telegram — not supported by Groq Whisper API.
+
+    Fallback adapter, not a default path: only invoked (see transcribe())
+    when the incoming file's extension isn't one Groq documents as
+    supported. As of 2026-07, "ogg"/"oga" ARE in that supported set (see
+    _GROQ_SUPPORTED_EXTENSIONS), so Telegram voice messages normally skip
+    this entirely. This function exists for whatever format Groq's API
+    doesn't accept — either a future format change on Groq's side, or an
+    attachment kind this project doesn't send from Telegram today.
+
     Raises RuntimeError if ffmpeg fails.
     """
     in_path = out_path = None
