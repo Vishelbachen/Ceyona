@@ -358,6 +358,47 @@ def _resize_image_if_needed(image_bytes: bytes) -> bytes:
 
 # ─── MAIN ENTRY POINT ─────────────────────────────────────────────────────────
 
+async def handle_vision_attachment(
+    attachment,  # infra.attachment.Attachment — typed as untyped to avoid import cycle at module load
+    caption: str = "",
+    lang: str = "en",
+) -> VisionResult:
+    """
+    Target-architecture entry point: extract image content given an
+    Attachment (infra/attachment.py), instead of a raw Telegram file_id.
+
+    Unlike voice (see speech_to_text.transcribe_attachment), vision has no
+    step that requires local bytes before the model call — there's no VAD
+    equivalent, and resizing is only needed on the bytes path (see below).
+    So when settings.groq_vision_accepts_signed_url is True, this skips
+    attachment.bytes() entirely: no download, no base64, no resize — just
+    a signed URL handed straight to Groq's image_url field.
+
+    Falls back to the base64 path (attachment.bytes() + resize + encode)
+    when the flag is False — e.g. before the signed-URL-reachability check
+    described in that setting's docstring has been confirmed empirically.
+    """
+    from i18n.t import t
+    err_text = t("vision_error", lang)
+
+    logger.info("[vision_input] single image received (attachment)", extra={
+        "kind":        attachment.kind,
+        "caption_len": len(caption),
+        "lang":        lang,
+    })
+
+    from app.settings import settings
+
+    if settings.groq_vision_accepts_signed_url:
+        url = await attachment.signed_url()
+        return await _handle_vision_core(image_url=url, caption=caption, lang=lang, err_text=err_text)
+
+    image_bytes = await attachment.bytes()
+    if not image_bytes:
+        return VisionResult(text=err_text, needs_pipeline=False)
+    return await _handle_vision_core(image_bytes=image_bytes, caption=caption, lang=lang, err_text=err_text)
+
+
 async def handle_vision(
     file_id: str,
     caption: str = "",
@@ -366,6 +407,13 @@ async def handle_vision(
     attachment_ref: dict | None = None,
 ) -> VisionResult:
     """
+    LEGACY entry point — kept for the fallback path used when the incoming
+    update has no `_attachment` (Worker's own download/upload failed; see
+    update_handler.py's build_attachment_or_none()). New code should go
+    through handle_vision_attachment() with an infra.attachment.Attachment
+    built from `_attachment`; this function still does its own Telegram-
+    proxy download for that degraded case only.
+
     Step 1 — qwen/qwen3.6-27b extracts image content (text or description).
     Step 2 — intent_engine.classify() determines whether the extracted content
               requires the main pipeline or can be answered directly.
@@ -388,36 +436,66 @@ async def handle_vision(
     if not image_bytes:
         return VisionResult(text=err_text, needs_pipeline=False)
 
-    # ── resize to prevent 413 Payload Too Large ───────────────────────────────
-    # Groq vision endpoint rejects images > ~4MB base64.
-    # Resize to max 1280px on longest side before encoding.
-    # Uses only stdlib (no Pillow dependency) via a pure-Python JPEG resize,
-    # or falls back to raw bytes if resize fails (still better than guaranteed 413).
-    image_bytes = _resize_image_if_needed(image_bytes)
+    return await _handle_vision_core(image_bytes=image_bytes, caption=caption, lang=lang, err_text=err_text)
 
-    image_b64 = base64.b64encode(image_bytes).decode("ascii")
 
-    # ── build user message: image first, then caption (if any) ───────────────
-    user_content: list[dict] = [
-        {
-            "type": "image_url",
-            "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"},
-        },
-    ]
-    if caption.strip():
-        user_content.append({"type": "text", "text": caption.strip()})
+async def _handle_vision_core(
+    *,
+    caption: str,
+    lang: str,
+    err_text: str,
+    image_bytes: bytes | None = None,
+    image_url: str | None = None,
+) -> VisionResult:
+    """
+    Shared extraction + routing logic for both the URL path and the bytes
+    path. Exactly one of image_bytes / image_url is expected to be set by
+    the caller.
+    """
+    if image_url:
+        user_content: list[dict] = [
+            {"type": "image_url", "image_url": {"url": image_url}},
+        ]
+        if caption.strip():
+            user_content.append({"type": "text", "text": caption.strip()})
+        # No local bytes to size-check in the URL path — use the FAST budget
+        # by default; GENERAL-tier extraction length only matters for dense
+        # UI screenshots, which the bytes path detects by resized size. If
+        # URL-path extraction starts truncating on complex images in
+        # practice, this is the place to revisit (e.g. a quick HEAD/range
+        # check on the URL, or always using the GENERAL budget for the URL
+        # path since we no longer pay the base64 token cost that made FAST
+        # worth defaulting to).
+        _extraction_max_tokens = RUNTIME.tier_configs[Tier.FAST].max_output_tokens
+    else:
+        # ── resize to prevent 413 Payload Too Large ───────────────────────
+        # Groq vision endpoint rejects images > ~4MB base64.
+        # Resize to max 1280px on longest side before encoding.
+        # Uses only stdlib (no Pillow dependency) via a pure-Python JPEG resize,
+        # or falls back to raw bytes if resize fails (still better than guaranteed 413).
+        image_bytes = _resize_image_if_needed(image_bytes)
+        image_b64 = base64.b64encode(image_bytes).decode("ascii")
 
-    # Choose max_tokens based on image size.
-    # FAST (1024): sufficient for simple photos, illustrations, small text.
-    # GENERAL (3072): required for UI screenshots, marketplace pages, dense text layouts
-    #   (e.g. Wildberries, Ozon, app interfaces) — these produce long extraction output
-    #   that exceeds FAST limit, causing truncated extraction → broken pipeline.
-    # Threshold: if image > 200KB after resize, treat as complex and use GENERAL limit.
-    _extraction_max_tokens = (
-        RUNTIME.tier_configs[Tier.GENERAL].max_output_tokens
-        if len(image_bytes) > 200_000
-        else RUNTIME.tier_configs[Tier.FAST].max_output_tokens
-    )
+        user_content = [
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"},
+            },
+        ]
+        if caption.strip():
+            user_content.append({"type": "text", "text": caption.strip()})
+
+        # Choose max_tokens based on image size.
+        # FAST (1024): sufficient for simple photos, illustrations, small text.
+        # GENERAL (3072): required for UI screenshots, marketplace pages, dense text layouts
+        #   (e.g. Wildberries, Ozon, app interfaces) — these produce long extraction output
+        #   that exceeds FAST limit, causing truncated extraction → broken pipeline.
+        # Threshold: if image > 200KB after resize, treat as complex and use GENERAL limit.
+        _extraction_max_tokens = (
+            RUNTIME.tier_configs[Tier.GENERAL].max_output_tokens
+            if len(image_bytes) > 200_000
+            else RUNTIME.tier_configs[Tier.FAST].max_output_tokens
+        )
 
     payload = {
         "model": _VISION_MODEL,
