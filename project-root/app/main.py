@@ -940,13 +940,14 @@ async def attachment_tests(request: Request, key: str = "") -> dict:
         results["test2_vision_signed_url"] = {"status": "skipped", "reason": "no photo file found"}
 
     # ── TEST 3: groq_whisper_accepts_signed_url ───────────────────────────────
-    # NOTE (2026-07, second run): files=[] still produced urlencoded, not
-    # multipart — httpx treats an empty files argument as falsy and falls
-    # back to the data-only encoding path. A non-empty dummy file part (a
-    # field with empty bytes content) forces httpx's multipart encoder
-    # unconditionally. Groq is expected to ignore/reject the dummy part
-    # itself and use the `url` form field — if it errors specifically on
-    # the dummy part's presence, that's a distinct finding worth noting.
+    # NOTE (2026-07, third run): the dummy "_unused" file part caused Groq to
+    # reject the whole request with "unknown param `_unused`" — Groq validates
+    # every multipart field by name and doesn't silently ignore unrecognized
+    # parts. Fix: put `model` and `url` themselves inside `files=` as
+    # (None, value) tuples, which is httpx's documented way to send plain
+    # form fields as multipart parts without introducing any extra field
+    # name Groq doesn't expect. No `data=` dict is used at all this time —
+    # every field, including url, goes through the multipart encoder.
     if voice_path:
         try:
             t0 = time.monotonic()
@@ -955,8 +956,10 @@ async def attachment_tests(request: Request, key: str = "") -> dict:
                 r = await client.post(
                     "https://api.groq.com/openai/v1/audio/transcriptions",
                     headers={"Authorization": f"Bearer {settings.groq_api_key}"},
-                    data={"model": "whisper-large-v3", "url": url},
-                    files={"_unused": ("", b"", "application/octet-stream")},
+                    files={
+                        "model": (None, "whisper-large-v3"),
+                        "url": (None, url),
+                    },
                 )
             if r.status_code == 200:
                 text = r.json().get("text", "")
