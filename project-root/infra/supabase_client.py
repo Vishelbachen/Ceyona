@@ -14,6 +14,15 @@ Fix: proactively recreate the client every 4 minutes (below the ~5-min
 idle timeout). On any connection error, reconnect immediately and retry
 the operation once.
 
+Coverage: .table()/.rpc() (PostgREST/RPC) and .storage.from_(bucket)
+(Storage — list/download/create_signed_url/upload) are both wrapped with
+this retry-once-after-reconnect behavior. CONFIRMED empirically (2026-07)
+that Storage calls hit the exact same dead-connection failure as
+PostgREST calls (a bare create_signed_url() raised RemoteProtocolError)
+— .storage was previously forwarded unwrapped via __getattr__, so this
+failure mode existed for every Storage call from the moment Storage
+usage was added, just unnoticed until this test.
+
 Drop-in usage in bootstrap.py:
 
     from infra.supabase_client import ResilientSupabase
@@ -91,7 +100,12 @@ class ResilientSupabase:
         self._ensure_fresh()
         return _RetryingRpc(self, fn, params or {})
 
-    # Forward everything else (auth, storage, postgrest_client, …)
+    @property
+    def storage(self) -> "_RetryingStorage":
+        self._ensure_fresh()
+        return _RetryingStorage(self)
+
+    # Forward everything else (auth, postgrest_client, …)
     def __getattr__(self, item: str) -> Any:
         return getattr(self._client, item)
 
@@ -170,3 +184,68 @@ class _RetryingRpc:
             )
             self._owner._reconnect()
             return self._owner._client.rpc(self._fn, self._params).execute()
+
+
+# ── Storage proxy ────────────────────────────────────────────────────────────
+#
+# Unlike .table()/.rpc(), the Storage API (.storage.from_(bucket).download(...),
+# .create_signed_url(...), .list(...), .upload(...)) has no query-builder chain
+# to record and replay — each call is a single direct method call. So this
+# proxy is simpler than _RetryingBuilder: just "call it, and on a dead-connection
+# error, reconnect and call it once more with the same arguments."
+#
+# CONFIRMED empirically (2026-07): a bare .storage.from_(bucket).create_signed_url()
+# call raised httpx.RemoteProtocolError (ConnectionTerminated) with no retry,
+# because .storage was previously forwarded straight to the inner client via
+# __getattr__ — the same idle-connection failure mode this file's docstring
+# describes for .table()/.rpc(), just never wired up for Storage.
+
+class _RetryingStorage:
+    """Proxies client.storage — only from_(bucket) needs wrapping."""
+
+    def __init__(self, owner: ResilientSupabase) -> None:
+        self._owner = owner
+
+    def from_(self, bucket: str) -> "_RetryingBucket":
+        return _RetryingBucket(self._owner, bucket)
+
+    # Forward anything else on .storage (e.g. list_buckets) without retry —
+    # not used on the hot path today; add wrapping here if that changes.
+    def __getattr__(self, item: str) -> Any:
+        return getattr(self._owner._client.storage, item)
+
+
+class _RetryingBucket:
+    """
+    Proxies client.storage.from_(bucket) and retries once, against a freshly
+    reconnected client, on a dead-connection error. Every call is independent
+    (no chained state to replay), so retrying just means re-issuing the same
+    method with the same args/kwargs against the new client's bucket handle.
+    """
+
+    def __init__(self, owner: ResilientSupabase, bucket: str) -> None:
+        self._owner = owner
+        self._bucket = bucket
+
+    def __getattr__(self, item: str) -> Any:
+        if item.startswith("_"):
+            raise AttributeError(item)
+
+        def _method(*args, **kwargs):
+            try:
+                bucket = self._owner._client.storage.from_(self._bucket)
+                return getattr(bucket, item)(*args, **kwargs)
+            except Exception as exc:
+                if not _is_dead_connection(exc):
+                    raise
+                logger.warning(
+                    "Supabase storage bucket '%s'.%s: dead connection, reconnecting and retrying",
+                    self._bucket,
+                    item,
+                    extra={"error": str(exc)},
+                )
+                self._owner._reconnect()
+                bucket = self._owner._client.storage.from_(self._bucket)
+                return getattr(bucket, item)(*args, **kwargs)  # let the second failure propagate normally
+
+        return _method
