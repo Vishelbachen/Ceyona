@@ -120,6 +120,17 @@ class MediaGroupItem:
     message_id: int
     caption: str = ""
     lang: str = "ru"  # detected language of the user's message / caption
+    # The Worker already downloaded this photo into Supabase Storage and
+    # attached {bucket, path, mime_type, size, kind} as `_attachment` on the
+    # Telegram update (see ceyona-worker/worker.js::downloadAndStoreAttachment,
+    # infra/attachment.py::from_pending_update_ref). Threading it through here
+    # means handle_vision_group() can build an Attachment and read
+    # attachment.bytes() straight from Storage — same target path as the
+    # single-photo flow — instead of re-downloading via the Worker's /tg/
+    # proxy per image. None if the Worker's own download/upload failed for
+    # this specific update; the caller falls back to a per-image Telegram
+    # re-download only for that one item, not the whole album.
+    attachment_ref: dict | None = None
 
 
 CallbackType = Callable[[str, list[MediaGroupItem]], Awaitable[None]]
@@ -218,10 +229,11 @@ class MediaGroupAggregator:
             keys=[list_key, ttl_key, seen_key],
             args=[
                 json.dumps({
-                    "file_id":    item.file_id,
-                    "message_id": item.message_id,
-                    "caption":    item.caption,
-                    "lang":       item.lang,
+                    "file_id":        item.file_id,
+                    "message_id":     item.message_id,
+                    "caption":        item.caption,
+                    "lang":           item.lang,
+                    "attachment_ref": item.attachment_ref,
                 }),
                 str(self._debounce_ttl),
                 str(item.message_id),
@@ -335,6 +347,7 @@ class MediaGroupAggregator:
                     message_id=data["message_id"],
                     caption=data.get("caption", ""),
                     lang=data.get("lang", "ru"),
+                    attachment_ref=data.get("attachment_ref"),
                 ))
             except (json.JSONDecodeError, KeyError) as exc:
                 logger.warning(
