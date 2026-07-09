@@ -28,8 +28,6 @@ from transport.telegram.message_router import (
 
 logger = logging.getLogger(__name__)
 
-_VISION_MODEL = "qwen/qwen3.6-27b"
-
 
 async def handle_message(
     update: dict,
@@ -179,43 +177,50 @@ async def handle_message(
             )
 
         # ── CASE 1: vision fast-path ──────────────────────────────────────────
+        # Transport does NOT decide ALLOW/DENY here (architecture_reality.md
+        # §4.2 — balance checks are not transport's job). It only reports
+        # what vision_handler actually produced; run() computes vision cost
+        # and asks EPK — the sole policy authority (economic.md §5) — exactly
+        # like every other path. See orchestrator.py's vision-fast-path block.
         if not vision_result.needs_pipeline:
-            from payments.pricing_engine import vision_cost
-            _vision_cost_usd = vision_cost(
-                input_tokens=vision_result.vision_input_tokens,
-                output_tokens=vision_result.vision_output_tokens,
-            ) or 0.001
-            if user_balance <= 0 or _vision_cost_usd > user_balance:
-                logger.warning("Vision fast-path: balance insufficient",
-                               extra={"user_id": user_id, "balance": user_balance, "cost": _vision_cost_usd})
-                from i18n.t import get_system_message
-                return OrchestratorResult(
-                    text=get_system_message("insufficient_balance", lang),
-                    tier=Tier.FAST, model="",
-                    epk_decision=EPKDecision.DENY,
-                    usage=UsageRecord(input_tokens=0, output_tokens=0, embedding_tokens=0,
-                                      rerank_tokens=0, tier=Tier.FAST, embedding_type="large", llm_cost_usd=0.0),
-                    denied=True, deny_reason="insufficient_balance", lang=lang,
-                )
-            return OrchestratorResult(
-                text=vision_result.text,
-                tier=Tier.GENERAL, model=_VISION_MODEL,
-                epk_decision=EPKDecision.ALLOW,
-                usage=UsageRecord(
-                    input_tokens=vision_result.vision_input_tokens,
-                    output_tokens=vision_result.vision_output_tokens,
-                    embedding_tokens=0, rerank_tokens=0,
-                    tier=Tier.GENERAL, embedding_type="large", llm_cost_usd=_vision_cost_usd,
-                ),
-                denied=False, deny_reason="", lang=lang,
-            )
+            _vision_fast_path            = True
+            _vision_fast_path_text       = vision_result.text
+            _vision_fast_path_in_tokens  = vision_result.vision_input_tokens
+            _vision_fast_path_out_tokens = vision_result.vision_output_tokens
+        else:
+            # ── CASE 2: vision → pipeline ─────────────────────────────────────
+            logger.info("Vision pipeline-path: forwarding to orchestrator", extra={"user_id": user_id})
+            update = dict(update)
+            _vision_text_override  = vision_result.text
+            _vision_intent_result  = vision_result.intent_result
+            _vision_caption_for_history = caption if caption.strip() else "[фото]"
 
-        # ── CASE 2: vision → pipeline ─────────────────────────────────────────
-        logger.info("Vision pipeline-path: forwarding to orchestrator", extra={"user_id": user_id})
-        update = dict(update)
-        _vision_text_override  = vision_result.text
-        _vision_intent_result  = vision_result.intent_result
-        _vision_caption_for_history = caption if caption.strip() else "[фото]"
+    # ── vision fast-path: skip straight to run() ──────────────────────────────
+    # Nothing below this point applies to fast-path: there is no voice to
+    # transcribe, no text to extract (the answer is already final text from
+    # vision_handler), and no vision-context to inject into a message that
+    # doesn't exist. Building the full OrchestratorRequest here (instead of
+    # returning a result directly, as before) is what lets run() ask EPK —
+    # the sole policy authority (economic.md §5) — instead of transport
+    # deciding ALLOW/DENY itself (architecture_reality.md §4.2).
+    if locals().get("_vision_fast_path"):
+        request = OrchestratorRequest(
+            user_message="",
+            user_balance=user_balance,
+            user_id=user_id,
+            lang=lang,
+            supabase=supabase,
+            redis=redis,
+            hf_client=hf_client,
+            is_vision=True,
+            request_id=request_id,
+            input_type=input_type,
+            vision_fast_path=True,
+            vision_fast_path_text=_vision_fast_path_text,
+            vision_input_tokens=_vision_fast_path_in_tokens,
+            vision_output_tokens=_vision_fast_path_out_tokens,
+        )
+        return await run(request)
 
     # ── voice/audio handling (ASR → transcript) ───────────────────────────────
     _is_voice_input    = False
