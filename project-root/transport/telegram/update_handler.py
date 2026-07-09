@@ -87,6 +87,19 @@ async def handle_message(
         group_id   = extract_media_group_id(update)
         message_id = extract_message_id(update)
 
+        # Worker already downloaded this photo into Supabase Storage and
+        # attached {bucket, path, mime_type, size, kind} as `_attachment` on
+        # the update (see ceyona-worker/worker.js::downloadAndStoreAttachment).
+        # Read the raw ref here, BEFORE branching on group_id, so it's
+        # available to both paths below: threaded into MediaGroupItem for
+        # albums (see media_group_aggregator.py's MediaGroupItem.attachment_ref
+        # docstring for why that used to be dropped), and used directly via
+        # from_pending_update_ref() for single photos. None if the Worker's
+        # own download/upload failed for this update — both paths fall back
+        # to a legacy Telegram re-download in that case, scoped to just this
+        # one photo.
+        attachment_ref = update.get("_attachment")
+
         logger.info("Photo message received", extra={
             "user_id": user_id, "file_id": file_id[:20],
             "caption": caption[:50], "group_id": group_id,
@@ -106,7 +119,17 @@ async def handle_message(
                 async def _noop_callback(gid: str, items) -> None: pass
                 aggregator = MediaGroupAggregator(redis, _noop_callback)
                 await aggregator.start()
-            item = MediaGroupItem(file_id=file_id, message_id=message_id, caption=caption, lang=lang)
+            if attachment_ref is None:
+                logger.warning(
+                    "No _attachment on album photo update — this item will fall "
+                    "back to a legacy per-image Telegram re-download when the "
+                    "group is flushed (see handle_vision_group)",
+                    extra={"user_id": user_id, "file_id": file_id[:20], "group_id": group_id},
+                )
+            item = MediaGroupItem(
+                file_id=file_id, message_id=message_id, caption=caption, lang=lang,
+                attachment_ref=attachment_ref,
+            )
             await aggregator.add(scoped_group_id, item)
             return OrchestratorResult(
                 text="", tier=Tier.FAST, model="",
@@ -117,18 +140,15 @@ async def handle_message(
             )
 
         # ── single photo: vision handler ──────────────────────────────────────
-        # Target path: Worker already downloaded the photo into Supabase Storage
-        # and attached {bucket, path, mime_type, size, kind} as `_attachment` on
-        # the update (see ceyona-worker/worker.js::downloadAndStoreAttachment).
-        # Build an Attachment from that and use the new entry point, which never
-        # touches Telegram. Only if `_attachment` is missing (Worker's own
-        # download/upload failed for this update) do we fall back to the legacy
-        # handle_vision(), which still calls the Worker's /tg/ proxy directly —
-        # a migration safety net, not part of the target architecture (see
+        # Target path: build an Attachment from attachment_ref (read above) and
+        # use the new entry point, which never touches Telegram. Only if
+        # `_attachment` is missing do we fall back to the legacy handle_vision(),
+        # which still calls the Worker's /tg/ proxy directly — a migration
+        # safety net, not part of the target architecture (see
         # infra/attachment.py module docstring).
         try:
             from infra.attachment import from_pending_update_ref
-            attachment = from_pending_update_ref(update.get("_attachment"), supabase=supabase)
+            attachment = from_pending_update_ref(attachment_ref, supabase=supabase)
 
             if attachment is not None:
                 from transport.telegram.vision_handler import handle_vision_attachment
