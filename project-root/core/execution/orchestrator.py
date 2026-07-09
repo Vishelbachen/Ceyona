@@ -81,6 +81,11 @@ _NO_GROUNDED_DATA = "no_grounded_data"
 _SEARCH_NEED_MORE_CLUES = "search_need_more_clues"
 _LIVE_DATA_UNAVAILABLE = "live_data_unavailable"
 
+# Vision fast-path model (economic.md §11 sync: models.md — VISION rates).
+# Moved here from transport/telegram/update_handler.py — this is the file
+# that now builds the OrchestratorResult for vision fast-path (§4.2).
+_VISION_FAST_PATH_MODEL = "qwen/qwen3.6-27b"
+
 
 # ─── REQUEST / RESULT CONTRACTS ───────────────────────────────────────────────
 
@@ -111,6 +116,18 @@ class OrchestratorRequest:
     is_vision: bool = False
     skip_web_search: bool = False
     vision_context: str = ""       # VQ-03: anchored image descriptions for grounding
+
+    # Vision FAST-PATH fields (economic.md §5, architecture_reality.md §4.2).
+    # Set only when vision_handler already produced a final answer and the
+    # rest of the pipeline (Safety Gate, multilingual, retrieval, history)
+    # is not needed at all — transport signals this via vision_fast_path=True.
+    # Transport does NOT decide ALLOW/DENY here — it only reports actual
+    # vision token counts; run() computes vision cost and asks EPK, the sole
+    # policy authority (economic.md §5), exactly like the text pipeline does.
+    vision_fast_path: bool = False
+    vision_fast_path_text: str = ""     # final answer text from vision_handler, already synthesized
+    vision_input_tokens: int = 0        # actual tokens from Groq vision call — NOT estimated
+    vision_output_tokens: int = 0       # actual tokens from Groq vision call — NOT estimated
 
 
 @dataclass
@@ -1478,12 +1495,91 @@ async def _save_history(
 
 # ─── MAIN PIPELINE ────────────────────────────────────────────────────────────
 
+def _run_vision_fast_path(
+    request: OrchestratorRequest,
+    lang: str,
+    rid: str,
+) -> OrchestratorResult:
+    """
+    Vision fast-path — short-circuit BEFORE Safety Gate / multilingual /
+    retrieval / history (economic.md §5, architecture_reality.md §4.2).
+
+    Transport already ran the vision model and has actual token counts —
+    there is nothing left to safety-gate, translate, or retrieve for. The
+    only decision still owed to the request is "can the user afford this",
+    and that decision belongs solely to EPK, exactly as it does for the
+    text pipeline. This function does NOT re-implement EPK's balance check —
+    it computes vision's own cost (vision_cost() — a real, post-execution
+    cost, not an estimate) and hands it to the same evaluate() every other
+    path uses.
+
+    Pulled out of run() as its own function (rather than an inline branch)
+    so run() stays a small coordinator. If a second fast-path (e.g. a future
+    STT short-circuit) is ever needed, this is the pattern to repeat — a
+    small dispatcher is only worth introducing once there is a second real
+    case to dispatch between, not before.
+    """
+    from payments.pricing_engine import vision_cost as _vision_cost_fn
+
+    _vision_cost_usd = _vision_cost_fn(
+        input_tokens=request.vision_input_tokens,
+        output_tokens=request.vision_output_tokens,
+    ) or 0.001
+
+    _vision_epk_out = evaluate(EPKInput(
+        estimated_cost=_vision_cost_usd,
+        user_balance=request.user_balance,
+        complexity=Complexity.MEDIUM,
+    ))
+
+    logger.info("EPK (vision fast-path)", extra={
+        "request_id": rid,
+        "decision": _vision_epk_out.decision,
+        "vision_cost": f"{_vision_cost_usd:.6f}",
+    })
+    increment(f"epk.decision.{_vision_epk_out.decision.value.lower()}")
+
+    if _vision_epk_out.decision == EPKDecision.DENY:
+        return _denied_result(
+            reason="insufficient_balance",
+            lang=lang,
+            epk_decision=EPKDecision.DENY,
+        )
+
+    # ALLOW / DEGRADED_MODE / HEAVY_REQUIRED — vision fast-path has no
+    # tiers of its own to degrade to or upgrade to; any non-DENY verdict
+    # means the cost is covered by balance, so the already-computed
+    # vision answer is returned as-is. (Vision fast-path never triggers
+    # HEAVY_REQUIRED/DEGRADED_MODE in practice — its cost is tiny and
+    # capped — but the branch is handled explicitly rather than assumed
+    # away, so this stays correct if thresholds ever change.)
+    return OrchestratorResult(
+        text=request.vision_fast_path_text,
+        tier=Tier.GENERAL,
+        model=_VISION_FAST_PATH_MODEL,
+        epk_decision=_vision_epk_out.decision,
+        usage=UsageRecord(
+            input_tokens=request.vision_input_tokens,
+            output_tokens=request.vision_output_tokens,
+            embedding_tokens=0,
+            rerank_tokens=0,
+            tier=Tier.GENERAL,
+            embedding_type="large",
+            llm_cost_usd=_vision_cost_usd,
+        ),
+        denied=False,
+        deny_reason="",
+        lang=lang,
+    )
+
+
 async def run(request: OrchestratorRequest) -> OrchestratorResult:
     """
     Full pipeline entry point. Orchestrator owns everything except
     transport I/O (Telegram parsing, ASR, TTS, send).
 
     Pipeline (architecture.md §4):
+      Vision fast-path    [short-circuit, see _run_vision_fast_path()]
       Safety Gate Pass 1  [NON-BLOCKING observability]
       Feature Extraction  [complexity classification]
       Multilingual        [LLM normalization — agent, billed]
@@ -1506,6 +1602,9 @@ async def run(request: OrchestratorRequest) -> OrchestratorResult:
 
     increment("orchestrator.requests")
     _run_start = __import__("time").perf_counter()
+
+    if request.vision_fast_path:
+        return _run_vision_fast_path(request, lang, _rid)
 
     # Pipeline state — populated as stages run
     _safety_pass1_tokens         = 0
