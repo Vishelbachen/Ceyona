@@ -853,20 +853,20 @@ async def handle_vision_group(
 
     Falls back to handle_vision() if the group has only one item.
 
-    KNOWN GAP (2026-07, attachments): unlike the single-photo path in
-    handle_vision(), this multi-image path does NOT yet read from Supabase
-    Storage — attachment_refs, if provided, is threaded through only for the
-    single-item fallback below. Albums (>1 photo) still call
-    _download_image_via_worker() per-image with attachment_ref=None, which
-    falls back to the direct-to-Worker download — still subject to the
-    ConnectError class described in architecture_reality.md. Reason: albums
-    arrive via MediaGroupAggregator (Redis-buffered, one MediaGroupItem per
-    photo — see media_group_aggregator.py), which doesn't currently carry
-    the Worker's per-photo _attachment ref through its serialization. Wiring
-    that through is a reasonable follow-up but wasn't done here to keep this
-    change scoped to the failure actually reproduced in logs (single photo,
-    single voice) — see architecture_reality.md §5 for the pattern to
-    follow if album downloads start showing the same ConnectError.
+    CLOSED (2026-07, attachments): this path now reads from Supabase Storage
+    like the single-photo path — attachment_refs (keyed by file_id) is used to
+    build an Attachment per image and call attachment.bytes(), instead of
+    _download_image_via_worker() per-image. media_group_aggregator.py's
+    MediaGroupItem now carries attachment_ref through its Redis serialization
+    (see that module), and update_handler.py reads `_attachment` before
+    branching into the album path, so attachment_refs arriving here should be
+    populated for every image in the ordinary case. A per-image Telegram
+    re-download via _download_image_via_worker() remains ONLY as a fallback
+    for whichever specific images are missing a ref (the Worker's own
+    download/upload failed for that one update) — it no longer applies to the
+    whole album by default. This mirrors the single-photo migration-safety-net
+    pattern (see infra/attachment.py module docstring) at per-image
+    granularity rather than per-album.
     """
     from i18n.t import t
     err_text = t("vision_error", lang)
@@ -900,10 +900,27 @@ async def handle_vision_group(
 
     # ── download all images concurrently, throttled ───────────────────────────
     _sem = asyncio.Semaphore(3)
+    _refs = attachment_refs or {}
 
     async def _fetch(fid: str) -> bytes | None:
         async with _sem:
-            raw = await _download_image_via_worker(fid)
+            ref = _refs.get(fid)
+            raw: bytes | None = None
+            if ref is not None:
+                from infra.attachment import from_pending_update_ref
+                attachment = from_pending_update_ref(ref, supabase=supabase)
+                if attachment is not None:
+                    try:
+                        raw = await attachment.bytes()
+                    except RuntimeError as exc:
+                        logger.warning(
+                            "Vision group: Storage download failed for one image, "
+                            "falling back to Telegram re-download for this item only",
+                            extra={"file_id": fid[:20], "error": str(exc)},
+                        )
+                        raw = None
+            if raw is None:
+                raw = await _download_image_via_worker(fid)
             if not raw:
                 return None
             return _resize_image_if_needed(raw)
