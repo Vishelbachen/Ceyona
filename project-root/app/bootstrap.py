@@ -74,9 +74,13 @@ async def bootstrap() -> dict:
 
     # ─── MediaGroup aggregator ──────────────────────────────────────────────
     # Wires the Redis-backed album aggregator.  The on_group_ready callback
-    # is intentionally left as a no-op here; webhook.py overrides it via
-    # app.state.media_group_aggregator after the app is created so it can
-    # access send_message helpers in the same module.
+    # is intentionally left as a no-op here; app/main.py's lifespan() overrides
+    # it (aggregator._on_group_ready = ...) after the app is created, since it
+    # needs access to send_message helpers and app.state.hf_client that live
+    # there. The real callback routes through handle_vision_group(), which
+    # (2026-07) reads each photo's Storage attachment_ref via MediaGroupItem —
+    # see media_group_aggregator.py's MediaGroupItem docstring and
+    # vision_handler.py's handle_vision_group docstring for that path.
     from transport.telegram.media_group_aggregator import MediaGroupAggregator
 
     async def _media_group_noop(group_id: str, items) -> None:  # noqa: E731
