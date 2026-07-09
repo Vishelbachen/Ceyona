@@ -79,6 +79,12 @@ async def lifespan(app: FastAPI):
 
         caption = next((i.caption for i in items if i.caption), "")
         file_ids = [i.file_id for i in items]
+        # Worker's per-photo Storage ref, now carried through MediaGroupItem
+        # (see media_group_aggregator.py) — keyed by file_id so
+        # handle_vision_group can look one up per image. Items whose Worker
+        # download/upload failed simply have attachment_ref=None and fall
+        # back to a per-image Telegram re-download inside handle_vision_group.
+        attachment_refs = {i.file_id: i.attachment_ref for i in items if i.attachment_ref}
         user_id = chat_id  # for Telegram bots: chat_id == user_id for private chats
 
         # Resolve lang: prefer item that has a caption (user typed something),
@@ -105,6 +111,8 @@ async def lifespan(app: FastAPI):
                 file_ids=file_ids,
                 caption=caption,
                 lang=lang,
+                supabase=state["supabase"],
+                attachment_refs=attachment_refs,
             )
         except Exception as exc:
             logger.error("MediaGroup vision group failed", extra={"error": str(exc)})
