@@ -39,7 +39,7 @@ dependencies = [
     "PyJWT>=2.8,<3.0",
     "sentry-sdk>=2.0,<3.0",
 
-    "aiogram>=3.6,<3.30",
+    "aiogram>=3.6,<3.32",
 
     "python-dotenv>=1.1,<2.0",
 
