@@ -9,7 +9,7 @@ dependencies = [
     "uvicorn[standard]>=0.43,<0.50",
 
     "groq>=1.1,<2.0",
-    "huggingface-hub>=0.20,<2.0",
+    "huggingface-hub>=0.20,<3.0",
     # huggingface_hub's InferenceClient.feature_extraction() converts its
     # response to a numpy array internally, but huggingface_hub itself only
     # declares numpy under its own testing/all/dev extras — NOT the base
